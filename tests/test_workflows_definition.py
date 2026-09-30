@@ -259,7 +259,8 @@ def test_publish_checks_step_subject_against_workflow_identity(register_step):
     register_step(PageEcho)
     document = {"nodes": {"start": {"step": "echo"}}}
     assert Definition.check(document, subject_model="knowledge.page")[1] == []
-    for subject_model in ("", "knowledge.vault", "knowledge.Page"):
+    assert Definition.check(document, subject_model="knowledge.Page")[1] == []
+    for subject_model in ("", "knowledge.vault"):
         issues = Definition.check(document, subject_model=subject_model)[1]
         assert any(issue.code == "subject" and not issue.blocks_draft for issue in issues)
 
@@ -284,7 +285,7 @@ def test_publish_canonicalizes_mixed_case_step_subject(execution, register_step)
         actor=actor,
     )
     assert workflow.published_id is not None
-    assert workflow.subject_model == PageStep.subject == "knowledge.page"
+    assert workflow.subject_model == "knowledge.Page" and PageStep.subject == "knowledge.page"
 
 
 @pytest.mark.parametrize("subject", ["unknown.Record", "knowledge.Missing", "malformed", ""])

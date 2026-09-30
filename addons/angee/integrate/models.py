@@ -55,7 +55,7 @@ from strawberry_django.descriptors import model_property
 from angee.base.fields import EncryptedField, StateField
 from angee.base.identity import public_id_for
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, SqidMixin
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import RecordRefMixin
 from angee.base.serialization import canonical_json
@@ -3381,7 +3381,7 @@ class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):
             )
 
 
-class RecordRevision(SqidMixin, AuditMixin, AngeeModel):
+class RecordRevision(AppendOnlyModel, SqidMixin, AuditMixin, AngeeModel):
     """Immutable observed and mapped payload history for one replica identity.
 
     Retention is unbounded by design. Full payload evidence grows with every
@@ -3403,23 +3403,9 @@ class RecordRevision(SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
         rebac_resource_type = "integrate/record_revision"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("link", "number"), name="uniq_record_revision_number"),)
-
-    def save(self, *args: Any, using: str | None = None, **kwargs: Any) -> None:
-        """Permit insertion only; applied evidence never changes in place."""
-
-        if self.pk and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValidationError("Record revisions are immutable.")
-        super().save(*args, using=using, **kwargs)
-
-    def delete(self, *args: Any, using: str | None = None, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Refuse deletion even when no successor references the revision."""
-
-        raise ValidationError("Record revisions are immutable.")
-
 
 class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
     """Read scopes for retained record quarantine."""

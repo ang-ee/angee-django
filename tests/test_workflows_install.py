@@ -63,13 +63,13 @@ def test_install_canonicalizes_subject_model_identity(execution, subject_model):
         key="canonical_subject", name="Canonical subject", subject_model=subject_model,
         draft={"nodes": {"entry": {"step": "echo"}}}, actor=actor,
     )
-    assert workflow.subject_model == "knowledge.vault"
-    assert system_queryset(Workflow).get(pk=workflow.pk).subject_model == "knowledge.vault"
+    assert workflow.subject_model == "knowledge.Vault"
+    assert system_queryset(Workflow).get(pk=workflow.pk).subject_model == "knowledge.Vault"
     reinstalled = Workflow.objects.install_definition(
         key=workflow.key, name=workflow.name, subject_model="knowledge.Vault",
         draft=workflow.draft, actor=actor,
     )
-    assert reinstalled.subject_model == "knowledge.vault" and reinstalled.published_id == workflow.published_id
+    assert reinstalled.subject_model == "knowledge.Vault" and reinstalled.published_id == workflow.published_id
 
 
 @pytest.mark.parametrize("subject_model", ["knowledge.Missing", "uninstalled.Record", "not_a_label"])

@@ -15,6 +15,7 @@ from rebac import system_context
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
+from angee.base.mixins import AppendOnlyModel, retained_set_null
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
@@ -23,7 +24,7 @@ from angee.decisions.policies import DecisionPolicy
 from angee.decisions.states import OPEN_DECISION, ClosedReason, Verdict
 
 
-class DecisionGroup(AngeeDataModel):
+class DecisionGroup(AppendOnlyModel, AngeeDataModel):
     """A policy and its seats; waiter references point here from their own addon."""
 
     runtime = True
@@ -70,11 +71,9 @@ class DecisionGroup(AngeeDataModel):
                   .order_by("index").values_list("closed_reason", flat=True).first())
         return "expired" if reason in (ClosedReason.EXPIRED, ClosedReason.INVALID_ATTEMPTS) else reason
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Admit immutable group facts; only the settle verb can set its final timestamp."""
-        if not self._state.adding or self.settled_at is not None:
-            raise ValidationError("Use group manager verbs; group facts and settlement cannot be edited.")
-        super().save(*args, **kwargs)
+    def validate_append(self) -> None:
+        if self.settled_at is not None:
+            raise ValidationError("A decision group cannot start settled.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Lock the group before collector cascades, preserving native delete authorization."""
@@ -83,7 +82,7 @@ class DecisionGroup(AngeeDataModel):
                 if not group.is_deletable:
                     raise ProtectedError("Only settled, unreferenced decision groups can be deleted.", [self])
             # The outer transaction retains the lock after the system context ends.
-            return super().delete(*args, **kwargs)
+            return self._owner_delete(*args, **kwargs)
 
     @property
     def is_deletable(self) -> bool:
@@ -102,7 +101,7 @@ class DecisionGroup(AngeeDataModel):
         return True
 
 
-class Decision(RecordRefMixin, AngeeDataModel):
+class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     """One immutable question and its conditional, final answer."""
 
     runtime = True
@@ -122,7 +121,7 @@ class Decision(RecordRefMixin, AngeeDataModel):
     errors = models.JSONField(default=dict)
     verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING, db_index=False)
     closed_reason = StateField(choices_enum=ClosedReason, null=True, blank=True, db_index=False)
-    superseded_by = models.ForeignKey("decisions.Decision", on_delete=models.SET_NULL, null=True, blank=True,
+    superseded_by = models.ForeignKey("decisions.Decision", on_delete=retained_set_null, null=True, blank=True,
                                      related_name="+")
     supersede = models.BooleanField(default=False)
     resolution = models.JSONField(default=dict)
@@ -172,12 +171,6 @@ class Decision(RecordRefMixin, AngeeDataModel):
             return bool(self.__dict__["_is_open"])
         return system_queryset(type(self)).open().filter(pk=self.pk).exists()
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Admit new rows; retained questions change only through manager verbs."""
-        if not self._state.adding:
-            raise ValidationError("Use decision manager verbs; retained questions and answers cannot be edited.")
-        super().save(*args, **kwargs)
-
     def __str__(self) -> str:
         """Identify a seat by the same kind label shown in its inbox."""
         return self.kind_label
@@ -187,12 +180,7 @@ class Decision(RecordRefMixin, AngeeDataModel):
         """Present the authored kind without exposing identifier separators."""
         return capfirst(self.kind.replace("_", " ").replace("-", " "))
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Retain individual seats until their owning group can be deleted."""
-        raise ValidationError("Delete the settled decision group, not an individual decision.")
-
-
-class DecisionEvidence(RecordRefMixin, AngeeDataModel):
+class DecisionEvidence(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     """Indexed projection of context references, authored only at admission."""
 
     runtime = True
@@ -215,13 +203,3 @@ class DecisionEvidence(RecordRefMixin, AngeeDataModel):
         constraints = [models.UniqueConstraint(fields=("decision", "content_type", "object_id"),
                                                name="decisions_evidence_unique")]
         indexes = [models.Index(fields=("content_type", "object_id"), name="decisions_evidence_record")]
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Admit evidence once; its retained target cannot be rewritten."""
-        if not self._state.adding:
-            raise ValidationError("Decision evidence cannot be edited.")
-        super().save(*args, **kwargs)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Retain evidence until its owning group can be deleted."""
-        raise ValidationError("Decision evidence cannot be deleted independently.")

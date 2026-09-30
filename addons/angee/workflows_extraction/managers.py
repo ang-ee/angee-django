@@ -51,13 +51,6 @@ class EvidenceQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
 EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
 
 
-class EvidenceSystemManager(EvidenceManager):
-    """Guarded base reads for Django relations and native permission traversal."""
-
-    def get_queryset(self) -> EvidenceQuerySet:
-        return super().get_queryset().system_context(reason="extraction retained relation read")
-
-
 class ExtractionManager(EvidenceManager):
     """Retain evidence after actor, schema, source and identity validation."""
 

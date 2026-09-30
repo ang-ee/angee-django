@@ -16,7 +16,7 @@ from rebac.resources import model_resource_type, to_object_ref
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import AppendOnlyModel, AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import RecordRefMixin
@@ -36,7 +36,7 @@ from angee.workflows_extraction.contracts import (
 )
 from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
 from angee.workflows_extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
-from angee.workflows_extraction.managers import EvidenceManager, EvidenceSystemManager, ExtractionManager
+from angee.workflows_extraction.managers import EvidenceManager, ExtractionManager
 from angee.workflows_extraction.pointers import (
     JSON_POINTER_MISSING,
     fact_pointers,
@@ -49,23 +49,15 @@ from angee.workflows_extraction.pointers import (
 from angee.workflows_extraction.profiles import ExtractionProfile
 
 
-class RetainedEvidence(models.Model):
-    """Close ordinary instance mutation; the manager owns validated insertion."""
+class RetainedEvidence(AppendOnlyModel):
+    """Let the retention owner admit inserts while generic insertion stays closed."""
 
     class Meta:
         abstract = True
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        raise ValueError("Extraction evidence is immutable; use the retention owner.")
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise ValueError("Extraction evidence is retained and cannot be deleted.")
-
     def retain(self) -> None:
         """Insert an owner-validated new evidence row, never update a retained row."""
-        if not self._state.adding:
-            raise ValueError("Extraction evidence is already retained.")
-        super().save(force_insert=True)
+        self._owner_insert()
 
 
 class ExtractionLineage(RetainedEvidence, AngeeModel):
@@ -78,7 +70,6 @@ class ExtractionLineage(RetainedEvidence, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
 
     def advance_head(self, extraction: Any) -> None:
         """Advance under the retention transaction after checking the lineage."""
@@ -132,11 +123,9 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
     object_id = models.CharField(max_length=255)
     target = GenericForeignKey("content_type", "object_id")
     objects = ExtractionManager()
-    system_objects = EvidenceSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("lineage_key", "-revision")
         rebac_resource_type = "workflows_extraction/extraction"
         constraints = (models.UniqueConstraint(fields=("lineage_key", "revision"), name="uniq_extraction_revision"),)
@@ -535,11 +524,9 @@ class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
     content_hash = models.CharField(max_length=64, editable=False)
     mime_type = models.CharField(max_length=200, editable=False)
     objects = EvidenceManager()
-    system_objects = EvidenceSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_source"
         constraints = (
@@ -589,11 +576,9 @@ class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
         "storage.File", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_pages"
     )
     objects = EvidenceManager()
-    system_objects = EvidenceSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_page"
         constraints = (
@@ -628,7 +613,6 @@ class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
     metadata = models.JSONField(default=dict, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     objects = EvidenceManager()
-    system_objects = EvidenceSystemManager()
 
     @property
     def carrier_identity(self) -> tuple[Any, ...]:
@@ -648,7 +632,6 @@ class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_part"
         constraints = (

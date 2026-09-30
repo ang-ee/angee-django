@@ -208,8 +208,8 @@ def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, 
     data = result_data(execute_schema(schema, """query($id: String!) {
       trigger(where: {id: {_eq: $id}}) { id source source_model display_name enabled disabled_reason run_as { id } }
     }""", {"id": trigger.sqid}, user=actor))["trigger"]
-    assert len(data) == 1 and data[0]["source_model"] == "knowledge.vault"
-    assert data[0]["display_name"] == "record_changed: knowledge.vault"
+    assert len(data) == 1 and data[0]["source_model"] == "knowledge.Vault"
+    assert data[0]["display_name"] == "record_changed: knowledge.Vault"
     assert data[0]["enabled"] is False and data[0]["run_as"] is None
     assert data[0]["disabled_reason"] == trigger.disabled_reason
 

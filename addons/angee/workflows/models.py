@@ -14,9 +14,9 @@ from django.db.models.functions import Coalesce, Now
 from django.utils.functional import cached_property
 from rebac import system_context
 
-from angee.base.fields import StateField
+from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyQuerySet, AuditMixin
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -48,7 +48,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     key = models.SlugField(max_length=100, unique=True)
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
-    subject_model = models.CharField(max_length=200, blank=True, default="")
+    subject_model = ModelLabelField(max_length=200, blank=True, default="")
     draft = models.JSONField(default=dict)
     draft_revision = models.PositiveIntegerField(default=0, editable=False)
     layout = models.JSONField(default=dict, blank=True)
@@ -71,7 +71,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     def validate_subject(self, subject: Any) -> None:
         """Require the declared concrete model when this workflow has a subject."""
         if self.subject_model and (
-            subject is None or subject._meta.label_lower != self.subject_model
+            subject is None or subject._meta.label != self.subject_model
         ):
             raise ValidationError("The workflow subject has the wrong model.")
 
@@ -88,7 +88,7 @@ class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
 WorkflowVersionManager = AngeeManager.from_queryset(WorkflowVersionQuerySet)
 
 
-class WorkflowVersion(AngeeDataModel):
+class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
     """Immutable normalized graph document selected when a run starts."""
 
     runtime = True
@@ -98,7 +98,7 @@ class WorkflowVersion(AngeeDataModel):
     number = models.PositiveIntegerField()
     document = models.JSONField(default=dict)
     content_hash = models.CharField(max_length=64)
-    published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
 
     objects = WorkflowVersionManager()
 
@@ -121,15 +121,6 @@ class WorkflowVersion(AngeeDataModel):
 
         return Definition.model_validate(self.document)
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Insert new snapshots and reject changes to existing instances."""
-
-        if not self._state.adding:
-            raise ValidationError("Workflow versions cannot be edited.")
-        kwargs["force_insert"] = True
-        super().save(*args, **kwargs)
-
-
 class WorkflowRun(RecordRefMixin, AngeeDataModel):
     """One actor's execution of one immutable graph against an optional record."""
 
@@ -146,7 +137,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     input = models.JSONField(default=dict)
     output = models.JSONField(default=dict)
     outcome = models.CharField(max_length=NAME_MAX_LENGTH, blank=True, default="")
-    error = models.TextField(max_length=8192, blank=True, default="")
+    error = DiagnosticTextField(max_length=8192, blank=True, default="")
     request_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
     parent_step = models.ForeignKey(
         "workflows.StepRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="child_runs",
@@ -161,7 +152,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     origin = RunOriginField()
     finished_at = models.DateTimeField(null=True, blank=True)
     prune_after = models.DateTimeField(null=True, blank=True, editable=False)
-    prune_reason = models.CharField(max_length=255, blank=True, default="", editable=False)
+    prune_reason = DiagnosticTextField(max_length=255, blank=True, default="", editable=False)
 
     objects = WorkflowRunManager()
 
@@ -272,7 +263,7 @@ class StepRun(AngeeDataModel):
     map_index = models.PositiveIntegerField(default=0)
     status = StateField(choices_enum=StepRunStatus, default=StepRunStatus.READY, db_index=False)
     waiting_kind = StateField(choices_enum=WaitingKind, null=True, blank=True, db_index=False)
-    wait_reason = models.TextField(blank=True, default="")
+    wait_reason = DiagnosticTextField(blank=True, default="")
     attempt = models.PositiveIntegerField(default=0)
     idempotency_token = models.UUIDField(null=True, blank=True, editable=False)
     page_index = models.PositiveIntegerField(default=0, editable=False)
@@ -419,8 +410,8 @@ class StepAttempt(AngeeDataModel):
     started_at = models.DateTimeField(db_default=Now())
     finished_at = models.DateTimeField(null=True, blank=True)
     result = StateField(choices_enum=AttemptResult, null=True, blank=True, db_index=False)
-    error = models.TextField(max_length=8192, blank=True, default="")
-    stacktrace = models.TextField(max_length=65536, blank=True, default="")
+    error = DiagnosticTextField(max_length=8192, blank=True, default="")
+    stacktrace = DiagnosticTextField(max_length=65536, blank=True, default="")
     effect_started_at = models.DateTimeField(null=True, blank=True)
     acknowledged_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
@@ -521,13 +512,13 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
     source = ImplClassField(base_class=TriggerSource, registry_setting="ANGEE_WORKFLOW_TRIGGER_SOURCES")
-    model_label = models.CharField(max_length=200, blank=True, default="")
+    model_label: str = ModelLabelField(max_length=200, blank=True, default="")
     condition = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False, editable=False)
     run_as = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False,
     )
-    disabled_reason = models.TextField(blank=True, default="", editable=False)
+    disabled_reason: str = DiagnosticTextField(blank=True, default="", editable=False)
     objects = TriggerManager()
 
     @classmethod
@@ -557,7 +548,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         self._trigger_hooks("trigger_input")
         self._trigger_hooks("check_admission")
         model = self.source_class.model(self)
-        if self.workflow.subject_model and self.workflow.subject_model != model._meta.label_lower:
+        if self.workflow.subject_model and self.workflow.subject_model != model._meta.label:
             raise ValidationError("The trigger source does not match the workflow subject model.")
         return model, GraphQLSchemas.from_discovery().resource_filter(model, self.condition)
 
@@ -602,7 +593,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     def clean(self) -> None:
         """Reject invalid authoring at save and preserve the server-owned actor."""
         super().clean()
-        self.model_label = "" if self.source_class.model_label else self.model_label.lower()
+        self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
         previous = system_queryset(type(self)).filter(pk=self.pk).first() if self.pk else None
         if previous is not None and self.workflow_id != previous.workflow_id:
@@ -662,7 +653,7 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel):
     changed_at = models.DateTimeField(db_default=Now())
     evaluated_at = models.DateTimeField(null=True, blank=True)
     admitted_at = models.DateTimeField(null=True, blank=True)
-    rejection = models.TextField(blank=True, default="")
+    rejection = DiagnosticTextField(blank=True, default="")
     run = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="trigger_events",
     )

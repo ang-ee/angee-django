@@ -882,8 +882,10 @@ and current contracts before applying a historical example to a new deployment.
   instance deletion overrides do not protect against every collector path; choose
   FK policies deliberately, including generic relations that can cascade into
   retained rows. This is a modelling rule, not a mechanical system check. Shared
-  retained collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py),
-  which rejects generic updates and deletion with a model-labelled `ValidationError`.
+  retained models compose [`AppendOnlyModel`](../../angee/base/mixins.py) and
+  their managers compose `AppendOnlyQuerySet`. The model closes ordinary instance
+  writes and binds a guarded base manager after class preparation; the queryset
+  rejects generic updates and deletion with a model-labelled `ValidationError`.
   Its `validate_insert` seam narrows all generic insert entrypoints. Retention
   commands insert validated batches through `owner_bulk_create`; lease state
   machines expose exact conditional writes through domain queryset methods using
@@ -892,8 +894,11 @@ and current contracts before applying a historical example to a new deployment.
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
   not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
-  `audit_set_null` FK policy to materialize the collector selection and schedule
+  `retained_set_null` FK policy to materialize the collector selection and schedule
   Django's native `UpdateQuery.update_batch` path for actor deletion.
+  Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
+  `ModelLabelField` from [`angee.base.fields`](../../angee/base/fields.py), so
+  instance saves and queryset writes share their storage rules.
   Never replace these rules with a database trigger or function.
 - **Resource imports use the native import-export lifecycle.** Models composing
   [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare

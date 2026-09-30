@@ -61,6 +61,8 @@ terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
 
 Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
+`subject_model` accepts a Django model label and stores the model's canonical
+`_meta.label` spelling; exact model-label filters normalize that spelling too.
 [`WorkflowDefinitionResource`](resources.py) delegates to `install_definition`,
 which uses the same draft and publication owners as direct calls. Tests compose
 the abstract sources through [`workflows.testing`](testing/__init__.py) and can

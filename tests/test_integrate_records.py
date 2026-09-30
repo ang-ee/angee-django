@@ -309,10 +309,10 @@ def test_revision_numbering_and_all_mutation_paths_refuse_edits(replica: Any) ->
     second = RecordRevision.objects.append(link, source_payload={"v": 2}, source_hash="two", mapping_version=1)
     assert (first.number, second.number, second.prior_id) == (1, 2, first.pk)
     first.source_hash = "edited"
-    for mutate in (first.save, first.delete):
+    for mutate, action in ((first.save, "edited"), (first.delete, "deleted")):
         with pytest.raises(ValidationError) as rejected:
             mutate()
-        assert rejected.value.messages == ["Record revisions are immutable."]
+        assert rejected.value.messages == [f"integrate.RecordRevision rows cannot be {action}."]
     collection_mutations = (
         (lambda: RecordRevision.objects.filter(pk=first.pk).update(source_hash="edited"), "edited"),
         (lambda: RecordRevision.objects.bulk_update([first], ["source_hash"]), "edited"),

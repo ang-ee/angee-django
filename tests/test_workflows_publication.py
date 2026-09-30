@@ -2,6 +2,7 @@
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import models
 from pydantic import BaseModel, Field
 
 from angee.base.scoping import system_queryset
@@ -179,6 +180,16 @@ def test_subject_identity_is_immutable_once_a_version_exists(execution, register
             Workflow.objects.publish(workflow, actor=actor)
         assert any(issue.code == "subject" for issue in caught.value.issues)
     retained = system_queryset(Workflow).get(pk=workflow.pk)
-    assert retained.subject_model == "knowledge.vault" and retained.published_id == original.pk
+    assert retained.subject_model == "knowledge.Vault" and retained.published_id == original.pk
     with pytest.raises(ValidationError, match="subject"):
         WorkflowRun.objects.start(retained, actor=actor, subject=retained, version=original)
+
+
+def test_published_version_rejects_instance_deletion_and_protects_author(execution):
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="protected-publication", actor=actor)
+    version = system_queryset(WorkflowVersion).get(pk=workflow.published_id)
+    assert WorkflowVersion._meta.get_field("published_by").remote_field.on_delete is models.PROTECT
+    with pytest.raises(ValidationError, match="cannot be deleted"):
+        version.delete()
+    assert system_queryset(WorkflowVersion).filter(pk=version.pk).exists()

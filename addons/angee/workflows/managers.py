@@ -27,6 +27,7 @@ from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
 from angee.base.exceptions import exception_text
+from angee.base.fields import ModelLabelField
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
@@ -61,11 +62,6 @@ cannot hide later items within this bound; each is independently rechecked.
 """
 PRUNE_BATCH_LIMIT = 25
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
-
-
-def _error_text(value: str, field: Any) -> str:
-    """Sanitize diagnostic text to the owning model field's declared bound."""
-    return cast(str, strip_null_bytes(value))[:field.max_length]
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -130,8 +126,8 @@ class WorkflowManager(AngeeManager):
         """Save an authorized identity with a canonical, version-stable subject model."""
         if subject_model:
             try:
-                subject_model = apps.get_model(subject_model)._meta.label_lower
-            except (LookupError, ValueError) as error:
+                subject_model = ModelLabelField.normalize(subject_model)
+            except ValidationError as error:
                 raise DefinitionInvalid([
                     Issue(
                         path=["subject_model"], code="subject_model",
@@ -476,7 +472,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "") -> None:
         self.filter(pk=run.pk).update(
             status=status, outcome=outcome, output=strip_null_bytes(output),
-            error=_error_text(error, self.model._meta.get_field("error")),
+            error=error,
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
         if status in RunStatus.terminal_values() and not run.is_terminal:
@@ -595,10 +591,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                                     raise ProtectedError("Decision evidence must remain retained.", [group])
                                 group.delete()
                         count += len(runs)
-                    except (ProtectedError, RestrictedError):
+                    except (ProtectedError, RestrictedError) as error:
                         self.filter(pk=run_id).update(
                             prune_after=Now() + timedelta(days=1),
-                            prune_reason="Active descendants or protected execution/decision evidence.",
+                            prune_reason=str(error.args[0]),
                             updated_at=Now(),
                         )
         return count
@@ -879,8 +875,8 @@ class StepAttemptQuerySet(AngeeQuerySet):
         """Close unfinished attempts once, sanitizing their diagnostic columns."""
         return self.filter(finished_at__isnull=True).update(
             finished_at=Now(), result=result,
-            error=_error_text(error, self.model._meta.get_field("error")),
-            stacktrace=_error_text(stacktrace, self.model._meta.get_field("stacktrace")), updated_at=Now(),
+            error=error,
+            stacktrace=stacktrace, updated_at=Now(),
         )
 
 

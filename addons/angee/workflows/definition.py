@@ -13,6 +13,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 
+from angee.base.fields import ModelLabelField
 from angee.base.jsonschema import (
     compose_schema,
     embed_schema,
@@ -290,7 +291,7 @@ class Definition(BaseModel):
             if (
                 subject_model is not None
                 and required_subject is not None
-                and subject_model != required_subject
+                and ModelLabelField.normalize(subject_model) != ModelLabelField.normalize(required_subject)
             ):
                 issues.append(
                     Issue(

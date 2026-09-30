@@ -113,7 +113,7 @@ def test_active_continuation_marks_parent_until_a_later_retention_retry(child_gr
     assert WorkflowRun.objects.prune() == 0
     parent.refresh_from_db()
     child.refresh_from_db()
-    assert parent.prune_after is not None and parent.prune_reason
+    assert parent.prune_after is not None and parent.prune_reason == "A descendant is still running."
     assert child.status == "running" and child.parent_step_id is not None
     assert not system_queryset(WorkflowRun).retention_candidates().filter(pk=parent.pk).exists()
     run_until(child)

@@ -53,7 +53,7 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
     visible = result_data(execute_schema(schema, query, variables, user=starter))
     assert visible["workflow"] == [{
         "id": workflow.sqid, "key": workflow.key, "name": workflow.name, "description": "",
-        "subject_model": "knowledge.vault",
+        "subject_model": "knowledge.Vault",
         "published": {"id": current.sqid, "number": 2, "created_at": current.created_at.isoformat()},
     }]
     assert visible["workflow_by_pk"] == {"id": workflow.sqid, "published": {"id": current.sqid, "number": 2}}

@@ -20,12 +20,12 @@ from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
 from angee.base.exceptions import exception_text
+from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
-from angee.base.serialization import strip_null_bytes
 
 logger = logging.getLogger(__name__)
 TRIGGER_DRAIN_LIMIT = 100
@@ -68,7 +68,7 @@ class TriggerSource(ImplBase):
         """Keep source eligibility identical at declaration, connection and capture."""
         if model._meta.app_label in {"workflows", "decisions"}:
             raise ValidationError("Workflow and decision models cannot be trigger sources.")
-        if cls.model_label and model._meta.label_lower != cls.model_label.lower():
+        if cls.model_label and model._meta.label != ModelLabelField.normalize(cls.model_label):
             raise ValidationError("This model does not belong to the fixed workflow source.")
         if not cls.model_label and not getattr(model, "workflow_trigger", False):
             raise ValidationError("This model has not opted in to workflow triggers.")
@@ -163,7 +163,7 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
                 implementation = triggers._meta.get_field("source").resolve_class(source)
                 queryset = system_queryset(triggers).filter(enabled=True, source=source)
                 if not implementation.model_label:
-                    queryset = queryset.filter(model_label=model._meta.label_lower)
+                    queryset = queryset.filter(model_label=model._meta.label)
                 implementation.validate_model(model)
                 content_type = ContentType.objects.get_for_model(model)
                 for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
@@ -268,7 +268,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     raise ValidationError("The trigger requires an active acting user.")
                 model, condition = trigger.validate_configuration()
             except (ValidationError, ImproperlyConfigured, LookupError) as error:
-                reason = strip_null_bytes(exception_text(error))
+                reason = exception_text(error)
                 self._disable(trigger, reason)
                 system_queryset(events).filter(pk=current.pk).update(evaluated_at=F("changed_at"), rejection=reason)
                 return False
@@ -294,7 +294,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     system_queryset(type(run)).filter(pk=run.pk).update(trigger_event=current)
             except (ValidationError, PermissionDenied) as error:
                 system_queryset(events).filter(pk=current.pk).update(
-                    evaluated_at=F("changed_at"), rejection=strip_null_bytes(exception_text(error)),
+                    evaluated_at=F("changed_at"), rejection=exception_text(error),
                 )
                 return False
             except DatabaseError:
