@@ -8,7 +8,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
-import { RecordFilesPane, useRecordFilesCount } from "./RecordFilesPane";
+import { RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
 import { FileRecordPreview } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
 import { folderForm } from "./views/folder-form";
@@ -66,7 +66,7 @@ const storage = defineBaseAddon({
     icon: "file",
     when: (context) => context.view.kind === "record" && Boolean(context.route?.modelLabel && context.view.sqid),
     useCount: useRecordFilesCount,
-    render: (context) => <RecordFilesPane context={context} />,
+    render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
   }],
   icons: {
     drive: HardDrive,
@@ -80,6 +80,7 @@ const storage = defineBaseAddon({
 });
 
 export { useStorageUpload } from "./data/use-upload";
+export { RecordFilesPane, recordFilesTarget, type RecordFilesTarget } from "./RecordFilesPane";
 export { FileRecordPreview, filePreviewReference } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
 export { StorageUploadTasks } from "./views/StorageUploadTasks";

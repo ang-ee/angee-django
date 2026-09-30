@@ -8,16 +8,16 @@ import { KnowledgePageView } from "./KnowledgePageView";
 
 const BINDING_MODELS = ["knowledge.RecordBinding"] as const;
 
-function recordVariables(context: ChatterViewContext, role?: string) {
+/** The chatter tab's record, as the pane expects it. */
+export function recordPagesTarget(context: ChatterViewContext): RecordPagesTarget {
   return {
     modelLabel: context.route?.modelLabel ?? "",
     recordId: context.view.kind === "record" ? context.view.sqid ?? "" : "",
-    role: role ?? null,
   };
 }
 
 function useRecordPagesCount(context: ChatterViewContext, role?: string): number | undefined {
-  const { modelLabel, recordId } = recordVariables(context, role);
+  const { modelLabel, recordId } = recordPagesTarget(context);
   const variables = useMemo(() => ({ modelLabel, recordId, role: role ?? null }), [modelLabel, recordId, role]);
   const query = useAuthoredQuery(KnowledgeRecordPages, variables, {
     enabled: Boolean(modelLabel && recordId), models: BINDING_MODELS,
@@ -42,15 +42,19 @@ export function recordPagesContribution(options: RecordPagesContributionOptions 
       && Boolean(context.route?.modelLabel && context.view.sqid)
       && (when?.(context) ?? true),
     useCount: (context) => useRecordPagesCount(context, role),
-    render: (context) => <RecordPagesPane context={context} role={role} />,
+    render: (context) => <RecordPagesPane target={recordPagesTarget(context)} role={role} />,
   };
 }
 
-/** Page bindings, role filter, inline reader, and writer-gated bind controls. */
-export function RecordPagesPane({ context, role }: { context: ChatterViewContext; role?: string }): ReactElement {
+/** The record whose page bindings a pane lists. */
+export interface RecordPagesTarget { modelLabel: string; recordId: string }
+
+/** Page bindings, role filter, inline reader, and writer-gated bind controls; the
+ *  chatter tab and a page section both hand it the record they show. */
+export function RecordPagesPane({ target, role }: { target: RecordPagesTarget; role?: string }): ReactElement {
   const t = useKnowledgeT();
   const preview = useRuntimeViewAs();
-  const { modelLabel, recordId } = recordVariables(context, role);
+  const { modelLabel, recordId } = target;
   const variables = useMemo(() => ({ modelLabel, recordId, role: role ?? null }), [modelLabel, recordId, role]);
   const bindingsQuery = useAuthoredQuery(KnowledgeRecordPages, variables, {
     enabled: Boolean(modelLabel && recordId), models: BINDING_MODELS,

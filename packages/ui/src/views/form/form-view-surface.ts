@@ -105,6 +105,8 @@ export interface RecordTabDescriptor {
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
   render: (context: RecordPanelContext) => React.ReactNode;
+  /** Shown only while the loaded record satisfies it; absent until the record loads. */
+  visibleWhen?: (record: Row) => boolean;
   /**
    * Keep the panel mounted even while inactive. Base UI mounts a keep-mounted
    * panel eagerly from the first render, so do not opt in for eager work such as
@@ -605,7 +607,8 @@ export function useFormViewSurface({
       : deleteAction;
   const recordTabList = React.useMemo(
     () => mergeRecordTabs(
-      recordTabs ?? EMPTY_RECORD_TABS,
+      (recordTabs ?? EMPTY_RECORD_TABS).filter((tab) =>
+        !tab.visibleWhen || (tabRecord != null && tab.visibleWhen(tabRecord))),
       slotDeclarations.flatMap((declaration): RecordTabDescriptor[] => {
         if (declaration.kind !== "tab") return [];
         const tab = declaration.tab;

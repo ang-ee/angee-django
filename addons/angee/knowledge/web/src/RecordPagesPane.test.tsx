@@ -25,7 +25,7 @@ vi.mock("@angee/ui", async (original) => ({
 }));
 vi.mock("./KnowledgePageView", () => ({ KnowledgePageView: ({ pageId }: { pageId: string }) => <p>Page {pageId}</p> }));
 
-import { RecordPagesPane, recordPagesContribution } from "./RecordPagesPane";
+import { RecordPagesPane, recordPagesContribution, recordPagesTarget } from "./RecordPagesPane";
 import { KnowledgeBindRecord, KnowledgePages, KnowledgeRecordPages } from "./data/documents";
 import type { ChatterViewContext } from "@angee/ui";
 
@@ -52,7 +52,7 @@ test("role configuration filters one shared query and opens the bound page inlin
   function Count() { return <span>Count {contribution.useCount?.(context)}</span>; }
   render(<Count />);
   expect(screen.getByText("Count 1")).toBeTruthy();
-  render(<RecordPagesPane context={context} role="reference" />);
+  render(<RecordPagesPane target={recordPagesTarget(context)} role="reference" />);
   expect(sdk.query).toHaveBeenCalledWith(KnowledgeRecordPages, {
     modelLabel: "example.Record", recordId: "rec_1", role: "reference",
   }, { enabled: true, models: ["knowledge.RecordBinding"] });
@@ -61,7 +61,7 @@ test("role configuration filters one shared query and opens the bound page inlin
 });
 
 test("writer controls use the role-keyed bind and unbind mutations", async () => {
-  render(<RecordPagesPane context={context} role="reference" />);
+  render(<RecordPagesPane target={recordPagesTarget(context)} role="reference" />);
   fireEvent.click(screen.getByRole("button", { name: "Bind" }));
   await waitFor(() => expect(sdk.bind).toHaveBeenCalledWith({ input: {
     model_label: "example.Record", record_id: "rec_1", page: "pg_2", role: "reference",
@@ -74,7 +74,7 @@ test("writer controls use the role-keyed bind and unbind mutations", async () =>
 });
 
 test("the unfiltered tab removes each binding under its stored role", async () => {
-  render(<RecordPagesPane context={context} />);
+  render(<RecordPagesPane target={recordPagesTarget(context)} />);
   fireEvent.click(screen.getByRole("button", { name: "Unbind Guide (reference)" }));
   await waitFor(() => expect(sdk.unbind).toHaveBeenCalledWith({ input: {
     model_label: "example.Record", record_id: "rec_1", page: "pg_1", role: "reference",
@@ -83,7 +83,7 @@ test("the unfiltered tab removes each binding under its stored role", async () =
 
 test("pending bindings render a skeleton without write controls", () => {
   sdk.query.mockReturnValue({ data: undefined, isPending: true });
-  render(<RecordPagesPane context={context} />);
+  render(<RecordPagesPane target={recordPagesTarget(context)} />);
   expect(screen.getByRole("status").textContent).toContain("Loading bound pages");
   expect(screen.queryByRole("button", { name: "Bind" })).toBeNull();
 });

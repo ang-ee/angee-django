@@ -17,7 +17,7 @@ vi.mock("./data/use-upload", () => ({
 }));
 vi.mock("./views/FilePreview", () => ({ FileRecordPreview: ({ id }: { id: string }) => <p>Preview {id}</p> }));
 
-import { RecordFilesPane, useRecordFilesCount } from "./RecordFilesPane";
+import { RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
 import { StorageDrives, StorageRecordFiles } from "./data/documents";
 import type { ChatterViewContext } from "@angee/ui";
 
@@ -42,7 +42,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 test("shares the actor-scoped attachment count and opens the existing file preview", () => {
-  render(<><Count /><RecordFilesPane context={context} /></>);
+  render(<><Count /><RecordFilesPane target={recordFilesTarget(context)} /></>);
   expect(screen.getByText("1")).toBeTruthy();
   expect(sdk.query).toHaveBeenCalledWith(StorageRecordFiles, {
     modelLabel: "example.Record", recordId: "rec_1",
@@ -55,12 +55,12 @@ test("uploads to the record through the existing record target and renders a ske
   sdk.query.mockImplementation((document) => document === StorageDrives
     ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
     : { data: undefined, isPending: true });
-  const view = render(<RecordFilesPane context={context} />);
+  const view = render(<RecordFilesPane target={recordFilesTarget(context)} />);
   expect(screen.getByRole("status").textContent).toContain("Loading attached files");
   sdk.query.mockImplementation((document) => document === StorageDrives
     ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
     : { data: { record_files: { available: true, can_upload: true, attachments: [] } }, isPending: false });
-  view.rerender(<RecordFilesPane context={context} />);
+  view.rerender(<RecordFilesPane target={recordFilesTarget(context)} />);
   fireEvent.change(view.container.querySelector('input[type="file"]')!, {
     target: { files: [new File(["content"], "note.txt", { type: "text/plain" })] },
   });

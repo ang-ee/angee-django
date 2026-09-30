@@ -9,7 +9,7 @@ import { recordPagesContribution } from "./RecordPagesPane";
 import { vaultCreateForm } from "./views/vault-form";
 
 export { KnowledgePageView, type KnowledgePageViewProps } from "./KnowledgePageView";
-export { recordPagesContribution, type RecordPagesContributionOptions } from "./RecordPagesPane";
+export { RecordPagesPane, recordPagesContribution, recordPagesTarget, type RecordPagesContributionOptions, type RecordPagesTarget } from "./RecordPagesPane";
 
 const KNOWLEDGE_ID = "knowledge";
 

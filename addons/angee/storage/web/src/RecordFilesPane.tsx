@@ -10,7 +10,8 @@ import { StorageUploadTasks } from "./views/StorageUploadTasks";
 
 const ATTACHMENT_MODELS = ["storage.FileAttachment"] as const;
 
-function recordVariables(context: ChatterViewContext) {
+/** The chatter tab's record, as the pane expects it. */
+export function recordFilesTarget(context: ChatterViewContext): RecordFilesTarget {
   return {
     modelLabel: context.route?.modelLabel ?? "",
     recordId: context.view.kind === "record" ? context.view.sqid ?? "" : "",
@@ -19,7 +20,7 @@ function recordVariables(context: ChatterViewContext) {
 
 /** Count uses the same actor-scoped read as the panel. */
 export function useRecordFilesCount(context: ChatterViewContext): number | undefined {
-  const { modelLabel, recordId } = recordVariables(context);
+  const { modelLabel, recordId } = recordFilesTarget(context);
   const variables = useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
   const query = useAuthoredQuery(StorageRecordFiles, variables, {
     enabled: Boolean(modelLabel && recordId), models: ATTACHMENT_MODELS,
@@ -28,11 +29,15 @@ export function useRecordFilesCount(context: ChatterViewContext): number | undef
   return files?.available ? files.attachments.length : undefined;
 }
 
-/** Record-scoped file list, inline preview, and the existing upload protocol. */
-export function RecordFilesPane({ context }: { context: ChatterViewContext }): ReactElement {
+/** The record whose attachments a pane lists. */
+export interface RecordFilesTarget { modelLabel: string; recordId: string }
+
+/** Record-scoped file list, inline preview, and the existing upload protocol; the
+ *  chatter tab and a page section both hand it the record they show. */
+export function RecordFilesPane({ target }: { target: RecordFilesTarget }): ReactElement {
   const t = useStorageT();
   const preview = useRuntimeViewAs();
-  const { modelLabel, recordId } = recordVariables(context);
+  const { modelLabel, recordId } = target;
   const variables = useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
   const filesQuery = useAuthoredQuery(StorageRecordFiles, variables, {
     enabled: Boolean(modelLabel && recordId), models: ATTACHMENT_MODELS,

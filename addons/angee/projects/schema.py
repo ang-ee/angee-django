@@ -30,7 +30,7 @@ from angee.graphql.data import (
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
 from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
@@ -266,6 +266,7 @@ class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     folder: FolderType | None = actor_scoped_to_one("folder")
     converted_from: "ConsoleTaskType | None" = actor_scoped_to_one("converted_from")
     lead: UserType | None = actor_scoped_to_one("lead")
+    links: list["ProjectLinkType"] = actor_scoped_to_many("links")
 
 
 @strawberry_django.type(Milestone)
@@ -440,6 +441,7 @@ class ProjectParticipantType(AuthoredRefMixin, AngeeNode):
     updated_at: auto
 
     project: ProjectType | None = actor_scoped_to_one("project")
+    links: list["ProjectLinkType"] = actor_scoped_to_many("links")
     party: PartyType | None = actor_scoped_to_one("party")
 
 
