@@ -14,7 +14,15 @@ from django.db import connection
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import ObjectRef, RelationshipTuple, actor_context, system_context, to_subject_ref, write_relationships
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.graphql.schema import GraphQLSchemas
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
@@ -201,6 +209,7 @@ class PublicationCases(TransactionTestCase):
             with self.assertRaises(PublishedQuestion):
                 question.set_visibility("restricted")
         self.post(question, self.asker)
+        self.post(question, self.recipient)
         self.post(question, self.manager)
 
     def test_stale_post_cannot_unmask_after_publication(self) -> None:
@@ -223,7 +232,11 @@ class PublicationCases(TransactionTestCase):
                         self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
                 self.assertEqual(self.Message._base_manager.count(), before)
                 self.post(question, self.manager)
-                self.post(question, self.recipient)
+                if passed:
+                    self.post(question, self.recipient)
+                else:
+                    with self.assertRaises(PermissionDenied):
+                        self.post(question, self.recipient)
 
     def test_ordinary_task_keeps_native_visibility_and_posting(self) -> None:
         with actor_context(self.manager):

@@ -1,7 +1,7 @@
 // Authorization schema for proposal rounds.
 // @rebac_package: proposals
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 9
 
 definition proposals/role {
     relation member: auth/user | auth/group#member | angee/role:admin#member

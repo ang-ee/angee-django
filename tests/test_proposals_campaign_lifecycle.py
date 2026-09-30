@@ -281,7 +281,7 @@ def test_facilitation_cannot_transfer_to_an_existing_or_retired_responder(campai
                 as_actor(round, manager).transfer_facilitation(c.person("responder"))
 
 
-def test_opening_uses_current_phase_and_backward_moves_never_erase_disclosure(campaign: ProposalCampaign) -> None:
+def test_lift_ignores_phase_and_backward_moves_never_erase_disclosure(campaign: ProposalCampaign) -> None:
     c = campaign
     round = c.round()
     proposal = c.admit(round, "responder")
@@ -300,22 +300,46 @@ def test_opening_uses_current_phase_and_backward_moves_never_erase_disclosure(ca
                 as_actor(round.project, owner).set_current_milestone(milestone)
         as_actor(round.project, owner).set_current_milestone(first)
     with actor_context(manager):
-        assert not as_actor(round, manager).can_open()
-        with pytest.raises(ValidationError, match="boundary"):
-            as_actor(round, manager).open()
+        assert as_actor(round, manager).can_open()
+        opened = as_actor(round, manager).open()
     with actor_context(owner):
         as_actor(round.project, owner).set_current_milestone(second)
         as_actor(round.project, owner).set_current_milestone(first)
-    with actor_context(manager), pytest.raises(ValidationError, match="boundary"):
-        as_actor(round, manager).open()
-    with actor_context(owner):
-        as_actor(round.project, owner).set_current_milestone(second)
-    opened = c.open(round)
+    assert not as_actor(round, manager).can_open()
     with actor_context(owner):
         as_actor(round.project, owner).set_current_milestone(third)
         as_actor(round.project, owner).set_current_milestone(first)
     assert Round._base_manager.get(pk=round.pk).opened_at == opened.opened_at
     assert Proposal._base_manager.get(pk=proposal.pk).disclosed_at == opened.opened_at
+
+
+@pytest.mark.parametrize("state", ("collecting", "cancelled"))
+def test_manager_can_lift_any_undisclosed_round_and_reader_sees_receipt(
+    campaign: ProposalCampaign, state: str,
+) -> None:
+    c = campaign
+    round = c.round(policy="answers")
+    proposal = c.admit(round, "responder")
+    manager, reader = c.person("facilitator"), c.person("reader")
+    with actor_context(manager):
+        as_actor(proposal, manager).submit()
+        if state == "cancelled":
+            round = as_actor(round, manager).cancel()
+    grant(round, "reader", reader)
+    assert as_actor(round, manager).can_open()
+    assert not as_actor(round, reader).can_open()
+    with actor_context(reader), pytest.raises(PermissionDenied):
+        as_actor(round, reader).open()
+    with actor_context(manager):
+        lifted = as_actor(round, manager).open()
+        revision = lifted.revision
+        assert not as_actor(round, manager).can_open()
+        replay = as_actor(round, manager).open(expected_revision=revision)
+    assert lifted.status == ("opened" if state == "collecting" else "cancelled")
+    assert replay.revision == revision
+    assert as_actor(round, reader).has_access("read")
+    assert Round._base_manager.get(pk=round.pk).opened_at == c.now
+    assert Proposal._base_manager.get(pk=proposal.pk).disclosed_at == c.now
 
 
 def test_question_replay_is_asker_scoped_and_surrender_does_not_duplicate_content(campaign: ProposalCampaign) -> None:

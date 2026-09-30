@@ -193,7 +193,7 @@ class ProposalsWorkTests(ClarificationCase):
             self.as_user(self.round, self.manager).ask("Manager question", "Details", recipient=self.recipient)
         self.assertEqual(self.Task._base_manager.count(), count)
 
-    def test_queue_roster_reads_and_comments_only_on_inherited_questions(self):
+    def test_queue_roster_reads_but_does_not_comment_on_widened_questions(self):
         self.route()
         inherited = self.ask()
         restricted = self.ask(audience="managers")
@@ -201,14 +201,10 @@ class ProposalsWorkTests(ClarificationCase):
             with self.subTest(visibility=task.visibility), actor_context(self.member):
                 held = self.as_user(task, self.member)
                 self.assertEqual(held.has_access("read"), allowed)
-                self.assertEqual(held.has_access("comment"), allowed)
+                self.assertFalse(held.has_access("comment"))
                 self.assertEqual(self.Task.objects.as_user(self.member).filter(pk=task.pk).exists(), allowed)
-                if allowed:
-                    message = held.message_post(body="Queue member reply")
-                    self.assertIsNotNone(message.pk)
-                else:
-                    with self.assertRaises(PermissionDenied):
-                        held.message_post(body="Must not be posted")
+                with self.assertRaises(PermissionDenied):
+                    held.message_post(body="Must not be posted")
         self.assertFalse(self.as_user(inherited, self.outsider).has_access("read"))
 
     def private_track(self):

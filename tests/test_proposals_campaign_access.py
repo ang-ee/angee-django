@@ -34,6 +34,18 @@ def assert_read(row: Any, actor: Any, expected: bool) -> None:
         )
 
 
+def test_project_writer_reads_widened_question_without_comment_authority(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    c.admit(round, "responder")
+    question = c.ask(round)
+    project_writer = c.person("project-owner")
+    assert_read(question, project_writer, True)
+    assert not as_actor(question, project_writer).has_access("comment")
+    with actor_context(project_writer), pytest.raises(PermissionDenied):
+        as_actor(question, project_writer).message_post("Not addressed to me")
+
+
 @pytest.mark.parametrize("policy", ("facilitator_only", "answers", "answers_and_tracks", "drafts_and_tracks"))
 @pytest.mark.parametrize("target_kind", ("project", "task"))
 def test_each_seat_reads_only_its_round_proposals_tracks_questions_and_answers(

@@ -691,15 +691,15 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Question passed.", id=result.sqid)
 
     @strawberry.mutation
-    @action_guard("Open round failed.", errors=(StaleRevisionError,))
+    @action_guard("Lift round failed.", errors=(StaleRevisionError,))
     def open_proposal_round(
         self, info: strawberry.Info, round: PublicID, expected_revision: int | None = None
     ) -> ActionResult:
-        """Open one collecting Round under its declared disclosure policy."""
+        """Lift one Round under its declared disclosure policy."""
 
-        target = authorized_action_target(info, Round, round, "write")
+        target = authorized_action_target(info, Round, round, "manage")
         target.open(expected_revision=expected_revision)
-        return ActionResult(ok=True, message="Proposal round opened.", id=target.sqid)
+        return ActionResult(ok=True, message="Round disclosure lifted.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Close round failed.", errors=(StaleRevisionError,))
