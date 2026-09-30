@@ -15,6 +15,7 @@ import type {
   ResourceToolbarFilterField,
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
+  ResourceToolbarChrome,
 } from "../../toolbars";
 import type {
   ListViewNavigationScope,
@@ -107,6 +108,12 @@ export interface BoardCardPlacement {
   rank?: number;
 }
 
+/** Declared default board card: one title and up to four readable detail fields. */
+export interface BoardCardSpec {
+  title: string;
+  fields?: readonly string[];
+}
+
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
   refresh: () => void;
@@ -135,9 +142,15 @@ export type ResourceCollectionPresentation = "page" | "workspace" | "embedded";
 export type ResourceTableLayout = "auto" | "fixed";
 export type ResourceTableHeaderVisibility = "visible" | "visually-hidden";
 
+export interface ListChrome extends ResourceToolbarChrome {
+  columnChooser?: boolean;
+}
+
 export interface ListViewProps<TRow extends Row = Row> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
+  /** Hide selected list chrome while preserving the resource view's query. */
+  chrome?: ListChrome;
   /** Page/workspace surfaces fill their owner; embedded surfaces grow in flow. */
   presentation?: ResourceCollectionPresentation;
   /** CSS table sizing strategy. Fixed layout lets rich single-column rows truncate to their pane. */
@@ -150,6 +163,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   source?: CollectionSource<TRow>;
   /** Allowed render kinds; defaults to the resource's available kinds. */
   availableViews?: readonly ResourceViewKind[];
+  /** Shipped view ids declared for this collection route. */
+  presetIds?: readonly string[];
   /** Semantic search field; null omits the search control. */
   textFilterField?: string | null;
   /** Limit nested grouping where the source supports a single axis. */
@@ -166,6 +181,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   baseFilter?: ResourceFilter<ResourceTypeName>;
   /** Favorite or quick filters shown in the list toolbar. */
   filterOptions?: readonly ResourceToolbarFilterOption[];
+  /** Show filter-option or shipped-preset ids and facets in a compact row. */
+  filterRow?: { quickFilterIds?: readonly string[]; facetIds?: readonly string[] };
   /** Explicit relation facets exposed as quick filters and group-by axes. */
   facets?: readonly FacetDescriptor[];
   /** Presentation overrides for custom filters; the query supplies all supported fields. */
@@ -185,6 +202,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   gantt?: GanttViewSpec;
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
+  /** Card content without replacing the board's shared frame and actions. */
+  boardCard?: BoardCardSpec;
   /** Group seeded by the resource list. */
   defaultGroup?: ResourceViewGroup | null;
   /** Per-view group defaults seeded by the resource list. */

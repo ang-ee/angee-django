@@ -97,6 +97,8 @@ export interface AppRuntime {
   vocabulary: RuntimeVocabulary;
   resourceViews: Readonly<Record<string, ResourceViewPreset>>;
   defaultResourceView?: string;
+  /** Presets targeted by menu entries for the active collection route. */
+  menuResourceViewIds?: readonly string[];
   auth: RuntimeAuthState;
   logoutAction: RuntimeLogoutAction;
   userPreferences: RuntimeUserPreferencesState;

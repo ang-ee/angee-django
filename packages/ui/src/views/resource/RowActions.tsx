@@ -42,6 +42,8 @@ interface RowActionDeclarationBase<TRow extends Row> {
   id: string;
   label: string;
   icon?: string;
+  /** How the row verb reads. A labelled verb shows its label by default. */
+  presentation?: "icon" | "label" | "both";
   variant: ButtonVariant;
   visible: (row: TRow) => boolean;
   disabled: (row: TRow) => boolean;
@@ -476,13 +478,16 @@ function RowActionButton<TRow extends Row>({
 }: RowActionButtonProps<TRow>): React.ReactElement {
   const preview = useRuntimeViewAs();
   const blocked = Boolean(preview.viewAs || preview.pending);
+  const presentation = action.presentation ?? "label";
+  const showIcon = presentation !== "label" && Boolean(action.icon);
+  const showLabel = presentation !== "icon" || !action.icon;
   return (
     <Button
       type="button"
       variant={action.variant}
-      size={action.icon ? "iconSm" : "sm"}
+      size={showIcon && !showLabel ? "iconSm" : "sm"}
       aria-label={action.label}
-      title={action.icon ? action.label : undefined}
+      title={showIcon && !showLabel ? action.label : undefined}
       disabled={blocked || busy || action.disabled(row)}
       pending={active && action.pendingPolicy === "active-row"}
       onClick={(event) => {
@@ -491,7 +496,8 @@ function RowActionButton<TRow extends Row>({
         onSelect();
       }}
     >
-      {action.icon ? <Glyph decorative name={action.icon} /> : action.label}
+      {showIcon && action.icon ? <Glyph decorative name={action.icon} /> : null}
+      {showLabel ? action.label : null}
     </Button>
   );
 }

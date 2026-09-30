@@ -1,9 +1,11 @@
 import * as React from "react";
+import { stableSerialize } from "@angee/refine";
 
 import type { ResourceToolbarProps } from "../../toolbars";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import type { ResourceViewGroup, ResourceViewKind } from "./resource-view-model";
 import {
+  activeFilterIdsFor,
   addCustomFilter as addCustomFilterToFilter,
   nextFacetFilter,
   nextTextFilter,
@@ -54,7 +56,12 @@ export function useResourceToolbarProps({
   );
 
   return React.useMemo<ResourceToolbarProps>(
-    () => ({
+    () => {
+      const activeFavoriteIds = resourceView.savedFavorites.flatMap((favorite) =>
+        stableSerialize(favorite.filter ?? {}) === stableSerialize(resourceView.state.filter)
+          && (favorite.preset ?? undefined) === (resourceView.state.preset || undefined)
+          ? [favorite.id] : []);
+      return ({
       ...props,
       view,
       group: groupingEnabled ? group : undefined,
@@ -62,13 +69,14 @@ export function useResourceToolbarProps({
       groupOptions: groupingEnabled ? groupOptions : undefined,
       customGroupOptions: groupingEnabled ? customGroupOptions : undefined,
       filterOptions,
+      activeFavoriteIds,
       onClearGroup: groupingEnabled
         ? () => resourceView.setGroupStack([])
         : undefined,
       onGroupStackChange: groupingEnabled ? resourceView.setGroupStack : undefined,
       onPageChange: setPage,
       onPageSizeChange: resourceView.setPageSize,
-      onViewChange: view ? resourceView.setView : undefined,
+      onViewChange: view && (props.availableViews?.length ?? 2) > 1 ? resourceView.setView : undefined,
       onCustomFilterAdd: (customFilter) =>
         resourceView.setFilter(
           addCustomFilterToFilter(resourceView.state.filter, customFilter),
@@ -77,20 +85,35 @@ export function useResourceToolbarProps({
         resourceView.setFilter(removeCustomFilter(resourceView.state.filter, id)),
       onFavoriteSave: resourceView.saveFavorite,
       onFavoriteSelect: resourceView.applyFavorite,
-      onQueryReset: resourceView.resetQuery,
-      queryDirty:
-        Object.keys(resourceView.state.filter).length > 0
-        || resourceView.state.groupStack.length > 0
-        || Boolean(resourceView.state.sorting?.length),
+      onFavoriteRename: resourceView.renameFavorite,
+      onFavoritePin: resourceView.pinFavorite,
+      onFavoriteToggle: (favorite) => activeFavoriteIds.includes(favorite.id)
+        ? favorite.id === resourceView.state.preset
+          ? resourceView.clearPreset()
+          : resourceView.resetQuery()
+        : resourceView.applyFavorite(favorite),
+      onQueryReset: resourceView.clearQuery,
+      queryDirty: resourceView.queryDirty,
       onFilterToggle: (id) =>
         resourceView.setFilter(
           nextFacetFilter(resourceView.state.filter, filterOptions, id),
         ),
+      onFacetChange: (field, optionId) => {
+        const active = activeFilterIdsFor(resourceView.state.filter, filterOptions)
+          .filter((id) => id.startsWith(`${field}:`));
+        if (active.length === 1 && active[0] === optionId) return;
+        const cleared = active.reduce(
+          (filter, id) => nextFacetFilter(filter, filterOptions, id),
+          resourceView.state.filter,
+        );
+        resourceView.setFilter(optionId ? nextFacetFilter(cleared, filterOptions, optionId) : cleared);
+      },
       onFilterTextChange: textFilterField === null ? undefined : (value) =>
         resourceView.setFilter(
           nextTextFilter(resourceView.state.filter, value, textFilterField),
         ),
-    }),
+    });
+    },
     [
       filterOptions,
       group,
@@ -101,14 +124,19 @@ export function useResourceToolbarProps({
       props,
       resourceView.applyFavorite,
       resourceView.saveFavorite,
+      resourceView.renameFavorite,
+      resourceView.pinFavorite,
+      resourceView.savedFavorites,
       resourceView.resetQuery,
+      resourceView.clearQuery,
+      resourceView.queryDirty,
+      resourceView.clearPreset,
       resourceView.setFilter,
       resourceView.setGroupStack,
       resourceView.setPageSize,
       resourceView.setView,
       resourceView.state.filter,
-      resourceView.state.groupStack,
-      resourceView.state.sorting,
+      resourceView.state.preset,
       setPage,
       textFilterField,
       view,

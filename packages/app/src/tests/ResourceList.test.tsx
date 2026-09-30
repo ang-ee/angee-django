@@ -885,10 +885,20 @@ describe("ResourceList", () => {
     ).toBeNull();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Filter and group" }),
+      screen.getByRole("button", { name: "Group by" }),
     );
 
-    expect(await screen.findByText("Group by")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Add custom group" })).toBeTruthy();
+  });
+
+  test("ListView hides declared chrome while retaining its filter", async () => {
+    render(<TestUrlState><ListView resource="notes.Note" columns={columns}
+      chrome={{ viewSwitcher: false, pager: false, columnChooser: false }} /></TestUrlState>);
+    expect(await screen.findByText("First")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Previous page" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Visible fields" })).toBeNull();
   });
 
   test("parses List child columns and forwards props into the list renderer", async () => {
@@ -1301,13 +1311,12 @@ describe("ResourceList", () => {
     expect(title.value).toBe("");
     expect(title.closest(".overflow-y-auto")).not.toBeNull();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Board view" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  test("renders record navigation and reuses the view switcher in record chrome", async () => {
+  test("renders record navigation without a collection switcher in record chrome", async () => {
     const onSelect = vi.fn();
-    const onClose = vi.fn();
 
     function Harness(): ReactElement {
       const [recordId, setRecordId] = useState<string | null>(null);
@@ -1328,7 +1337,6 @@ describe("ResourceList", () => {
               onSelect(id);
               setRecordId(id);
             }}
-            onClose={onClose}
           />
         </TestUrlState>
       );
@@ -1368,17 +1376,7 @@ describe("ResourceList", () => {
       ).toContain("3 / 4"),
     );
 
-    const switcher = screen.getByRole("group", {
-      name: "Record view switcher",
-    });
-    const boardButton = within(switcher).getByRole("button", {
-      name: "Board view",
-    });
-    fireEvent.click(boardButton);
-    expect(onClose).toHaveBeenCalledTimes(1);
-    await waitFor(() =>
-      expect(boardButton.getAttribute("aria-pressed")).toBe("true"),
-    );
+    expect(screen.queryByRole("group", { name: "Record view switcher" })).toBeNull();
   });
 
   test("does not probe list state for a cold direct record", async () => {
@@ -1994,7 +1992,7 @@ describe("ResourceList", () => {
       expect(onSelect).toHaveBeenCalledWith("note-2");
       const pager = await screen.findByRole("navigation", { name: "Record navigation" });
       expect(pager.textContent?.replace(/\s+/g, " ")).toContain("2 / 2");
-      expect(screen.queryByRole("button", { name: "Filter and group", hidden: true })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Filter", hidden: true })).toBeNull();
       const request = sdkMocks.listCalls.findLast((call) => call.enabled !== false);
       expect(JSON.stringify(request?.filter)).toContain("2026-01-01");
       expect(JSON.stringify(request?.filter)).toContain("2026-02-01");
@@ -2152,7 +2150,7 @@ describe("ResourceList", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter and group" }),
+      await screen.findByRole("button", { name: "Filter" }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "Add custom filter" }),
@@ -2192,7 +2190,7 @@ describe("ResourceList", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter, group, favorites" }),
+      await screen.findByRole("button", { name: "Filter and favorites" }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "Save current search" }),
@@ -2202,7 +2200,7 @@ describe("ResourceList", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter, group, favorites" }),
+      await screen.findByRole("button", { name: "Filter and favorites" }),
     );
     expect(await screen.findByRole("button", { name: "Two per page" }))
       .toBeTruthy();
@@ -2218,7 +2216,7 @@ describe("ResourceList", () => {
     });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter, group, favorites" }),
+      await screen.findByRole("button", { name: "Filter and favorites" }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Two per page" }));
     await waitFor(() => {
@@ -2270,13 +2268,10 @@ describe("ResourceList", () => {
     await screen.findByRole("button", { name: "Groups 3-4 / 4 groups" });
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Filter and group",
+        name: "Group by",
       }),
     );
-    const groupPicker = await screen.findByRole("heading", { name: "Group by" });
-    fireEvent.click(
-      within(groupPicker.parentElement!).getByRole("button", { name: "Month" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Month" }));
 
     await waitFor(() =>
       expect(
@@ -2353,30 +2348,20 @@ describe("ResourceList", () => {
     });
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Filter and group",
+        name: "Group by",
       }),
     );
-    const groupPicker = await screen.findByRole("heading", { name: "Group by" });
-    fireEvent.click(
-      within(groupPicker.parentElement!).getByRole("button", { name: "Day" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Day" }));
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Remove Updated At · Day" }))
         .toBeNull(),
     );
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Filter and group",
+        name: "Group by",
       }),
     );
-    const updatedGroupPicker = await screen.findByRole("heading", {
-      name: "Group by",
-    });
-    fireEvent.click(
-      within(updatedGroupPicker.parentElement!).getByRole("button", {
-        name: "Month",
-      }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Month" }));
 
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];

@@ -32,6 +32,9 @@ export interface ResourceListFrameProps {
   onRetry?: () => void;
   summary?: string;
   loadingFooter?: boolean;
+  fetching?: boolean;
+  /** Whether this render already has rows; retain settled content only for a gap. */
+  hasRows?: boolean;
   children: React.ReactNode;
   overlays?: React.ReactNode;
 }
@@ -46,10 +49,17 @@ export function ResourceListFrame({
   onRetry,
   summary,
   loadingFooter = false,
+  fetching = false,
+  hasRows = true,
   children,
   overlays,
 }: ResourceListFrameProps): React.ReactElement {
   const t = useUiT();
+  const previousContent = React.useRef<React.ReactNode>(null);
+  React.useEffect(() => {
+    if (!fetching && !error) previousContent.current = hasRows ? children : null;
+  }, [children, error, fetching, hasRows]);
+  const retaining = fetching && !hasRows && previousContent.current !== null;
   return (
     <>
       <ControlBand wrap={toolbar.wrap}>
@@ -64,8 +74,10 @@ export function ResourceListFrame({
       </ControlBand>
       <div
         data-resource-presentation={presentation}
+        aria-busy={fetching}
         className={cn(
           "resource-list-frame flex min-w-0 flex-col bg-sheet",
+          retaining && "pointer-events-none opacity-50",
           presentation === "embedded"
             ? "overflow-visible"
             : presentation === "workspace"
@@ -93,9 +105,7 @@ export function ResourceListFrame({
             description={error.message}
             actions={onRetry ? <Button size="sm" onClick={onRetry}>{t("collection.retry")}</Button> : undefined}
           />
-        ) : (
-          children
-        )}
+        ) : retaining ? previousContent.current : children}
         {loadingFooter ? <ListLoadingFooter /> : null}
         {overlays}
       </div>

@@ -374,6 +374,16 @@ shared UI copy through an addon bundle.
   or local copies of shared resource-view state.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
+  Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
+  because a verb must remain understandable without recognizing its icon.
+- A list route declares its shipped `presetIds`, `filterRow` quick filter and facet
+  ids, `createAction`, and `boardCard` fields on `ResourceList`/`List` rather than
+  building parallel controls. The route default preset is included automatically.
+  Quick filter ids may name shipped presets or filter options. A scoped create verb
+  uses a server-projected parent record for its permission; the create label comes
+  from resource vocabulary. `chrome` may hide the view switcher, pager, or column
+  chooser without changing query state. A nonselectable list hides Share but keeps
+  other contributed utilities.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
   A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
   `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
@@ -415,8 +425,10 @@ shared UI copy through an addon bundle.
   in-memory fixtures still use `RowsListView`.
 - Named addon `resourceViews` compose the existing favorites and ResourceView
   query state. A route or menu `defaultResourceView` selects a shipped preset;
-  URL edits override its editable defaults. Fixed filters remain on the preset
-  and survive query reset. The switcher includes shipped views even without
+  `presetIds` adds only the other presets declared for that collection route.
+  Menu presets are admitted only on their target route. URL edits override the
+  route default's editable query; toolbar Clear restores that default and its
+  fixed filter. The switcher includes shipped views even without
   writable preferences. Columns use native TanStack visibility keyed by the
   authored field; relation display-path projection preserves that identity.
   See the [manifest contract](../../packages/app/README.md#app-vocabulary-and-shipped-views).

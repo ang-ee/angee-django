@@ -66,7 +66,7 @@ test("local rows keep curated group shortcuts separate from complete query capab
     />
   </ResourceViewProvider></ToastProvider>);
 
-  fireEvent.click(screen.getByLabelText("Filter and group"));
+  fireEvent.click(screen.getByLabelText("Group by"));
   expect(screen.queryByRole("button", { name: "Owner" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
   const field = screen.getByLabelText("Group field");
@@ -97,7 +97,7 @@ test("drops a curated date shortcut when its granularity is no longer supported"
     />
   </ResourceViewProvider></ToastProvider>);
 
-  fireEvent.click(screen.getByLabelText("Filter and group"));
+  fireEvent.click(screen.getByLabelText("Group by"));
   expect(screen.queryByRole("button", { name: "Document date by day" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
   expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
