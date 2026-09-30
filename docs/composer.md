@@ -427,6 +427,10 @@ explicit `None` disabling migrations for an emitted label, fail clearly.
   [notes workflow](../examples/addons/example/notes/resources/demo/100_workflows.workflow.yaml).
   [`WorkflowDefinitionResource`](../addons/angee/workflows/resources.py) delegates
   identity, draft validation and publication to `WorkflowManager.install_definition`.
-  Edit that source document rather than persisted versions.
+  Publication freezes the normalized child contracts in each version. Edit the
+  source document and republish affected parents when a child contract changes.
 - Runtime cleanup may delete only the configured generated runtime directory,
   only after verifying Angee's generated sentinel, and must preserve migrations.
+  A fresh-stack reset that also discards generated migration history has no
+  owner yet (Decision 29). `Runtime.clean_configured` cannot serve as that reset;
+  see [the migration debt](backend/guidelines.md#migrations-and-runtime).

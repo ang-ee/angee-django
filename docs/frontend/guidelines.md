@@ -477,6 +477,14 @@ history uses native Query pages with domain-owned
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
   discriminator selection; RHF owns original and transformed values. Keep this
   opt-in adapter out of the UI main entry so other forms do not load Ajv.
+- A widget that consumes a fixed array of object fields declares
+  `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
+  passes the parsed `rowTemplate` only through that seam and rejects a selected
+  widget that cannot accept it; compose the shared `rows` widget for decision
+  forms with fixed-size tables. Decision-specific presentation contributes
+  `decisionContent(kind, Component)` through the decisions fragment's content
+  slot, with one component per kind; the inbox owns the form and its React Hook
+  Form context.
 - Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);

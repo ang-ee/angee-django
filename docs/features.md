@@ -94,12 +94,15 @@ actually unique to your product.
 - **Connect** *(Planned)* — people and conversations: contacts and organisations +
   threads and messages across web, email, and agent channels (agents are
   participants).
-- **Workflows** — durable runs, step journals, gates, decisions, triggers, and
-  published lineages for permissioned human-in-the-loop automation. Each
+- **Workflows** — durable runs, step journals, review steps, triggers, and
+  self-contained published versions for permissioned human-in-the-loop
+  automation. The runner executes typed settlements while row-set owners persist
+  transitions; decisions and extraction remain independent domains. Each
   workflow's service user holds listable source grants, acts for trigger
   admission, and is retained as the actor of triggered runs. Principal admission
-  rechecks the published version's author against those grants, while trigger
-  enablement discloses prospective grants and run readers.
+  rechecks the version's publisher against those grants. Trigger enablement
+  discloses prospective grants and run readers; retained run-input evidence is
+  projected as record references with per-reader redaction.
 - **MCP** *(Planned)* — an agent tool surface generated from the framework's
   persisted, REBAC-gated GraphQL operations.
 - **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed

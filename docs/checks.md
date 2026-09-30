@@ -90,7 +90,11 @@ order cannot hide missing models.
 Workflow tests reach execution states through the shared `load_workflow`,
 `start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
 production admission and transition verbs; do not fabricate step runs or attempts
-to stand in for execution. Name Python test modules `test_<concern>.py` and tests
+to stand in for execution. The scoped `capture_tasks` and `observe(model)`
+helpers capture task sends and publications; `trigger_source(model)` opts a
+declared source into signal capture. Decisions-only suites use
+`angee.decisions.testing` drivers with central concrete models. Name Python
+test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
 ## Agent Methodology And Documentation

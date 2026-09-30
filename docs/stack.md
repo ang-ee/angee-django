@@ -114,6 +114,16 @@ choices and native enums project that same registry;
 GraphQL adaptation stays in `angee.graphql.impl`. Python entry points were
 evaluated and rejected because composition facts belong to project settings,
 not package metadata.
+Declared function hooks use the same owner: addons append setting names to
+`ANGEE_HOOKS`, and callers use `resolve_hook` or `resolve_hooks` after the startup
+check. Resource sources and trigger sources are implementation class registries,
+not caller-maintained loaders.
+
+**REBAC adoption debt.** The current locked floor remains 0.18.2. Version 0.23
+discards a model's declared `Meta.base_manager_name`, which defeats the
+append-only model's guarded base manager. The required fix is in
+`django-zed-rebac`: preserve Django's declared base manager. Adoption is blocked
+until that library fix and the guarded-manager test both pass.
 
 Audit-history exclusions: `django-easy-audit` was evaluated and rejected because
 GPL code is incompatible with a framework composed into commercial consumers.
@@ -243,6 +253,12 @@ calendar.
 | Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |
+
+**Typing stack decision pending.** Mypy cannot type Django `TextChoices` members
+in `integrate` and `parties` without `django-stubs`; eight errors are known
+there. Decide whether to add and configure `django-stubs` in the
+tooling manifest and lock, then resolve the eight errors. The dependency
+decision blocks a code-only workaround or a claim that the type check is clean.
 
 ## Proposed, Not Locked
 

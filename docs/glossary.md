@@ -139,6 +139,10 @@ the source grants at enable time. A human-published version may run as this
 principal only while its publisher can delegate every enabled trigger grant;
 the same check governs child runs. System-installed versions are trusted.
 
+**Trigger source grant** — a source-declared, listable and revocable REBAC tuple
+assigned to the workflow principal when its trigger is enabled. A
+`record_changed` model declares its grant scope when it opts in.
+
 **Trigger enable preview** — the prospective source grants and the users and
 groups with workflow monitoring access to runs the trigger will start. Only a
 user eligible to enable the trigger may see it.
@@ -204,6 +208,14 @@ contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
 ## Workflows
 
+**Workflow version** — an immutable published definition, including the
+normalized contracts of any child workflows it awaits. A run pins one version.
+
+**Run origin and cause** — the origin describes why a run started; exactly one
+protected link identifies its parent step, prior run, or trigger event when one
+caused it. A manual run has no cause. A cited cause stays retained until its
+dependent effects are pruned.
+
 **Node** — a keyed graph declaration naming a step, its bindings and outgoing
 edges in a `Definition` document.
 
@@ -217,12 +229,22 @@ settlement. A retry creates another attempt for the same step run.
 
 **Settlement** — what a step returns: `Done`, `Wait`, `NextPage`, `Ask` or `Fail`. It describes the
 attempt's completion or continuation, and the transition owner persists it.
+Runner-only retry and diagnostic facts belong to the attempt record.
 
 **Result** — what a workflow run reports, selected and projected from its
 declared producer bindings by `Definition`.
 
 **Review step** — one node that freezes a question, waits for a decision group,
 and applies its answers as the run actor. Each answer retains its resolver.
+
+**Run-input evidence** — the subject and every input field declared as a record
+reference in the pinned schema, admitted only when the run actor can read it.
+Shared `DerivedFrom` edges retain the source identities; the run's read
+projection redacts references a current reader cannot access.
+
+**Derived-from evidence** — a frozen fact or source link admitted through
+`angee.base.evidence`'s standing-read check. Decisions, run inputs and
+extraction retain their own edges to this shared source identity.
 
 ## Decisions
 
@@ -243,6 +265,12 @@ basis, and context. Any authorized assignee can supply that seat's answer.
 
 **Inbox** — the person's readable decisions, filtered by assignment or requester
 to distinguish questions they can answer from questions they issued.
+
+## Extraction
+
+**Extraction** — an independent evidence domain that retains source-grounded
+documents, facts and revisions against an explicit file or message target.
+`workflows_extraction` is its workflow adapter; it does not own the evidence.
 
 ## Relationship Management
 

@@ -8,8 +8,9 @@ field relation. Each source is a base `DerivedFrom` row with a canonical record
 reference. Retention accepts only the target file or a part of the target message.
 Its explicit file or message-part link keeps part and page reads intersected
 with source read access; result and outcome content require target read access.
-The base evidence admission check authorizes the source
-set at retention and again before inference. Profiles supply interpretation through `ExtractionProfile`;
+The base evidence admission check authorizes the source set at retention and
+again before inference. Profiles supply interpretation through
+`ExtractionProfile`;
 `ExtractionManager.prepare_pages` acquires bytes, and recognition and mapping
 use `agents.InferenceModel.infer`. Consumers hold a protected reference to
 `Extraction` and read documents, lines and facts through
@@ -20,8 +21,8 @@ The `workflows_extraction` adapter's `document_extraction` definition prepares
 pages once, maps recognition over raster pages, collects partial results, and
 retains processed evidence or a source hold. `infer_evidence` consumes that
 snapshot, using a pinned revision and explicit identity correspondence when
-structure changes. Retention
-serializes revision allocation on the lineage head and checks exact request reuse.
+structure changes. Retention serializes revision allocation on the lineage head
+and checks exact request reuse.
 Inference preserves source-grounded facts, correction authority and retained
 carriers. Revisions reference the same digest-bound part files instead of copying
 the full carrier value into each part row. It rechecks source access before model work; explicit correspondence
@@ -45,11 +46,12 @@ references and revision correspondence. The shipped definition declares the
 built-in plain text profile and schema.
 
 The shipped definition runs prepare, a `map` of page recognition, then process.
-Processing consumes the engine's typed `MapItem` results directly; the map's
+Processing consumes the workflow runner's typed `MapItem` results directly; the map's
 `failed` edge also routes to processing, so a failed page becomes a source hold
 while its siblings' evidence is retained.
 
-Register profiles through `ANGEE_EXTRACTION_PROFILE_CLASSES`. The domain manifest
+`ExtractionProfile` owns its registry setting,
+`ANGEE_EXTRACTION_PROFILE_CLASSES`; the domain manifest
 owns native parser dependencies. Historical `Document*` contracts remain aliases to the pure
 contracts. Decision-backed corrections compose the typed resolution contract in
 `angee.decisions`; [`ExtractionManager`](managers.py) owns revision and reviewed
