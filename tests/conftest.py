@@ -162,9 +162,12 @@ class Page(AbstractPage):
         rebac_resource_type = "knowledge/page"
 
 
-@reversion.register(fields=("body",))
-class MarkdownPage(AbstractMarkdownPage):
-    """Concrete knowledge markdown sidecar used by source-addon tests.
+reversion.register(Page, fields=())
+
+
+@reversion.register(fields=("body", "page"))
+class MarkdownPage(AbstractMarkdownPage, Page):
+    """Concrete knowledge markdown child used by source-addon tests.
 
     Registered with django-reversion the way the composer registers the
     completed runtime model.

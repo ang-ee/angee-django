@@ -450,7 +450,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
             """
             query IntegrationGroups($groupBy: [GROUP_BY_SPEC!]!) {
               integrations_groups(group_by: $groupBy, limit: 10) {
-                key { vendor_id vendor__display_name kind }
+                key { vendor_id vendor__display_name concrete_type_id concrete_type__model }
                 aggregate { count }
               }
             }
@@ -459,7 +459,8 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
                 "groupBy": [
                     {"field": "VENDOR"},
                     {"field": "VENDOR__DISPLAY_NAME"},
-                    {"field": "KIND"},
+                    {"field": "CONCRETE_TYPE"},
+                    {"field": "CONCRETE_TYPE__MODEL"},
                 ],
             },
             user=admin,
@@ -470,7 +471,8 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
             "key": {
                 "vendor_id": vendor_id,
                 "vendor__display_name": "Conn-Groups",
-                "kind": "Integration",
+                "concrete_type_id": str(integration.concrete_type_id),
+                "concrete_type__model": "integration",
             },
             "aggregate": {"count": 1},
         }
@@ -497,7 +499,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "runtime_status",
         "lifecycle",
         "id",
-        "kind",
+        "concrete_type",
         "vendor",
         "updated_at",
     }
@@ -506,17 +508,17 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "runtime_status",
         "lifecycle",
         "created_at",
-        "kind",
+        "concrete_type",
         "vendor",
         "updated_at",
     }
     assert metadata.aggregate_fields == ("id",)
-    assert set(metadata.query.axes) == {"runtime_status", "lifecycle", "vendor", "kind"}
+    assert set(metadata.query.axes) == {"runtime_status", "lifecycle", "vendor", "concrete_type"}
     assert {
         dimension.field: (dimension.server.input, dimension.server.key, dimension.kind)
         for dimension in metadata.query.axes.values()
     } == {
-        "kind": ("KIND", "kind", "column"),
+        "concrete_type": ("CONCRETE_TYPE", "concrete_type_id", "relation"),
         "vendor": ("VENDOR", "vendor_id", "relation"),
         "lifecycle": ("LIFECYCLE", "lifecycle", "column"),
         "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column"),
@@ -528,6 +530,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.query.fields["vendor"].relation.model == "integrate.Vendor"
     assert metadata.query.fields["vendor"].relation.identity_path == "vendor.id"
     assert metadata.query.axes["vendor"].server.label_key == "vendor__display_name"
+    assert metadata.query.axes["concrete_type"].server.label_key == "concrete_type__model"
     assert metadata.query.identity.field == "id"
     assert not hasattr(metadata, "group_aliases")
     serialized = console_schema._schema.extensions["angee"]["resources"]
@@ -553,7 +556,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "changes",
     ]
     assert list(integration["query"]["axes"]) == [
-        "kind",
+        "concrete_type",
         "vendor",
         "lifecycle",
         "runtime_status",
@@ -566,7 +569,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         )
         for dimension in integration["query"]["axes"].values()
     } == {
-        "kind": ("KIND", "kind", "column"),
+        "concrete_type": ("CONCRETE_TYPE", "concrete_type_id", "relation"),
         "vendor": ("VENDOR", "vendor_id", "relation"),
         "lifecycle": ("LIFECYCLE", "lifecycle", "column"),
         "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column"),
@@ -582,9 +585,9 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert integration["updateFields"] == ["vendor", "credential", "account", "owner"]
     kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
     assert kind_field["kind"] == "scalar"
-    assert integration["query"]["fields"]["kind"]["filter"] is not None
-    assert integration["query"]["fields"]["kind"]["sort"] is not None
-    assert "kind" in integration["query"]["axes"]
+    assert integration["query"]["fields"]["concrete_type"]["filter"] is not None
+    assert integration["query"]["fields"]["concrete_type"]["sort"] is not None
+    assert "concrete_type" in integration["query"]["axes"]
     assert kind_field["updatable"] is False
     lifecycle_field = {field["name"]: field for field in integration["fields"]}["lifecycle"]
     assert lifecycle_field["kind"] == "enum"
@@ -751,7 +754,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
         )
         integration = Integration.objects.get(pk=bridge.pk)
 
-        assert integration.kind == "VCS bridge"
+        assert integration.concrete_type.model_class() is VcsBridge
         assert bridge.backend_class == "stub"
         assert str(integration.lifecycle) == "disconnected"
         assert bridge.pk == integration.pk
@@ -791,16 +794,17 @@ def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
     }
 
 
-def test_integration_kind_backfill_recovers_child_rows(composed_tables: None) -> None:
-    """Existing parent rows recover their concrete integration kind after migration."""
+def test_integration_concrete_type_records_child_model(composed_tables: None) -> None:
+    """A child save records the stable content type used by grouping."""
 
     bridge = make_integration("kind-backfill", backend_class="stub", model=VcsBridge)
 
-    with system_context(reason="test.integrate.kind_backfill"):
-        Integration.objects.filter(pk=bridge.pk).update(kind="Integration")
-        assert Integration.objects.get(pk=bridge.pk).kind == "Integration"
-        assert Integration.objects.sync_kinds() == 1
-        assert Integration.objects.get(pk=bridge.pk).kind == "VCS bridge"
+    with system_context(reason="test.integrate.concrete_type"):
+        parent = Integration.objects.get(pk=bridge.pk)
+        assert parent.concrete_type.model_class() is VcsBridge
+        parent.display_name = "Renamed"
+        parent.save(update_fields=["display_name"])
+        assert Integration.objects.get(pk=bridge.pk).concrete_type.model_class() is VcsBridge
 
 
 def test_integration_update_delete_are_admin_only(

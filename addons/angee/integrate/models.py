@@ -37,7 +37,6 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
     app_settings,
@@ -56,7 +55,13 @@ from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import (
+    RecordRefMixin,
+    canonical_record_target,
+    concrete_child,
+    concrete_child_accessor,
+    concrete_child_models,
+)
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
@@ -1434,8 +1439,8 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
         """Prefetch installed and actor-readable concrete children in fixed queries."""
 
         prefetches: list[Prefetch] = []
-        for child_model in _integration_child_models(cast(type[Integration], self.model)):
-            accessor = self.model.concrete_child_accessor(child_model)
+        for child_model in concrete_child_models(self.model):
+            accessor = concrete_child_accessor(self.model, child_model)
             prefetches.append(
                 Prefetch(
                     accessor,
@@ -1455,19 +1460,7 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
 
 
 class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
-    """Manager factories for invariants that span Integration and its impl row."""
-
-    def sync_kinds(self) -> int:
-        """Backfill parent rows with the concrete integration kind they materialize."""
-
-        parent = self.model._base_manager
-        count = parent.filter(kind="").update(kind=self.model.integration_kind_value())
-        for child_model in _integration_child_models(cast(type[Integration], self.model)):
-            if not child_model._meta.can_migrate(connection):
-                continue
-            kind = child_model.integration_kind_value()
-            count += parent.filter(pk__in=child_model._base_manager.values("pk")).exclude(kind=kind).update(kind=kind)
-        return count
+    """Manager for integration and bridge collection scopes."""
 
 
 class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
@@ -1488,21 +1481,21 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """Expose the lifecycle vocabulary off the row for callers that cannot import this module."""
 
     sqid_prefix = "int_"
-    integration_kind_label = "Integration"
-    """Human kind label for parent-level integration grouping."""
     # Operator-given label (the connect flow sets it); blank falls back to the
     # vendor-derived :attr:`display_label`. The one human name for every child
     # (directory, channel, …), so it is not re-buried in each child's config.
     display_name = models.CharField(max_length=255, blank=True, default="")
-    kind = models.CharField(max_length=80, db_index=True, default=integration_kind_label)
-    """Human integration type/kind label, denormalized for server-side grouping."""
+    concrete_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, null=True, editable=False)
+    """Concrete MTI model identity used for server-side grouping."""
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
         """Reject concrete descendants whose native parent path cannot be routed."""
 
         errors = super().check(**kwargs)
-        for child_model in _integration_child_models(cls):
+        for child_model in (
+            model for model in cls._meta.apps.get_models() if model is not cls and issubclass(model, cls)
+        ):
             if child_model._meta.parents.get(cls) is None:
                 errors.append(
                     checks.Error(
@@ -1518,19 +1511,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def concrete_child_models(cls) -> tuple[type[Integration], ...]:
         """Return installed concrete descendants in stable model-label order."""
 
-        return _integration_child_models(cls)
-
-    @classmethod
-    def concrete_child_accessor(cls, child_model: type[Integration]) -> str:
-        """Return the native reverse accessor for one direct concrete child."""
-
-        parent_link = child_model._meta.parents.get(cls)
-        if parent_link is None:
-            raise ImproperlyConfigured(
-                f"{child_model._meta.label} is an indirect Integration descendant; "
-                "concrete-target routing requires a direct capability owner."
-            )
-        return str(parent_link.remote_field.get_accessor_name())
+        return cast(tuple[type[Integration], ...], concrete_child_models(cls))
 
     @classmethod
     def concrete_child_cache_attr(cls, child_model: type[Integration], *, authorized: bool) -> str:
@@ -1542,18 +1523,20 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def _concrete_child(self, model: type[Integration], *, actor: Any, authorized: bool) -> Integration | None:
         """Return one child from this row's collection cache or scoped storage."""
 
-        cache_name = type(self).concrete_child_cache_attr(model, authorized=authorized)
-        if hasattr(self, cache_name):
-            value = getattr(self, cache_name)
-            if isinstance(value, list | tuple):
-                return value[0] if value else None
-            return cast(Integration | None, value)
         queryset = (
             model.objects.with_actor(actor)
             if authorized
             else model.objects.sudo(reason="integrate.integration.child_integrity")
         )
-        return cast(Integration | None, queryset.filter(pk=self.pk).first())
+        return cast(
+            Integration | None,
+            concrete_child(
+                self,
+                model,
+                queryset=queryset,
+                cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
+            ),
+        )
 
     def concrete_children(
         self, *, actor: Any, exposed_model_labels: set[str]
@@ -1726,31 +1709,16 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
         return f"{vendor_slug}:{self.public_id}"
 
-    @classmethod
-    def integration_kind_value(cls) -> str:
-        """Return the grouping label this integration concrete model contributes."""
-
-        if _is_integration_child_model(cls):
-            for base in cls.__mro__:
-                label = base.__dict__.get("integration_kind_label")
-                meta = getattr(base, "_meta", None)
-                if label and getattr(meta, "label_lower", "") != "integrate.integration":
-                    return str(label)
-        else:
-            own_label = cls.__dict__.get("integration_kind_label")
-            if own_label:
-                return str(own_label)
-        return capfirst(cls._meta.verbose_name)
-
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the parent grouping kind when a concrete child row saves."""
+        """Keep the grouping content type aligned with the row's concrete model."""
 
-        current_kind = self.kind
-        if _is_integration_child_model(type(self)) or not self.kind:
-            self.kind = type(self).integration_kind_value()
-        update_fields = kwargs.get("update_fields")
-        if update_fields is not None and self.kind != current_kind:
-            kwargs["update_fields"] = {*update_fields, "kind"}
+        if self.concrete_type_id is None or type(self) is not self._meta.apps.get_model("integrate", "Integration"):
+            content_type = ContentType.objects.get_for_model(type(self))
+            changed = self.concrete_type_id != content_type.pk
+            self.concrete_type = content_type
+            update_fields = kwargs.get("update_fields")
+            if changed and update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "concrete_type"}
         super().save(*args, **kwargs)
 
     @property
@@ -1899,31 +1867,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                     "updated_at",
                 ],
             )
-
-
-def _is_integration_child_model(model: type[models.Model]) -> bool:
-    """Return whether ``model`` is an MTI child of the Integration parent."""
-
-    return any(parent._meta.label_lower == "integrate.integration" for parent in model._meta.parents)
-
-
-def _integration_child_models(parent_model: type[Integration]) -> tuple[type[Integration], ...]:
-    """Return concrete Integration children in deterministic model-label order."""
-
-    return tuple(
-        cast(type[Integration], model)
-        for model in sorted(
-            (
-                model
-                for model in apps.get_models()
-                if model is not parent_model
-                and not model._meta.abstract
-                and not model._meta.proxy
-                and issubclass(model, parent_model)
-            ),
-            key=lambda model: model._meta.label_lower,
-        )
-    )
 
 
 def merge_json_state(
@@ -3239,8 +3182,9 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         else:
             if target.pk is None:
                 raise ValidationError("A record target must be saved.")
-            link.target_ct = ContentType.objects.get_for_model(target)
-            link.target_id = str(target.pk)
+            canonical = canonical_record_target(target)
+            link.target_ct = canonical.content_type
+            link.target_id = str(canonical.object_id)
 
     def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
         """Count a bounded batch of missing keys, retaining tombstones.

@@ -29,6 +29,7 @@ from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscr
 from tests.conftest import make_integration
 from tests.integrate_models import Integration
 from tests.messaging_models import Channel
+from tests.mtidemo.models import MtiChild, MtiParent
 
 
 @pytest.fixture
@@ -69,6 +70,15 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
             queryset = manager.filter(pk=row.pk).lock_if_supported()
             assert isinstance(queryset, AngeeQuerySet)
             assert list(queryset) == [row]
+
+
+def test_record_link_keys_mti_target_on_canonical_parent(replica: Any) -> None:
+    """The link target shares the canonical parent identity used by other edges."""
+
+    child = MtiChild.objects.create(title="Target")
+    link = RecordLink.objects.observe(replica, "mti-target", target=child)
+    assert link.target_ct.model_class() is MtiParent
+    assert link.target_id == str(child.pk)
 
 
 def test_epoch_retains_links_revisions_and_quarantine(replica: Any) -> None:

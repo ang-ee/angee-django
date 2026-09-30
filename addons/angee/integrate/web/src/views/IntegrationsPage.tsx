@@ -26,7 +26,7 @@ export function IntegrationsPage(): React.ReactElement {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();
-  const groupOptions = React.useMemo(() => [{ id: "kind", label: t("integrations.typeGroup"), group: { field: "kind" }, type: "value" as const }], [t]);
+  const groupOptions = React.useMemo(() => [{ id: "concrete_type", label: t("integrations.typeGroup"), group: { field: "concrete_type" }, type: "value" as const }], [t]);
   const rowHref = React.useCallback((row: Row): string => {
     return concreteIntegrationHref(row, recordHref);
   }, [recordHref]);
@@ -41,7 +41,7 @@ export function IntegrationsPage(): React.ReactElement {
       <List
         resource={MODEL}
         fields={["concrete_target.state", "concrete_target.resource", "concrete_target.id"]}
-        defaultGroups={{ list: { field: "kind" }, board: { field: "kind" } }}
+        defaultGroups={{ list: { field: "concrete_type" }, board: { field: "concrete_type" } }}
         groupOptions={groupOptions}
       >
         <Column field="display_name" />

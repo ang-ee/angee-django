@@ -92,7 +92,11 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
                 [
                     "",
                     f"if {name}.revisioned_fields:",
-                    f"    reversion.register({name}, fields={name}.revisioned_fields)",
+                    f"    for parent_model in {name}._meta.parents:",
+                    "        if not reversion.is_registered(parent_model):",
+                    "            reversion.register(parent_model, fields=())",
+                    f"    reversion.register({name}, fields=(*{name}.revisioned_fields,",
+                    f"        *(field.name for field in {name}._meta.parents.values())))",
                 ]
             )
         bodies.append("\n".join(lines))

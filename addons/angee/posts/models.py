@@ -58,7 +58,6 @@ class Feed(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_kind_label = "Feed"
 
     backend_class = ImplClassField(
         FeedBackend,

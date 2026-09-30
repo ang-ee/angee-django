@@ -847,12 +847,17 @@ and current contracts before applying a historical example to a new deployment.
   Compose a custom final save through `persist(instance, *, update_fields)`;
   the success hook must explicitly forward it to `save_state`, which retains the
   concurrency guard and transaction.
+- **MTI down-casts use `angee.base.refs.concrete_child`.** The parent-link
+  accessor and any query prefetch identify the child; callers supply their
+  actor-scoped queryset when that lookup is permission-sensitive. A parent
+  row never grows a human-label kind column to mirror its child model.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with
   `super()`. A verb starting from an `Integration` parent row must still resolve
   the concrete child before dispatch because Django does not downcast multi-table
-  parent instances automatically (`sync_integration` is the precedent). Walking
+  parent instances automatically (`Integration.concrete_capability` composes the
+  shared child lookup). Walking
   `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
   free.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**

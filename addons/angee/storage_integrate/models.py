@@ -51,7 +51,6 @@ class Mount(Bridge):
     runtime = True
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.CONNECT
-    integration_kind_label = "Mount"
     live_impl_field = "backend_class"
 
     backend_class = ImplClassField(

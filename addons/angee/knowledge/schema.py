@@ -96,7 +96,7 @@ class OutlineEntryType:
 
 @strawberry_django.type(MarkdownPage)
 class MarkdownPageType(AngeeNode):
-    """GraphQL projection of a page's markdown body sidecar."""
+    """GraphQL projection of a concrete markdown page."""
 
     body: auto
     body_hash: auto
@@ -148,10 +148,22 @@ class PageType(AuthoredRefMixin, AngeeNode):
         resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
     title: auto
-    kind: auto
     icon: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["id", "markdown__kind"])
+    def kind(self) -> str:
+        """Return the concrete page kind."""
+
+        return cast(str, cast(Any, self).kind)
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
+        """Load concrete markdown identity with each page collection."""
+
+        del info
+        return queryset.select_related("markdown")
 
     @strawberry_django.field(only=["vault_id"])
     def vault(self) -> strawberry.ID:
@@ -180,11 +192,11 @@ class PageType(AuthoredRefMixin, AngeeNode):
 
     @strawberry_django.field(only=["id"])
     def markdown(self) -> MarkdownPageType | None:
-        """Return the markdown body sidecar visible to the actor, if any."""
+        """Return the concrete markdown body visible to the actor, if any."""
 
         return cast(
             MarkdownPageType | None,
-            MarkdownPage._default_manager.filter(page_id=cast(Any, self).pk).first(),
+            MarkdownPage._default_manager.filter(pk=cast(Any, self).pk).first(),
         )
 
     @strawberry_django.field(only=["id"])
@@ -307,23 +319,6 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
         return Vault._default_manager.create_for(user, **data)
 
 
-class PageWriteBackend(AngeeHasuraWriteBackend):
-    """Write semantics for pages: create belongs to the manager factory."""
-
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create a page in a vault the requesting user can write."""
-
-        del info
-        vault = require_instance_for_id(Vault, data["vault"])
-        parent = None
-        if data.get("parent") is not None:
-            parent = require_instance_for_id(Page, data["parent"])
-        payload = dict(data)
-        payload.pop("vault", None)
-        payload.pop("parent", None)
-        return Page._default_manager.create_in(vault, parent=parent, **payload)
-
-
 _VAULT_RESOURCE = hasura_model_resource(
     VaultType,
     model=Vault,
@@ -340,17 +335,17 @@ _PAGE_RESOURCE = hasura_model_resource(
     PageType,
     model=Page,
     name="pages",
-    filterable=["id", "vault", "title", "kind", "updated_at"],
-    sortable=["title", "kind", "created_at", "updated_at"],
+    filterable=["id", "vault", "title", "updated_at"],
+    sortable=["title", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["vault", "vault__name", "kind", "updated_at"],
-    insertable=["vault", "title", "kind", "parent", "icon"],
-    updatable=["title", "kind", "icon", "parent"],
+    groupable=["vault", "vault__name", "updated_at"],
+    updatable=["title", "icon", "parent"],
     field_id_decode={
         "vault": public_pk_decoder(Vault),
         "parent": public_pk_decoder(Page),
     },
-    write_backend=PageWriteBackend(Page, public_id_fields=("parent",)),
+    write_backend=AngeeHasuraWriteBackend(Page, public_id_fields=("parent",)),
+    get_queryset=partial(PageType.get_queryset, Page.objects),
     subtitle=DataResourceSubtitleMetadata(word_count="markdown.word_count"),
 )
 
@@ -466,6 +461,16 @@ class KnowledgeQuery:
 @strawberry.type
 class KnowledgeMutation:
     """Markdown body writes that belong to the Knowledge domain."""
+
+    @strawberry.mutation(name="create_page")
+    def create_page(
+        self, vault: PublicID, title: str, kind: str = "note", parent: PublicID | None = None
+    ) -> PageType:
+        """Create the requested concrete page through its vault-owned preflight."""
+
+        vault_row = require_instance_for_id(Vault, vault)
+        parent_row = require_instance_for_id(Page, parent) if parent is not None else None
+        return cast(PageType, Page._default_manager.create_in(vault_row, title=title, kind=kind, parent=parent_row))
 
     @strawberry.mutation(name="bind_knowledge_record")
     def bind_knowledge_record(self, input: RecordBindingInput) -> RecordBindingType:

@@ -3,9 +3,9 @@ import { useCallback, useMemo } from "react";
 import {
   type Row, } from "@angee/metadata";
 import {
-  useCreate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  refineFieldsFromPaths, } from "@angee/refine";
+  refineFieldsFromPaths, useAuthoredMutation, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
 import {
@@ -15,6 +15,7 @@ import {
 import {
   useModelMetadata,
 } from "@angee/metadata";
+import { KnowledgeCreatePage } from "./documents";
 
 export interface PageActions {
   busy: boolean;
@@ -32,8 +33,8 @@ export interface PageActions {
 }
 
 /**
- * The navigator write verbs over the knowledge CRUD mutations (create/delete are
- * the gated factory mutations; move rides `updatePage`'s parent patch).
+ * The navigator write verbs over the knowledge mutations (create uses the
+ * concrete page factory; move rides `updatePage`'s parent patch).
  * `onChanged` fires after each so the caller can refetch the tree.
  */
 export function usePageActions(
@@ -44,12 +45,7 @@ export function usePageActions(
   const resource = metadata?.resource ?? null;
   const resourceName = refineResourceName(resource);
   const fields = useMemo(() => refineFieldsFromPaths(["id", "title"]), []);
-  const createPageMutation = useCreate<RowRecord, HttpError, Record<string, unknown>>({
-    resource: resourceName,
-    dataProviderName: resource?.schemaName,
-    meta: { fields },
-    invalidates: ["list", "many"],
-  });
+  const [createPage] = useAuthoredMutation(KnowledgeCreatePage);
   const updatePageMutation = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resourceName,
     dataProviderName: resource?.schemaName,
@@ -61,10 +57,9 @@ export function usePageActions(
 
   // The navigator publishes into the shell primary pane, so its action handlers
   // must stay stable even if Refine refreshes the mutation function identities.
-  const { mutateAsync: createMutate } = createPageMutation;
   const { mutateAsync: updateMutate } = updatePageMutation;
   const actionRef = useLatestRef({
-    createMutate,
+    createPage,
     deleteWithPreview,
     resource,
     run,
@@ -73,13 +68,11 @@ export function usePageActions(
 
   const createPage = useCallback<PageActions["createPage"]>(
     ({ vault, title, kind, parent }) => {
-      const { createMutate, resource, run } = actionRef.current;
+      const { createPage, resource, run } = actionRef.current;
       return run(async () => {
         requirePageResource(resource);
-        const response = await createMutate({
-          values: { vault, title, kind, parent },
-        });
-        return rowPublicId(response.data ?? null);
+        const response = await createPage({ vault, title, kind, parent });
+        return rowPublicId(response?.create_page ?? null);
       });
     },
     [],

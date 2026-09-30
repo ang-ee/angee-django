@@ -44,7 +44,6 @@ class VcsBridge(Bridge):
     runtime = True
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.FORM
-    integration_kind_label = "VCS bridge"
 
     backend_class = ImplClassField(VCSBackend,
         default="local",
@@ -59,6 +58,7 @@ class VcsBridge(Bridge):
 
         abstract = True
         db_table = "integrate_vcsbridge"
+        verbose_name = "VCS bridge"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate_vcs/vcs_bridge"
 

@@ -290,7 +290,6 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     runtime = True
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.FORM
-    integration_kind_label = "Inference provider"
 
     backend_class = ImplClassField(InferenceBackend,
         default="manual",

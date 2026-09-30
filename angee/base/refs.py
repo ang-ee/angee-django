@@ -116,6 +116,58 @@ def canonical_record_model(model: type[models.Model]) -> type[models.Model]:
     return typed[-1] if typed else concrete
 
 
+def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models.Model], ...]:
+    """Return direct, installed MTI children in stable model-label order."""
+
+    return tuple(
+        sorted(
+            (
+                model
+                for model in parent_model._meta.apps.get_models()
+                if model._meta.managed and not model._meta.proxy and tuple(model._meta.parents) == (parent_model,)
+            ),
+            key=lambda model: model._meta.label_lower,
+        )
+    )
+
+
+def concrete_child_accessor(parent_model: type[models.Model], child_model: type[models.Model]) -> str:
+    """Return Django's reverse accessor for a direct MTI parent link."""
+
+    parent_link = child_model._meta.parents.get(parent_model)
+    if parent_link is None:
+        raise ImproperlyConfigured(f"{child_model._meta.label} is not a direct child of {parent_model._meta.label}.")
+    return str(parent_link.remote_field.get_accessor_name())
+
+
+def concrete_child(
+    parent: models.Model,
+    child_model: type[models.Model],
+    *,
+    queryset: models.QuerySet[Any] | None = None,
+    cache_attr: str | None = None,
+) -> models.Model | None:
+    """Read one child through a prefetch cache or its supplied base/scoped queryset.
+
+    The caller owns access policy. The default base manager reads structural MTI
+    identity; an actor-scoped queryset can instead restrict the returned row.
+    """
+
+    if queryset is None and isinstance(parent, child_model):
+        return parent
+    parent_model = next((model for model in child_model._meta.parents if isinstance(parent, model)), type(parent))
+    accessor = concrete_child_accessor(parent_model, child_model)
+    if cache_attr is not None and hasattr(parent, cache_attr):
+        cached = getattr(parent, cache_attr)
+        if isinstance(cached, (list, tuple)):
+            return cached[0] if cached else None
+        return cached
+    if queryset is None and accessor in parent._state.fields_cache:
+        return parent._state.fields_cache[accessor]
+    rows = queryset if queryset is not None else child_model._base_manager.all()
+    return rows.filter(pk=parent.pk).first()
+
+
 def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]]:
     """Yield ``model`` then each concrete MTI ancestor it shares its primary key with.
 

@@ -18,10 +18,12 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
+from django.utils.text import capfirst
 from django.utils.translation import gettext as _
 from rebac import MissingActorError, PermissionDenied, system_context
 from strawberry import auto
@@ -131,7 +133,7 @@ class ConsoleIntegrationCapabilitiesQuery:
             capabilities.append(
                 IntegrationCapability(
                     resource=model._meta.label,
-                    label=str(model.integration_kind_value()),
+                    label=capfirst(str(model._meta.verbose_name)),
                     icon=None,
                     create_mode=mode,
                 )
@@ -884,7 +886,9 @@ class ConnectionMutation:
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            oauth_client = integration.capability_impl.connect_oauth_client(integration.integration_kind_value())
+            oauth_client = integration.capability_impl.connect_oauth_client(
+                capfirst(str(integration._meta.verbose_name))
+            )
             return connect_integration_target(
                 info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
@@ -1175,6 +1179,14 @@ class IntegrationLabelMixin:
 
         return cast(Any, self).display_label
 
+    @strawberry_django.field(only=["concrete_type_id"])
+    def kind(self) -> str:
+        """Return the concrete model's human name from Django metadata."""
+
+        concrete_type_id = cast(Any, self).concrete_type_id
+        model = ContentType.objects.get_for_id(concrete_type_id).model_class() if concrete_type_id else Integration
+        return capfirst(str(model._meta.verbose_name)) if model is not None else "Integration"
+
     @strawberry_django.field(only=["credential__status"])
     def credential_status(self) -> str:
         """Return the attached credential's status, or ``""`` when none is attached."""
@@ -1236,7 +1248,6 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     credential: CredentialType | None
     account: ExternalAccountType | None
     owner: UserType | None
-    kind: auto
     lifecycle: auto
     runtime_status: auto
     last_used_at: auto
@@ -1246,6 +1257,12 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     last_error: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["concrete_type_id"])
+    def concrete_type(self) -> str | None:
+        """Return the concrete content type key used by collection grouping."""
+
+        return str(cast(Any, self).concrete_type_id) if cast(Any, self).concrete_type_id else None
 
     @classmethod
     def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
@@ -1286,7 +1303,6 @@ class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     credential: ConnectedCredentialType | None
     account: ConnectedExternalAccountType | None
     owner: UserType | None
-    kind: auto
     lifecycle: auto
     runtime_status: auto
     last_used_at: auto
@@ -1575,18 +1591,25 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
     name="integrations",
-    filterable=["id", "display_name", "vendor", "kind", "lifecycle", "runtime_status", "updated_at"],
+    filterable=["id", "display_name", "vendor", "concrete_type", "lifecycle", "runtime_status", "updated_at"],
     sortable=[
         "display_name",
         "vendor",
-        "kind",
+        "concrete_type",
         "lifecycle",
         "runtime_status",
         "created_at",
         "updated_at",
     ],
     aggregatable=["id"],
-    groupable=["kind", "vendor", "vendor__display_name", "lifecycle", "runtime_status"],
+    groupable=[
+        "concrete_type",
+        "concrete_type__model",
+        "vendor",
+        "vendor__display_name",
+        "lifecycle",
+        "runtime_status",
+    ],
     updatable=["vendor", "credential", "account", "owner"],
     insert=False,
     field_id_decode={

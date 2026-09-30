@@ -45,6 +45,7 @@ from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
+from angee.base.refs import concrete_child, concrete_child_models
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
@@ -181,13 +182,11 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         never actor-scoped user data.
         """
 
-        for kind in (
-            cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.ORGANIZATION),
-            cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.PERSON),
-        ):
-            child = kind.model()
-            if child is not None and child._base_manager.filter(pk=self.pk).exists():
-                return kind
+        for child_model in concrete_child_models(apps.get_model("parties", "Party")):
+            if isinstance(self, child_model) or concrete_child(self, child_model) is not None:
+                for kind in (RelationshipKind.PartyKind.ORGANIZATION, RelationshipKind.PartyKind.PERSON):
+                    if kind.model() is child_model:
+                        return cast(RelationshipKind.PartyKind, kind)
         return None
 
     def canonical(self) -> Party:
@@ -1364,7 +1363,6 @@ class Directory(Bridge):
     runtime = True
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.CONNECT
-    integration_kind_label = "Directory"
 
     backend_class = ImplClassField(DirectoryBackend,
         default="manual",

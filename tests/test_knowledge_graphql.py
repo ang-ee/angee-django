@@ -55,7 +55,7 @@ def test_page_resource_emits_nested_word_count_subtitle_fact() -> None:
 
 
 def test_create_vault_and_page_flow(composed_tables: None) -> None:
-    """The Hasura insert mutations persist through Knowledge-owned factories."""
+    """Vault insertion and concrete page creation use Knowledge-owned factories."""
 
     alice = create_user("alice")
     schema = _schema("public")
@@ -81,7 +81,7 @@ def test_create_vault_and_page_flow(composed_tables: None) -> None:
             schema,
             """
             mutation CreatePage($vault: ID!) {
-              insert_pages_one(object: {vault: $vault, title: "Reading list"}) {
+              create_page(vault: $vault, title: "Reading list") {
                 id title kind vault vault_label parent created_by_label
               }
             }
@@ -89,7 +89,7 @@ def test_create_vault_and_page_flow(composed_tables: None) -> None:
             {"vault": vault["id"]},
             user=alice,
         )
-    )["insert_pages_one"]
+    )["create_page"]
     assert page["title"] == "Reading list"
     assert page["kind"] == "note"
     assert page["vault_label"] == "Research"

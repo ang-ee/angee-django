@@ -22,6 +22,9 @@ from angee.base.refs import (
     ancestor_object_refs,
     canonical_record_model,
     canonical_record_target,
+    concrete_child,
+    concrete_child_accessor,
+    concrete_child_models,
     record_ref_for,
 )
 from tests.mtidemo.models import (
@@ -393,6 +396,26 @@ def test_canonical_record_model_exposes_the_mti_ancestor_without_contenttypes() 
     assert canonical_record_model(MtiChildProxy) is MtiParent
     assert canonical_record_model(RecordRefTypedTarget) is RecordRefTypedTarget
     assert canonical_record_model(RecordRefPlainTarget) is RecordRefPlainTarget
+
+
+def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:
+    """One owner resolves MTI children from a parent row and honors Django's relation cache."""
+
+    del record_ref_tables
+    with system_context(reason="concrete child lookup"):
+        child = MtiChild.objects.create(title="Parent", detail="Child")
+        parent = MtiParent.objects.get(pk=child.pk)
+        with CaptureQueriesContext(connection) as uncached:
+            found = concrete_child(parent, MtiChild)
+        assert found is not None and found.detail == "Child"
+        assert len(uncached) == 1
+        prefetched = MtiParent.objects.select_related("mtichild").get(pk=child.pk)
+        with CaptureQueriesContext(connection) as cached:
+            assert concrete_child(prefetched, MtiChild) is prefetched.mtichild
+        assert len(cached) == 0
+        assert concrete_child(prefetched, MtiChild, queryset=MtiChild.objects.none()) is None
+    assert concrete_child_models(MtiParent) == (MtiChild,)
+    assert concrete_child_accessor(MtiParent, MtiChild) == "mtichild"
 
 
 def test_canonical_record_target_leaves_leaf_and_untyped_rows_uncanonicalized(record_ref_tables: None) -> None:
