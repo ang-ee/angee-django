@@ -59,6 +59,14 @@ export {
   type RecordThreadConversationChrome,
 } from "./RecordThreadConversation";
 export {
+  RecordThreadStream,
+  type RecordThreadStreamProps,
+  type RecordThreadStreamSource,
+  type StreamChildItem,
+  type StreamCreateAction,
+  type StreamSectionHeading,
+} from "./RecordThreadStream";
+export {
   ThreadTranscript,
   type ThreadTranscriptProps,
   type TranscriptOrder,

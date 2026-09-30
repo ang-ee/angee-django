@@ -1,0 +1,161 @@
+import * as React from "react";
+import { holdsPermission } from "@angee/metadata";
+import {
+  ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow,
+  SectionHeading, Tag, avatarInitials, useActionForm, useRuntimeViewAs,
+  type ResourceListProps,
+} from "@angee/ui";
+
+import { RecordThreadConversation, type RecordThreadConversationProps } from "./RecordThreadConversation";
+import { useMessagingT } from "./i18n";
+import { StreamComposer } from "./StreamComposer";
+
+export interface StreamSectionHeading {
+  label: React.ReactNode;
+  /** Consumer-translated server annotations; never derived from loaded rows. */
+  counts?: React.ReactNode;
+  summary?: React.ReactNode;
+  hint?: React.ReactNode;
+  audience?: React.ReactNode;
+}
+
+export interface StreamChildItem {
+  id: string;
+  title: string;
+  body?: string | null;
+  authorLabel?: string | null;
+  isSelf: boolean;
+  audienceLabel?: string | null;
+  createdAt: string;
+  kindLabel?: string;
+  /** The item owner names both entry verbs. A question can say answered/replied. */
+  verbs: { root: string; reply: string };
+  prompt?: string;
+  submitLabel?: string;
+  readerLine?: string;
+}
+
+/** px-list owns this shape. The lane compiles against its merged createAction seam. */
+export type StreamCreateAction = NonNullable<ResourceListProps["createAction"]>;
+
+export type RecordThreadStreamSource =
+  | { kind: "record"; modelLabel: string; recordId: string; conversation?: RecordThreadConversationProps["stream"] }
+  | {
+      kind: "children";
+      modelLabel: string;
+      items: readonly StreamChildItem[];
+      createAction?: StreamCreateAction;
+      /** Bind a single text argument of createAction to an always-open foot composer. */
+      createComposer?: { bodyArg: string; prompt: string; readerLine?: string; audience?: string };
+      onCreated?: () => void;
+      submitKey?: RecordThreadConversationProps["submitKey"];
+    };
+
+export interface RecordThreadStreamProps {
+  heading: StreamSectionHeading;
+  source: RecordThreadStreamSource;
+  submitKey?: RecordThreadConversationProps["submitKey"];
+}
+
+/** One stream presentation over a record thread or server-selected child rows. */
+export function RecordThreadStream({ heading, source, submitKey }: RecordThreadStreamProps): React.ReactElement {
+  const t = useMessagingT();
+  const create = source.kind === "children" ? source.createAction : undefined;
+  const canCreate = Boolean(create && (!create.permission || holdsPermission(create.record, create.permission)));
+  const composer = source.kind === "children" ? source.createComposer : undefined;
+  const inlineCreate = Boolean(create && composer && create.args?.length === 1 &&
+    create.args[0]?.name === composer.bodyArg &&
+    (create.args[0].argKind === undefined || create.args[0].argKind === "scalar"));
+
+  return <section className="space-y-4">
+    <SectionHeading label={heading.label} count={heading.counts} summary={heading.summary}
+      hint={heading.hint} audience={heading.audience} />
+    {source.kind === "record" ? <RecordThreadConversation modelLabel={source.modelLabel}
+      recordId={source.recordId} submitKey={submitKey} stream={source.conversation ?? {}} /> : <>
+      {source.items.length > 0 ? <div className="rounded-8 border border-border-subtle bg-sheet p-4">
+        <div className="space-y-6">
+          {source.items.map((item) => <ChildStreamItem key={item.id} item={item}
+            modelLabel={source.modelLabel} submitKey={source.submitKey ?? submitKey} />)}
+        </div>
+      </div> : <EmptyState icon="comments" title={t("stream.empty")}
+        description={t("stream.emptyHint")} className="min-h-32 p-4" />}
+      {canCreate && create ? inlineCreate && composer
+        ? <InlineCreateComposer key={create.id} action={create} composer={composer}
+            submitKey={source.submitKey ?? submitKey} onCreated={source.onCreated} />
+        : <CreateActionDialogControl key={create.id} action={create} onCreated={source.onCreated} /> : null}
+    </>}
+  </section>;
+}
+
+function ChildStreamItem({ item, modelLabel, submitKey }: {
+  item: StreamChildItem;
+  modelLabel: string;
+  submitKey?: RecordThreadConversationProps["submitKey"];
+}): React.ReactElement {
+  const t = useMessagingT();
+  const [expanded, setExpanded] = React.useState(false);
+  const author = item.isSelf ? t("message.you") : item.authorLabel || t("message.author");
+  const audience = item.audienceLabel || t("composer.audience");
+  return <div className="space-y-3">
+    <ul>
+      <MessageRow avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
+        author={author} timestamp={item.createdAt} channel={<>
+          <Chip tone="neutral" size="md">{audience}</Chip>
+          {item.kindLabel ? <Tag tone="info" density="micro">{item.kindLabel}</Tag> : null}
+        </>}>
+        <div className="font-medium">{item.title}</div>
+        {item.body ? <div>{item.body}</div> : null}
+      </MessageRow>
+    </ul>
+    <Button type="button" variant="ghost" size="sm" aria-expanded={expanded}
+      onClick={() => setExpanded((open) => !open)}>
+      {t(expanded ? "stream.hideThread" : "stream.showThread")}
+    </Button>
+    {expanded ? <RecordThreadConversation modelLabel={modelLabel} recordId={item.id}
+      submitKey={submitKey} stream={{ audience: item.audienceLabel ?? undefined,
+        prompt: item.prompt, submitLabel: item.submitLabel, readerLine: item.readerLine,
+        verbs: item.verbs, messageTypes: ["comment"] }} /> : null}
+  </div>;
+}
+
+function CreateActionDialogControl({ action, onCreated }: {
+  action: StreamCreateAction;
+  onCreated?: () => void;
+}): React.ReactElement {
+  const [open, setOpen] = React.useState(false);
+  return <div className="flex justify-end">
+    <Button type="button" variant="primary" size="sm" disabled={action.disabled}
+      onClick={() => setOpen(true)}>{action.label}</Button>
+    {open ? <ActionFormDialog action={action}
+      context={{ record: action.record ?? null, selectedIds: [] }} open
+      onOpenChange={setOpen} onSucceeded={onCreated} /> : null}
+  </div>;
+}
+
+function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated }: {
+  action: StreamCreateAction;
+  composer: { bodyArg: string; prompt: string; readerLine?: string; audience?: string };
+  submitKey?: RecordThreadConversationProps["submitKey"];
+  onCreated?: () => void;
+}): React.ReactElement {
+  const t = useMessagingT();
+  const preview = useRuntimeViewAs();
+  const [body, setBody] = React.useState("");
+  const form = useActionForm<Record<string, string>>({
+    fieldNames: [composer.bodyArg],
+    submit: async (values) => (await action.submit(values, { record: action.record ?? null, selectedIds: [] })) ?? null,
+    onSuccess: () => { setBody(""); onCreated?.(); },
+  });
+  const disabled = Boolean(action.disabled || form.submitting || preview.viewAs || preview.pending);
+  const submit = () => { if (body.trim() && !disabled) void form.run({ [composer.bodyArg]: body.trim() }); };
+  return <StreamComposer value={body}
+    onChange={(next) => { setBody(next); form.clearFieldError(composer.bodyArg); }}
+    onSubmit={submit} disabled={disabled} ready={Boolean(body.trim())}
+    submitKey={submitKey} prompt={composer.prompt} submitLabel={action.label}
+    readerLine={composer.readerLine ?? (composer.audience ? undefined : t("composer.audience"))}
+    audience={composer.audience}
+    after={<>
+      {form.fieldErrors[composer.bodyArg]?.map((message) => <p key={message} className="text-xs text-danger-text">{message}</p>)}
+      <ErrorBanner description={form.formError} />
+    </>} />;
+}

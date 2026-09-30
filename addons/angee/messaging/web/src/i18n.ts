@@ -34,6 +34,11 @@ export const enMessagingMessages: Record<string, string> = {
   "chatter.noMatchTitle": "No matching comments",
   "chatter.noMatchHint": "Try a different search.",
   "chatter.editedMeta": "edited",
+  "stream.empty": "Nothing yet",
+  "stream.emptyHint": "New entries will appear here.",
+  "stream.postingTo": "Posting to {audience}",
+  "stream.showThread": "Show conversation",
+  "stream.hideThread": "Hide conversation",
 
   // Message content tab — the nested parts data view.
   "parts.fragment": "Fragment",
@@ -45,6 +50,7 @@ export const enMessagingMessages: Record<string, string> = {
 
   // Message row affordances.
   "message.author": "Someone",
+  "message.you": "You",
   "message.reactions": "Reactions",
   "message.reactionCount": "{reaction} {count}",
   "message.reactionTitle": "{reaction} by {names}",

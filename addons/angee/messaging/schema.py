@@ -9,7 +9,8 @@ producers retain their writes. Reactions remain nested message projections.
 from __future__ import annotations
 
 from dataclasses import fields
-from datetime import date
+from datetime import date, datetime
+from enum import StrEnum
 from typing import Annotated, Any, Self, cast
 
 import strawberry
@@ -46,7 +47,7 @@ from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin, IntegrationType
 from angee.messaging import connect
-from angee.messaging.managers import MessageQuerySet, message_subtype_options
+from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
@@ -540,6 +541,35 @@ class RecordMessageType(AngeeNode):
     parent: "RecordMessageParentType | None" = actor_scoped_to_one("parent")
     subtype: MessageSubtypeType | None
     tracking_values: list[TrackingValueType]
+
+    @strawberry_django.field(only=["edit_history"])
+    def edited_at(self) -> datetime | None:
+        """The latest content edit, from the message's newest-first history."""
+
+        history = cast(Any, self).edit_history or []
+        return datetime.fromisoformat(history[0]["edited_at"]) if history else None
+
+    @strawberry_django.field(only=["created_by_id"])
+    def is_self(self, info: strawberry.Info) -> bool:
+        """Whether the current reader created this message."""
+
+        user = _request_user(info)
+        return user is not None and cast(Any, self).created_by_id == user.pk
+
+    @strawberry_django.field(only=["parent_id"])
+    def is_reply(self) -> bool:
+        """Reply shape without requiring the reader to see the parent projection."""
+
+        return cast(Any, self).parent_id is not None
+
+    @strawberry_django.field(
+        only=["sender_id"],
+        annotate={"_sender_name": lambda info: Message.objects.sender_name_expression()},
+    )
+    def author_label(self) -> str | None:
+        """Actor-readable sender label; the web owns the withheld-identity copy."""
+
+        return cast(Any, self).sender_name() or None
 
     @strawberry.field
     def parts(self) -> list[PartType]:
@@ -1134,6 +1164,14 @@ class RecordThreadStatePayload:
         return cls(**(values | overrides))
 
 
+@strawberry.enum
+class RecordPostKind(StrEnum):
+    """The two native record-thread composer acts."""
+
+    COMMENT = "comment"
+    NOTE = "note"
+
+
 @strawberry.type
 class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     """A record chatter thread, or the error that prevented resolving it."""
@@ -1144,12 +1182,34 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     permissions: list[str] = strawberry.field(default_factory=list)
     messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
+    _reply_search: strawberry.Private[str] = ""
+    _reply_message_types: strawberry.Private[tuple[str, ...]] = ()
+    audience_label: str | None = strawberry.field(name="audience_label", default=None)
+    post_kinds: list[RecordPostKind] = strawberry.field(name="post_kinds", default_factory=list)
     self_follower: RecordThreadFollowerType | None = strawberry.field(name="self_follower", default=None)
     suggested_recipients: list[SuggestedRecipientType] = strawberry.field(
         name="suggested_recipients",
         default_factory=list,
     )
     subtypes: list[MessageSubtypeOptionType] = strawberry.field(default_factory=list)
+
+    @strawberry.field(name="reply_count")
+    def reply_count(self) -> int:
+        """Count matching replies only when a caller selects this annotation."""
+
+        if self.thread is None:
+            return 0
+        replies = Message.objects.sudo(reason="messaging.record_thread.reply_count").for_thread(self.thread)
+        kinds = {
+            strip_null_bytes(value or "").strip().lower()
+            for value in self._reply_message_types
+            if strip_null_bytes(value or "").strip()
+        }
+        if kinds:
+            replies = replies.filter(message_type__in=kinds)
+        for term in strip_null_bytes(self._reply_search or "").split():
+            replies = replies.searching(term)
+        return replies.filter(parent__isnull=False).distinct().count()
 
 
 @strawberry.type
@@ -2376,7 +2436,8 @@ def _record_thread_payload(
 ) -> RecordThreadPayload:
     """Return a record thread payload with follower state for the request user."""
 
-    thread = cast(Any, record).message_thread(create=False)
+    attachment = ThreadAttachment.objects.for_record(record, role=role)
+    thread = attachment.thread if attachment is not None else None
     messages, message_result_count = (
         Message.objects.for_record(
             record,
@@ -2391,6 +2452,18 @@ def _record_thread_payload(
         if thread is not None
         else ([], 0)
     )
+    if messages:
+        # The model's actor-readable sender expression resolves all labels in one
+        # query. Keep the projection on each message so author_label never performs
+        # a per-row fallback lookup.
+        sender_names = dict(
+            Message.objects.sudo(reason="messaging.record_thread.sender_labels")
+            .filter(pk__in=[message.pk for message in messages])
+            .annotate(_sender_name=Message.objects.sender_name_expression())
+            .values_list("pk", "_sender_name")
+        )
+        for message in messages:
+            setattr(message, "_sender_name", sender_names.get(message.pk, ""))
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
     activities = (
@@ -2462,6 +2535,9 @@ def _record_thread_payload(
         thread=thread,
         messages=messages,
         message_result_count=message_result_count,
+        _reply_search=search,
+        _reply_message_types=message_types,
+        post_kinds=[RecordPostKind.COMMENT, RecordPostKind.NOTE] if record_access[0] else [],
         followers=followers,
         self_follower=self_follower,
         suggested_recipients=suggested_recipients,
