@@ -11,12 +11,14 @@ from typing import get_args
 
 from django.apps import apps
 from django.db import models
+from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
 from angee.base.evidence import DerivedFrom, EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.workflows.managers import PublishResult
+from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Settlement, Step
 from angee.workflows.testing import drivers as test_drivers
 
@@ -185,6 +187,23 @@ def test_workflow_test_driver_surface() -> None:
 def test_workflow_publication_result_surface() -> None:
     """Publication reports a version and explicit republish targets."""
     assert tuple(field.name for field in fields(PublishResult)) == ("version", "dependents")
+
+
+def test_run_origin_and_trigger_event_surface() -> None:
+    """Admission has one stored origin and one protected link to its sole cause."""
+    run = apps.get_model("workflows", "WorkflowRun")
+    event = apps.get_model("workflows", "TriggerEvent")
+    assert run._meta.get_field("origin").choices_enum is RunOrigin
+    assert not isinstance(run._meta.get_field("origin"), models.GeneratedField)
+    assert tuple(RunOrigin.values) == ("manual", "workflow", "reprocess", "trigger")
+    for name in ("parent_step", "reprocess_of", "trigger_event"):
+        assert run._meta.get_field(name).remote_field.on_delete is PROTECT
+    assert run._meta.get_field("trigger_event").one_to_one
+    assert "run" not in {field.name for field in event._meta.get_fields()}
+    assert event._meta.get_field("trigger").remote_field.on_delete is PROTECT
+    assert {constraint.name for constraint in run._meta.constraints} >= {"workflows_run_origin_cause"}
+    assert {constraint.name for constraint in event._meta.constraints} >= {"workflows_event_admission_evaluated"}
+    assert {index.name for index in event._meta.indexes} >= {"workflows_event_pending"}
 
 
 def test_evidence_owner_surface() -> None:

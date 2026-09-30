@@ -35,6 +35,7 @@ export function RunsList({ baseFilter, embedded = false }: {
     <List order={{ created_at: "DESC" }} defaultGroups={{ list: { field: "status" }, board: { field: "status" } }}
       emptyContent={t("runs.empty")}>
       <Facet field="version.workflow" label={t("run.workflow")} />
+      <Facet field="origin" label={t("run.origin")} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
       <Column field="version.workflow.name" header={t("run.workflow")} />
       <Column field="subject_id" header={t("run.subject")} render={(row) => typeof row.subject_id === "string" && typeof row.subject_model === "string"

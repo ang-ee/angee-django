@@ -1,6 +1,7 @@
 """Resource-owned workflow reads, execution facets and public reference filters."""
 
 import pytest
+from django.db import IntegrityError, transaction
 
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionRequest
@@ -175,8 +176,8 @@ def test_for_subject_preserves_actor_and_existing_filters(execution):
     assert list(other_rows.values_list("pk", flat=True)) == [foreign.pk]
 
 
-def test_run_origin_groups_and_filters_follow_generated_lineage_and_read_scope(schema, execution):
-    """Origin is one database-derived fact for rows, scoped groups and drill-down."""
+def test_run_origin_groups_and_filters_follow_admission_lineage_and_read_scope(schema, execution):
+    """The stored admission fact serves scoped rows, groups and drill-down."""
     admin, _sent = execution
     starter, other = (create_user(name) for name in ("origin-starter", "origin-other"))
     workflow = load_workflow(document("entry"), actor=admin)
@@ -205,12 +206,16 @@ def test_run_origin_groups_and_filters_follow_generated_lineage_and_read_scope(s
     assert resource.query.fields["origin"].filter is not None
     assert {item.from_value: item.to_value for item in axis.drill.value_map}["REPROCESS"] == "reprocess"
 
-    # A native bulk lineage update also changes the generated value, with no save hook.
+    # A native bulk update cannot change origin without violating the cause invariant.
     replacement = replacements[0]
-    system_queryset(WorkflowRun).filter(pk=replacement.pk).update(reprocess_of=None)
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            system_queryset(WorkflowRun).filter(pk=replacement.pk).update(reprocess_of=None)
     replacement.refresh_from_db()
-    assert replacement.origin == "manual"
-    assert result_data(execute_schema(schema, query, {"origin": "reprocess"}, user=starter))["workflowrun"] == []
+    assert replacement.origin == "reprocess"
+    assert result_data(execute_schema(schema, query, {"origin": "reprocess"}, user=starter))["workflowrun"] == [
+        {"id": replacement.sqid, "origin": "REPROCESS"},
+    ]
 
 
 class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):

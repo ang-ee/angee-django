@@ -10,7 +10,7 @@ const runStates = [
 ];
 const origins = [
   { value: "MANUAL", description: "Manual" }, { value: "WORKFLOW", description: "Workflow" },
-  { value: "REPROCESS", description: "Reprocess" }, { value: "TEST", description: "Test" },
+  { value: "REPROCESS", description: "Reprocess" },
   { value: "TRIGGER", description: "Trigger" },
 ];
 const statusValues = runStates.map(({ value }) => ({ from: value, to: value.toLowerCase() }));

@@ -56,7 +56,7 @@ export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { 
       if (query.includes("trigger_by_pk")) return jsonResponse({ data: { trigger_by_pk: current } });
       if (query.includes("triggerevent")) return jsonResponse({ data: { triggerevent: [triggerEventFixture], triggerevent_aggregate: { aggregate: { count: 1 } } } });
       if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.workflow } });
-      if (query.includes("workflowrun_by_pk")) return jsonResponse({ data: { workflowrun_by_pk: triggerEventFixture.run } });
+      if (query.includes("workflowrun_by_pk")) return jsonResponse({ data: { workflowrun_by_pk: triggerEventFixture.started_run } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       return jsonResponse({ data: { trigger: [current], trigger_aggregate: { aggregate: { count: 1 } } } });
     }).public!;

@@ -11,7 +11,7 @@ from angee.base.scoping import system_queryset
 from angee.workflows.managers import PRUNE_BATCH_LIMIT
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.decisions_models import Decision, DecisionGroup
 from tests.tables import model_tables
@@ -88,23 +88,31 @@ def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_gr
     assert system_queryset(grand_workflow.versions.model).filter(workflow=grand_workflow).exists()
 
 
-def test_prune_preserves_terminal_continuation_and_nulls_its_parent_step(child_graph):
-    """A continuation's completed work survives deletion of its expired parent."""
+def test_prune_preserves_parent_cause_until_terminal_continuation_is_pruned(child_graph):
+    """Even completed continuations retain the parent step that caused them."""
     _, _, admitted, build = child_graph
     parent, _ = build(relation="continuation", await_child=False)
     run_until(parent)
     child = admitted[0]
     run_until(child)
     age_runs(parent)
-    assert WorkflowRun.objects.prune() == 1
+    assert WorkflowRun.objects.prune() == 0
+    parent.refresh_from_db()
+    assert parent.prune_reason
     child.refresh_from_db()
     assert child.status == "succeeded" and child.output == {"value": 7}
-    assert child.parent_step_id is None and child.relation == "continuation"
-    assert not system_queryset(WorkflowRun).filter(pk=parent.pk).exists()
+    assert child.parent_step_id is not None
+    assert child.relation == "continuation"
     assert system_queryset(StepAttempt).filter(step_run__run=child).exists()
+    age_runs(child)
+    assert WorkflowRun.objects.prune() == 1
+    assert not system_queryset(WorkflowRun).filter(pk=child.pk).exists()
+    retry_prune(parent)
+    assert WorkflowRun.objects.prune() == 1
+    assert not system_queryset(WorkflowRun).filter(pk=parent.pk).exists()
 
 
-def test_active_continuation_marks_parent_until_a_later_retention_retry(child_graph):
+def test_active_continuation_marks_parent_until_the_continuation_is_pruned(child_graph):
     """The explicit retention rule defers deletion while a continuation is active."""
     _, _, admitted, build = child_graph
     parent, _ = build(relation="continuation", await_child=False)
@@ -120,9 +128,32 @@ def test_active_continuation_marks_parent_until_a_later_retention_retry(child_gr
     run_until(child)
     assert WorkflowRun.objects.prune() == 0
     retry_prune(parent)
-    assert WorkflowRun.objects.prune() == 1
+    assert WorkflowRun.objects.prune() == 0
     child.refresh_from_db()
-    assert child.parent_step_id is None and child.status == "succeeded"
+    assert child.parent_step_id is not None and child.status == "succeeded"
+    age_runs(child)
+    assert WorkflowRun.objects.prune() == 1
+    retry_prune(parent)
+    assert WorkflowRun.objects.prune() == 1
+
+
+def test_reprocess_cause_is_retained_until_its_replacement_is_pruned(execution):
+    """A later run protects the exact predecessor it reprocessed."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), actor=actor)
+    original = start_run(workflow, actor=actor)
+    run_until(original)
+    replacement = WorkflowRun.objects.reprocess(original, actor=actor)
+    run_until(replacement)
+    age_runs(original)
+    assert WorkflowRun.objects.prune() == 0
+    original.refresh_from_db()
+    assert original.prune_reason
+    assert replacement.reprocess_of_id == original.pk
+    age_runs(replacement)
+    assert WorkflowRun.objects.prune() == 1
+    retry_prune(original)
+    assert WorkflowRun.objects.prune() == 1
 
 
 def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_graph, protected_execution):

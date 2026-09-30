@@ -63,7 +63,7 @@ def test_trigger_and_manual_mti_subjects_share_identity_through_retention(execut
     RecordChanged.dispatch(MtiChild, subject)
     assert Trigger.objects.drain() == 1
     event = system_queryset(TriggerEvent).get(trigger=trigger)
-    triggered = system_queryset(WorkflowRun).get(pk=event.run_id)
+    triggered = event.started_run
     for run in (manual, triggered):
         assert (run.subject_content_type_id, run.subject_object_id) == (target.content_type.pk, target.object_id)
     for record in (subject, system_queryset(MtiParent).get(pk=subject.pk)):
@@ -76,7 +76,7 @@ def test_trigger_and_manual_mti_subjects_share_identity_through_retention(execut
     system_queryset(WorkflowRun).filter(pk=triggered.pk).update(finished_at=Now() - timedelta(days=2))
     assert WorkflowRun.objects.prune() == 1
     event.refresh_from_db()
-    assert event.admitted_at and event.run_id is None
+    assert event.admitted_at and not system_queryset(WorkflowRun).filter(trigger_event=event).exists()
     RecordChanged.dispatch(MtiChild, subject)
     assert Trigger.objects.drain() == 0
     assert list(WorkflowRun.objects.with_actor(actor).for_subject(subject).values_list("pk", flat=True)) == [manual.pk]

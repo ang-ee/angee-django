@@ -399,10 +399,10 @@ def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancella
 
 
 def test_origin_enum_has_native_choice_labels(schema):
-    """The derived origin uses the same labelled enum projection as stored choices."""
+    """The stored origin uses the same labelled enum projection as its choices."""
     origin = schema._schema.get_type("RunOrigin")
     assert {key: value.description for key, value in origin.values.items()} == {
-        "MANUAL": "Manual", "WORKFLOW": "Workflow", "REPROCESS": "Reprocess", "TEST": "Test", "TRIGGER": "Trigger",
+        "MANUAL": "Manual", "WORKFLOW": "Workflow", "REPROCESS": "Reprocess", "TRIGGER": "Trigger",
     }
 
 

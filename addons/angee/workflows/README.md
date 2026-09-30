@@ -43,6 +43,10 @@ results, cancellation and recovery. A database step holds its run lock for its
 whole transaction. The domain writes, fenced result and successor planning
 commit together. After commit, every ready row of an active run is sent to the job
 queue, including parallel branches whose earlier message encountered a busy run.
+Run admission stores its origin and exactly one protected cause in the same
+insert: a parent step, a prior run, or a trigger event. Manual runs have no cause.
+Retention prunes a cited run only after its continuations and reprocesses are
+pruned; retained events protect their trigger and survive pruning of their run.
 IO bodies run after their claim commits, without a transaction. Their result is
 fenced by the attempt counter and deadline. IO timeouts leave a settlement window
 below the worker's soft and hard limits; [`Step`](steps.py) owns those bounds.

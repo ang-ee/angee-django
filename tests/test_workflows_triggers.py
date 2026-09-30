@@ -14,6 +14,7 @@ from rebac.actors import is_sudo
 from angee.base.impl import impl_choices_enum
 from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
+from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
@@ -99,17 +100,34 @@ def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_set
     assert Trigger.objects.drain() == 1
     event.refresh_from_db()
     assert event.admitted_at and not event.rejection
-    run = system_queryset(WorkflowRun).get(pk=event.run_id)
+    run = event.started_run
     assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     assert run.trigger_event_id == event.pk
     run_until(run)
     system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
     assert WorkflowRun.objects.prune() == 1
     event.refresh_from_db()
-    assert event.run_id is None and event.admitted_at
+    assert event.admitted_at and not system_queryset(WorkflowRun).filter(trigger_event=event).exists()
+    with actor_context(actor):
+        assert delete_by_public_id(Trigger, trigger.sqid).has_blockers
     capture(record)
     assert Trigger.objects.drain() == 0
     assert not system_queryset(WorkflowRun).exists()
+
+
+def test_admitted_event_blocks_trigger_purge_preview(trigger_setup):
+    """The retained ledger and its started run appear as native deletion blockers."""
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    with actor_context(actor):
+        preview = delete_by_public_id(Trigger, trigger.sqid)
+    assert preview.has_blockers
+    assert any(blocked.label == str(TriggerEvent._meta.verbose_name_plural) for blocked in preview.blocked)
+    assert system_queryset(Trigger).filter(pk=trigger.pk).exists()
+    assert event.started_run.trigger_event_id == event.pk
 
 
 def test_actor_losing_record_read_rejects_under_system_drain(trigger_setup):

@@ -104,11 +104,11 @@ definition workflows/trigger {
 
 definition workflows/trigger_event {
     relation trigger: workflows/trigger // rebac:field=trigger
-    relation run: workflows/run // rebac:field=run
+    relation started_run: workflows/run // rebac:field=started_run
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = trigger->write + run->operate + admin->member
+    permission read = trigger->write + started_run->operate + admin->member
     permission write = admin->member
     permission delete = admin->member
 }

@@ -63,7 +63,7 @@ def test_two_saves_racing_admission_retain_one_ledger_and_run(trigger_setup, mon
     run = system_queryset(WorkflowRun).get()
     assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     event.refresh_from_db()
-    assert event.admitted_at and event.run_id == run.pk
+    assert event.admitted_at and event.started_run.pk == run.pk
 
 
 def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypatch, caplog):
@@ -154,5 +154,5 @@ def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(tri
     record.refresh_from_db()
     assert record.name == "Saved afterward"
     event.refresh_from_db()
-    assert event.admitted_at and event.run_id and not event.rejection
-    assert system_queryset(WorkflowRun).count() == 1
+    assert event.admitted_at and not event.rejection
+    assert event.started_run.pk == system_queryset(WorkflowRun).get().pk

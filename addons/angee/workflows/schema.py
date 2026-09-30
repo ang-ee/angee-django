@@ -257,7 +257,7 @@ class TriggerType(AngeeNode):
 
 @strawberry_django.type(TriggerEvent)
 class TriggerEventType(AngeeNode):
-    """Durable admission evidence independent of the lifetime of its run."""
+    """Durable admission evidence with a started run until that run is pruned."""
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
@@ -265,7 +265,7 @@ class TriggerEventType(AngeeNode):
         return with_record_reference_access(queryset)
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
-    run: WorkflowRunType | None = actor_scoped_to_one("run")
+    started_run: WorkflowRunType | None = actor_scoped_to_one("started_run", reverse=True)
     changed_at: auto
     evaluated_at: auto
     admitted_at: auto
@@ -344,7 +344,7 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     )),
 )
 _TRIGGER_EVENT_RESOURCE = hasura_model_resource(
-    TriggerEventType, model=TriggerEvent, filterable=["id", "trigger", "run", "admitted_at"],
+    TriggerEventType, model=TriggerEvent, filterable=["id", "trigger", "started_run", "admitted_at"],
     record_ref_filters=("record_model", "record_id"),
     record_ref_requires_read=True,
     sortable=["changed_at", "evaluated_at", "admitted_at"], aggregatable=["id"],

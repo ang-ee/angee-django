@@ -127,7 +127,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         self.assertEqual(Trigger.objects.drain(), 1)
         with system_context(reason="admitted note trigger assertions"):
             event.refresh_from_db()
-            run = event.run
+            run = event.started_run
             self.assertEqual(run.run_as_id, self.admin.pk)
             self.assertEqual(run.origin, "trigger")
             self.assertEqual(run.trigger_event_id, event.pk)

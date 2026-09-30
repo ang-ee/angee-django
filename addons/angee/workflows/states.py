@@ -41,13 +41,12 @@ class TerminalStates(models.TextChoices):
 
 
 class RunOrigin(models.TextChoices):
-    """Admission sources exposed by the run's derived origin contract."""
+    """Admission source fixed with its cause when a run starts."""
 
     MANUAL = "manual", "Manual"
     WORKFLOW = "workflow", "Workflow"
     REPROCESS = "reprocess", "Reprocess"
     TRIGGER = "trigger", "Trigger"
-    TEST = "test", "Test"
 
 
 class RunStatus(TerminalStates):

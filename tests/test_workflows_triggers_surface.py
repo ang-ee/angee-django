@@ -11,7 +11,7 @@ from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.resources.testing.models import Resource
 from angee.workflows import schema as workflow_schema
 from angee.workflows.testing.drivers import load_workflow
-from angee.workflows.testing.models import Trigger, TriggerEvent, WorkflowRun
+from angee.workflows.testing.models import Trigger, TriggerEvent
 from angee.workflows.triggers import TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
 from tests.conftest import Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
@@ -161,34 +161,45 @@ def test_trigger_ledger_origin_and_filters_require_operator_visibility(trigger_s
     Trigger.objects.drain()
     event = system_queryset(TriggerEvent).get(trigger=trigger)
     assert event.admitted_at is not None, event.rejection
-    run = system_queryset(WorkflowRun).get(pk=event.run_id)
+    run = event.started_run
     assert run.origin == "trigger" and run.trigger_event_id == event.pk and run.run_as_id == editor.pk
-    query = """query($workflow: String!, $trigger: String!, $model: String!, $record: String!, $event: String!) {
+    query = """query(
+      $workflow: String!, $trigger: String!, $model: String!, $record: String!, $event: String!, $run: String!
+    ) {
       trigger(where: {workflow: {_eq: $workflow}}) { id enabled source run_as { id } }
       triggerevent(where: {trigger: {_eq: $trigger}, record_model: {_eq: $model}, record_id: {_eq: $record}}) {
-        id record_model record_id changed_at evaluated_at admitted_at rejection run { id origin }
+        id record_model record_id changed_at evaluated_at admitted_at rejection started_run { id origin }
       }
       workflowrun(where: {trigger_event: {_eq: $event}}) { id origin trigger_event { id } }
+      by_started_run: triggerevent(where: {started_run: {_eq: $run}}) { id }
     }"""
     variables = {
         "workflow": workflow.sqid, "trigger": trigger.sqid, "model": "knowledge.Vault",
-        "record": record.sqid, "event": event.sqid,
+        "record": record.sqid, "event": event.sqid, "run": run.sqid,
     }
     visible = result_data(execute_schema(schema, query, variables, user=editor))
     assert visible["trigger"][0]["id"] == trigger.sqid
     ledger = visible["triggerevent"]
     assert len(ledger) == 1 and ledger[0]["record_id"] == record.sqid
     assert ledger[0]["admitted_at"] and ledger[0]["evaluated_at"] and ledger[0]["rejection"] == ""
-    assert ledger[0]["run"] == {"id": run.sqid, "origin": "TRIGGER"}
+    assert ledger[0]["started_run"] == {"id": run.sqid, "origin": "TRIGGER"}
+    assert visible["by_started_run"] == [{"id": event.sqid}]
     assert visible["workflowrun"] == [{"id": run.sqid, "origin": "TRIGGER", "trigger_event": {"id": event.sqid}}]
     for reader in (viewer, starter):
         restricted = result_data(execute_schema(schema, query, variables, user=reader))
         assert len(restricted["trigger"]) == 1
         assert restricted["triggerevent"] == []
+        assert restricted["by_started_run"] == []
         if reader is viewer:
             assert restricted["workflowrun"] == [{"id": run.sqid, "origin": "TRIGGER", "trigger_event": None}]
         else:
             assert restricted["workflowrun"] == []
+    operator = create_user("trigger-run-operator")
+    run.with_actor(editor).grant_record_access("operator", operator)
+    operated = result_data(execute_schema(schema, "{ triggerevent { id started_run { id origin } } }", user=operator))
+    assert operated["triggerevent"] == [{
+        "id": event.sqid, "started_run": {"id": run.sqid, "origin": "TRIGGER"},
+    }]
     resources = {resource.model_label: resource for resource in schema.angee_resources}
     assert "condition" in {field.name for field in resources["workflows.Trigger"].fields}
     mutations = schema._schema.mutation_type.fields

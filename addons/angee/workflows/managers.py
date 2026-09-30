@@ -34,6 +34,7 @@ from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, DefinitionIn
 from angee.workflows.states import (
     CANCELED_OUTCOME,
     AttemptResult,
+    RunOrigin,
     RunRelation,
     RunStatus,
     StepRunStatus,
@@ -369,8 +370,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         reprocess_of: Any = None,
         parent_step: Any = None,
         relation: str | None = None,
+        trigger_event: Any = None,
     ) -> Any:
-        """Start a pinned version, or replay against the existing run's version."""
+        """Insert the pinned version, origin and sole cause together, or replay the same request."""
 
         actor = workflow.require_access("start", actor)
         if actor is None:
@@ -379,6 +381,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             parent_step is not None and relation not in RunRelation.values
         ):
             raise ValidationError("A child requires an owned or continuation relation and a parent step.")
+        if sum(cause is not None for cause in (parent_step, reprocess_of, trigger_event)) > 1:
+            raise ValidationError("A run can have only one cause.")
+        origin = (RunOrigin.WORKFLOW if parent_step is not None else
+                  RunOrigin.REPROCESS if reprocess_of is not None else
+                  RunOrigin.TRIGGER if trigger_event is not None else RunOrigin.MANUAL)
         payload = {} if input is None else input
         with transaction.atomic(), (
             self.hold(parent_step.run_id) if parent_step is not None else nullcontext(None)
@@ -401,6 +408,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 subject_content_type_id=target.content_type.pk if target is not None else None,
                 subject_object_id=target.object_id if target is not None else None,
                 parent_step_id=parent_step.pk if parent_step is not None else None,
+                reprocess_of_id=reprocess_of.pk if reprocess_of is not None else None,
+                trigger_event_id=trigger_event.pk if trigger_event is not None else None,
+                origin=origin,
                 relation=relation,
             )
 
@@ -426,8 +436,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             try:
                 with transaction.atomic():
                     run = self.create(
-                        version=version, input=normalized, request_key=request_key,
-                        reprocess_of=reprocess_of, **identity,
+                        version=version, input=normalized, request_key=request_key, **identity,
                     )
             except IntegrityError:
                 existing = self.filter(request_key=request_key).first() if request_key is not None else None

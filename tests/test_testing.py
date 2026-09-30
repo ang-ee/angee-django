@@ -8,6 +8,7 @@ from rebac import actor_context, system_context
 
 from angee.integrate.testing import models as integrate_models
 from angee.workflows import models as workflow_sources
+from angee.workflows.states import RunOrigin
 from angee.workflows.testing import models as workflow_models
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
 from tests import decisions_models
@@ -64,6 +65,6 @@ def test_workflow_run_reads_through_the_version_workflow_relation(composed_table
         runner = get_user_model().objects.create_user(username="workflow-runner")
         workflow = Workflow.objects.create(key="forward-relation", name="Forward relation", created_by=owner)
         version = WorkflowVersion.objects.create(workflow=workflow, number=1, document={}, content_hash="0" * 64)
-        run = WorkflowRun.objects.create(version=version, run_as=runner)
+        run = WorkflowRun.objects.create(version=version, run_as=runner, origin=RunOrigin.MANUAL)
     with actor_context(owner):
         assert WorkflowRun.objects.filter(pk=run.pk).exists()

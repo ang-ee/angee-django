@@ -288,11 +288,11 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                         raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
                     trigger.source_class.check_access(trigger, trigger.run_as, record)
                     trigger.admit_record(record, actor=trigger.run_as)
-                    run = apps.get_model("workflows", "WorkflowRun").objects.start(
+                    apps.get_model("workflows", "WorkflowRun").objects.start(
                         trigger.workflow, actor=trigger.run_as, subject=record, input=trigger.admission_input(record),
                         request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
+                        trigger_event=current,
                     )
-                    system_queryset(type(run)).filter(pk=run.pk).update(trigger_event=current)
             except (ValidationError, PermissionDenied) as error:
                 system_queryset(events).filter(pk=current.pk).update(
                     evaluated_at=F("changed_at"), rejection=exception_text(error),
@@ -305,7 +305,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 logger.exception("Workflow trigger admission failed for event %s.", current.pk)
                 return False
             system_queryset(events).filter(pk=current.pk).update(
-                evaluated_at=F("changed_at"), admitted_at=Now(), rejection="", run=run,
+                evaluated_at=F("changed_at"), admitted_at=Now(), rejection="",
             )
             return True
 

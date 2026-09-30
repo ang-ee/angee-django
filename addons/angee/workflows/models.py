@@ -23,7 +23,6 @@ from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
-from angee.workflows.fields import RunOriginField
 from angee.workflows.managers import (
     StepAttemptQuerySet,
     StepRunManager,
@@ -32,7 +31,15 @@ from angee.workflows.managers import (
     WorkflowRunManager,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
-from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunRelation, RunStatus, StepRunStatus, WaitingKind
+from angee.workflows.states import (
+    NAME_MAX_LENGTH,
+    AttemptResult,
+    RunOrigin,
+    RunRelation,
+    RunStatus,
+    StepRunStatus,
+    WaitingKind,
+)
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerEventManager, TriggerManager, TriggerSource
 
@@ -140,16 +147,16 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     error = DiagnosticTextField(max_length=8192, blank=True, default="")
     request_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
     parent_step = models.ForeignKey(
-        "workflows.StepRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="child_runs",
+        "workflows.StepRun", on_delete=models.PROTECT, null=True, blank=True, related_name="child_runs",
     )
     relation = StateField(choices_enum=RunRelation, null=True, blank=True)
     reprocess_of = models.ForeignKey(
-        "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="reprocesses",
+        "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="reprocesses",
     )
-    trigger_event = models.ForeignKey(
-        "workflows.TriggerEvent", on_delete=models.SET_NULL, null=True, blank=True, related_name="started_runs",
+    trigger_event = models.OneToOneField(
+        "workflows.TriggerEvent", on_delete=models.PROTECT, null=True, blank=True, related_name="started_run",
     )
-    origin = RunOriginField()
+    origin = StateField(choices_enum=RunOrigin, editable=False)
     finished_at = models.DateTimeField(null=True, blank=True)
     prune_after = models.DateTimeField(null=True, blank=True, editable=False)
     prune_reason = DiagnosticTextField(max_length=255, blank=True, default="", editable=False)
@@ -224,6 +231,16 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         abstract = True
         rebac_resource_type = "workflows/run"
         constraints = [
+            models.CheckConstraint(condition=(
+                models.Q(origin=RunOrigin.MANUAL, parent_step__isnull=True, reprocess_of__isnull=True,
+                         trigger_event__isnull=True)
+                | models.Q(origin=RunOrigin.WORKFLOW, parent_step__isnull=False, reprocess_of__isnull=True,
+                           trigger_event__isnull=True)
+                | models.Q(origin=RunOrigin.REPROCESS, parent_step__isnull=True, reprocess_of__isnull=False,
+                           trigger_event__isnull=True)
+                | models.Q(origin=RunOrigin.TRIGGER, parent_step__isnull=True, reprocess_of__isnull=True,
+                           trigger_event__isnull=False)
+            ), name="workflows_run_origin_cause"),
             models.CheckConstraint(
                 condition=(
                     models.Q(status__in=RunStatus.terminal_values(), finished_at__isnull=False)
@@ -243,7 +260,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
 
 
 class StepRun(AngeeDataModel):
-    """One graph node's state and input, with its claim counter as the fence."""
+    """One graph node's state and input, with its claim counter as the fence.
+
+    ``rank`` stores graph order for query sorting without reparsing the version.
+    """
 
     runtime = True
     decision_group = models.OneToOneField(
@@ -669,7 +689,7 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "wfe_"
-    trigger = models.ForeignKey("workflows.Trigger", on_delete=models.CASCADE, related_name="events")
+    trigger = models.ForeignKey("workflows.Trigger", on_delete=models.PROTECT, related_name="events")
     record_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
     record_object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("record_content_type", "record_object_id")
@@ -677,9 +697,6 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel):
     evaluated_at = models.DateTimeField(null=True, blank=True)
     admitted_at = models.DateTimeField(null=True, blank=True)
     rejection = DiagnosticTextField(blank=True, default="")
-    run = models.ForeignKey(
-        "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="trigger_events",
-    )
     objects = TriggerEventManager()
 
     def __str__(self) -> str:
@@ -693,4 +710,11 @@ class TriggerEvent(RecordRefMixin, AngeeDataModel):
         rebac_resource_type = "workflows/trigger_event"
         constraints = [models.UniqueConstraint(
             fields=("trigger", "record_content_type", "record_object_id"), name="workflows_trigger_record_unique",
+        ), models.CheckConstraint(
+            condition=models.Q(admitted_at__isnull=True) | models.Q(evaluated_at__isnull=False),
+            name="workflows_event_admission_evaluated",
+        )]
+        indexes = [models.Index(
+            fields=("changed_at", "id"), condition=models.Q(admitted_at__isnull=True),
+            name="workflows_event_pending",
         )]

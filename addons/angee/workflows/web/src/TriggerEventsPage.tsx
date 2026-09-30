@@ -19,8 +19,8 @@ export function TriggerEventsList({ triggerId }: { triggerId?: string }) {
         ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
       <Column field="changed_at" header={t("trigger.changed")} />
       <Column field="admitted_at" header={t("trigger.admitted")} />
-      <Column field="run" header={t("trigger.run")} render={(row) => {
-        const id = relationValueId(row.run);
+      <Column field="started_run" header={t("trigger.run")} render={(row) => {
+        const id = relationValueId(row.started_run);
         return id ? <RecordReference model={RUN_MODEL} id={id} /> : null;
       }} />
       <Column field="rejection" header={t("trigger.rejection")} />
@@ -31,7 +31,7 @@ export function TriggerEventsList({ triggerId }: { triggerId?: string }) {
       <Field name="display_name" title />
       <Group columns={2}>
         <Field name="trigger" label={t("trigger.title")} />
-        <Field name="run" label={t("trigger.run")} />
+        <Field name="started_run" label={t("trigger.run")} />
         <Field name="changed_at" label={t("trigger.changed")} />
         <Field name="evaluated_at" label={t("trigger.evaluated")} />
         <Field name="admitted_at" label={t("trigger.admitted")} />
