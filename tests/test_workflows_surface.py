@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import inspect
 import pkgutil
+from dataclasses import fields
 from typing import get_args
 
 from django.apps import apps
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 import angee.workflows as workflows
 from angee.base.evidence import DerivedFrom, EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
+from angee.workflows.managers import PublishResult
 from angee.workflows.steps import Settlement, Step
 from angee.workflows.testing import drivers as test_drivers
 
@@ -178,6 +180,11 @@ def test_workflow_test_driver_surface() -> None:
         and (inspect.isfunction(member) or inspect.isclass(member))
     ))
     assert public == EXPECTED_TEST_DRIVERS
+
+
+def test_workflow_publication_result_surface() -> None:
+    """Publication reports a version and explicit republish targets."""
+    assert tuple(field.name for field in fields(PublishResult)) == ("version", "dependents")
 
 
 def test_evidence_owner_surface() -> None:

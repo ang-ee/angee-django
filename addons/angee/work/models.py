@@ -1393,7 +1393,6 @@ class UserWork(ResourceLoadMixin):
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Ensure every loaded user has exactly one personal queue."""
 
@@ -1401,4 +1400,4 @@ class UserWork(ResourceLoadMixin):
         for user in sorted(instances, key=lambda instance: instance.pk or 0):
             queue_model.objects.provision_personal(user)
 
-        super().after_resource_load(instances, tier=tier, source=source, publish=publish)
+        super().after_resource_load(instances, tier=tier, source=source)

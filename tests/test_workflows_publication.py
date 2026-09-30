@@ -77,7 +77,7 @@ def test_request_key_replays_original_admission_after_publication(execution, reg
         expected_revision=workflow.draft_revision, actor=actor,
     )
     assert saved.status == "saved" and not saved.issues
-    version = Workflow.objects.publish(workflow, actor=actor)
+    version = Workflow.objects.publish(workflow, actor=actor).version
     assert version.pk != original.version_id
     replay = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 1}, request_key="test:original")
     assert replay.pk == original.pk

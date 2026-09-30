@@ -303,7 +303,7 @@ def test_draft_compare_and_swap_and_publish_hash(execution):
     assert unknown.status == "invalid"
     Workflow.objects.save_draft(workflow, draft=document("entry"), expected_revision=saved.revision, actor=actor)
     original = workflow.published_id
-    assert Workflow.objects.publish(workflow, actor=actor).pk == original
+    assert Workflow.objects.publish(workflow, actor=actor).version.pk == original
     assert system_queryset(WorkflowVersion).filter(workflow=workflow).count() == 1
 
 
@@ -463,7 +463,7 @@ def test_publication_and_start_keep_requesting_actor_attribution(execution, expl
 
     with actor_context(operator):
         actor = operator if explicit_actor else None
-        version = Workflow.objects.publish(workflow, actor=actor)
+        version = Workflow.objects.publish(workflow, actor=actor).version
         run = WorkflowRun.objects.start(workflow, actor=actor)
 
     assert version.published_by_id == operator.pk
@@ -660,7 +660,7 @@ def test_reprocess_uses_current_publication_and_ambient_actor(execution):
     Workflow.objects.save_draft(
         workflow, draft=document("entry", "last"), expected_revision=workflow.draft_revision, actor=actor,
     )
-    current = Workflow.objects.publish(workflow, actor=actor)
+    current = Workflow.objects.publish(workflow, actor=actor).version
     with actor_context(actor):
         replay = WorkflowRun.objects.reprocess(run)
     assert replay.pk != run.pk and replay.version_id == current.pk != run.version_id
@@ -678,7 +678,7 @@ def test_run_version_remains_pinned_across_republish(execution):
     Workflow.objects.save_draft(
         workflow, draft=document("entry", "last"), expected_revision=workflow.draft_revision, actor=actor,
     )
-    current = Workflow.objects.publish(workflow, actor=actor)
+    current = Workflow.objects.publish(workflow, actor=actor).version
     assert current.pk != pinned
     assert WorkflowRun.objects.start(
         workflow, actor=actor, input={"value": 8}, request_key="test:version_pin",

@@ -35,7 +35,7 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
         workflow, draft=document("entry", "finish"), expected_revision=workflow.draft_revision, actor=admin,
     )
     assert saved.status == "saved"
-    current = Workflow.objects.publish(workflow, actor=admin)
+    current = Workflow.objects.publish(workflow, actor=admin).version
     hidden = load_workflow(document("entry"), key="hidden-publication", actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", starter)
     query = """query($id: String!, $key: String!, $model: String!) {

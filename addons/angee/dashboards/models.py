@@ -728,7 +728,6 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Reconcile readers and validate snapshots, including unchanged resource rows."""
 
@@ -737,7 +736,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
             dashboard = cast("Dashboard", instance)
             dashboard.reconcile_shared_reader()
             dashboard.validate_installed_snapshot()
-        super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
+        super().after_resource_load(loaded, tier=tier, source=source)
 
 
 class DashboardWidgetQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
@@ -798,7 +797,6 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Revalidate installed parents when a widget resource is loaded alone."""
 
@@ -807,4 +805,4 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
         dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
         for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, owner__isnull=True):
             dashboard.validate_installed_snapshot()
-        super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
+        super().after_resource_load(loaded, tier=tier, source=source)

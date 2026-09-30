@@ -264,7 +264,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     tuple(instances_by_pk.values()),
                     tier=group.entry.tier,
                     source=group.entry.source,
-                    publish=group.entry.publish,
                 )
 
     def _addon_aliases(self, addons: Iterable[Any]) -> dict[str, str]:

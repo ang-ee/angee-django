@@ -1,6 +1,5 @@
 """A run wait composes actor-scoped reads and the settlement-owned wake seam."""
 
-from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -9,11 +8,8 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
 from angee.base.jsonschema import union_schema
-from angee.base.scoping import system_queryset
 from angee.workflows.states import Outcome, WaitingKind
 from angee.workflows.steps import Done, Step, _Settlement
-
-_expecting: ContextVar[tuple[str, ...]] = ContextVar("workflow_expected_contracts", default=())
 
 
 class AwaitRunInput(BaseModel):
@@ -24,10 +20,11 @@ class AwaitRunInput(BaseModel):
 
 
 class AwaitRunConfig(BaseModel):
-    """The published workflow whose outcome contracts this node expects."""
+    """The expected workflow and its frozen outcome-to-output-schema contract."""
 
     model_config = ConfigDict(extra="forbid")
     expects: str
+    outcomes: dict[Outcome, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -42,6 +39,11 @@ class _AwaitedRun(_Settlement):
     def check(self, step: type[Step], *, config: Any = None) -> _AwaitedRun:
         if not self.completed:
             return self
+        if self.outcome not in config.outcomes:
+            raise ValidationError(
+                f"Awaited workflow {config.expects!r} returned outcome {self.outcome!r} "
+                "outside this published await contract."
+            )
         checked = Done(output=self.output, outcome=self.outcome).check(step, config=config)
         return replace(self, output=checked.output, outcome=checked.outcome)
 
@@ -65,22 +67,9 @@ class AwaitRun(Step[AwaitRunInput, Any, AwaitRunConfig]):
 
     @classmethod
     def outcomes_for(cls, config: AwaitRunConfig) -> dict[Outcome, str]:
-        """Expose the expected workflow's actual terminal outcomes."""
+        """Expose only the outcomes retained in this parent version."""
         return {outcome: outcome.replace("_", " ").capitalize()
-                for outcome in cls.expected_schemas(config)}
-
-    @classmethod
-    def expected_schemas(cls, config: AwaitRunConfig) -> dict[str, dict[str, Any]]:
-        """Reject recursive publication contracts with an actionable issue."""
-        if config.expects in _expecting.get():
-            raise ValidationError("Awaited workflow output contracts cannot be recursive.")
-        with _expecting.set((*_expecting.get(), config.expects)):
-            workflow = system_queryset(apps.get_model("workflows", "Workflow")).select_related("published").filter(
-                key=config.expects,
-            ).first()
-            if workflow is None or workflow.published_id is None:
-                raise ValidationError(f"Expected workflow {config.expects!r} must exist and be published.")
-            return workflow.published.definition.output_schemas
+                for outcome in config.outcomes}
 
     @classmethod
     def required_outcomes(cls, config: AwaitRunConfig) -> set[Outcome]:
@@ -92,7 +81,7 @@ class AwaitRun(Step[AwaitRunInput, Any, AwaitRunConfig]):
         """Project only the routed outcomes when checking a successor's input."""
         if config is None:
             return {}
-        schemas = cls.expected_schemas(config)
+        schemas = config.outcomes
         return union_schema(*(schema for outcome, schema in schemas.items() if outcomes is None or outcome in outcomes))
 
     def run(self, ctx: Any) -> _Settlement:

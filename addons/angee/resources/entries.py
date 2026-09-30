@@ -228,9 +228,6 @@ class ResourceEntry:
     adopt: AdoptDeclaration = False
     """Unique field(s) used for adoption; ``True`` infers one unique field."""
 
-    publish: bool = False
-    """Whether loaded rows should be published by a target-model resource hook."""
-
     _groups: tuple[ResourceGroup, ...] | None = field(
         default=None,
         init=False,
@@ -258,7 +255,6 @@ class ResourceEntry:
             encoding=declaration.get("encoding", "utf-8"),
             depends_on=declaration.get("depends_on", ()),
             adopt=_resource_adopt_value(declaration["adopt"]) if "adopt" in declaration else False,
-            publish=bool(declaration.get("publish", False)),
         )
 
     @property

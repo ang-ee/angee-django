@@ -14,7 +14,8 @@ from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
 from angee.workflows.steps import Done, EmptyOutput, Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepRun, Workflow, WorkflowVersion
+from angee.workflows.testing.models import StepAttempt, StepRun, Workflow
+from tests.conftest import create_user
 
 
 class Number(BaseModel):
@@ -55,10 +56,13 @@ def child_document():
     }
 
 
-def parent_document(expects):
+def parent_document(expects, outcomes=None):
     """Route each child result to a successor with exactly its typed contract."""
+    config = {"expects": expects}
+    if outcomes is not None:
+        config["outcomes"] = outcomes
     return {"nodes": {
-        "awaited": {"step": AwaitRun.key, "config": {"expects": expects}, "next": {
+        "awaited": {"step": AwaitRun.key, "config": config, "next": {
             "accepted": "value", "declined": "empty", "done": "empty", "error": "empty", "canceled": "empty",
         }},
         "value": {"step": NumberStep.key},
@@ -138,15 +142,29 @@ def test_native_output_alternatives_preserve_nested_model_references(register_st
 
 @pytest.mark.django_db(transaction=True)
 def test_await_requires_published_expected_workflow(execution):
-    """Absent and unpublished identities are publication issues, not parse errors."""
+    """Absent and unpublished identities yield author-scoped publication issues."""
     actor, _ = execution
-    _, issues = Definition.check(parent_document("missing"))
-    assert any(issue.code == "outcome" and "published" in issue.message for issue in issues)
+    parent = Workflow.objects.install_definition(
+        key="await_missing_parent", name="Parent", draft=parent_document("missing"), publish=False, actor=actor,
+    )
+    saved = Workflow.objects.save_draft(
+        parent, draft=parent_document("missing"), expected_revision=parent.draft_revision, actor=actor,
+    )
+    assert any(issue.code == "expected_workflow" and "published" in issue.message for issue in saved.issues)
     Workflow.objects.install_definition(
         key="unpublished", name="Unpublished", draft=child_document(), publish=False, actor=actor,
     )
-    _, issues = Definition.check(parent_document("unpublished"))
-    assert any(issue.code == "outcome" and "published" in issue.message for issue in issues)
+    saved = Workflow.objects.save_draft(
+        parent, draft=parent_document("unpublished"), expected_revision=saved.revision, actor=actor,
+    )
+    assert any(issue.code == "expected_workflow" and "published" in issue.message for issue in saved.issues)
+    forged = parent_document("", {"done": EmptyStep.output_schema()})
+    saved = Workflow.objects.save_draft(
+        parent, draft=forged, expected_revision=saved.revision, actor=actor,
+    )
+    assert any(issue.code == "config" for issue in saved.issues)
+    with pytest.raises(ValidationError):
+        Workflow.objects.publish(parent, actor=actor)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -154,7 +172,7 @@ def test_await_requires_every_outcome_route_and_checks_successor_by_outcome(exec
     """An accepted edge supplies Number while default failures remain empty."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_contract", actor=actor)
-    document = parent_document(workflow.key)
+    document = parent_document(workflow.key, workflow.published.definition.output_schemas)
     definition, issues = Definition.check(document)
     assert issues == []
     assert schemas_match(definition.output_schema("awaited", {"accepted"}), NumberStep.input_schema())
@@ -171,7 +189,7 @@ def test_await_checks_output_against_the_selected_child_outcome(execution):
     """An await can forward error, but cannot forward another outcome's shape."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_checks", actor=actor)
-    config = AwaitRunConfig(expects=workflow.key)
+    config = AwaitRunConfig(expects=workflow.key, outcomes=workflow.published.definition.output_schemas)
     assert AwaitRun.check(Done(output={"value": 2}, outcome="accepted"), config=config).output == {"value": 2}
     assert AwaitRun.check(Done(output={}, outcome="error"), config=config).outcome == "error"
     assert AwaitRun.check(Done(output={}, outcome="canceled"), config=config).outcome == "canceled"
@@ -192,7 +210,7 @@ def test_await_successor_field_binding_uses_its_routed_outcome_contract(executio
     """An accepted edge can bind accepted fields without admitting empty closures."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_field_binding", actor=actor)
-    document = parent_document(workflow.key)
+    document = parent_document(workflow.key, workflow.published.definition.output_schemas)
     document["nodes"]["value"]["input"] = {"value": {"from": "awaited", "path": ["value"]}}
     _, issues = Definition.check(document)
     assert issues == []
@@ -207,7 +225,7 @@ def test_await_result_projection_uses_selected_outcome_contract(execution, whole
     """A result's eligibility selects the same child shape as its binding."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_result_binding", actor=actor)
-    document = parent_document(workflow.key)
+    document = parent_document(workflow.key, workflow.published.definition.output_schemas)
     binding = {"from": "awaited", "path": ["value"]}
     document["results"] = [{"from": "awaited", "when": ["accepted"], "as": "answer",
                             "output": binding if whole else {"answer": binding}}]
@@ -221,7 +239,7 @@ def test_await_whole_error_result_retains_the_publication_restriction(execution)
     """Dynamic empty outcomes do not remove the graph's universal error-binding rule."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_error_binding", actor=actor)
-    document = parent_document(workflow.key)
+    document = parent_document(workflow.key, workflow.published.definition.output_schemas)
     document["results"] = [{"from": "awaited", "when": ["error"], "output": {"from": "awaited"}}]
     _, issues = Definition.check(document)
     assert any(issue.code == "binding" and "error" in issue.message for issue in issues)
@@ -248,6 +266,9 @@ def test_await_map_body_preserves_error_label_and_child_output(execution, regist
             "step": AwaitRun.key, "config": {"expects": workflow.key},
         }}}, "results": [{"from": "each"}],
     }, key="await_observer_map", actor=actor)
+    assert parent.published.definition.node("each.body").parsed_config.outcomes == (
+        workflow.published.definition.output_schemas
+    )
     run = start_run(parent, actor=actor, input={"items": [{"run_id": public_id_of(child)}]})
     run_until(run)
     assert run.status == "succeeded", run.error
@@ -318,18 +339,80 @@ def test_observing_already_failed_owned_child_preserves_its_open_rows(execution,
 
 
 @pytest.mark.django_db(transaction=True)
-def test_recursive_await_contract_is_a_publish_issue_and_restores_guard(execution):
-    """Old published cycles fail as diagnostics instead of unbounded recursion."""
+def test_parent_retains_child_contract_and_reports_republish_dependency(execution, register_step):
+    """A child change leaves the parent version fixed and names it for republishing."""
+    class NewOutcome(Step[Number, Number, None]):
+        key = "await_new_outcome"
+        outcomes = {"surprise": "Surprise"}
+
+        def run(self, ctx):
+            return ctx.done(ctx.input, outcome="surprise")
+
+    register_step(NewOutcome)
+    actor, _ = execution
+    child = load_workflow(child_document(), key="frozen_child", actor=actor)
+    parent = load_workflow(parent_document(child.key), key="frozen_parent", actor=actor)
+    original = parent.published
+    frozen = original.definition.node("awaited").parsed_config.outcomes
+    assert frozen == child.published.definition.output_schemas
+    assert "outcomes" not in parent.draft["nodes"]["awaited"]["config"]
+
+    revised = {"nodes": {"value": {"step": NewOutcome.key}}, "results": [{"from": "value"}]}
+    saved = Workflow.objects.save_draft(child, draft=revised, expected_revision=child.draft_revision, actor=actor)
+    assert saved.status == "saved" and not saved.issues
+    published = Workflow.objects.publish(child, actor=actor)
+    assert published.dependents == (parent.key,)
+    assert "surprise" in published.version.definition.output_schemas
+    assert parent.published_id == original.pk
+    assert parent.published.definition.node("awaited").parsed_config.outcomes == frozen
+    assert Definition.check(original.document)[1] == []
+
+    run = start_run(child, actor=actor, input={"value": 3})
+    run_until(run)
+    observer = start_run(parent, actor=actor, input={"run_id": public_id_of(run), "empty": {}})
+    run_until(observer)
+    awaited = system_queryset(StepRun).get(run=observer, node_key="awaited")
+    assert awaited.status == "failed"
+    assert "outside this published await contract" in system_queryset(StepAttempt).get(step_run=awaited).error
+
+
+@pytest.mark.django_db(transaction=True)
+def test_draft_author_cannot_resolve_unreadable_child_contract(execution):
+    """Write access to a parent does not disclose another workflow's outcomes."""
+    admin, _ = execution
+    child = load_workflow(child_document(), key="private_child", actor=admin)
+    parent = load_workflow(parent_document(child.key), key="editable_parent", actor=admin)
+    author = create_user("await-draft-author")
+    parent.with_actor(admin).grant_record_access("editor", author)
+    saved = Workflow.objects.save_draft(
+        parent, draft=parent_document(child.key), expected_revision=parent.draft_revision, actor=author,
+    )
+    assert saved.status == "saved"
+    assert any(issue.code == "expected_workflow" and "readable" in issue.message for issue in saved.issues)
+    with pytest.raises(ValidationError, match="readable and published"):
+        Workflow.objects.publish(parent, actor=author)
+    child.with_actor(admin).grant_record_access("viewer", author)
+    saved = Workflow.objects.save_draft(
+        parent, draft=parent_document(child.key), expected_revision=saved.revision, actor=author,
+    )
+    assert saved.status == "saved" and not saved.issues
+    assert Workflow.objects.publish(parent, actor=author).version.pk == parent.published_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_await_contract_never_recurses_into_current_publications(execution):
+    """A published parent uses its frozen contract even if a child later awaits it."""
     actor, _ = execution
     workflow = load_workflow(child_document(), key="await_recursive", actor=actor)
-    # Seed a historical malformed publication through the model's insertion door.
-    document = parent_document(workflow.key)
-    document["results"] = [{"from": "awaited", "when": ["accepted"]}]
-    version = system_queryset(WorkflowVersion).create(
-        workflow=workflow, number=2, document=document, content_hash="recursive",
+    parent = load_workflow(parent_document(workflow.key), key="await_parent", actor=actor)
+    old_schemas = parent.published.definition.node("awaited").parsed_config.outcomes
+    routes = {outcome: "finish" for outcome in parent.published.definition.output_schemas}
+    replacement = {"nodes": {"awaited": {"step": AwaitRun.key, "config": {"expects": parent.key},
+                                      "next": routes},
+                              "finish": {"step": EmptyStep.key, "input": {"from": "input", "path": ["empty"]}}}}
+    saved = Workflow.objects.save_draft(
+        workflow, draft=replacement, expected_revision=workflow.draft_revision, actor=actor,
     )
-    system_queryset(Workflow).filter(pk=workflow.pk).update(published=version)
-    _, issues = Definition.check(parent_document(workflow.key))
-    assert any("cannot be recursive" in issue.message for issue in issues)
-    unrelated = load_workflow(child_document(), key="await_unrelated", actor=actor)
-    assert "accepted" in AwaitRun.outcomes_for(AwaitRunConfig(expects=unrelated.key))
+    assert saved.status == "saved"
+    Workflow.objects.publish(workflow, actor=actor)
+    assert parent.published.definition.node("awaited").parsed_config.outcomes == old_schemas

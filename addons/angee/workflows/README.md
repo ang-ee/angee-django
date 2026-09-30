@@ -8,6 +8,12 @@ the normalized immutable document selected when a run starts.
 It also plans ready and skipped nodes from retained step rows without querying
 the database. Named outcomes route control, lists of targets fan out, and joins
 wait until all incoming sources have settled.
+Draft save and publication resolve each `await_run` child under the author's
+workflow read scope. A published parent stores the child's outcome-to-output-schema
+contract in the node config; execution uses that frozen contract. A child outcome
+outside it fails the await step. Publishing returns the version and the readable
+published parent workflow keys that should be republished to adopt a changed child
+contract.
 Schema declaration checks, format validation and structural schema operations
 come from [`angee.base.jsonschema`](../../../angee/base/jsonschema.py).
 

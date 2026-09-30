@@ -19,6 +19,7 @@ from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Exists, F, Max, OuterRef, Q, Subquery, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
+from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
@@ -75,6 +76,14 @@ class DraftSave:
 
 
 @dataclass(frozen=True)
+class PublishResult:
+    """The published version and readable parents that need republishing."""
+
+    version: Any
+    dependents: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Cancellation:
     """The facts observed and changed under the cancellation lock."""
 
@@ -103,6 +112,52 @@ class Cancellation:
 
 class WorkflowManager(AngeeManager):
     """Own the editable document and the immutable publication sequence."""
+
+    def _resolved_document(self, draft: Any, actor: Any) -> tuple[Any, list[Issue]]:
+        """Snapshot each awaited contract through the author's workflow read scope."""
+        try:
+            definition = Definition.model_validate(draft)
+        except PydanticValidationError:
+            return draft, []
+        document = definition.model_dump(mode="json", by_alias=True)
+        issues: list[Issue] = []
+        readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
+        assert readable is not None
+        for key, node, path in definition.declarations():
+            if node.step != "await_run":
+                continue
+            config = document["nodes"][key.partition(".")[0]]
+            if key.endswith(MAP_BODY_SUFFIX):
+                config = config["body"]
+            config = config["config"]
+            expects = config.get("expects")
+            config.pop("outcomes", None)
+            if not isinstance(expects, str) or not expects:
+                continue
+            expected = readable.select_related("published").filter(key=expects, published__isnull=False).first()
+            if expected is None:
+                issues.append(Issue(
+                    node=key, path=[*path, "config", "expects"], code="expected_workflow",
+                    message=f"Expected workflow {expects!r} must be readable and published.",
+                ))
+                continue
+            config["outcomes"] = expected.published.definition.output_schemas
+        return document, issues
+
+    def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
+        """Name readable published parents whose frozen contract names this workflow."""
+        readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
+        assert readable is not None
+        parents = readable.exclude(pk=workflow.pk).filter(published__isnull=False).values_list(
+            "key", "published__document",
+        )
+        return tuple(sorted(
+            key for key, document in parents
+            if any(
+                node.step == "await_run" and node.config.get("expects") == workflow.key
+                for _, node, _ in Definition.model_validate(document).declarations()
+            )
+        ))
 
     def save_identity(
         self, *, key: str, name: str, description: str = "", subject_model: str = "", actor: Any = None,
@@ -147,9 +202,11 @@ class WorkflowManager(AngeeManager):
     ) -> DraftSave:
         """Save one parsable registered document with optimistic concurrency."""
 
-        workflow.require_access("write", actor)
+        actor = workflow.require_access("write", actor)
+        resolved, resolution_issues = self._resolved_document(draft, actor)
         with system_context(reason="workflows.save_draft"):
-            definition, issues = Definition.check(draft, subject_model=workflow.subject_model)
+            definition, issues = Definition.check(resolved, subject_model=workflow.subject_model)
+            issues.extend(resolution_issues)
             if definition is None or any(issue.blocks_draft for issue in issues):
                 return DraftSave("invalid", expected_revision, issues)
             values = {"draft": draft, "draft_revision": F("draft_revision") + 1, "updated_at": Now()}
@@ -159,29 +216,34 @@ class WorkflowManager(AngeeManager):
             revision = self.values_list("draft_revision", flat=True).get(pk=workflow.pk)
         return DraftSave("saved" if changed else "conflict", revision, issues)
 
-    def publish(self, workflow: Any, *, actor: Any = None) -> Any:
-        """Validate and publish the locked draft, reusing an unchanged hash."""
+    def publish(self, workflow: Any, *, actor: Any = None) -> PublishResult:
+        """Publish a frozen document and report readable dependents to republish."""
 
         actor = workflow.require_access("write", actor)
-        with transaction.atomic(), system_context(reason="workflows.publish"):
-            current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
-            definition, issues = Definition.check(current.draft, subject_model=current.subject_model)
+        with transaction.atomic():
+            with system_context(reason="workflows.publish"):
+                current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+            resolved, resolution_issues = self._resolved_document(current.draft, actor)
+            definition, issues = Definition.check(resolved, subject_model=current.subject_model)
+            issues.extend(resolution_issues)
             if issues:
                 raise DefinitionInvalid(issues)
             assert definition is not None
             document = definition.model_dump(mode="json", by_alias=True)
             digest = canonical_json_sha256(document)
             if current.published_id and current.published.content_hash == digest:
-                return current.published
-            number = current.versions.aggregate(number=Max("number"))["number"] or 0
-            version = current.versions.create(
-                number=number + 1,
-                document=document,
-                content_hash=digest,
-                published_by_id=actor_user_id(to_subject_ref(actor)) if actor is not None else None,
-            )
-            self.filter(pk=current.pk).update(published=version, updated_at=Now())
-            return version
+                version = current.published
+            else:
+                with system_context(reason="workflows.publish"):
+                    number = current.versions.aggregate(number=Max("number"))["number"] or 0
+                    version = current.versions.create(
+                        number=number + 1,
+                        document=document,
+                        content_hash=digest,
+                        published_by_id=actor_user_id(to_subject_ref(actor)) if actor is not None else None,
+                    )
+                    self.filter(pk=current.pk).update(published=version, updated_at=Now())
+            return PublishResult(version, self._published_dependents(current, actor))
 
     def install_definition(
         self,
