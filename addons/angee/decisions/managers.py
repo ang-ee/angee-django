@@ -212,7 +212,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 raise ValidationError("Supersession requires one seat per kind and subject in a group.")
         try:
             with transaction.atomic(), system_context(reason="decisions.admit"):
-                group = group_model.objects.create(policy=policy, issuer=issuer, reasked_from=reasked_from)
+                group = group_model.objects.create(
+                    policy=policy, issuer=issuer, reasked_from=reasked_from,
+                    reask_root_id=(reasked_from.reask_root_id or reasked_from.pk)
+                    if reasked_from is not None else None,
+                )
                 old = list(self.pending().filter(Q(*[
                     Q(kind=kind, subject_content_type=ct, subject_object_id=pk) for kind, ct, pk in identities
                 ], _connector=Q.OR)).order_by("group_id", "pk")) if identities else []

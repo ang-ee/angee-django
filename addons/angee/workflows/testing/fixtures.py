@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from rebac import system_context
@@ -17,6 +17,7 @@ from rebac.roles import grant as grant_role
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
 from angee.jobs.enqueue import celery_app
+from angee.testing.permissions import bind_test_permission_schemas
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import RunFactory, register_steps
 
@@ -24,14 +25,16 @@ from angee.workflows.testing.drivers import RunFactory, register_steps
 @pytest.fixture
 def workflow_permissions(
     composed_tables: None, restore_composed_permission_bindings: None, tmp_path: Path,
+    permission_app_configs: list[AppConfig],
 ) -> None:
     """Compose permission contributions for the combined source-test models."""
-    configs = list(apps.get_app_configs())
+    configs = permission_app_configs
     sources = extension_source_map(configs)
     runtime = tmp_path / "permissions"
     for relative, content in sources.items():
         write_atomic(runtime / relative, content)
     apply_schema_paths(configs, runtime, sources=sources)
+    bind_test_permission_schemas(configs, runtime / "concrete")
     call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
 
 

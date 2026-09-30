@@ -133,5 +133,7 @@ ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
 ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
+# Track ContentType writes used by the money rate permission filter.
+REBAC_TRACKED_MODELS = ["contenttypes.ContentType"]
 
 AutoConfig.apply_installed(globals(), environment=False)

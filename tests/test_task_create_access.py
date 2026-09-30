@@ -20,6 +20,7 @@ from rebac import (
     write_relationships,
 )
 from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.index.rebuild import rebuild
 from rebac.schema import parse_zed
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -99,6 +100,7 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
     )
     active.set_schema(replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]))
     try:
+        rebuild(using="default")
         reader = create_user("task-project-reader")
         admin = create_platform_admin("task-project-admin")
         with system_context(reason="tests.task_create_access.project"):

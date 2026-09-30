@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.management import call_command
 from django.db import transaction
 from django.test import override_settings
@@ -26,6 +26,7 @@ from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
 from angee.projects import signals as project_signals
 from angee.projects.access import bind, resync_project_access, unbind
+from angee.testing.permissions import bind_test_permission_schemas
 from tests.conftest import (
     Backend,
     Drive,
@@ -50,16 +51,19 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
 
 
 @pytest.fixture
-def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
+def project_access_schema(
+    tmp_path: Path, transactional_db: None, permission_app_configs: list[AppConfig],
+) -> Any:
     """Load composed permission extensions and restore app schema paths afterward."""
 
-    configs = list(apps.get_app_configs())
+    configs = permission_app_configs
     originals = {config: getattr(config, "rebac_schema", None) for config in configs}
     sources = extension_source_map(configs)
     runtime = tmp_path / "project-access-runtime"
     for relative, source in sources.items():
         write_atomic(runtime / relative, source)
     apply_schema_paths(configs, runtime, sources=sources)
+    bind_test_permission_schemas(configs, runtime / "concrete")
     call_command("rebac", "sync", verbosity=0)
     try:
         yield

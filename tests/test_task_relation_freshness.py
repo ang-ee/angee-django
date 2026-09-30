@@ -33,6 +33,7 @@ class FreshnessStage(AbstractStage):
     class Meta(AbstractStage.Meta):
         abstract = False
         app_label = "scopedemo"
+        rebac_resource_type = "tests/freshness_stage"
         constraints = _local_constraints(AbstractStage.Meta.constraints)
 
 
@@ -42,6 +43,7 @@ class FreshnessMilestone(AbstractMilestone):
     class Meta(AbstractMilestone.Meta):
         abstract = False
         app_label = "scopedemo"
+        rebac_resource_type = "tests/freshness_milestone"
         constraints = _local_constraints(getattr(AbstractMilestone.Meta, "constraints", ()))
 
 
@@ -62,6 +64,7 @@ class FreshnessTask(TaskWork, AbstractTask):
     class Meta(AbstractTask.Meta):
         abstract = False
         app_label = "scopedemo"
+        rebac_resource_type = "tests/freshness_task"
         constraints = _local_constraints(AbstractTask.Meta.constraints[:2])
 
 

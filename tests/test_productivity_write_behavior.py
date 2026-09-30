@@ -14,6 +14,7 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.index.rebuild import rebuild
 from rebac.schema import parse_zed
 from strawberry import auto
 
@@ -211,6 +212,7 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
         """)
     active.set_schema(replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]))
     try:
+        rebuild(using="default")
         admin = create_platform_admin("productivity-create-admin")
         with system_context(reason="tests.productivity.create.queue"):
             queue = Queue.objects.create(key="CREATE", name="Create", slug="create")

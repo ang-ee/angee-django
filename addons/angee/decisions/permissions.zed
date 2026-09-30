@@ -1,16 +1,18 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition decisions/group {
-    relation reasked_by: decisions/group // rebac:field=reasked_by
+    relation root: decisions/group // rebac:field=reask_root
     relation issuer: auth/user // rebac:field=issuer
     relation assignee: auth/user // rebac:field=decisions__assignees
     relation requester: auth/user // rebac:field=decisions__requester
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member
-    permission waiter_read = reasked_by->waiter_read
-    permission read = issuer + assignee + requester + admin->member + waiter_read
+    // Waiter addons contribute a leaf permission; the chain never recurses.
+    permission waiter_read = nil
+    permission chain_waiter_read = waiter_read + root->waiter_read
+    permission read = issuer + assignee + requester + admin->member + chain_waiter_read
     permission write = admin->member
     permission delete = admin->member
 }
@@ -23,7 +25,7 @@ definition decisions/decision {
     relation person: iam/kind // rebac:const=person
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member
-    permission read = assignee + requester + issuer + admin->member + group->waiter_read
+    permission read = assignee + requester + issuer + admin->member + group->chain_waiter_read
     permission act = ((assignee - requester) + admin->member) & person->active_member
     permission write = admin->member
     permission delete = admin->member

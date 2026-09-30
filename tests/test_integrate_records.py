@@ -13,8 +13,10 @@ from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
+from rebac.managers import TrackedQuerySet
 
 from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.scoping import lock_if_supported
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,
@@ -55,14 +57,17 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
         for row in (replica, link, revision, discrepancy):
             model = type(row)
             assert model._default_manager is model.objects
-            for manager in (model.objects, model._base_manager):
-                queryset = manager.filter(pk=row.pk).order_by("pk").lock_if_supported()
-                expected = (
-                    AngeeUnscopedQuerySet
-                    if manager is model._base_manager and model is not RecordRevision
-                    else AngeeQuerySet
-                )
-                assert isinstance(queryset, expected)
+            queryset = model.objects.filter(pk=row.pk).order_by("pk").lock_if_supported()
+            assert isinstance(queryset, AngeeQuerySet)
+            assert queryset.query.select_for_update is True
+            assert list(queryset) == [row]
+            queryset = lock_if_supported(model._base_manager.filter(pk=row.pk).order_by("pk"))
+            assert isinstance(queryset, TrackedQuerySet)
+            assert queryset.query.select_for_update is True
+            assert list(queryset) == [row]
+            if model is not RecordRevision:
+                queryset = model.unscoped_objects.filter(pk=row.pk).lock_if_supported()
+                assert isinstance(queryset, AngeeUnscopedQuerySet)
                 assert queryset.query.select_for_update is True
                 assert list(queryset) == [row]
         for manager, row in ((replica.links, link), (replica.discrepancies, discrepancy), (link.revisions, revision)):
@@ -230,6 +235,34 @@ def test_record_link_sync_evidence_uses_bounded_queries(replica: Any, count: int
         }
     assert len(queries) == 3
     assert actual == expected
+
+
+@pytest.mark.parametrize("source_policy", ["owner", "outsider", "system"])
+def test_record_link_sync_evidence_preserves_source_policy(composed_tables: None, source_policy: str) -> None:
+    """Embedded evidence follows the source's policy, not an unrelated ambient actor."""
+    del composed_tables
+    with system_context(reason="test sync evidence policy"):
+        bridge = make_integration("sync-evidence-policy", model=Channel)
+        owner = get_user_model().objects.get(pk=bridge.owner_id)
+        outsider = get_user_model().objects.create_user(username="sync-evidence-outsider")
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "person:1")
+        RecordRevision.objects.append(link, source_payload={}, source_hash="old", mapping_version=1)
+        latest = RecordRevision.objects.append(link, source_payload={}, source_hash="new", mapping_version=2)
+        conflict = SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.CONFLICT, code="changed")
+
+    if source_policy == "system":
+        source = RecordLink.objects.system_context(reason="test authorized evidence read")
+    else:
+        source = RecordLink.objects.with_actor(owner if source_policy == "owner" else outsider)
+    with actor_context(owner if source_policy == "outsider" else outsider):
+        rows = list(source.filter(pk=link.pk).with_sync_evidence())
+    if source_policy == "outsider":
+        assert rows == []
+    else:
+        assert len(rows) == 1
+        assert [row.pk for row in rows[0].latest_revisions] == [latest.pk]
+        assert [row.pk for row in rows[0].open_conflicts] == [conflict.pk]
 
 
 def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any) -> None:
@@ -553,9 +586,17 @@ def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tabl
         assert model.objects.with_actor(owner).filter(pk=row.pk).exists()
         assert not model.objects.with_actor(other).filter(pk=row.pk).exists()
 
-    with system_context(reason="test derived stream owner change"):
-        Integration.objects.filter(pk=bridge.pk).update(owner=other)
-
-    for model, row in ((SyncStream, stream), (RecordLink, link)):
-        assert not model.objects.with_actor(owner).filter(pk=row.pk).exists()
-        assert model.objects.with_actor(other).filter(pk=row.pk).exists()
+    current, replacement = owner, other
+    for manager in (Integration.objects, Integration.unscoped_objects, Integration._base_manager):
+        for operation in ("update", "bulk_update"):
+            with system_context(reason="test derived stream owner change"):
+                if operation == "update":
+                    manager.filter(pk=bridge.pk).update(owner=replacement)
+                else:
+                    changed = Integration._base_manager.get(pk=bridge.pk)
+                    changed.owner = replacement
+                    manager.bulk_update([changed], ["owner"])
+            for model, row in ((SyncStream, stream), (RecordLink, link)):
+                assert not model.objects.with_actor(current).filter(pk=row.pk).exists()
+                assert model.objects.with_actor(replacement).filter(pk=row.pk).exists()
+            current, replacement = replacement, current

@@ -9,6 +9,8 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 from rebac import app_settings
 from rebac.backends.local import mark_relationships_changed
+from rebac.index.maintain import IndexMaintenance
+from rebac.index.rebuild import rebuild
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 
@@ -35,11 +37,12 @@ def grant_counts() -> GrantCounts:
 def reset_rebac_grants() -> GrantCounts:
     """Atomically clear both local grant stores and their identity registry."""
 
-    with transaction.atomic():
+    with IndexMaintenance(using="default"):
         counts = grant_counts()
         Relationship._base_manager.all().delete()
         RelationshipRegistry._base_manager.all().delete()
         RebacResource._base_manager.all().delete()
+        rebuild(using="default")
         transaction.on_commit(mark_relationships_changed)
     return counts
 

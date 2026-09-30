@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
@@ -26,6 +26,7 @@ from angee.compose.permissions import (
 )
 from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.testing.permissions import bind_test_permission_schemas
 from tests import test_messaging_graphql
 from tests.conftest import (
     SchemaAddon,
@@ -45,11 +46,13 @@ spaces_schema = importlib.import_module("angee.spaces.schema")
 
 
 @pytest.fixture()
-def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
+def spaces_tables(
+    transactional_db: Any, tmp_path: Path, permission_app_configs: list[AppConfig],
+) -> Iterator[None]:
     """Load the composed spaces/messaging REBAC schema for native test tables."""
 
     del transactional_db
-    app_configs = list(apps.get_app_configs())
+    app_configs = permission_app_configs
     runtime_dir = tmp_path / "runtime"
     source_map = extension_source_map(app_configs)
     for relpath, text in source_map.items():
@@ -59,6 +62,7 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     sentinel = object()
     original_schema = getattr(messaging, "rebac_schema", sentinel)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
+    bind_test_permission_schemas(app_configs, runtime_dir / "concrete")
 
     call_command("rebac", "sync", verbosity=0)
     try:

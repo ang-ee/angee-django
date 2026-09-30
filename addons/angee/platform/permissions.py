@@ -27,7 +27,8 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError
+from rebac.index.maintain import IndexMaintenance
 from rebac.models import active_relationship_model
 from rebac.schema import resolve_schema_path
 
@@ -67,7 +68,7 @@ def reconcile_permission_schema() -> int:
     if not stale:
         return 0
 
-    with system_context(reason="angee.platform.reconcile_permission_schema"), transaction.atomic():
+    with system_context(reason="angee.platform.reconcile_permission_schema"), IndexMaintenance(using="default"):
         _delete_stale_relationships(stale)
         for record in sorted(stale, key=_prune_key):
             target = record.target

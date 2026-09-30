@@ -10,10 +10,26 @@ those orphans and stale rows inside still-composed packages.
 
 from __future__ import annotations
 
-from pathlib import Path
+from dataclasses import asdict
 
 import pytest
+from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
+from django.utils import timezone
+from rebac import ObjectRef, RelationshipTuple, SubjectRef
+from rebac.models import (
+    PackageManagedRecord,
+    SchemaDefinition,
+    SchemaPermission,
+    SchemaRelation,
+    active_relationship_model,
+)
+from rebac.schema import parse_zed
+from rebac.schema.ast import FieldBinding, backing_to_dict
+
+from angee.base.historical_relationships import ensure_historical_relationships
+from angee.platform.permissions import reconcile_permission_schema
 
 _OLD_IAM_ZED = """
 // @rebac_package: iam
@@ -54,62 +70,39 @@ definition iam/company {
 """
 
 
-def _managed(package: str, resource_type: str):
-    """Create a SchemaDefinition with a PackageManagedRecord owning it, as sync would."""
-
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    definition = SchemaDefinition.objects.create(resource_type=resource_type)
-    PackageManagedRecord.objects.create(
+def _provenance(historical_models, package: str, external_id: str, target) -> None:
+    """Retain the package ownership present before index publication existed."""
+    historical_models.get_model("rebac", "PackageManagedRecord").objects.create(
         package=package,
-        external_id=f"definition:{resource_type}",
+        external_id=external_id,
         schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaDefinition),
-        target_pk=definition.pk,
+        target_ct_id=ContentType.objects.get_for_model(target).pk,
+        target_pk=target.pk,
         content_hash="x",
         last_synced_at=timezone.now(),
     )
+
+
+def _managed(historical_models, package: str, resource_type: str):
+    """Create a SchemaDefinition with a PackageManagedRecord owning it, as sync would."""
+
+    definition = historical_models.get_model("rebac", "SchemaDefinition").objects.create(resource_type=resource_type)
+    _provenance(historical_models, package, f"definition:{resource_type}", definition)
     return definition
 
 
-def _managed_relation(package: str, resource_type: str, name: str):
+def _managed_relation(historical_models, package: str, resource_type: str, name: str):
     """Create a SchemaRelation with package-managed provenance."""
 
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition, SchemaRelation
-
-    definition = SchemaDefinition.objects.create(resource_type=resource_type)
-    relation = SchemaRelation.objects.create(
-        definition=definition,
-        name=name,
-        allowed_subjects=[{"type": "auth/user", "relation": "", "wildcard": False}],
-        backing={"attname": "created_by", "kind": "fk"},
-    )
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"definition:{resource_type}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaDefinition),
-        target_pk=definition.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
-    )
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"relation:{resource_type}#{name}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaRelation),
-        target_pk=relation.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
+    definition = _managed(historical_models, package, resource_type)
+    relation = _managed_relation_for_definition(
+        historical_models, package, definition, name, backing=backing_to_dict(FieldBinding("created_by")),
     )
     return definition, relation
 
 
 def _managed_relation_for_definition(
+    historical_models,
     package: str,
     definition,
     name: str,
@@ -118,73 +111,48 @@ def _managed_relation_for_definition(
 ):
     """Create one package-managed relation on an existing definition."""
 
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaRelation
-
-    relation = SchemaRelation.objects.create(
+    relation = historical_models.get_model("rebac", "SchemaRelation").objects.create(
         definition=definition,
         name=name,
         allowed_subjects=[{"type": "auth/user", "relation": "", "wildcard": False}],
         backing=backing,
     )
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"relation:{definition.resource_type}#{name}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaRelation),
-        target_pk=relation.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
-    )
+    _provenance(historical_models, package, f"relation:{definition.resource_type}#{name}", relation)
     return relation
-
-
-@pytest.fixture
-def _restore_iam_schema_path():
-    """Restore IAM's test-time ``rebac_schema`` override after a repoint."""
-
-    from django.apps import apps
-
-    iam = apps.get_app_config("iam")
-    sentinel = object()
-    original = getattr(iam, "rebac_schema", sentinel)
-    yield iam
-    if original is sentinel:
-        if hasattr(iam, "rebac_schema"):
-            delattr(iam, "rebac_schema")
-    else:
-        iam.rebac_schema = original
 
 
 @pytest.mark.django_db
 def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
-    tmp_path: Path,
-    _restore_iam_schema_path,
+    historical_rebac_models,
 ) -> None:
     """Old ``iam/company`` rows are pruned when IAM's current zed no longer declares them."""
 
-    from rebac import ObjectRef, RelationshipTuple, SubjectRef, write_relationships
-    from rebac.models import (
-        PackageManagedRecord,
-        SchemaDefinition,
-        SchemaPermission,
-        SchemaRelation,
-        active_relationship_model,
-    )
-
-    iam = _restore_iam_schema_path
-    old_schema = tmp_path / "old_iam_permissions.zed"
-    old_schema.write_text(_OLD_IAM_ZED, encoding="utf-8")
-    iam.rebac_schema = str(old_schema)
-    call_command("rebac", "sync", verbosity=0)
+    iam = apps.get_app_config("iam")
+    for declaration in parse_zed(_OLD_IAM_ZED).definitions:
+        definition = _managed(historical_rebac_models, iam.name, declaration.resource_type)
+        for item in declaration.relations:
+            relation = historical_rebac_models.get_model("rebac", "SchemaRelation").objects.create(
+                definition=definition, name=item.name,
+                allowed_subjects=[asdict(subject) for subject in item.allowed_subjects],
+                backing=backing_to_dict(item.backing), with_expiration=item.with_expiration,
+            )
+            _provenance(
+                historical_rebac_models, iam.name, f"relation:{declaration.resource_type}#{item.name}", relation,
+            )
+        for item in declaration.permissions:
+            permission = historical_rebac_models.get_model("rebac", "SchemaPermission").objects.create(
+                definition=definition, name=item.name, expression=item.raw_text,
+            )
+            _provenance(
+                historical_rebac_models, iam.name, f"permission:{declaration.resource_type}#{item.name}", permission,
+            )
 
     company = SchemaDefinition.objects.get(resource_type="iam/company")
     assert company.relations.filter(name="direct_member").exists()
     assert company.permissions.filter(name="member").exists()
     assert PackageManagedRecord.objects.filter(package=iam.name, external_id="definition:iam/company").exists()
-    write_relationships(
-        [
+    ensure_historical_relationships(
+        historical_rebac_models, using="default", relationships=[
             RelationshipTuple(
                 resource=ObjectRef("iam/company", "old-company"),
                 relation="direct_member",
@@ -202,7 +170,6 @@ def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     )
     assert old_direct_member.exists()
 
-    delattr(iam, "rebac_schema")
     call_command("reconcile_permissions", verbosity=0)
 
     assert not SchemaDefinition.objects.filter(resource_type="iam/company").exists()
@@ -226,18 +193,13 @@ def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     assert SchemaDefinition.objects.filter(resource_type="auth/user").exists()
 
 
-def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
+def test_reconcile_prunes_orphaned_package_and_keeps_composed(db, historical_rebac_models) -> None:
     """A managed row whose package is not a composed app is pruned with its target,
     while a row for a composed app survives untouched."""
 
-    from django.apps import apps
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    from angee.platform.permissions import reconcile_permission_schema
-
-    orphan = _managed("ghost.addon", "ghost/thing")  # no such app in the composed set
+    orphan = _managed(historical_rebac_models, "ghost.addon", "ghost/thing")  # no such app in the composed set
     kept_package = apps.get_app_config("contenttypes").name  # a composed app
-    kept = _managed(kept_package, "ghost/kept")
+    kept = _managed(historical_rebac_models, kept_package, "ghost/kept")
 
     assert reconcile_permission_schema() == 1
 
@@ -247,21 +209,17 @@ def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
     assert PackageManagedRecord.objects.filter(package=kept_package).exists()
 
 
-def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
+def test_reconcile_prunes_stale_rows_inside_composed_package(db, historical_rebac_models) -> None:
     """A removed definition in a still-installed addon is pruned before checks run."""
-
-    from django.apps import apps
-    from rebac.models import PackageManagedRecord, SchemaDefinition, SchemaRelation
-
-    from angee.platform.permissions import reconcile_permission_schema
 
     package = apps.get_app_config("messaging").name
     stale_definition, stale_relation = _managed_relation(
+        historical_rebac_models,
         package,
         "messaging/message_metrics",
         "owner",
     )
-    kept = _managed(package, "messaging/message")
+    kept = _managed(historical_rebac_models, package, "messaging/message")
 
     assert reconcile_permission_schema() == 2
 
@@ -285,57 +243,51 @@ def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
 def test_reconcile_directly_purges_stale_relations_from_active_store(
     db,
     settings,
+    historical_rebac_models,
     storage_mode: str,
 ) -> None:
     """A renamed field-backed relation cannot block direct stale-tuple cleanup."""
 
-    from django.apps import apps
-    from rebac.models import (
-        PackageManagedRecord,
-        SchemaDefinition,
-        SchemaRelation,
-        active_relationship_model,
-    )
-
-    from angee.platform.permissions import reconcile_permission_schema
-
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage_mode
-    package = apps.get_app_config("nexus").name
-    definition = _managed(package, "nexus/tie")
+    package = apps.get_app_config("knowledge").name
+    definition = _managed(historical_rebac_models, package, "knowledge/page")
     stale_backed = _managed_relation_for_definition(
+        historical_rebac_models,
         package,
         definition,
-        "party",
-        backing={"attname": "party", "kind": "fk"},
+        "author",
+        backing=backing_to_dict(FieldBinding("author")),
     )
     stale_stored = _managed_relation_for_definition(
+        historical_rebac_models,
         package,
         definition,
         "legacy_reader",
         backing=None,
     )
     kept = _managed_relation_for_definition(
+        historical_rebac_models,
         package,
         definition,
-        "party_a",
-        backing={"attname": "party_a", "kind": "fk"},
+        "owner",
+        backing=backing_to_dict(FieldBinding("created_by")),
     )
 
     relationship_model = active_relationship_model()
-    stale_tuple = relationship_model.objects.create(
-        resource_type="nexus/tie",
-        resource_id="old-tie",
-        relation="legacy_reader",
-        subject_type="auth/user",
-        subject_id="old-reader",
+    ensure_historical_relationships(
+        historical_rebac_models, using="default", relationships=[
+            RelationshipTuple(
+                resource=ObjectRef("knowledge/page", "901"), relation="legacy_reader",
+                subject=SubjectRef.of("auth/user", "902"),
+            ),
+            RelationshipTuple(
+                resource=ObjectRef("knowledge/role", "vault_viewer"), relation="member",
+                subject=SubjectRef.of("auth/user", "903"),
+            ),
+        ],
     )
-    unrelated_tuple = relationship_model.objects.create(
-        resource_type="knowledge/role",
-        resource_id="vault_viewer",
-        relation="member",
-        subject_type="auth/user",
-        subject_id="kept-reader",
-    )
+    stale_tuple = relationship_model.objects.get(resource_type="knowledge/page", resource_id="901")
+    unrelated_tuple = relationship_model.objects.get(resource_type="knowledge/role", resource_id="vault_viewer")
 
     assert reconcile_permission_schema() == 2
 
@@ -345,8 +297,8 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
     assert not PackageManagedRecord.objects.filter(
         package=package,
         external_id__in=(
-            "relation:nexus/tie#party",
-            "relation:nexus/tie#legacy_reader",
+            "relation:knowledge/page#author",
+            "relation:knowledge/page#legacy_reader",
         ),
     ).exists()
     assert not relationship_model.objects.filter(pk=stale_tuple.pk).exists()
@@ -355,7 +307,5 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
 
 def test_reconcile_is_a_noop_when_nothing_stale(db) -> None:
     """Every managed package composed (here: none managed at all) prunes nothing."""
-
-    from angee.platform.permissions import reconcile_permission_schema
 
     assert reconcile_permission_schema() == 0

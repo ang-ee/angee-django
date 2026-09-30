@@ -1717,7 +1717,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         """Django model options for integrations."""
 
         abstract = True
-        base_manager_name = "unscoped_objects"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
 
@@ -3091,7 +3090,6 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/sync_stream"
         rebac_id_attr = "pk"
         constraints = (
@@ -3110,11 +3108,20 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
 
         The driver reloads under stream and link locks before applying.
         Empty lists represent identities without revisions or open conflicts.
+        Prepare nested queries with the source's effective actor or system policy.
         """
 
-        revisions = apps.get_model("integrate", "RecordRevision").objects
-        conflicts = apps.get_model("integrate", "SyncDiscrepancy").objects
-        return self.prefetch_related(
+        actor, bypass = self.effective_actor(strict=True)
+        revisions = apps.get_model("integrate", "RecordRevision").objects.all()
+        conflicts = apps.get_model("integrate", "SyncDiscrepancy").objects.all()
+        if bypass:
+            revisions = revisions.system_context(reason="integrate.record.sync_evidence")
+            conflicts = conflicts.system_context(reason="integrate.record.sync_evidence")
+        elif actor is not None:
+            revisions = revisions.with_actor(actor)
+            conflicts = conflicts.with_actor(actor)
+        revisions, conflicts = revisions.scoped(), conflicts.scoped()
+        return self.scoped().prefetch_related(
             Prefetch(
                 "revisions",
                 queryset=revisions.filter(pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))),
@@ -3335,7 +3342,6 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/record_link"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
@@ -3659,7 +3665,6 @@ class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/sync_discrepancy"
         rebac_id_attr = "pk"
         constraints = (

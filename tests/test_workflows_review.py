@@ -558,23 +558,31 @@ def test_reask_chain_protects_history_and_retains_operator_resolution(review, wo
     actor, people, _sent, question = review
     run, step = start_review(review, input={"reject_rounds": 2})
     original = seats(step)[0]
+    operator = people[1]
+    run.with_actor(actor).grant_record_access("operator", operator)
     for _round in range(2):
         answer(seats(step)[0], people[0])
         run_until(run)
         step = system_queryset(StepRun).get(pk=step.pk)
+        current = system_queryset(DecisionGroup).get(pk=step.decision_group_id)
+        assert current.reask_root_id == original.group_id
+        round_ids = [group.pk for group in current.rounds()]
+        assert DecisionGroup.objects.with_actor(operator).filter(pk__in=round_ids).count() == len(round_ids)
+        assert Decision.objects.with_actor(operator).filter(group_id__in=round_ids).count() == len(round_ids)
     current = system_queryset(DecisionGroup).get(pk=step.decision_group_id)
     rounds = list(current.rounds())
     assert len(rounds) == 3 and rounds[-1].pk == original.group_id
     assert all(not group.is_deletable for group in rounds)
     with pytest.raises(ProtectedError), actor_context(actor):
         rounds[-1].delete()
-    operator = people[1]
-    run.with_actor(actor).grant_record_access("operator", operator)
     assert DecisionGroup.objects.with_actor(operator).filter(pk__in=[group.pk for group in rounds]).count() == 3
     assert Decision.objects.with_actor(operator).filter(pk=original.pk).exists()
     retained = StepRun.objects.resolution(public_id_of(original), run=run, actor=operator)
     assert retained.resolver.pk == people[0].pk and isinstance(retained.action, Approve)
     assert isinstance(retained.basis, question.basis_model)
+    run.with_actor(actor).revoke_record_access("operator", operator)
+    assert not DecisionGroup.objects.with_actor(operator).filter(pk__in=round_ids).exists()
+    assert not Decision.objects.with_actor(operator).filter(group_id__in=round_ids).exists()
 
 
 def test_context_resolution_rejects_another_runs_readable_answer(review, register_step):

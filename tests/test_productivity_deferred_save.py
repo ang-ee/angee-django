@@ -63,7 +63,7 @@ class TaskRelation(AbstractTaskRelation):
     class Meta(AbstractTaskRelation.Meta):
         abstract = False
         app_label = "projects"
-        rebac_resource_type = "projects/task_relation"
+        rebac_resource_type = "tests/freshness_task_relation"
 
 
 @pytest.fixture

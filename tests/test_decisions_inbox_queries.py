@@ -97,7 +97,7 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
     print(json.dumps({"metrics": metrics, "sql_directory": str(tmp_path)}, indent=2))
     (tmp_path / "metrics.json").write_text(json.dumps(metrics, indent=2))
     assert all(len(set(values)) == 1 for values in counts.values()), counts
-    for name, budget in (("list", 300), ("groups", 285), ("record", 310)):
+    for name, budget in (("list", 4), ("groups", 3), ("record", 6)):
         assert max(counts[name]) <= budget, counts
 
 

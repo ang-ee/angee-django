@@ -10,6 +10,8 @@ SETTINGS = {
     "REBAC_LINT_BARE_PREFETCH": False,
     "REBAC_FIELD_READ_MODE": "redact",
     "REBAC_ALLOW_SUDO": True,
+    # Track ContentType writes used by the money rate permission filter.
+    "REBAC_TRACKED_MODELS": ["contenttypes.ContentType"],
     # Admin reach is expressed in the schema (const-backed `admin` relations
     # -> angee/role:admin), so all actors use grants unless a host opts into the native bypass.
     "REBAC_SUPERUSER_BYPASS": False,

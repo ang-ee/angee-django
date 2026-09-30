@@ -5,13 +5,15 @@ from __future__ import annotations
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from rebac import SubjectRef, actor_context, system_context
+from rebac import actor_context, system_context
 from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.index.rebuild import rebuild
 from rebac.models import active_relationship_model
 from rebac.schema import parse_zed
 
 from angee.base.models import AngeeDataModel
 from angee.portfolio.models import Initiative, InitiativeProject, Product, Release, Update, WorkspaceVisibleMixin
+from tests.conftest import create_user
 from tests.hierdemo.models import HierNode
 
 
@@ -84,7 +86,8 @@ def test_workspace_reader_is_proposed_and_reconciled_without_granting_write() ->
         )
     )
     try:
-        reader = SubjectRef.of("auth/user", "workspace-reader")
+        rebuild(using="default")
+        reader = create_user("workspace-reader")
         with system_context(reason="test.portfolio.workspace"):
             row = WorkspaceRow.objects.create(name="Shared")
             assert row.proposed_relationships()["reader"]

@@ -890,6 +890,7 @@ def test_reask_retains_every_round_through_protected_group_links(people):
     """Retention traverses the complete decisions-owned chain after any re-ask."""
     issuer, reviewer, _outsider, _subject = people
     original = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    assert original.reask_root_id is None
     rounds = [original]
     for _ in range(2):
         answer(seat(rounds[-1]), reviewer)
@@ -900,6 +901,7 @@ def test_reask_retains_every_round_through_protected_group_links(people):
     assert [group.pk for group in rounds[-1].rounds()] == [group.pk for group in reversed(rounds)]
     for current, previous in zip(rounds[1:], rounds):
         assert current.reasked_from_id == previous.pk
+        assert current.reask_root_id == original.pk
         previous.refresh_from_db()
         assert not previous.is_deletable
         with pytest.raises(ProtectedError), system_context(reason="test.delete_retained_round"):
@@ -908,6 +910,14 @@ def test_reask_retains_every_round_through_protected_group_links(people):
     assert rounds[-1].is_deletable
     assert system_queryset(DecisionGroup).count() == 3
     assert system_queryset(Decision).filter(closed_reason="resolved").count() == 3
+    administrator = create_platform_admin("retention-administrator")
+    for group in reversed(rounds):
+        group.refresh_from_db()
+        assert group.is_deletable
+        with actor_context(administrator):
+            group.with_actor(administrator).delete()
+    assert not system_queryset(DecisionGroup).exists()
+    assert not system_queryset(Decision).exists()
 
 
 def test_reask_renews_original_duration_from_the_database_clock(people):

@@ -122,8 +122,9 @@ class Command(BaseCommand):
            only after identity migrations have preserved moved rows.
         6. ``rebac --skip-checks sync --yes`` (``--force-overwrite`` when
            ``--force-rebac``) — replace old persisted policy before validating it.
-        7. ``check`` — enforce the complete model and persisted-REBAC contract
-           after migration and sync, before user data or schema output proceeds.
+        7. ``check --database default`` — enforce the complete model, persisted
+           policy and permission-index contract after migration and sync, before
+           user data or schema output proceeds.
         8. ``resources load`` (``--include-demo`` when ``--demo``).
         9. ``schema`` — render the GraphQL SDL.
         10. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
@@ -178,7 +179,7 @@ class Command(BaseCommand):
             ["migrate", "--noinput", "--skip-checks"],
             ["reconcile_permissions"],
             rebac_sync,
-            ["check"],
+            ["check", "--database", "default"],
             resources_load,
             ["schema"],
         ]

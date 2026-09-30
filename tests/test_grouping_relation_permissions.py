@@ -19,6 +19,7 @@ from rebac import (
     write_relationships,
 )
 from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.index.rebuild import rebuild
 from rebac.schema import parse_zed
 from strawberry import auto
 
@@ -145,6 +146,7 @@ def relation_grouping_case(transactional_db: None):
     )
     models_in_order = (GroupLabel, GroupMiddle, PlainGroupLabel, GroupParent)
     with model_tables(models_in_order):
+        rebuild(using="default")
         try:
             alice = SubjectRef.of("auth/user", "alice")
             bob = SubjectRef.of("auth/user", "bob")

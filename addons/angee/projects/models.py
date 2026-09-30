@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from django.apps import apps
@@ -43,12 +43,15 @@ class ProjectQuerySet(AngeeQuerySet[Any]):
             raise ValueError("Project.folder must be updated through instance save().")
         return super().update(**kwargs)
 
-    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> int:
+    def bulk_update(
+        self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None,
+    ) -> int:
         """Reject bulk folder edits that bypass instance lifecycle reconciliation."""
 
-        if {"folder", "folder_id"}.intersection(fields):
+        field_names = tuple(fields)
+        if {"folder", "folder_id"}.intersection(field_names):
             raise ValueError("Project.folder must be updated through instance save().")
-        return super().bulk_update(objs, fields, **kwargs)
+        return super().bulk_update(objs, field_names, batch_size=batch_size)
 
 
 class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: ignore[misc]

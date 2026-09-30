@@ -14,7 +14,7 @@ from typing import Any, cast
 import pytest
 import reversion
 import tomlkit
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
@@ -61,6 +61,7 @@ from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
+from angee.testing.permissions import bind_test_permission_schemas
 from tests import (  # noqa: F401 -- register shared FK targets before native database setup
     agents_models,
     extraction_models,
@@ -70,6 +71,22 @@ from tests.integrate_models import Integration
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
+
+
+@pytest.fixture
+def permission_app_configs() -> list[AppConfig]:
+    """The bare task model omits work's queue donor and its permission extension."""
+
+    return [config for config in apps.get_app_configs() if config.name != "angee.work"]
+
+
+@pytest.fixture(autouse=True)
+def bare_permission_schemas(
+    restore_composed_permission_bindings: None, tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Only concrete source-test models contribute model-backed policy rows."""
+
+    bind_test_permission_schemas(apps.get_app_configs(), tmp_path_factory.mktemp("bare-permissions"))
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):

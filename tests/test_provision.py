@@ -12,12 +12,12 @@ from pathlib import Path
 import pytest
 import strawberry
 from django.core.management import call_command
+from django.db.migrations.state import StateApps
 from django.test import override_settings
 from django.test.utils import override_system_checks
 from rebac.backends import reset_backend
 from rebac.checks import check_universal_admin_in_roles
 from rebac.errors import SchemaError
-from rebac.models import SchemaRelation
 
 from angee.compose.management.commands.angee import Command
 from angee.graphql.checks import check_graphql_schemas
@@ -55,7 +55,10 @@ class BareComposeConfig(AppConfig):
     name = "angee.compose"
     label = "compose"
 SECRET_KEY = "provision-process-probe"
-INSTALLED_APPS = ["django.contrib.contenttypes", "probe.apps.ProbeConfig", "probe.settings.BareComposeConfig"]
+INSTALLED_APPS = [
+    "django.contrib.contenttypes", "django.contrib.auth", "rebac",
+    "probe.apps.ProbeConfig", "probe.settings.BareComposeConfig",
+]
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
 """,
         encoding="utf-8",
@@ -102,7 +105,7 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
-        ["check"],
+        ["check", "--database", "default"],
         ["resources", "load", "--include-demo"],
         ["schema"],
     ]
@@ -167,13 +170,23 @@ def test_rebac_sync_invalidates_the_native_backend_cache() -> None:
 
 
 @pytest.mark.django_db
-def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks() -> None:
+def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks(
+    historical_rebac_models: StateApps,
+) -> None:
     """Old permission usersets cannot prevent sync from installing their replacement."""
 
-    call_command("rebac", "sync", "--yes", verbosity=0)
-    relation = SchemaRelation.objects.get(definition__resource_type="storage/role", name="includes")
-    relation.allowed_subjects = [{"type": "storage/role", "relation": "effective_member", "wildcard": False}]
-    relation.save(update_fields=["allowed_subjects"])
+    definition = historical_rebac_models.get_model("rebac", "SchemaDefinition").objects.create(
+        resource_type="storage/role",
+    )
+    relations = historical_rebac_models.get_model("rebac", "SchemaRelation").objects
+    relations.create(definition=definition, name="member", allowed_subjects=[{"type": "auth/user"}])
+    relations.create(
+        definition=definition, name="includes",
+        allowed_subjects=[{"type": "storage/role", "relation": "effective_member"}],
+    )
+    historical_rebac_models.get_model("rebac", "SchemaPermission").objects.create(
+        definition=definition, name="effective_member", expression="member",
+    )
     reset_backend()
 
     # Exercise a native schema-reading check without requiring a fully composed

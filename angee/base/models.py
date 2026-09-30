@@ -26,7 +26,7 @@ from rebac import (
 )
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
-from rebac.managers import RebacManager, RebacQuerySet
+from rebac.managers import RebacManager, RebacQuerySet, TrackedQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
@@ -109,7 +109,7 @@ class AngeeQuerySet(
         """
 
         actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self.none()
+        readable = self.with_actor(actor).scoped() if actor is not None else self.none().scoped_for_aggregate()
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
         scalar = models.Subquery(readable.values(field)[:1])
@@ -208,12 +208,11 @@ class AngeeQuerySet(
 
 class AngeeUnscopedQuerySet(
     _AngeeQuerySetMixin[_ModelT],
-    models.QuerySet[_ModelT],
+    TrackedQuerySet[_ModelT],
 ):
     """Angee queryset API for intentionally permission-naive managers.
 
-    Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics.
+    Reads remain unfiltered; writes retain the native permission-index lifecycle.
     """
 
     def scoped_for_aggregate(self) -> Self:

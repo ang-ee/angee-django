@@ -35,6 +35,10 @@ class DecisionGroup(AngeeDataModel):
     reasked_from = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reasked_by",
     )
+    reask_root = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reask_rounds",
+        help_text="Original group for a repeated round; empty on the original itself.",
+    )
     settled_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionGroupManager()
 

@@ -12,6 +12,7 @@ from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
+from rebac.managers import TrackedManager, TrackedQuerySet
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import lock_if_supported, system_queryset
@@ -91,14 +92,13 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
 
     manager = model._base_manager
     assert model._default_manager is model.objects
-    assert callable(manager.lock_if_supported)
-    queryset = manager.db_manager("default").lock_if_supported(of=("self",))
+    queryset = lock_if_supported(manager.db_manager("default").all(), of=("self",))
     assert queryset.model is model
     assert queryset._db == "default"
     assert queryset.query.select_for_update is True
     assert queryset.query.select_for_update_of == ("self",)
-    assert isinstance(manager, AngeeUnscopedManager)
-    assert isinstance(queryset, AngeeUnscopedQuerySet)
+    assert isinstance(manager, TrackedManager)
+    assert isinstance(queryset, TrackedQuerySet)
 
 
 @pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
@@ -221,7 +221,7 @@ def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables:
         assert set(queryset.values_list("pk", flat=True)) == {selected.pk, excluded.pk}
         assert manager.db_manager("default").locked_get(pk=excluded.pk) == excluded
 
-    assert type(GuardedSystemQueryThing._base_manager) is models.Manager
+    assert isinstance(GuardedSystemQueryThing._base_manager, TrackedManager)
     assert list(GuardedSystemQueryThing.system_queryset()) == [selected]
 
 

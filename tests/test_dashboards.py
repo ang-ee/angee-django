@@ -13,10 +13,11 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.test import override_settings
-from rebac import actor_context, system_context
+from rebac import actor_context, delete_relationships, system_context
 from rebac.backends import LocalBackend, backend, reset_backend
-from rebac.models import active_relationship_model
+from rebac.index.rebuild import rebuild
 from rebac.schema import parse_zed
+from rebac.types import RelationshipFilter
 
 from angee.dashboards.models import Dashboard as AbstractDashboard
 from angee.dashboards.models import DashboardWidget as AbstractDashboardWidget
@@ -71,6 +72,7 @@ def dashboard_tables(transactional_db: Any) -> Iterator[None]:
         )
     )
     try:
+        rebuild(using="default")
         yield
     finally:
         reset_backend()
@@ -191,8 +193,8 @@ def test_resource_reload_reconciles_unchanged_installed_readers(
             dashboard = DashboardTarget.objects.get(scope_key="reload")
         if expected_created:
             with system_context(reason="test.dashboards.resource.previous-policy"):
-                active_relationship_model().objects.filter(
+                delete_relationships(RelationshipFilter(
                     resource_type="dashboards/dashboard", resource_id=str(dashboard.pk), relation="shared"
-                ).delete()
+                ))
             with actor_context(outsider):
                 assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()

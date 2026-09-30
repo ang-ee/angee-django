@@ -1,8 +1,24 @@
 """Framework-generic fixtures requiring pytest and pytest-django."""
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.management import call_command
+from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.state import StateApps
+
+
+@pytest.fixture
+def permission_app_configs() -> list[AppConfig]:
+    """Select installed addons whose permission extensions the test host composes."""
+
+    return list(apps.get_app_configs())
+
+
+@pytest.fixture
+def historical_rebac_models() -> StateApps:
+    """Use native pre-index models to represent policy written before an upgrade."""
+
+    return MigrationLoader(None).project_state([("rebac", "0006_schema_write_owners")]).apps
 
 
 @pytest.fixture(autouse=True)

@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
@@ -32,6 +32,7 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
+from angee.testing.permissions import bind_test_permission_schemas
 
 User = get_user_model()
 
@@ -271,11 +272,13 @@ def _restore_scopedemo_schema():
 
 
 @pytest.mark.django_db
-def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scopedemo_schema) -> None:
+def test_contributed_relation_syncs_and_resolves(
+    tmp_path: Path, _restore_scopedemo_schema, permission_app_configs: list[AppConfig],
+) -> None:
     """``tests.extcontrib`` extends ``scopedemo/doc``; the merged schema syncs and a
     ``reviewer`` tuple resolves ``read`` through the local evaluator."""
 
-    app_configs = list(apps.get_app_configs())
+    app_configs = permission_app_configs
     runtime_dir = tmp_path / "runtime"
 
     # The composer/Runtime seam, driven directly (bare test settings skip the composer):
@@ -285,6 +288,7 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
+    bind_test_permission_schemas(app_configs, runtime_dir / "concrete")
 
     scopedemo = _restore_scopedemo_schema
     assert scopedemo.rebac_schema == str((runtime_dir / merged_schema_relpath("tests.scopedemo")).resolve())

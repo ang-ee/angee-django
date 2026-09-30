@@ -9,7 +9,7 @@ upstream rows only when this addon is composed.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.conf import settings
@@ -108,7 +108,7 @@ class WorkspaceVisibleMixin(ConditionalSharedReaderMixin):
     """Make portfolio rows readable across the workspace through shared readers."""
 
     shared_reader_relation = "reader"
-    objects = WorkspaceVisibleManager()
+    objects: ClassVar[WorkspaceVisibleManager] = WorkspaceVisibleManager()
 
     class Meta:
         abstract = True

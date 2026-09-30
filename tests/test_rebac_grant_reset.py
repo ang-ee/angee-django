@@ -6,22 +6,29 @@ from io import StringIO
 
 import pytest
 from django.core.management import call_command
-from rebac import ObjectRef, SubjectRef
-from rebac.backends.local import LocalBackend
+from rebac import ObjectRef, to_subject_ref
+from rebac.backends import LocalBackend, reset_backend
+from rebac.backends import backend as configured_backend
+from rebac.index.rebuild import rebuild
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.schema import parse_zed
 
+from tests.conftest import create_user
+
 
 @pytest.mark.django_db(transaction=True)
-def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
+def test_reset_rebac_grants_previews_then_clears_both_stores(request: pytest.FixtureRequest) -> None:
     """Preview is inert; apply clears tuples and registry identities together."""
 
+    reset_backend()
+    request.addfinalizer(reset_backend)
+    actor = to_subject_ref(create_user("legacy-grant-reader"))
     Relationship._base_manager.create(
         resource_type="tests/document",
         resource_id="old-public-id",
         relation="reader",
         subject_type="auth/user",
-        subject_id="old-user-id",
+        subject_id=actor.subject_id,
         optional_subject_relation="",
     )
     resource = RebacResource._base_manager.create(
@@ -30,7 +37,7 @@ def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
     )
     subject = RebacResource._base_manager.create(
         resource_type="auth/user",
-        resource_id="old-user-id",
+        resource_id=actor.subject_id,
     )
     RelationshipRegistry._base_manager.create(
         resource_fk=resource,
@@ -38,7 +45,8 @@ def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
         subject_fk=subject,
         optional_subject_relation="",
     )
-    backend = LocalBackend()
+    backend = configured_backend()
+    assert isinstance(backend, LocalBackend)
     backend.set_schema(
         parse_zed("""
         definition auth/user {}
@@ -48,7 +56,7 @@ def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
         }
     """)
     )
-    actor = SubjectRef.of("auth/user", "old-user-id")
+    rebuild(using="default")
     document = ObjectRef("tests/document", "old-public-id")
     assert backend.check_access(subject=actor, action="read", resource=document).allowed
 

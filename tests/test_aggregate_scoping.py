@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 import strawberry_django
 from django.db import models
-from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref, write_relationships
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.index.rebuild import rebuild
 from rebac.schema import parse_zed
 from strawberry import auto
 
@@ -16,7 +17,7 @@ from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import SchemaAddon, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
 from tests.tables import model_tables
 
 
@@ -59,6 +60,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
     )
     with model_tables((ScopedAggregateRecord,)):
         try:
+            rebuild(using="default")
             resource = hasura_model_resource(
                 ScopedAggregateRecordType,
                 model=ScopedAggregateRecord,
@@ -78,8 +80,8 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
                     )
                 ]
             ).build("public")
-            alice = SubjectRef.of("auth/user", "alice")
-            bob = SubjectRef.of("auth/user", "bob")
+            alice = create_user("aggregate-alice")
+            bob = create_user("aggregate-bob")
             with system_context(reason="test.aggregate.scope.seed"):
                 first = ScopedAggregateRecord.objects.create(name="first", amount=5, bucket="a")
                 second = ScopedAggregateRecord.objects.create(name="second", amount=10, bucket="b")
@@ -87,11 +89,11 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
                 excluded = ScopedAggregateRecord.objects.create(name="excluded", amount=100, bucket="c")
             write_relationships(
                 [
-                    RelationshipTuple(to_object_ref(first), "reader", alice),
-                    RelationshipTuple(to_object_ref(first), "writer", alice),
-                    RelationshipTuple(to_object_ref(second), "reader", alice),
-                    RelationshipTuple(to_object_ref(hidden), "reader", bob),
-                    RelationshipTuple(to_object_ref(excluded), "reader", alice),
+                    RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(alice)),
+                    RelationshipTuple(to_object_ref(first), "writer", to_subject_ref(alice)),
+                    RelationshipTuple(to_object_ref(second), "reader", to_subject_ref(alice)),
+                    RelationshipTuple(to_object_ref(hidden), "reader", to_subject_ref(bob)),
+                    RelationshipTuple(to_object_ref(excluded), "reader", to_subject_ref(alice)),
                 ]
             )
             result: dict[str, Any] = result_data(

@@ -1,15 +1,61 @@
 """Contracts for the reusable Django test composition."""
 
+from pathlib import Path
+
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.db import connection
 from rebac import actor_context, system_context
+from rebac.checks import check_index_ready
+from rebac.field_backing import field_backing_model_errors
+from rebac.schema import parse_zed, resolve_schema_path
 
 from angee.integrate.testing import models as integrate_models
+from angee.testing.permissions import bind_test_permission_schemas
 from angee.workflows import models as workflow_sources
 from angee.workflows.testing import models as workflow_models
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
+from tests.conftest import make_addon
+
+
+def test_partial_permission_schema_keeps_concrete_backing_errors(tmp_path: Path) -> None:
+    """Absent model definitions are omitted; malformed concrete policy stays loud."""
+
+    config = make_addon(path=tmp_path / "addon")
+    (Path(config.path) / "permissions.zed").write_text(
+        """definition tests/absent {
+    relation owner: auth/user // rebac:field=owner
+}
+definition tests/virtual {
+    relation member: auth/user
+}
+definition workflows/workflow {
+    relation owner: auth/user // rebac:field=missing_owner
+}
+""",
+        encoding="utf-8",
+    )
+
+    bind_test_permission_schemas([config], tmp_path / "permissions")
+
+    source = resolve_schema_path(config)
+    assert source is not None
+    schema = parse_zed(source.read_text(encoding="utf-8"))
+    assert schema.get_definition("tests/absent") is None
+    assert schema.get_definition("tests/virtual") is not None
+    definition = schema.get_definition("workflows/workflow")
+    assert definition is not None
+    errors = field_backing_model_errors(definition, definition.relations[0])
+    assert errors and "missing_owner" in errors[0]
+
+
+def test_permission_sync_builds_the_native_index(composed_tables: None) -> None:
+    """Native schema sync leaves fresh test databases ready for permission reads."""
+
+    assert check_index_ready(databases=["default"]) == []
+    call_command("rebac", "index", "verify", verbosity=0)
 
 
 @pytest.mark.parametrize("shared_models", (integrate_models, workflow_models))

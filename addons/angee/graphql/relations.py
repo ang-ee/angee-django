@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import strawberry_django
 from django.contrib.contenttypes.models import ContentType
@@ -11,6 +11,7 @@ from django.db import models
 from django.db.models.expressions import Combinable
 from django.db.models.functions import Cast
 from rebac import current_actor
+from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 from strawberry import Info
@@ -154,6 +155,8 @@ def actor_scoped_to_one(field_name: str, *, reverse: bool = False) -> Any:
         queryset = read_scoped_queryset(related_model, current_actor())
         if queryset is None:
             queryset = related_model._default_manager.none()
+        else:
+            queryset = cast(RebacQuerySet[Any], queryset).scoped()
         queryset = run_type_get_queryset(queryset, related_type, info)
         return models.Prefetch(field_name, queryset=optimize(queryset, info))
 

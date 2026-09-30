@@ -308,6 +308,14 @@ def test_rebac_strict_mode_is_explicitly_pinned(tmp_path: Path) -> None:
     assert settings["REBAC_STRICT_MODE"] is True
 
 
+def test_rebac_tracks_content_type_filter_dependencies(tmp_path: Path) -> None:
+    """Composed hosts keep external ContentType writes in the permission index."""
+
+    settings = _compose(tmp_path)
+
+    assert settings["REBAC_TRACKED_MODELS"] == ["contenttypes.ContentType"]
+
+
 def test_rebac_bare_prefetch_lint_is_quiet_by_default(tmp_path: Path) -> None:
     """Composed hosts disable the structural REBAC relation audit by default."""
 
@@ -1732,6 +1740,7 @@ def test_bare_settings_use_addon_owned_defaults(settings):
 
     assert settings.REBAC_LOCAL_BACKEND_STORAGE == "registry"
     assert settings.REBAC_STRICT_MODE is True
+    assert settings.REBAC_TRACKED_MODELS == ["contenttypes.ContentType"]
     assert settings.CELERY_WORKER_PREFETCH_MULTIPLIER == 1
     steps = settings.ANGEE_WORKFLOW_STEP_CLASSES
     assert steps["review"] == "angee.workflows.reviews.Review"
