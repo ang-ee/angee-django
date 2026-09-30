@@ -186,6 +186,7 @@ function ReadyDashboardSurface(
   props: DashboardSurfaceProps & {
     registry: DashboardRegistry;
     definition?: DashboardDefinition;
+    baseline: DashboardSnapshot | null;
     state: Extract<DashboardLoadState, { status: "ready" }>;
     binding: DashboardStoreBinding;
   },
