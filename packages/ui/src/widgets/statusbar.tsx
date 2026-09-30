@@ -11,6 +11,9 @@ import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { formatDate, formatDateRange, type DateFormatValue } from "./date-format";
 import { canonicalOptionValue, optionLabel, optionTextLabel, type WidgetDefinition, type WidgetOption, type WidgetRenderProps } from "./types";
 
+/** Below this per-step share a filled bar reads as a chip and a menu. */
+const MIN_FILLED_STEP_WIDTH = 96;
+
 const STEP_CLIP = "[clip-path:polygon(0_0,calc(100%-12px)_0,100%_50%,calc(100%-12px)_100%,0_100%,12px_50%)]";
 const FIRST_CLIP = "[clip-path:polygon(0_0,calc(100%-12px)_0,100%_50%,calc(100%-12px)_100%,0_100%)]";
 const LAST_CLIP = "[clip-path:polygon(0_0,100%_0,100%_100%,0_100%,12px_50%)]";
@@ -91,7 +94,11 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, dateEditor
     return () => observer.disconnect();
   }, [path.length, fill]);
   const available = containerWidth ?? observedWidth;
-  const collapsed = available !== undefined && requiredWidth !== undefined && requiredWidth > available;
+  // A filled bar truncates its labels, so it collapses only once a step's share is unreadable; a
+  // natural-width bar collapses when its content overflows.
+  const collapsed = available !== undefined && (fill
+    ? available / Math.max(path.length, 1) < MIN_FILLED_STEP_WIDTH
+    : requiredWidth !== undefined && requiredWidth > available);
   const active = current >= 0 ? path[current] : undefined;
   const twoLine = path.some((step, index) => Boolean(dateRange(step) || (index === current && step.note)));
   const selectable = (step: StatusbarStep) => !readOnly && Boolean(onChange) && step.selectable === true && !step.disabled && step.value !== currentValue;
@@ -123,7 +130,7 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, dateEditor
             </button>
             {step.editableDates && dateEditor ? <PopoverRoot>
               <PopoverTrigger aria-label={t("statusbar.editDates", { label: optionTextLabel(step.label, step.value) })}
-                className="ml-auto shrink-0 rounded-4 p-0.5 outline-none focus-visible:focus-ring">
+                className="ml-auto size-4 shrink-0 rounded-4 border-0 bg-transparent p-0.5 outline-none focus-visible:focus-ring">
                 <Pencil aria-hidden="true" className="size-3" />
               </PopoverTrigger>
               <PopoverPortal><PopoverPositioner sideOffset={6} align="end">
