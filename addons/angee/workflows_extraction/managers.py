@@ -19,7 +19,7 @@ from angee.base.identity import public_id_of
 from angee.base.jsonschema import check_schema, validate
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import record_ref_for
+from angee.base.refs import canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.decisions.forms import Action
@@ -607,7 +607,10 @@ class ExtractionManager(EvidenceManager):
         return successor
 
     def _correction_basis(self, decision: Any, *, actor: Any) -> tuple[Any, Any]:
-        """Resolve the immutable decision basis and its exact revision parent."""
+        """Resolve the immutable decision basis and its exact revision parent.
+
+        Canonicalize only the decision match; access uses the retained concrete target.
+        """
         basis = decision.basis
         if not isinstance(basis, dict):
             raise ValidationError("The correction decision basis must be an object.")
@@ -643,9 +646,10 @@ class ExtractionManager(EvidenceManager):
             raise ValidationError("The decision has an invalid correction binding.")
         self._require_correction_parent(original, parent)
         target = original.target
-        if target is None or (decision.subject_content_type_id, str(decision.subject_object_id)) != (
-            original.content_type_id,
-            str(original.object_id),
+        canonical_target = canonical_record_target(target) if target is not None else None
+        if canonical_target is None or (decision.subject_content_type_id, str(decision.subject_object_id)) != (
+            canonical_target.content_type.pk,
+            str(canonical_target.object_id),
         ):
             raise ValidationError("The correction decision names another target.")
         for record in (original, parent, target):
