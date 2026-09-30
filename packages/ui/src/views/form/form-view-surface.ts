@@ -6,6 +6,7 @@ import {
   useSchemaFieldMetadata,
   type ModelMetadata,
   type Row,
+  holdsPermission,
 } from "@angee/metadata";
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
@@ -273,7 +274,8 @@ export function useFormViewSurface({
           ...parsePageGroups(entry.content as React.ReactNode).map(
             (group, childOrder) => ({
               kind: "group" as const,
-              group,
+              // A contribution's permission gates every group and tab it declares.
+              group: entry.permission === undefined ? group : { ...group, permission: entry.permission },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -281,7 +283,8 @@ export function useFormViewSurface({
           ...parsePageTabs(entry.content as React.ReactNode).map(
             (tab, childOrder) => ({
               kind: "tab" as const,
-              tab,
+              tab: entry.permission === undefined ? tab : { ...tab, visibleWhen: (record: Row) =>
+                holdsPermission(record, entry.permission!) && (tab.visibleWhen?.(record) ?? true) },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -553,13 +556,16 @@ export function useFormViewSurface({
         declaredGroupSequences,
         isCreate,
       );
-      const stacked = groupSections.filter((section) => section.label == null);
-      const tabbedSections = groupSections
+      const permitted = groupSections.filter((section) =>
+        section.permission === undefined
+        || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)));
+      const stacked = permitted.filter((section) => section.label == null);
+      const tabbedSections = permitted
         .filter((section) => section.label != null)
         .sort(compareFormSections);
       return [...stacked, ...tabbedSections];
     },
-    [declaredGroupSequences, gridFields, gridGroups, isCreate],
+    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord],
   );
   const subtitleParts = React.useMemo(
     () =>

@@ -215,6 +215,35 @@ describe("FormView", () => {
     await screen.findByRole("menuitem", { name: "Archive" });
   });
 
+  test("a section contribution with a permission is absent for a reader without it", async () => {
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
+    const renderSections = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, { types: { NoteType: {
+      ...defaultModel("NoteType", "notes.Note"),
+      fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+        reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
+      },
+    } } }, undefined, { slots: [
+      { ...formViewSectionsSlot("notes.Note"), id: "notes.private", permission: "write", content: <>
+        <Group label="Private"><Field name="reminderAt" label="Reminder" /></Group>
+        <Tab id="private-tab" label="Private tab">Private panel</Tab>
+      </> },
+    ] });
+    renderSections();
+    await screen.findByRole("heading", { name: "First" });
+    expect(screen.queryByText("Private")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Private tab" })).toBeNull();
+
+    cleanup();
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    renderSections();
+    await screen.findByDisplayValue("First");
+    expect(screen.getByText("Private")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Private tab" })).toBeTruthy();
+  });
+
   test("Action and record-action slots require their declared permission", async () => {
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
     const renderActions = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">

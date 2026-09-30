@@ -24,6 +24,8 @@ export interface GroupDescriptor {
   actions: readonly ActionDescriptor[];
   content?: ReactNode;
   savedOnly?: boolean;
+  /** Projected record permission required to show this group; set from a contribution. */
+  permission?: string;
 }
 
 function GroupMarker(_props: GroupProps): null {

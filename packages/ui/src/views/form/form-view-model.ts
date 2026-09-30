@@ -60,6 +60,8 @@ export interface FormSectionModel {
   defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
+  /** Projected record permission required to show this section. */
+  permission?: string;
   sequence?: number;
   order?: number;
 }
@@ -94,6 +96,7 @@ export function formSections(
         defaultOpen: group.defaultOpen,
         fields: group.fields,
         ...(group.content !== undefined ? { render: () => group.content } : {}),
+        ...(group.permission !== undefined ? { permission: group.permission } : {}),
         sequence: sequences[index],
         order: index,
       },
