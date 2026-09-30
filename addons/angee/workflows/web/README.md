@@ -16,6 +16,8 @@ facts decide which actions appear. The shared action owner handles confirmation,
 typed acknowledgement, errors and pending state. Reprocess navigates to the
 replacement through the resource route owner. Retained errors are evidence, and readable attempts display only
 the stack traces returned by the backend's field policy.
+Trigger enablement uses the same action confirmation surface to show prospective
+principal grants and workflow run readers from the server's authorized preview.
 
 Workflows contributes the waiting run to the decisions origin slot. Records gain
 a separate Workflows chatter tab scoped by model label and public ID. The existing

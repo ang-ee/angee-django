@@ -41,6 +41,7 @@ export const triggerEventResourceFixture = testDataResource(TRIGGER_EVENT_MODEL,
 
 export const triggerFixture = { id: "wft_review", display_name: "Review admission", workflow: { id: "wfl_review", name: "Record review" },
   source: "RECORD_CHANGED", model_label: "notes.note", source_model: "notes.Note", condition: { status: { _eq: "in_review" } }, enabled: false, can_edit: true, disabled_reason: "",
+  enable_preview: { grants: ["member on trigger editor (notes role)"], run_readers: ["User: Review owner", "Group: Reviewers"] },
   grants: [{ resource_type: "notes/role", resource_id: "trigger_editor", relation: "member", target_label: null }] };
 export const triggerEventFixture = { id: "wte_review", display_name: "Review event", trigger: { id: "wft_review" },
   record_model: "notes.Note", record_id: "nte_7", changed_at: "2026-09-29T09:00:00Z", evaluated_at: "2026-09-29T09:00:01Z",

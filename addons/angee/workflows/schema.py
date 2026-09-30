@@ -266,6 +266,14 @@ class TriggerGrantType:
     target_label: str | None
 
 
+@strawberry.type
+class TriggerEnablePreviewType:
+    """The source grants and workflow monitor readers disclosed before enabling."""
+
+    grants: list[str]
+    run_readers: list[str]
+
+
 @strawberry_django.type(Trigger)
 class TriggerType(AngeeNode):
     """A workflow's editable event admission policy and server-owned activation."""
@@ -278,6 +286,13 @@ class TriggerType(AngeeNode):
     condition: JSON
     enabled: auto
     disabled_reason: auto
+
+    @strawberry_django.field
+    def enable_preview(self, info: strawberry.Info) -> TriggerEnablePreviewType | None:
+        """Show expected grants and inherited run readers only to eligible enablers."""
+        preview = Trigger.objects.enable_preview(cast(Any, self), actor=request_from_info(info).user)
+        return (TriggerEnablePreviewType(grants=list(preview.grants), run_readers=list(preview.run_readers))
+                if preview is not None else None)
 
     @strawberry_django.field
     def grants(self, info: strawberry.Info) -> list[TriggerGrantType]:
@@ -485,7 +500,8 @@ schemas = {
         "types": [
             RunOrigin,
             WorkflowType, WorkflowVersionType, WorkflowRunType, WorkflowRunEvidenceType,
-            StepRunType, StepAttemptType, StepArtifactType, StepWatchType, TriggerType, TriggerEventType,
+            StepRunType, StepAttemptType, StepArtifactType, StepWatchType,
+            TriggerEnablePreviewType, TriggerType, TriggerEventType,
             *(type_ for resource in _RESOURCES for type_ in resource.types),
         ],
     },

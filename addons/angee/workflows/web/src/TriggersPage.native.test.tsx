@@ -13,6 +13,12 @@ test("enable and disable dispatch the displayed trigger through native actions",
   expect(enabled.getAttribute("aria-checked")).toBe("false");
   expect(enabled.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(await screen.findByRole("button", { name: "Enable trigger" }));
+  const confirmation = await screen.findByRole("dialog");
+  expect(within(confirmation).getByText("member on trigger editor (notes role)")).toBeTruthy();
+  expect(within(confirmation).getByText("User: Review owner")).toBeTruthy();
+  expect(within(confirmation).getByText("Group: Reviewers")).toBeTruthy();
+  expect(requests.some(({ query }) => query.includes("enable_workflow_trigger("))).toBe(false);
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Enable trigger" }));
   await screen.findByText("Trigger enabled.");
   await waitFor(() => expect(screen.getByRole("checkbox", { name: "Enabled" }).getAttribute("aria-checked")).toBe("true"));
   expect(requests.find(({ query }) => query.includes("enable_workflow_trigger("))?.variables).toEqual({ id: "wft_review" });
@@ -71,6 +77,7 @@ test("viewer facts make the existing trigger immutable and avoid implementation-
   await screen.findByRole("heading", { name: "Review admission" });
   expect(await screen.findByText(/Status.*in_review/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Enable trigger" })).toBeNull();
+  expect(requests.find(({ query }) => query.includes("trigger_by_pk"))?.query).toContain("enable_preview");
   expect(screen.queryByRole("menuitem", { name: "Disable trigger" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   expect(screen.queryByLabelText("Filter value")).toBeNull();

@@ -12,14 +12,23 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, models, transaction
 from django.db.models import F, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
-from rebac import ObjectRef, RelationshipTuple, actor_context, system_context, to_subject_ref
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    actor_context,
+    resolve_subjects,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+)
 from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.relationships import delete_relationship, write_relationships
+from rebac.resources import model_for_resource_type
 
 from angee.base.exceptions import exception_text
 from angee.base.fields import ModelLabelField
@@ -28,11 +37,24 @@ from angee.base.impl import ImplBase
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
+from angee.iam.identity import user_label
 from angee.iam.service_users import sync_service_user
 
 logger = logging.getLogger(__name__)
 TRIGGER_DRAIN_LIMIT = 100
 """One drain examines at most 100 ledger candidates, each in its own transaction."""
+
+
+class PublisherAuthorityDenied(PermissionDenied):
+    """A version's publisher can no longer delegate the principal's grants."""
+
+
+@dataclass(frozen=True)
+class TriggerEnablePreview:
+    """Grant and run-reader facts shown before an authorized enablement."""
+
+    grants: tuple[str, ...]
+    run_readers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -44,15 +66,43 @@ class TriggerGrantTarget:
     grant_permission: str = field(default="", compare=False)
     grant_resource: ObjectRef | None = field(default=None, compare=False)
 
+    def target_label(self) -> str:
+        """Describe a grant target without exposing a raw authorization ID."""
+        model = model_for_resource_type(self.resource.resource_type)
+        if model is not None and model._meta.managed:
+            target = system_queryset(model).filter(pk=self.resource.resource_id).first()
+            if target is not None:
+                return (str(target) if type(target).__str__ is not models.Model.__str__
+                        else str(target._meta.verbose_name))
+        kind = self.resource.resource_type.replace("/", " ").replace("_", " ")
+        if self.resource.resource_type.endswith("/role"):
+            return f"{str(self.resource.resource_id).replace('_', ' ')} ({kind})"
+        return kind
+
+    def permits(self, actor: Any) -> bool:
+        """Check the source-declared delegation permission at its owning resource."""
+        return bool(self.grant_permission and backend().has_access(
+            subject=to_subject_ref(actor), action=self.grant_permission,
+            resource=self.grant_resource or self.resource,
+        ))
+
     def require_grant_access(self, actor: Any) -> None:
         """Use the target owner's REBAC permission before minting a tuple."""
         if not self.grant_permission:
             raise ImproperlyConfigured(f"No grant permission was declared for {self.resource}#{self.relation}.")
-        if not backend().has_access(
-            subject=to_subject_ref(actor), action=self.grant_permission,
-            resource=self.grant_resource or self.resource,
-        ):
+        if not self.permits(actor):
             raise PermissionDenied(f"The acting user cannot grant {self.relation} on {self.resource}.")
+
+    def require_publisher_access(self, publisher: Any, version: Any) -> None:
+        """Refuse a published graph when its author cannot delegate this grant now."""
+        if self.permits(publisher):
+            return
+        detail = ("grant provenance is missing; enable the trigger again"
+                  if not self.grant_permission else "the publisher cannot delegate it")
+        raise PublisherAuthorityDenied(
+            f"{version} published by {user_label(publisher)} cannot run as the workflow principal: "
+            f"{self.relation} on {self.target_label()} is unavailable because {detail}."
+        )
 
     def stored(self) -> dict[str, str]:
         """Retain grant provenance when a source implementation later disappears."""
@@ -60,12 +110,20 @@ class TriggerGrantTarget:
             "resource_type": self.resource.resource_type,
             "resource_id": str(self.resource.resource_id),
             "relation": self.relation,
+            "grant_permission": self.grant_permission,
+            "grant_resource_type": (self.grant_resource or self.resource).resource_type,
+            "grant_resource_id": str((self.grant_resource or self.resource).resource_id),
         }
 
     @classmethod
     def from_stored(cls, value: dict[str, str]) -> TriggerGrantTarget:
         """Restore the exact tuple target that an enabled trigger contributed."""
-        return cls(ObjectRef(value["resource_type"], value["resource_id"]), value["relation"])
+        return cls(
+            ObjectRef(value["resource_type"], value["resource_id"]), value["relation"],
+            value.get("grant_permission", ""),
+            ObjectRef(value["grant_resource_type"], value["grant_resource_id"])
+            if "grant_resource_type" in value and "grant_resource_id" in value else None,
+        )
 
 
 class RecordChangedOptIn:
@@ -312,6 +370,43 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             system_queryset(self.model).filter(pk=trigger.pk).update(granted_targets=stored)
             trigger.granted_targets = stored
 
+    def _enable_targets(self, trigger: Any, actor: Any) -> tuple[TriggerGrantTarget, ...]:
+        """Use one permission and source check for preview and enablement."""
+        trigger.workflow.require_access("write", actor)
+        trigger.validate_configuration()
+        if not trigger.workflow.published_id:
+            raise ValidationError("Publish the workflow before enabling its trigger.")
+        trigger.source_class.check_access(trigger, actor)
+        targets = tuple(trigger.source_class.grant_targets(trigger))
+        if not targets:
+            raise ValidationError("The trigger source must declare at least one grant target.")
+        if len(set(targets)) != len(targets):
+            raise ValidationError("The trigger source declared a duplicate grant target.")
+        for target in targets:
+            target.require_grant_access(actor)
+        return targets
+
+    def enable_preview(self, trigger: Any, *, actor: Any) -> TriggerEnablePreview | None:
+        """Disclose source grants and workflow run readers only to eligible enablers."""
+        if actor is None:
+            return None
+        try:
+            targets = self._enable_targets(trigger, actor)
+        except (PermissionDenied, ValidationError, ImproperlyConfigured):
+            return None
+        resource = to_object_ref(trigger.workflow)
+        readers: list[str] = []
+        for subject_type, label in (("auth/user", "User"), ("auth/group", "Group")):
+            refs = backend().lookup_subjects(resource=resource, action="monitor", subject_type=subject_type)
+            with system_context(reason="workflows.enable_preview readers"):
+                resolved = resolve_subjects(refs)
+            readers.extend(f"{label}: {user_label(row) if subject_type == 'auth/user' else row}"
+                           for row in resolved.values())
+        return TriggerEnablePreview(
+            grants=tuple(sorted(f"{target.relation} on {target.target_label()}" for target in targets)),
+            run_readers=tuple(sorted(set(readers))),
+        )
+
     def enable(self, trigger: Any, *, actor: Any) -> Any:
         """Require workflow write and source-declared delegation authority."""
         if is_sudo():
@@ -323,18 +418,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             self.lock_grants(trigger.workflow_id)
             current = system_queryset(self.model).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
             current.with_actor(actor)
-            current.workflow.require_access("write", actor)
-            current.validate_configuration()
-            if not current.workflow.published_id:
-                raise ValidationError("Publish the workflow before enabling its trigger.")
-            current.source_class.check_access(current, actor)
-            targets = tuple(current.source_class.grant_targets(current))
-            if not targets:
-                raise ValidationError("The trigger source must declare at least one grant target.")
-            if len(set(targets)) != len(targets):
-                raise ValidationError("The trigger source declared a duplicate grant target.")
-            for target in targets:
-                target.require_grant_access(actor)
+            targets = self._enable_targets(current, actor)
             self.reconcile_grants(current, targets)
             system_queryset(self.model).filter(pk=current.pk).update(
                 enabled=True, disabled_reason="",
@@ -452,6 +536,15 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                         request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
                         trigger_event=current,
                     )
+            except PublisherAuthorityDenied as error:
+                reason = exception_text(error)
+                if self.lock_grants(trigger.workflow_id, skip_locked=True) is None:
+                    return False
+                self._disable(trigger, reason)
+                system_queryset(events).filter(pk=current.pk).update(
+                    evaluated_at=F("changed_at"), rejection=reason,
+                )
+                return False
             except (ValidationError, PermissionDenied) as error:
                 system_queryset(events).filter(pk=current.pk).update(
                     evaluated_at=F("changed_at"), rejection=exception_text(error),

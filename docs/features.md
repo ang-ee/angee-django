@@ -97,7 +97,9 @@ actually unique to your product.
 - **Workflows** — durable runs, step journals, gates, decisions, triggers, and
   published lineages for permissioned human-in-the-loop automation. Each
   workflow's service user holds listable source grants, acts for trigger
-  admission, and is retained as the actor of triggered runs.
+  admission, and is retained as the actor of triggered runs. Principal admission
+  rechecks the published version's author against those grants, while trigger
+  enablement discloses prospective grants and run readers.
 - **MCP** *(Planned)* — an agent tool surface generated from the framework's
   persisted, REBAC-gated GraphQL operations.
 - **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed
