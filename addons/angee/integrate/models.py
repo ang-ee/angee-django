@@ -1954,7 +1954,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     last_sync_started_at = models.DateTimeField(null=True, blank=True)
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
-    sync_stage = StateField(choices_enum=SyncStage, default=SyncStage.IDLE, db_index=True)
+    sync_stage = StateField(choices_enum=SyncStage, max_length=32, default=SyncStage.IDLE, db_index=True)
+    """Messaging channels keep their existing varchar(32) column on upgrade."""
     sync_error: str = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""

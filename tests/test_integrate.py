@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from django.db import models
+from django.db import connection, models
 from django.test.utils import isolate_apps
 
+from angee.base.fields import StateField
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with
@@ -81,6 +82,23 @@ def test_concrete_bridge_inherits_scheduler_field(concrete_bridge: type[Bridge])
     field = concrete_bridge._meta.get_field("next_sync_at")
 
     assert isinstance(field, models.DateTimeField)
+
+
+def test_bridge_sync_stage_preserves_live_column_shape(concrete_bridge: type[Bridge]) -> None:
+    """The enum field keeps messaging channels' existing varchar(32) storage."""
+
+    field = concrete_bridge._meta.get_field("sync_stage")
+    assert isinstance(field, StateField)
+    assert field.max_length == 32
+    previous = models.CharField(
+        max_length=32,
+        choices=Bridge.SyncStage.choices,
+        default=Bridge.SyncStage.IDLE,
+        db_index=True,
+    )
+    assert field.deconstruct()[3] == previous.deconstruct()[3]
+    assert field.db_type(connection) == previous.db_type(connection)
+    assert [field.get_prep_value(stage) for stage in Bridge.SyncStage] == [stage.value for stage in Bridge.SyncStage]
 
 
 def test_concrete_bridge_uses_django_mti_parent_link(concrete_bridge: type[Bridge]) -> None:
