@@ -4,7 +4,7 @@ import { EmptyState, LoadingPanel, registerForm, type RegisteredFormProps } from
 
 import { PartyRecordRedirectDocument } from "./documents";
 import { usePartiesT } from "./i18n";
-import { OrganizationForm } from "./OrganizationsPage";
+import { OrganizationForm } from "./OrganizationForm";
 import { PersonForm } from "./PersonForm";
 
 const MODEL = "parties.Party";

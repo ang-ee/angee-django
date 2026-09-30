@@ -4,7 +4,7 @@ import type { BaseMenuItem } from "@angee/ui";
 import { FolderGit2, GitBranch, GitFork, LayoutTemplate } from "lucide-react";
 
 import { enIntegrateVcsMessages } from "./i18n";
-import { vcsBridgeForm } from "./views/VcsBridgesPage";
+import { vcsBridgeForm } from "./views/VcsBridgeForm";
 
 const routes = [
   ...resourcePageRoutes("integrate_vcs.vcs", "/integrate/vcs", lazyRouteComponent(() => import("./views/VcsBridgesPage"), "VcsBridgesPage"), "integrate_vcs.VcsBridge", { detailName: "integrate_vcs.vcsBridge" }),

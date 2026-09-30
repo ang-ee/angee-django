@@ -9,8 +9,8 @@ import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { enMessagingMessages } from "./i18n";
-import { channelForm } from "./ChannelsPage";
-import { messageForm } from "./MessagesPage";
+import { channelForm } from "./ChannelForm";
+import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";

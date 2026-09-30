@@ -13,7 +13,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   }),
 }));
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
-vi.mock("./OrganizationsPage", () => ({
+vi.mock("./OrganizationForm", () => ({
   OrganizationForm: (props: { resource: string; id: string; readOnly?: boolean }) =>
     <div data-testid="organization-form">{props.resource}:{props.id}:{String(props.readOnly)}</div>,
 }));
