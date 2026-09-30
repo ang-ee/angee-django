@@ -4,7 +4,10 @@ Extraction retains immutable source, page and carrier rows together with a
 schema candidate. A lineage foreign key groups revisions, and a tagged `outcome`
 records success or an explicit failure code with grounding facts. Exactly one
 protected `file` or `message` target grants inherited read access through its
-field relation. Profiles supply interpretation through `ExtractionProfile`;
+field relation. Each source is a base `DerivedFrom` row with a canonical record
+reference; its explicit file or message-part link keeps part reads intersected
+with source read access. The base evidence admission check authorizes the source
+set at retention and again before inference. Profiles supply interpretation through `ExtractionProfile`;
 `ExtractionManager.prepare_pages` acquires bytes, and recognition and mapping
 use `agents.InferenceModel.infer`. Consumers hold a protected reference to
 `Extraction` and read documents, lines and facts through

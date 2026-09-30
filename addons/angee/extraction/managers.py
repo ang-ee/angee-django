@@ -13,6 +13,7 @@ from django.db import IntegrityError, transaction
 from rebac import system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
+from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.identity import public_id_of
 from angee.base.jsonschema import validate
 from angee.base.mixins import AppendOnlyQuerySet
@@ -69,12 +70,12 @@ class ExtractionManager(EvidenceManager):
         """Authorize retained inputs before disclosing their carriers to inference."""
         if actor is None or not (extraction).with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to retained evidence and its sources is required.")
-        sources = extraction.document_sources()
-        for source in sources:
-            row = source.file if source.file is not None else source.message_part
-            if row is None or not row.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Read access to retained evidence and its sources is required.")
-        return sources
+        references = tuple(source.record_ref for source in extraction.sources.order_by("position"))
+        readable_records(
+            tuple(EvidenceReference(model=ref.model_label, id=ref.public_id) for ref in references),
+            (actor,),
+        )
+        return extraction.document_sources()
 
     def retain_result(
         self,
@@ -132,10 +133,9 @@ class ExtractionManager(EvidenceManager):
         for source in sources:
             if (source.file is None) == (source.message_part is None):
                 raise ValidationError("A source requires exactly one file or message part.")
-            row = source.file if source.file is not None else source.message_part
-            assert row is not None
-            if not row.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Read access to retained evidence and its sources is required.")
+        readable_records(tuple(source.evidence_reference for source in sources), (actor,))
+        for source in sources:
+            row = source.record
             digest = row.content_hash if source.file is not None else row.fragment.hash
             if base is None and source.content_hash != str(digest):
                 raise ValidationError("The source content identity differs from its retained record.")
@@ -188,16 +188,18 @@ class ExtractionManager(EvidenceManager):
                     or not 0 <= claim["start"] < claim["end"] <= len(text)
                 ):
                     raise ValidationError("A text claim requires a valid retained span.")
-        source_values = [
-            {
-                "position": s.source_position,
-                "file_id": s.file.pk if s.file is not None else None,
-                "message_part_id": s.message_part.pk if s.message_part is not None else None,
-                "content_hash": s.content_hash,
-                "mime_type": s.mime_type,
-            }
-            for s in sources
-        ]
+        source_values = []
+        for source in sources:
+            target_ref = canonical_record_target(source.record)
+            source_values.append({
+                "position": source.source_position,
+                "file_id": source.file.pk if source.file is not None else None,
+                "message_part_id": source.message_part.pk if source.message_part is not None else None,
+                "content_type_id": target_ref.content_type.pk,
+                "object_id": target_ref.object_id,
+                "content_hash": source.content_hash,
+                "mime_type": source.mime_type,
+            })
         reference = record_ref_for(target)
         lineage_identity = canonical_json_sha256(
             {
@@ -800,7 +802,10 @@ class ExtractionManager(EvidenceManager):
             }
             outcome["request_digest"] = canonical_json_sha256(request)
             sources = list(
-                original.sources.values("position", "file_id", "message_part_id", "content_hash", "mime_type")
+                original.sources.values(
+                    "position", "file_id", "message_part_id", "content_type_id", "object_id",
+                    "content_hash", "mime_type",
+                )
             )
             parts = [asdict(part) for part in original.document_parts()]
             return self._retain(values, sources, [], parts, parent, mapping, retired, correction=True)

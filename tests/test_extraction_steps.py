@@ -452,7 +452,7 @@ def test_unreadable_original_source_blocks_inference_before_provider_call(step_e
     )
     run_until(run)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == "failed"
-    assert "Read access" in system_queryset(StepAttempt).get(step_run__run=run).error
+    assert "declared permission" in system_queryset(StepAttempt).get(step_run__run=run).error
     assert DeterministicExtraction.calls == ["prepare"]
 
 

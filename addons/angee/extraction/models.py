@@ -10,7 +10,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.evidence import FactAuthority as FactAuthorityKind
+from angee.base.evidence import DerivedFrom, FactAuthority
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AppendOnlyModel, AuditMixin, SqidMixin
@@ -25,7 +25,6 @@ from angee.extraction.contracts import (
     DocumentSource,
     ExtractionPartKind,
     ExtractionRef,
-    FactAuthority,
     LineRef,
     PageRef,
     SourceRef,
@@ -485,15 +484,24 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, AngeeModel):
         """Classify source grounding or retained correction authority for a fact."""
         self.fact(pointer)
         if self.claims.get(pointer):
-            return FactAuthority(FactAuthorityKind.SOURCE)
+            return FactAuthority.SOURCE
+        if self.fact_correction(pointer) is not None:
+            return FactAuthority.CORRECTION
+        return FactAuthority.UNVERIFIED
+
+    def fact_correction(self, pointer: str) -> CorrectionRef | None:
+        """Return the latest correction governing this fact, unless source grounding wins."""
+        self.fact(pointer)
+        if self.claims.get(pointer):
+            return None
         for correction in reversed(self.corrections):
             if any(pointer == path or pointer.startswith(f"{path}/") for path in correction.corrected_paths):
-                return FactAuthority(FactAuthorityKind.CORRECTION, correction.decision_id)
-        return FactAuthority(FactAuthorityKind.UNVERIFIED)
+                return correction
+        return None
 
 
-class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
-    """One source's immutable position and content identity."""
+class ExtractionSource(DerivedFrom):
+    """One derived-from source with retained position, digest and REBAC links."""
 
     runtime = True
     sqid_prefix = "exs_"
@@ -521,14 +529,8 @@ class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
                 name="extraction_source_one_input",
             ),
             models.UniqueConstraint(
-                fields=("extraction", "file"),
-                condition=models.Q(file__isnull=False),
-                name="uniq_extraction_source_file",
-            ),
-            models.UniqueConstraint(
-                fields=("extraction", "message_part"),
-                condition=models.Q(message_part__isnull=False),
-                name="uniq_extraction_source_part",
+                fields=("extraction", "content_type", "object_id"),
+                name="uniq_extraction_source_record",
             ),
         )
 

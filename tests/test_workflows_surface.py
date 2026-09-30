@@ -220,10 +220,14 @@ def test_run_origin_and_trigger_event_surface() -> None:
 
 
 def test_evidence_owner_surface() -> None:
-    """Decision evidence composes the base fact, derivation and admission owners."""
+    """Decision and extraction evidence compose the base derivation owner."""
     evidence = apps.get_model("decisions", "DecisionEvidence")
+    extraction_source = apps.get_model("extraction", "ExtractionSource")
+    extraction = apps.get_model("extraction", "Extraction")
     decision = apps.get_model("decisions", "Decision")
     assert issubclass(evidence, DerivedFrom)
+    assert issubclass(extraction_source, DerivedFrom)
+    assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
     assert issubclass(DecisionRequest, BaseModel)

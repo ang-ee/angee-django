@@ -123,7 +123,7 @@ def test_inference_retention_preserves_source_grounding_before_schema_validation
     assert successor.fact("/documents/0/title") == "Note"
     assert successor.fact("/documents/0/optional") == "Inferred"
     assert successor.claims == first.claims
-    assert successor.fact_authority("/documents/0/title").kind == "source"
+    assert successor.fact_authority("/documents/0/title") == "source"
     assert retain(base=first, result=result, request_key="preserved").pk == successor.pk
 
 

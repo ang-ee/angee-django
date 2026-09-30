@@ -106,7 +106,8 @@ def test_decision_correction_is_exact_reusable_and_retains_its_authority(correct
     assert revised.result["documents"][0]["title"] == "Reviewed"
     assert original.result["documents"][0]["title"] == "Note"
     assert revised.document_refs == original.document_refs
-    assert revised.fact_authority("/documents/0/title").kind == "correction"
+    assert revised.fact_authority("/documents/0/title") == "correction"
+    assert revised.fact_correction("/documents/0/title").decision_id == public_id_of(decision)
     assert revised.claims == {}
     assert revised.correction_decision_id == decision.pk
     assert revised.outcome["corrections"][-1]["decision_resolved_by"] == public_id_of(reviewer)

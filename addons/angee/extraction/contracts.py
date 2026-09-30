@@ -9,16 +9,9 @@ from typing import Annotated, Any, Literal
 from django.db.models import TextChoices
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from angee.base.evidence import FactAuthority as FactAuthorityKind
+from angee.base.evidence import EvidenceReference
+from angee.base.identity import public_id_of
 from angee.extraction.enums import ExtractionRole, ExtractionSourceKind
-
-
-@dataclass(frozen=True, slots=True)
-class FactAuthority:
-    """Provenance classification for one retained result fact."""
-
-    kind: FactAuthorityKind
-    decision_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +174,17 @@ class Source:
     content: bytes | str
     file: Any | None = None
     message_part: Any | None = None
+
+    @property
+    def record(self) -> Any:
+        """Return the source record whose standing read permission admits this input."""
+        return self.file if self.file is not None else self.message_part
+
+    @property
+    def evidence_reference(self) -> EvidenceReference:
+        """Supply this input's public record identity to the base admission check."""
+        row = self.record
+        return EvidenceReference(model=row._meta.label, id=public_id_of(row))
 
     @property
     def filename(self) -> str:

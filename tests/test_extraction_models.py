@@ -18,7 +18,9 @@ from django.db.models.deletion import PROTECT
 from django.test import override_settings
 from rebac import actor_context, system_context
 
+from angee.base.evidence import DerivedFrom, FactAuthority
 from angee.base.fields import StateField
+from angee.base.refs import canonical_record_target
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
@@ -147,7 +149,12 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     line, line_reference = row.selected_line(reference.identity, reference.lines[1].identity)
     assert line["text"] == "Second line" and line_reference == reference.lines[1]
     assert row.fact("/documents/0/optional") is None
-    assert row.fact_authority("/documents/0/title").kind == "source"
+    assert row.fact_authority("/documents/0/title") is FactAuthority.SOURCE
+    assert row.fact_correction("/documents/0/title") is None
+    source = row.sources.get()
+    assert isinstance(source, DerivedFrom)
+    assert (source.content_type, source.object_id) == canonical_record_target(values["target"])
+    assert source.record == values["target"]
     with pytest.raises(KeyError):
         row.fact("/documents/0/absent")
     with pytest.raises(KeyError):
