@@ -4,6 +4,7 @@ import { canonicalModelLabelOrNull, modelMetadataForLabel, useSchemaFieldMetadat
 import type { CrudFilter } from "@refinedev/core";
 
 import { FieldDescription, FieldError, FieldLabel, FieldRoot } from "../../ui/field";
+import { titleCase } from "../../lib/titleCase";
 import { relationValueId, type WidgetFocusTarget } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
@@ -221,7 +222,7 @@ export function LabeledDescriptorField({
           htmlFor={isCompositeField || groupLabel ? undefined : controlId}
           required={field.required}
         >
-          {field.label ?? field.name}
+          {field.label ?? titleCase(field.name)}
         </FieldLabel>
       ) : null}
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>

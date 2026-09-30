@@ -510,6 +510,21 @@ describe("ActionFormDialog", () => {
     expect(screen.getByRole("textbox", { name: "Amount" })).toBeTruthy();
   });
 
+  test("gives schema table forms room within the shared dialog", async () => {
+    renderDialog({
+      id: "review-rows", label: "Review rows",
+      args: jsonSchemaActionArgs({
+        type: "object", properties: { rows: { type: "array", items: { type: "object", properties: {
+          reference: { type: "string" }, note: { type: "string" },
+        } } } },
+      }, defaultWidgets),
+      submit: vi.fn(),
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Review rows" });
+    expect(await screen.findByRole("table", { name: "Rows" })).toBeTruthy();
+    expect(dialog.className).toContain("has-[table]:w-[80rem]");
+  });
+
   test("forwards a relation argument's declared filters to its option query", async () => {
     renderDialog(registerReviewAction(vi.fn()));
 

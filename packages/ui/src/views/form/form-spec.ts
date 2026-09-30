@@ -9,6 +9,7 @@ import {
 import type { DescriptorField } from "./DescriptorFieldList";
 import { emptyValueForField } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
+import { statusLabel } from "../../lib/labels";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
 
@@ -25,10 +26,13 @@ export type FormSpecRelationCreate = Pick<
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
  * vocabulary. Presentation extensions live on each property: string-only
  * `widget`/`label`/`description`/`placeholder` (`label` overrides JSON Schema
- * `title`), list `addLabel`/`removeLabel`,
+ * `title`; an undeclared label is humanized from the field name), list
+ * `addLabel`/`removeLabel`,
  * `readOnly`, `hidden` (retained in values without a control), JSON `defaultValue`
  * (overriding the standard schema `default` when both are supplied),
- * string-labelled `options`, and the pure-data `relation` config. A property's
+ * string-labelled `options` (or `oneOf` constant titles, then humanized enum
+ * values), and the pure-data `relation` config. The backend supplies relation
+ * model names as titles when no field title is declared. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
  * Arrays of objects resolve to the registered fixed-N `rows` view composer.
  * Properties and items may reference root-local `$defs` or `definitions`;
@@ -349,9 +353,10 @@ function formSpecFieldType(
 
 /** Ordinal control tokens distinguish choices such as the number 1 and string "1". */
 function optionsFrom(field: FormSpecWire): Pick<FormSpecFieldDescriptor, "options" | "valueCodec"> | undefined {
-  const choices = field.options ?? field.enum?.map((value) => ({
-    value, label: typeof value === "string" ? value : JSON.stringify(value), disabled: false,
-  }));
+  const choices: readonly { value: unknown; label: string; disabled?: boolean }[] | undefined =
+    field.options ?? (field.oneOf?.length && field.oneOf.every((choice) => Object.hasOwn(choice, "const"))
+    ? field.oneOf.map((choice) => ({ value: choice.const, label: choice.title ?? choiceLabel(choice.const) }))
+    : undefined) ?? field.enum?.map((value) => ({ value, label: choiceLabel(value) }));
   if (!choices) return undefined;
   const typed = choices.some(({ value }) => typeof value !== "string");
   const options: readonly WidgetOption[] = choices.map(({ value, label, disabled }, index) => ({
@@ -370,4 +375,8 @@ function optionsFrom(field: FormSpecWire): Pick<FormSpecFieldDescriptor, "option
       return index < 0 ? undefined : structuredClone(choices[index]!.value);
     },
   } };
+}
+
+function choiceLabel(value: unknown): string {
+  return typeof value === "string" ? statusLabel(value) : JSON.stringify(value);
 }

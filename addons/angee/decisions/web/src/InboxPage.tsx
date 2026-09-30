@@ -13,7 +13,7 @@ import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
 import { DecisionContext } from "./DecisionContext";
 import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.console";
 import { useDecisionsT } from "./i18n";
-import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet } from "./slots";
+import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./slots";
 
 /** Personal query defaults remain editable through the resource toolbar and saved views. */
 export function InboxPage(): ReactElement {
@@ -98,12 +98,13 @@ function DecisionDetails({ recordId, editing = false }: Pick<RecordPanelContext,
   const t = useDecisionsT();
   const query = useAuthoredQuery(DecisionDocument, { id: recordId }, { models: DECISION_MODELS });
   const decision = query.data?.decisions_by_pk;
+  const content = useDecisionContentEntries(decision?.kind ?? "");
   if (query.isLoading) return <LoadingPanel />;
   if (!decision) return <ErrorBanner description={t("decision.unavailable")} />;
   return <DecisionContentProvider value={{ decision, basis: decision.basis, context: decision.context }}>
     <div className="space-y-6">
       <DecisionOriginOutlet />
-      <DecisionContext context={decision.context} />
+      <DecisionContext context={decision.context} showFacts={content.length === 0} />
       <fieldset disabled={!editing}><DecisionContentOutlet /></fieldset>
       {!editing ? <DecisionSeats recordId={recordId} groupId={decision.group.id} /> : null}
     </div>

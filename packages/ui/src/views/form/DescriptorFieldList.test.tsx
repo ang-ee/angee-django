@@ -45,6 +45,15 @@ function FormHarness<TValues extends Values = Values>({
 afterEach(cleanup);
 
 describe("DescriptorFieldList", () => {
+  test("humanizes schema field names when no field title is declared", async () => {
+    const fields = deserializeFormSpec({ properties: {
+      source_line: { type: "object", properties: { original_text: { type: "string" } } },
+    } }, defaultWidgets);
+    render(<FormHarness fields={fields} defaultValues={{ source_line: { original_text: "" } }} />);
+    expect(screen.getByText("Source Line")).toBeTruthy();
+    expect(await screen.findByText("Source Line Original Text")).toBeTruthy();
+  });
+
   test("registry widgets receive live sibling values in descriptor forms", () => {
     const read: WidgetDefinition["read"] = ({ row }) => <output aria-label="Sibling model">{row && typeof row === "object" && "model" in row ? String(row.model) : ""}</output>;
     function Harness() {

@@ -188,7 +188,7 @@ describe("deserializeFormSpec", () => {
     expect(fields[1]?.itemTemplate?.objectTemplate).toEqual(columns);
     expect(fields[2]?.objectTemplate).toEqual(columns);
     expect(fields[3]).toMatchObject({ label: "Default identity", options: [
-      { value: "first", label: "first" }, { value: "second", label: "second" },
+          { value: "first", label: "First" }, { value: "second", label: "Second" },
     ] });
     expect(schema).toEqual(original);
   });
@@ -296,6 +296,7 @@ describe("deserializeFormSpec", () => {
           },
           target: {
             type: "string",
+            title: "Target",
             relation: {
               resource: "Channel",
               labelField: "name",
@@ -316,6 +317,7 @@ describe("deserializeFormSpec", () => {
               properties: {
                 target: {
                   type: "string",
+                  title: "Target",
                   relation: { resource: "Channel" },
                 },
                 replace: { type: "boolean", widget: "switch" },
@@ -354,7 +356,7 @@ describe("deserializeFormSpec", () => {
         ],
       },
       {
-        name: "target",
+        name: "target", label: "Target",
         kind: "string",
         widget: "many2one",
         required: true,
@@ -377,7 +379,7 @@ describe("deserializeFormSpec", () => {
         required: true,
         rowTemplate: [
           {
-            name: "target",
+            name: "target", label: "Target",
             kind: "string",
             widget: "many2one",
             required: true,
@@ -408,11 +410,24 @@ describe("deserializeFormSpec", () => {
         kind: "any",
         widget: "select",
         options: [
-          { value: "append", label: "append" },
-          { value: "replace", label: "replace" },
+          { value: "append", label: "Append" },
+          { value: "replace", label: "Replace" },
         ],
       },
     ]);
+  });
+
+  test("uses per-value titles and humanized fallback labels for oneOf choices", () => {
+    const [field] = deserializeFormSpec({ properties: {
+      choice: { type: "string", oneOf: [
+        { const: "retain", title: "Keep current" },
+        { const: "add_more" },
+      ] },
+    } }, defaultWidgets);
+    expect(field).toMatchObject({ widget: "select", options: [
+      { value: "retain", label: "Keep current" },
+      { value: "add_more", label: "Add More" },
+    ] });
   });
 
   test("preserves an empty root JSON Pointer as an authored select value", () => {

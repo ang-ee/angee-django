@@ -9,13 +9,12 @@ from typing import Any, ClassVar
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, GetJsonSchemaHandler
-from pydantic.json_schema import JsonSchemaValue
-from pydantic_core import CoreSchema
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, JsonSchemaValue
+from pydantic_core import CoreSchema, core_schema
 
 from angee.base.identity import relation_permission_validator
 from angee.base.impl import (
     FORM_SCHEMA_ANNOTATIONS,
-    check_form_annotations,
     freeze_form_schema,
     materialize_form_schema,
     resolve_impl_class,
@@ -88,6 +87,30 @@ class Action(BaseModel):
         cls.outcome = outcome
 
 
+class _FormJsonSchema(GenerateJsonSchema):
+    """Keep Python type identity and docstrings out of field presentation metadata."""
+
+    def field_title_should_be_set(self, schema: Any) -> bool:
+        return False
+
+    @staticmethod
+    def _without_type_metadata(generated: JsonSchemaValue) -> JsonSchemaValue:
+        generated.pop("title", None)
+        generated.pop("description", None)
+        return generated
+
+    def model_schema(self, schema: core_schema.ModelSchema) -> JsonSchemaValue:
+        return self._without_type_metadata(super().model_schema(schema))
+
+    def generate(self, schema: CoreSchema, mode: JsonSchemaMode = "validation") -> JsonSchemaValue:
+        generated = super().generate(schema, mode=mode)
+        # Pydantic's Enum core metadata restores type names after enum_schema runs.
+        for definition in generated.get("$defs", {}).values():
+            if "enum" in definition:
+                self._without_type_metadata(definition)
+        return generated
+
+
 def resolve_action(value: str) -> type[Action]:
     """Resolve a trusted action registration, whose key is the authored action value."""
     action = resolve_impl_class("ANGEE_DECISION_ACTION_CLASSES", value, Action)
@@ -119,15 +142,10 @@ def compile_form(
     branches, options = [], []
     for action in actions:
         try:
-            original = action.model_json_schema(mode="validation")
+            original = action.model_json_schema(mode="validation", schema_generator=_FormJsonSchema)
             branch = materialize_form_schema(original)
         except (KeyError, ValueError, TypeError, ValidationError) as error:
             raise ImproperlyConfigured(f"Invalid schema declaration on action {action.value}.") from error
-        for node in schema_nodes(branch):
-            if node.get("type") == "object" and "properties" in node:
-                node["additionalProperties"] = False
-            if "default" in node and validation_issues(node, node["default"]):
-                raise ImproperlyConfigured(f"Invalid declared default on action {action.value}.")
         fields = branch.get("properties", {})
         if "action" in fields or "action" in action.model_fields:
             raise ImproperlyConfigured("The action field is reserved by decision forms.")
@@ -136,11 +154,18 @@ def compile_form(
             values.keys() | refinements.keys()
         ) - fields.keys():
             raise ValidationError("Initial values and refinements must map declared action fields.")
-        for name, metadata in refine.get(action.value, {}).items():
+        for name, metadata in refinements.items():
             if not isinstance(metadata, Mapping) or metadata.keys() - FORM_SCHEMA_ANNOTATIONS:
                 raise ValidationError("Decision form refinements only accept presentation annotations.")
-            fields[name].update(deepcopy(metadata))
-            check_form_annotations(fields[name])
+            original["properties"][name].update(deepcopy(metadata))
+        if refinements:
+            branch = materialize_form_schema(original)
+            fields = branch["properties"]
+        for node in schema_nodes(branch):
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+            if "default" in node and validation_issues(node, node["default"]):
+                raise ImproperlyConfigured(f"Invalid declared default on action {action.value}.")
         if action.value in initial:
             freeze_form_schema(branch, dict(values))
         else:

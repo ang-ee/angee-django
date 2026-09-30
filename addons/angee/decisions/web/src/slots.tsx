@@ -36,8 +36,12 @@ function ConsumerContent({ Component }: { Component: ComponentType<DecisionConte
 /** Mount inside the page's React Hook Form provider so content can edit the form. */
 export function DecisionContentOutlet(): ReactElement {
   const { decision } = useDecisionContent();
-  const entries = useSlot(DECISION_CONTENT_SLOT);
-  return <SlotOutlet entries={entries.filter((entry) => entry.id === decision.kind)} />;
+  return <SlotOutlet entries={useDecisionContentEntries(decision.kind)} />;
+}
+
+/** The selected kind's registered presentation replaces generic fact display. */
+export function useDecisionContentEntries(kind: string): readonly SlotContribution[] {
+  return useSlot(DECISION_CONTENT_SLOT).filter((entry) => entry.id === kind);
 }
 
 /** An unfilled origin slot renders nothing. Contributions use useDecisionContent. */

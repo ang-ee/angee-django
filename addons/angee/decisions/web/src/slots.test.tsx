@@ -6,9 +6,10 @@ import { composeAddons, defineAddon } from "@angee/app";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import type { SlotContribution } from "@angee/ui";
 
+import { DecisionContext } from "./DecisionContext";
 import {
   DECISION_ORIGIN_SLOT, DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet,
-  decisionContent, useDecisionContent, type DecisionContentProps,
+  decisionContent, useDecisionContent, useDecisionContentEntries, type DecisionContentProps,
 } from "./slots";
 import { decisionFixture } from "./testing";
 
@@ -28,11 +29,19 @@ function Origin() {
   const { decision: current } = useDecisionContent();
   return <p>Waiting on {current.group.id}</p>;
 }
-function Harness({ slots = [] }: { slots?: readonly SlotContribution[] }) {
+function ContextWithContent() {
+  const { decision: current } = useDecisionContent();
+  const entries = useDecisionContentEntries(current.kind);
+  return <>
+    <DecisionContext context={{ facts: [{ pointer: "/review", label: "Review fact", value: { outcome: "Ready" }, authority: "source" }] }} showFacts={entries.length === 0} />
+    <DecisionContentOutlet />
+  </>;
+}
+function Harness({ slots = [], withContext = false }: { slots?: readonly SlotContribution[]; withContext?: boolean }) {
   const form = useForm({ defaultValues: { note: "Initial note" } });
   return <ShellPageTestProviders runtime={{ slots }}><FormProvider {...form}>
     <DecisionContentProvider value={{ decision, basis: decision.basis, context: decision.context }}>
-      <DecisionContentOutlet /><DecisionOriginOutlet />
+      {withContext ? <ContextWithContent /> : <DecisionContentOutlet />}<DecisionOriginOutlet />
     </DecisionContentProvider>
   </FormProvider></ShellPageTestProviders>;
 }
@@ -53,6 +62,15 @@ describe("decision content contracts", () => {
     expect(screen.getByText(JSON.stringify({ basis: decision.basis, context: decision.context }))).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox", { name: "Consumer note" }), { target: { value: "Updated note" } });
     expect(screen.getByLabelText("Form note").textContent).toBe("Updated note");
+  });
+
+  test("registered content replaces the generic facts for its kind", () => {
+    const { rerender } = render(<Harness withContext slots={[decisionContent("review", Consumer)]} />);
+    expect(screen.getByText("review")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Facts" })).toBeNull();
+    rerender(<Harness withContext />);
+    expect(screen.getByRole("region", { name: "Facts" })).toBeTruthy();
+    expect(screen.getByText("Ready")).toBeTruthy();
   });
 
   test("an independent waiting owner can consume the same decision and empty slots add no output", () => {

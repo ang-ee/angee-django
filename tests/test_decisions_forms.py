@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from enum import Enum
 from typing import Annotated, Literal
 
 import pytest
@@ -90,6 +91,39 @@ def test_nested_local_references_and_readonly_row_values():
     assert "lines.1.key" in error.value.message_dict
 
 
+def test_model_names_and_docstrings_do_not_become_form_field_metadata():
+    class Line(BaseModel):
+        """Developer guidance for a line model."""
+
+        value: str
+
+    class Choice(str, Enum):
+        """Developer guidance for a choice type."""
+
+        READY = "ready"
+        PENDING = "pending"
+
+    class Edit(Action, value="edit", label="Edit", verdict=Verdict.COMPLETED):
+        """Developer guidance for an action."""
+
+        line: Line
+        source_id: str
+        choice: Choice
+        titled_choice: Choice = Field(title="Declared choice")
+        titled: Line = Field(title="Declared field title", description="Declared field help")
+
+    branch = compile_form([Edit])["oneOf"][0]
+    assert "title" not in branch and "description" not in branch
+    assert "title" not in branch["properties"]["line"]
+    assert "description" not in branch["properties"]["line"]
+    assert "title" not in branch["properties"]["source_id"]
+    assert "title" not in branch["properties"]["choice"]
+    assert "description" not in branch["properties"]["choice"]
+    assert branch["properties"]["titled_choice"]["title"] == "Declared choice"
+    assert branch["properties"]["titled"]["title"] == "Declared field title"
+    assert branch["properties"]["titled"]["description"] == "Declared field help"
+
+
 def test_declared_readonly_default_is_filled_when_omitted():
     class Document(Action, value="document", label="Document", verdict=Verdict.COMPLETED):
         revision: int = Field(default=3, json_schema_extra={"readOnly": True})
@@ -101,14 +135,14 @@ def test_declared_readonly_default_is_filled_when_omitted():
 
 def test_relation_candidates_are_frozen_and_constrain_submissions():
     class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
-        document: Annotated[str, Relation("notes.Document")]
+        document: Annotated[str, Relation("auth.Permission")]
 
     schema = compile_form([Select], refine={"select": {"document": {"options": [
         {"value": "document-a", "label": "Document A"},
         {"value": "document-b", "label": "Document B"},
     ]}}})
     field = schema["oneOf"][0]["properties"]["document"]
-    assert field["relation"] == {"resource": "notes.Document", "permission": "read"}
+    assert field["relation"] == {"resource": "auth.Permission", "permission": "read"}
     assert field["enum"] == ["document-a", "document-b"]
     branch = schema["oneOf"][0]
     assert not validation_issues(branch, {"action": "select", "document": "document-a"})
@@ -319,7 +353,7 @@ def test_relation_metadata_uses_the_base_contract_for_classes_and_runtime_refine
 
 def test_relation_candidate_projection_preserves_permissions_and_ignores_value_metadata():
     class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
-        document: Annotated[str, Relation("notes.Document", permission="write")]
+        document: Annotated[str, Relation("auth.Permission", permission="write")]
         metadata: dict
 
     schema = compile_form([Select], initial={"select": {
@@ -327,13 +361,14 @@ def test_relation_candidate_projection_preserves_permissions_and_ignores_value_m
         "metadata": {"relation": {"resource": "not.a_model"}, "enum": ["not-a-record"]},
     }}, refine={"select": {"document": {
         "options": [{"value": "document-a", "label": "A"}, {"value": "document-b", "label": "B"}],
-        "relation": {"resource": "notes.Document", "permission": "write", "filters": [
+        "relation": {"resource": "auth.Group", "permission": "write", "filters": [
             {"operator": "eq", "field": "state", "value": "ready"},
         ]},
     }}})
     assert relation_candidates(schema) == (
-        RelationCandidate("notes.Document", "write", ("document-a", "document-b")),
+        RelationCandidate("auth.Group", "write", ("document-a", "document-b")),
     )
+    assert schema["oneOf"][0]["properties"]["document"]["title"] == "Group"
     assert schema["oneOf"][0]["properties"]["document"]["relation"]["filters"] == [
         {"operator": "eq", "field": "state", "value": "ready"},
     ]

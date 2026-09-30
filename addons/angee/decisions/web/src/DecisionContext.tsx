@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import * as v from "valibot";
-import { Badge, ErrorBanner, JsonValueSchema, JsonValueView, LazyBoundary, RecordReference, useRecordPeek, type RecordPeekOpen } from "@angee/ui";
+import { Badge, ErrorBanner, JsonValueSchema, MetaGrid, RecordReference, titleCase, useRecordPeek, useUiT, type JsonValue, type RecordPeekOpen } from "@angee/ui";
 
 import { useDecisionsT } from "./i18n";
 
@@ -26,23 +26,23 @@ const ContextSchema = v.strictObject({
 type Reference = v.InferOutput<typeof ReferenceSchema>;
 
 /** Project only the decisions-owned context contract; record peeks retain native navigation. */
-export function DecisionContext({ context }: { context: unknown }): ReactElement | null {
+export function DecisionContext({ context, showFacts = true }: { context: unknown; showFacts?: boolean }): ReactElement | null {
   const t = useDecisionsT();
   const openRecord = useRecordPeek();
   const parsed = v.safeParse(ContextSchema, context);
   if (!parsed.success) return <ErrorBanner description={t("context.invalid")} />;
   const { facts, references } = parsed.output;
-  if (!facts.length && !references.length) return null;
+  if ((!showFacts || !facts.length) && !references.length) return null;
   const authorityLabels = {
     source: t("context.source"), correction: t("context.correction"), unverified: t("context.unverified"),
   };
   return <section aria-label={t("context.title")} className="space-y-4">
-    {facts.length ? <section aria-label={t("context.facts")} className="space-y-3">
+    {showFacts && facts.length ? <section aria-label={t("context.facts")} className="space-y-3">
       <h2 className="font-semibold">{t("context.facts")}</h2>
       <dl className="space-y-4">{facts.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="space-y-2">
         <dt className="flex items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
         <dd className="space-y-2">
-          <LazyBoundary pending={null}><JsonValueView value={fact.value} /></LazyBoundary>
+          <FactValue value={fact.value} />
           {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || fact.subject.id} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
           <References heading="h3" title={t("context.evidence")} references={fact.evidence} openRecord={openRecord} />
         </dd>
@@ -50,6 +50,17 @@ export function DecisionContext({ context }: { context: unknown }): ReactElement
     </section> : null}
     <References title={t("context.references")} references={references} openRecord={openRecord} />
   </section>;
+}
+
+function FactValue({ value }: { value: JsonValue }): ReactElement {
+  const t = useUiT();
+  if (Array.isArray(value)) return <ul className="list-disc space-y-1 pl-5">{value.map((item, index) =>
+    <li key={index}><FactValue value={item} /></li>,
+  )}</ul>;
+  if (value !== null && typeof value === "object") return <MetaGrid rows={Object.entries(value).map(([name, item]) => ({
+    id: name, label: titleCase(name), value: <FactValue value={item} />,
+  }))} />;
+  return <span>{value === null ? "-" : typeof value === "boolean" ? t(value ? "list.yes" : "list.no") : value}</span>;
 }
 
 function References({ title, references, openRecord, heading: Heading = "h2" }: {

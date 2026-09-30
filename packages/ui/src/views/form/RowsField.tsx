@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "../../ui/table";
 import { RequiredMark } from "../../ui/label";
+import { titleCase } from "../../lib/titleCase";
 import type {
   WidgetDefinition,
   WidgetField,
@@ -77,7 +78,7 @@ export function RowsField({
     return (rowTitle ? visibleColumns : columns).map((column) => {
       const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
       const control = visibleColumns.includes(column) ? <LabeledDescriptorField
-        field={{ ...column, name: cellPath, label: column.label ?? column.name }}
+        field={{ ...column, name: cellPath, label: column.label ?? titleCase(column.name) }}
         value={row[column.name]}
         dialogValues={row}
         messages={messagesForDottedPath(messages, cellPath)}
@@ -102,7 +103,7 @@ export function RowsField({
       role="group"
       id={field?.controlProps?.id}
       aria-labelledby={field?.controlProps?.["aria-labelledby"]}
-      aria-label={field?.controlProps?.["aria-labelledby"] ? undefined : typeof field?.label === "string" ? field.label : fieldName}
+      aria-label={field?.controlProps?.["aria-labelledby"] ? undefined : typeof field?.label === "string" ? field.label : titleCase(fieldName)}
       aria-describedby={field?.controlProps?.["aria-describedby"]}
       className="space-y-4"
     >
@@ -117,7 +118,7 @@ export function RowsField({
       <Table
         id={field?.controlProps?.id}
         aria-label={
-          typeof field?.label === "string" ? field.label : fieldName
+          typeof field?.label === "string" ? field.label : titleCase(fieldName)
         }
         aria-describedby={field?.controlProps?.["aria-describedby"]}
         density={readOnly ? "compact" : "comfortable"}
@@ -135,7 +136,7 @@ export function RowsField({
                     : undefined
                 }
               >
-                {column.label ?? column.name}
+                {column.label ?? titleCase(column.name)}
                 <RequiredMark required={column.required} className="ml-1" />
               </TableHead>
             ))}

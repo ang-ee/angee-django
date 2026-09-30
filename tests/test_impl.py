@@ -54,6 +54,20 @@ def test_frozen_form_metadata_and_per_row_defaults_compose_shared_schema_validat
     assert set(validation_issues(schema, values)) == {"1.key"}
 
 
+def test_frozen_relation_titles_use_model_verbose_names_unless_declared():
+    schema = materialize_form_schema({"type": "object", "properties": {
+        "selected_id": {"type": "string", "relation": {"resource": "auth.Permission"}},
+        "related_ids": {"type": "array", "items": {
+            "type": "string", "relation": {"resource": "auth.Permission"},
+        }},
+        "named_id": {"type": "string", "title": "Granted access", "relation": {"resource": "auth.Permission"}},
+    }})
+    fields = schema["properties"]
+    assert fields["selected_id"]["title"] == "Permission"
+    assert fields["related_ids"]["title"] == "Permissions"
+    assert fields["named_id"]["title"] == "Granted access"
+
+
 @pytest.mark.parametrize("declared_default", [False, True])
 def test_empty_array_form_defaults_preserve_valid_item_schemas(declared_default):
     """No initialized rows means no positional schemas or fabricated readonly values."""

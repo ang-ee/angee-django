@@ -15,11 +15,13 @@ from dataclasses import dataclass, replace
 from functools import cache
 from typing import Any, ClassVar, NoReturn, cast, get_args
 
+from django.apps import apps
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.module_loading import import_string
+from django.utils.text import capfirst
 from django_choices_field import TextChoicesField
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, TypeAdapter
@@ -139,8 +141,23 @@ def materialize_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
         if "format" in node and node["format"] not in FormatChecker.checkers:
             raise ValidationError(f"Unsupported form format: {node['format']}.")
     result = materialize_schema(schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"})
-    for node in schema_nodes(result):
+    nodes = list(schema_nodes(result))
+    for node in nodes:
         check_form_annotations(node)
+    for node in nodes:
+        if "title" in node:
+            continue
+        relation = node.get("relation")
+        plural = False
+        if node.get("type") == "array" and isinstance(node.get("items"), dict):
+            relation = node["items"].get("relation")
+            plural = relation is not None
+        if relation is not None:
+            try:
+                model = apps.get_model(relation["resource"])
+            except (LookupError, ValueError) as error:
+                raise ValidationError(f"Unknown form relation target {relation['resource']!r}.") from error
+            node["title"] = capfirst(str(model._meta.verbose_name_plural if plural else model._meta.verbose_name))
     return result
 
 

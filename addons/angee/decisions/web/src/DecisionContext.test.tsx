@@ -38,6 +38,28 @@ describe("decision context", () => {
     expect(container.textContent).toBe("");
   });
 
+  test("shows structured facts as readable fields without a JSON code block", () => {
+    const { container } = render(<ShellPageTestProviders><DecisionContext context={{ facts: [{
+      pointer: "/review", label: "Review", authority: "source", value: {
+        source_name: "Draft", reviewed: true, lines: [{ line_number: 1, text: "Ready" }],
+      },
+    }] }} /></ShellPageTestProviders>);
+    expect(screen.getByText("Source Name")).toBeTruthy();
+    expect(screen.getByText("Draft")).toBeTruthy();
+    expect(screen.getByText("Line Number")).toBeTruthy();
+    expect(screen.getByText("Ready")).toBeTruthy();
+    expect(container.querySelector("pre, code")).toBeNull();
+  });
+
+  test("hides generic facts for registered content but keeps references", () => {
+    render(<ShellPageTestProviders><DecisionContext showFacts={false} context={{
+      facts: [{ pointer: "/review", label: "Review", value: { result: "Ready" }, authority: "source" }],
+      references: [{ model: "notes.Note", id: "nte_related", label: "Related note" }],
+    }} /></ShellPageTestProviders>);
+    expect(screen.queryByRole("region", { name: "Facts" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Related note" })).toBeTruthy();
+  });
+
   test.each([
     { facts: [{ label: "Malformed", authority: "source", value: 2 }] },
     { references: [{ model: "notes.Note", id: "nte_bad", page: "two" }] },

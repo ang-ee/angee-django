@@ -27,8 +27,10 @@ the framework's composition collision check rejects duplicate claims. Content
 receives read-only `{decision, basis, context}` in the Context tab and in the
 Decide dialog, where it inherits the action's native React Hook Form context.
 The record tab disables consumer controls. Consumers parse their own basis/context
-payloads before using them; the generic context renderer validates the decisions-owned facts,
-references and evidence shape and opens references through record peeks.
+payloads before using them. When a kind has registered content, the generic Facts
+region stays hidden to avoid duplicating its presentation. Otherwise the generic
+context renderer validates and displays facts as readable fields; references and
+evidence open through record peeks.
 
 `DECISION_ORIGIN_SLOT` lets an independent waiting owner contribute links for the
 current group. Its content reads `useDecisionContent()` and renders nothing when
