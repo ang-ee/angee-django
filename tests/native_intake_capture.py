@@ -545,6 +545,20 @@ class NeedAccessDecisionTests(IntakeAccessCase):
 
 
 class NeedAccessTests(IntakeAccessCase):
+    def test_task_requester_projects_name_and_writer_only_email_in_both_schemas(self):
+        party = self.party(self.reader)
+        need = self.need(email="contact@example.com", party=party)
+        query = "{ project_tasks { id requester { display_name email } } }"
+        for bucket in ("public", "console"):
+            writer = self.graphql(query, {}, user=self.writer, bucket=bucket)["project_tasks"]
+            reader = self.graphql(query, {}, user=self.reader, bucket=bucket)["project_tasks"]
+            self.assertEqual(writer, [{"id": need.task.sqid, "requester": {
+                "display_name": party.display_name, "email": "contact@example.com",
+            }}])
+            self.assertEqual(reader, [{"id": need.task.sqid, "requester": {
+                "display_name": party.display_name, "email": None,
+            }}])
+
     def test_decision_inbox_tracks_current_sharers_without_assignment_snapshots(self):
         need = self.need()
         decisions = apps.get_model("decisions", "Decision")

@@ -332,7 +332,10 @@ shared UI copy through an addon bundle.
   `statusBadge`, `colorDot`, and form headers.
   The pure `statusTone` resolver remains for non-React transforms with explicit
   vocabulary. An explicit `<Column tone>` map wins, then addon tones, then the shared
-  convention, else `brand`. A run
+  convention, else `brand`. Scoped `resources.<model>.fields.<field>.tones`
+  colors one column without claiming a global status word; its option label
+  remains the displayed text. Bare enum columns use `statusBadge`, and scalar
+  stages can declare it. A run
   state — stopped/running/error/warning — renders as `colorDot` (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
@@ -376,13 +379,16 @@ shared UI copy through an addon bundle.
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
   because a verb must remain understandable without recognizing its icon.
+  Mark the state's next descriptor `primary`; keep infrequent descriptors at
+  `placement: "menu"`. Secondary inline verbs appear on hover and focus.
 - A list route declares its shipped `presetIds`, `filterRow` quick filter and facet
   ids, `createAction`, and `boardCard` fields on `ResourceList`/`List` rather than
   building parallel controls. The route default preset is included automatically.
   Quick filter ids may name shipped presets or filter options. A scoped create verb
   uses a server-projected parent record for its permission; the create label comes
   from resource vocabulary. `chrome` may hide the view switcher, pager, or column
-  chooser without changing query state. A nonselectable list hides Share but keeps
+  chooser without changing query state; `chrome.heading` declares label, hint,
+  and audience around the live count. A nonselectable list hides Share but keeps
   other contributed utilities.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
   A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own

@@ -17,8 +17,14 @@ field as their table ID even when metadata resolves a different display path.
 `ResourceList`/`ListView` may declare `presetIds` for route-local shipped views,
 `filterRow` with filter-option or shipped-preset quick ids and facet ids, and
 `boardCard` with a title and up to four fields. Saved favourites can be renamed
-and pinned into the filter row. `chrome` hides the view switcher, pager, or column
-chooser without changing the collection query.
+and pinned into the filter row. Quick ids and pinned favourites appear as chips;
+the Favorites menu still owns saving and pinning. `chrome.heading` takes `label`,
+`hint`, and `audience`; the shared list frame supplies the live count. `chrome`
+can also hide the view switcher, pager, or column chooser without changing the
+collection query. Bare enum columns use `statusBadge` and metadata option labels.
+A scalar stage column may declare `widget="statusBadge"`, `options`, and `tone`.
+A descriptor row action marked `primary` stays visible; other inline actions
+appear on hover, while `placement: "menu"` retains the row menu.
 Toolbar Clear appears for changes beyond the collection default and restores its
 query and fixed preset scope.
 `ResourceList.createAction` places a typed server verb in the normal create
@@ -46,7 +52,9 @@ an explicit historical anchor and subsequent navigation use native scale periods
 Gantt day and range labels use its configured time zone; timed multi-day bars
 read as one span from the start date and time to the end date and time.
 Shared `formatDate` uses a compact, locale-aware calendar date and adds the year
-outside the current year. `formatDateRange`, `formatRelativeTime`, and
+outside the current year. Date and datetime list cells use `density: "list"`
+with the full value on hover; record reads retain full labels.
+`formatDateRange`, `formatRelativeTime`, and
 `formatDuration` cover ranges, activity labels, and compact or full units.
 The app runtime i18n provider sets the shared formatter language. Pure calls
 use that language unless a locale is passed, with English before a runtime is

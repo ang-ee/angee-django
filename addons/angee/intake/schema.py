@@ -10,6 +10,7 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.functions import Coalesce, NullIf
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -17,7 +18,7 @@ from angee.base.mixins import StaleRevisionError
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.schema import DecisionVerdict, HumanDecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
@@ -107,6 +108,66 @@ class NeedType(AngeeNode):
     access_resolved_by: UserType | None = strawberry_django.field(
         only=["access_decision_id"], prefetch_related=["access_decision__resolved_by"],
     )
+
+
+@strawberry.type
+class TaskRequester:
+    """Name visible with a task; contact detail visible only to its writers."""
+
+    display_name: str
+    email: str | None
+
+
+def _task_requester_rows() -> Any:
+    """Use the same first request as the intake record's attribution."""
+
+    return Need._base_manager.filter(task_id=models.OuterRef("pk")).order_by("created_at", "pk")
+
+
+def _task_requester(root: Any) -> TaskRequester | None:
+    name = cast(str | None, root._intake_requester_name)
+    if not name:
+        return None
+    email = cast(str | None, root._intake_requester_email)
+    return TaskRequester(
+        display_name=name,
+        email=email or None if "write" in held_permissions(root, ("write",)) else None,
+    )
+
+
+@strawberry.type
+class TaskIntakeFields:
+    """Shared intake attribution for task collection projections."""
+
+    requester: TaskRequester | None = strawberry_django.field(
+        resolver=_task_requester,
+        annotate={
+            "_intake_requester_name": lambda info: models.Subquery(
+                _task_requester_rows().annotate(name=Coalesce(
+                    NullIf(models.F("party__display_name"), models.Value("", output_field=models.TextField())),
+                    NullIf(models.F("claimed_name"), models.Value("", output_field=models.TextField())),
+                    output_field=models.TextField(),
+                )).values("name")[:1],
+                output_field=models.TextField(),
+            ),
+            "_intake_requester_email": lambda info: models.Subquery(
+                _task_requester_rows().values("claimed_email")[:1],
+                output_field=models.TextField(),
+            ),
+            "_angee_permission_actor": lambda info: permission_annotations(Task, ())["_angee_permission_actor"],
+            "_angee_permission_write": lambda info: permission_annotations(Task, ("write",))["_angee_permission_write"],
+        },
+    )
+
+
+@strawberry_django.type(Task, name="TaskType", extend=True)
+class TaskIntakeExtension(TaskIntakeFields):
+    """Public task contribution from intake."""
+
+
+@strawberry_django.type(Task, name="ConsoleTaskType", extend=True)
+class ConsoleTaskIntakeExtension(TaskIntakeFields):
+    """Console task contribution from intake."""
 
 
 @strawberry_django.type(Channel, name="ChannelType", extend=True)
@@ -276,6 +337,7 @@ _INTAKE_SCHEMA_BUCKET = {
     "mutation": [IntakeActionMutation, _NEED_RESOURCE.mutation],
     "types": [
         NeedType,
+        TaskRequester,
         ChannelType,
         MessageType,
         PartyType,
@@ -284,7 +346,7 @@ _INTAKE_SCHEMA_BUCKET = {
         WorkQueueType,
         *_NEED_RESOURCE.types,
     ],
-    "type_extensions": [ChannelIntakeExtension],
+    "type_extensions": [ChannelIntakeExtension, TaskIntakeExtension],
     "input_extensions": [ProjectIntakeSetupInput],
 }
 
@@ -292,6 +354,7 @@ schemas = {
     "public": {**_INTAKE_SCHEMA_BUCKET},
     "console": {
         **_INTAKE_SCHEMA_BUCKET,
+        "type_extensions": [ChannelIntakeExtension, TaskIntakeExtension, ConsoleTaskIntakeExtension],
         "subscription": [changes(Need, field="intakeNeedChanged")],
     },
 }

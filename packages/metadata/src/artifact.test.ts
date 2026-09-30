@@ -18,6 +18,17 @@ test("scoped vocabulary projects labels without altering resource or query ident
   expect(base.labels["notes.Note"]!.fields.title?.label).toBeUndefined();
 });
 
+test("scoped field vocabulary projects tone maps without mutating the base schema", () => {
+  const resource = testDataResource("notes.Note", { fields: [{ name: "status", kind: "enum", values: [{ value: "HIGH", description: "High" }],
+    readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] });
+  const base = schemaFieldMetadataFromDataResources([resource]);
+  const scoped = schemaFieldMetadataWithVocabulary(base, { "notes.Note": {
+    fields: { status: { label: "Priority", tones: { HIGH: "warning" } } },
+  } });
+  expect(scoped.labels["notes.Note"]?.fields.status).toMatchObject({ label: "Priority", tones: { HIGH: "warning" } });
+  expect(base.labels["notes.Note"]?.fields.status?.tones).toBeUndefined();
+});
+
 test("scoped vocabulary labels declared grant relations without changing their ids", () => {
   const resource = testDataResource("notes.Note", { grantable: [{
     relation: "reader", permission: "share", subjects: [],

@@ -127,7 +127,7 @@ function BoardRowCardContent<TRow extends Row>({
       ref={dragEnabled ? setNodeRef : undefined}
       style={style}
       className={cn(
-        "board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
+        "board-card-grid group/record grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
         isDragging
           ? "transition-none"
           : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",

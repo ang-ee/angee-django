@@ -6,6 +6,17 @@ import { ResourceListFrame } from "./ResourceListFrame";
 
 afterEach(cleanup);
 
+test("list chrome composes heading copy with the live count", () => {
+  render(<ResourceListFrame toolbar={{ pager: { total: 7, page: 1, pageSize: 20 } }}
+    heading={{ label: "Requests", hint: "Filed through the public form", audience: "Managers only" }}>
+    <p>Rows</p>
+  </ResourceListFrame>);
+  const heading = screen.getByRole("heading", { name: "Requests" });
+  expect(heading.parentElement?.textContent).toContain("· 7");
+  expect(heading.parentElement?.textContent).toContain("Filed through the public form");
+  expect(heading.parentElement?.textContent).toContain("Managers only");
+});
+
 test("retains and dims settled rows only while the new request has none", () => {
   const toolbar = { pager: { total: 1, page: 1, pageSize: 20 } };
   const rendered = render(<ResourceListFrame toolbar={toolbar} hasRows><p>Previous row</p></ResourceListFrame>);

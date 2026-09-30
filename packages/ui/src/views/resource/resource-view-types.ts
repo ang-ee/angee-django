@@ -146,6 +146,8 @@ export type ResourceTableHeaderVisibility = "visible" | "visually-hidden";
 
 export interface ListChrome extends ResourceToolbarChrome {
   columnChooser?: boolean;
+  /** Copy surrounding the live collection count in the shared heading line. */
+  heading?: { label: ReactNode; hint?: ReactNode; audience?: ReactNode };
 }
 
 export interface ListViewProps<TRow extends Row = Row> {

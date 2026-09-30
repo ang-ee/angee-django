@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Row } from "@angee/metadata";
+import { holdsPermission, type Row } from "@angee/metadata";
 import type {
   AuthoredDocument,
   AuthoredVariables,
@@ -9,6 +9,8 @@ import type {
 import { errorMessage, useConfirm, useToast } from "../../feedback";
 import { Glyph } from "../../chrome/Glyph";
 import { Button, type ButtonVariant } from "../../ui/button";
+import { DropdownMenu } from "../../ui/dropdown-menu";
+import { useUiT } from "../../i18n";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
@@ -45,6 +47,9 @@ interface RowActionDeclarationBase<TRow extends Row> {
   /** How the row verb reads. A labelled verb shows its label by default. */
   presentation?: "icon" | "label" | "both";
   variant: ButtonVariant;
+  /** The row's next verb stays visible; other inline verbs appear on row hover. */
+  primary?: boolean;
+  placement?: "inline" | "menu";
   visible: (row: TRow) => boolean;
   disabled: (row: TRow) => boolean;
   pendingPolicy: RowActionPendingPolicy;
@@ -178,8 +183,14 @@ export function useDescriptorRowActions<TRow extends Row>(
     label: typeof action.label === "string" ? action.label : action.id,
     ...(action.icon ? { icon: action.icon } : {}),
     variant: action.danger ? "danger" : "ghost",
-    visible: (row) => (options.visible?.(action, row) ?? true)
-      && (!action.visibleWhen || action.visibleWhen(options.contextRecord?.(row) ?? row)),
+    primary: action.primary,
+    placement: action.placement === "menu" ? "menu" : "inline",
+    visible: (row) => {
+      const record = options.contextRecord?.(row) ?? row;
+      return (options.visible?.(action, row) ?? true)
+        && (!action.permission || holdsPermission(record, action.permission))
+        && (!action.visibleWhen || action.visibleWhen(record));
+    },
     disabled: () => Boolean(action.disabled),
     pendingPolicy: options.pendingPolicy ?? "disable-actions",
     ...(action.confirm ? { confirm: {
@@ -316,25 +327,30 @@ function VisibleRowActions<TRow extends Row>({
   controller,
   row,
 }: DeclaredRowActionsProps<TRow>): React.ReactElement {
+  const t = useUiT();
+  const primary = actions.find((action) => action.primary && action.placement !== "menu");
+  const secondary = actions.filter((action) => action !== primary && action.placement !== "menu");
+  const menu = actions.filter((action) => action.placement === "menu");
+  const renderAction = (action: RowActionDeclaration<TRow>, menuItem = false) =>
+    action.kind === "authored" ? (
+      <AuthoredRowActionButton key={action.id} action={action} controller={controller} row={row} menuItem={menuItem} />
+    ) : (
+      <PageRowActionButton key={action.id} action={action} controller={controller} row={row} menuItem={menuItem} />
+    );
   return (
     <div className="flex justify-end gap-1">
-      {actions.map((action) =>
-        action.kind === "authored" ? (
-          <AuthoredRowActionButton
-            key={action.id}
-            action={action}
-            controller={controller}
-            row={row}
-          />
-        ) : (
-          <PageRowActionButton
-            key={action.id}
-            action={action}
-            controller={controller}
-            row={row}
-          />
-        ),
-      )}
+      {primary ? renderAction(primary) : null}
+      {secondary.length > 0 ? <span className="inline-flex gap-1 opacity-0 group-hover/record:opacity-100 group-focus-within/record:opacity-100 focus-within:opacity-100">
+        {secondary.map((action) => renderAction(action))}
+      </span> : null}
+      {menu.length > 0 ? <DropdownMenu.Root>
+        <DropdownMenu.Trigger render={<Button type="button" size="iconSm" variant="ghost" aria-label={t("list.actions")}>
+          <Glyph name="more-vertical" decorative />
+        </Button>} />
+        <DropdownMenu.Portal><DropdownMenu.Positioner sideOffset={6} align="end">
+          <DropdownMenu.Content className="w-52">{menu.map((action) => renderAction(action, true))}</DropdownMenu.Content>
+        </DropdownMenu.Positioner></DropdownMenu.Portal>
+      </DropdownMenu.Root> : null}
     </div>
   );
 }
@@ -343,6 +359,7 @@ interface AuthoredRowActionButtonProps<TRow extends Row> {
   action: AuthoredRowActionDeclaration<TRow>;
   controller: RowActionsController<TRow>;
   row: TRow;
+  menuItem?: boolean;
 }
 
 /** Both generated callbacks and authored mutations share confirmation semantics. */
@@ -367,6 +384,7 @@ function AuthoredRowActionButton<TRow extends Row>({
   action,
   controller,
   row,
+  menuItem,
 }: AuthoredRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
   const preview = useLatestRef(useRuntimeViewAs());
@@ -411,6 +429,7 @@ function AuthoredRowActionButton<TRow extends Row>({
       active={active}
       busy={busy}
       row={row}
+      menuItem={menuItem}
       onSelect={() => {
         if (!controller.arm(action.id, row)) return;
         void runArmed();
@@ -423,12 +442,14 @@ interface PageRowActionButtonProps<TRow extends Row> {
   action: PageRowActionDeclaration<TRow>;
   controller: RowActionsController<TRow>;
   row: TRow;
+  menuItem?: boolean;
 }
 
 function PageRowActionButton<TRow extends Row>({
   action,
   controller,
   row,
+  menuItem,
 }: PageRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
   const preview = useLatestRef(useRuntimeViewAs());
@@ -453,6 +474,7 @@ function PageRowActionButton<TRow extends Row>({
       active={active}
       busy={busy}
       row={row}
+      menuItem={menuItem}
       onSelect={() => {
         if (!controller.arm(action.id, row)) return;
         void runArmed();
@@ -466,6 +488,7 @@ interface RowActionButtonProps<TRow extends Row> {
   active: boolean;
   busy: boolean;
   row: TRow;
+  menuItem?: boolean;
   onSelect: () => void;
 }
 
@@ -474,6 +497,7 @@ function RowActionButton<TRow extends Row>({
   active,
   busy,
   row,
+  menuItem = false,
   onSelect,
 }: RowActionButtonProps<TRow>): React.ReactElement {
   const preview = useRuntimeViewAs();
@@ -481,10 +505,15 @@ function RowActionButton<TRow extends Row>({
   const presentation = action.presentation ?? "label";
   const showIcon = presentation !== "label" && Boolean(action.icon);
   const showLabel = presentation !== "icon" || !action.icon;
+  if (menuItem) return <DropdownMenu.Item
+    variant={action.variant === "danger" ? "danger" : "default"}
+    disabled={blocked || busy || action.disabled(row)}
+    onClick={(event) => { event.stopPropagation(); if (!blocked && !busy && !action.disabled(row)) onSelect(); }}
+  >{action.icon ? <Glyph decorative name={action.icon} /> : null}{action.label}</DropdownMenu.Item>;
   return (
     <Button
       type="button"
-      variant={action.variant}
+      variant={action.primary ? "primary" : action.variant === "danger" ? "danger" : "secondary"}
       size={showIcon && !showLabel ? "iconSm" : "sm"}
       aria-label={action.label}
       title={showIcon && !showLabel ? action.label : undefined}

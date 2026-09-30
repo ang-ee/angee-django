@@ -72,6 +72,14 @@ describe("date formatting", () => {
       .toBe("Jun 18, 2026, 1:45:12 PM");
   });
 
+  test("list density omits time and the current year while the full label keeps it", () => {
+    const now = new Date(2026, 8, 30);
+    expect(formatDate("2026-09-28", { now, density: "list" })).toBe("Sep 28");
+    expect(formatDate("2026-09-28", { now, density: "full" })).toBe("Sep 28, 2026");
+    expect(formatDateTime("2026-09-28T09:16:00", { now, density: "list" })).toBe("Sep 28");
+    expect(formatDateTime("2025-09-28T09:16:00", { now, density: "list" })).toBe("Sep 28, 2025");
+  });
+
   test("empty and invalid values render empty", () => {
     expect(formatDate(null)).toBe("");
     expect(formatDate(undefined)).toBe("");

@@ -497,10 +497,10 @@ function FilterRow({
   });
   return <div className="flex min-w-0 flex-wrap items-center gap-1.5" aria-label={t("resourceToolbar.filters")}>
     {pinnedFavorites.map((favorite) => <Button key={favorite.id}
-      type="button" size="sm" variant="ghost" active={activeFavoriteIds.includes(favorite.id)}
+      type="button" size="sm" variant="ghost" className="rounded-full" active={activeFavoriteIds.includes(favorite.id)}
       aria-pressed={activeFavoriteIds.includes(favorite.id)} onClick={() => onFavoriteToggle?.(favorite)}>
       {favorite.label}</Button>)}
-    {quickFilters.map((option) => <Button key={option.id} type="button" size="sm" variant="ghost"
+    {quickFilters.map((option) => <Button key={option.id} type="button" size="sm" variant="ghost" className="rounded-full"
       active={option.active} aria-pressed={option.active}
       onClick={option.onClick}>{option.label}</Button>)}
     {facetIds.map((field) => {
