@@ -76,7 +76,7 @@ Issues = "https://github.com/ang-ee/angee-django/issues"
 # django.db.backends.postgresql uses when DATABASE_URL points at Postgres (the
 # stack env supplies the URL; angee/compose/settings.py maps it, SQLite floor
 # otherwise).
-postgres = ["psycopg[binary]>=3.2"]
+postgres = ["psycopg[binary,pool]>=3.2"]
 
 [dependency-groups]
 dev = [
@@ -86,7 +86,7 @@ dev = [
   "faker>=30.0",
   # Source-addon tests import django.contrib.postgres field types even when the
   # test database is SQLite; the former base wrapper selected the core extra.
-  "psycopg[binary]>=3.2",
+  "psycopg[binary,pool]>=3.2",
   "mypy>=1.10",
   "pytest>=8.0",
   "pytest-django>=4.8",
