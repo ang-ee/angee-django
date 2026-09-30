@@ -85,6 +85,8 @@ interface GanttEvent<TData = unknown> {
   title: string
   /** Emphasize the lane's declared current event, independently of user selection. */
   current?: boolean
+  /** Short lane annotation, placed after the last scheduled bar. */
+  note?: string
   /** Plain instants, not ISO strings. `end` is exclusive and must be >= start. */
   start: Date
   end: Date
@@ -96,6 +98,8 @@ interface GanttEvent<TData = unknown> {
   originalStart?: Date
   /** Token or css color; flows to the --gantt-event-color css var. */
   color?: string
+  /** Foreground token paired with a solid current bar. */
+  onColor?: string
   /** Vetoes only, ANDed with interactions.drag / .resize: readOnly blocks both, draggable/resizable one each. */
   readOnly?: boolean
   draggable?: boolean

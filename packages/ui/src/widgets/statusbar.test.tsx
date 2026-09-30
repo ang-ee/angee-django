@@ -12,13 +12,14 @@ const steps = [
   { value: "removed", label: "Removed", onPath: false, date: "2026-09-24" },
 ];
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("StatusbarSteps", () => {
   test("renders only path steps, with a muted off-path state chip", () => {
+    vi.setSystemTime(new Date(2026, 8, 30));
     render(<StatusbarSteps steps={steps} value="REMOVED" />);
     expect(screen.queryByRole("button", { name: "Removed" })).toBeNull();
-    expect(screen.getByText("Removed · Sep 24, 2026")).toBeTruthy();
+    expect(screen.getByText("Removed · Sep 24")).toBeTruthy();
     expect(screen.getByRole("list").textContent).toContain("Draft");
     expect(screen.getByRole("list").className).toContain("isolate");
     const first = screen.getByText("Draft").closest("[role='listitem']");

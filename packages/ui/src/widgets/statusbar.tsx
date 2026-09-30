@@ -7,7 +7,7 @@ import { statusLabel } from "../lib/labels";
 import { Badge } from "../ui/badge";
 import { DropdownMenu } from "../ui/dropdown-menu";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
-import { formatDate, type DateFormatValue } from "./date-format";
+import { formatDate, formatDateRange, type DateFormatValue } from "./date-format";
 import { canonicalOptionValue, optionLabel, optionTextLabel, type WidgetDefinition, type WidgetOption, type WidgetRenderProps } from "./types";
 
 const STEP_CLIP = "[clip-path:polygon(0_0,calc(100%-12px)_0,100%_50%,calc(100%-12px)_100%,0_100%,12px_50%)]";
@@ -146,9 +146,7 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, readOnly, 
 }
 
 function dateRange(step: StatusbarStep): string {
-  const start = formatDate(step.startDate);
-  const end = formatDate(step.endDate);
-  return start && end ? `${start} – ${end}` : start || end;
+  return formatDateRange(step.startDate, step.endDate);
 }
 
 export const statusbarWidget = { edit: Statusbar, read: Statusbar, cell: Statusbar } satisfies WidgetDefinition<string>;

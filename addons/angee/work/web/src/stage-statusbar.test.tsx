@@ -18,16 +18,17 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   }),
 }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 test("the stage owner hides side stages from the path and names the state without a verb", () => {
+  vi.setSystemTime(new Date(2026, 8, 30));
   render(<StageStatusbar value="removed" row={{
     queue: { id: "queue-1" }, stage: { id: "removed", name: "Removed" },
     dropped_at: "2026-09-24",
   }} />);
   expect(screen.getByRole("list").textContent).toContain("First");
   expect(screen.getByRole("list").textContent).not.toContain("Removed");
-  expect(screen.getByText("Removed · Sep 24, 2026")).toBeTruthy();
+  expect(screen.getByText("Removed · Sep 24")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "task.action.reopen" })).toBeNull();
 });
 

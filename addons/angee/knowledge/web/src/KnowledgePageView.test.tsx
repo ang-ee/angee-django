@@ -70,6 +70,7 @@ function queryResult(page: KnowledgePageDetail | null, error: Error | null = nul
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 8, 30));
   sdk.query.mockReset().mockReturnValue(queryResult(detail()));
   sdk.updatePage.mockReset().mockResolvedValue({ data: { id: "pg_guide", title: "Draft title" } });
   sdk.updateBody.mockReset().mockResolvedValue({
@@ -90,7 +91,7 @@ describe("KnowledgePageView", () => {
     expect(sdk.query).toHaveBeenCalledWith(KnowledgePage, { id: "pg_guide" }, { models: PAGE_READ_MODELS });
     expect(screen.getByRole("heading", { name: "Guide" })).toBeTruthy();
     expect(screen.getByText("Published instructions")).toBeTruthy();
-    expect(screen.getByText(/Updated Jan 1, 2026/)).toBeTruthy();
+    expect(screen.getByText(/^Updated Jan 1$/)).toBeTruthy();
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 

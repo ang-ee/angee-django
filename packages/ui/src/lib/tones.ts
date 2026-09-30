@@ -87,6 +87,11 @@ export function toneColorVar(tone: Tone): string {
   return `var(--${tone})`;
 }
 
+/** Foreground token paired with a tone's solid fill. */
+export function toneOnColorVar(tone: Tone): string {
+  return tone === "neutral" ? "var(--color-fg-inverse)" : `var(--color-on-${tone})`;
+}
+
 // The tone-colored text utility per tone — the one place each on-surface
 // `text-*` literal is written. `toneFill`'s soft/surface/outline/ghost columns
 // interpolate this (mirroring how the solid column reads `SOLID_BG`), so a tone's

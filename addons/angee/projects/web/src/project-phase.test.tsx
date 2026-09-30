@@ -45,7 +45,7 @@ vi.mock("./i18n", () => ({
     key === "project.phase.confirm" ? `Change from ${values?.previous} to ${values?.selected}?` : key,
 }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 test("only selectable milestones ask for confirmation, and a declined confirmation never writes", async () => {
   mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -69,6 +69,7 @@ test("only selectable milestones ask for confirmation, and a declined confirmati
 });
 
 test("only a milestone writer can edit dates through the milestone resource", async () => {
+  vi.setSystemTime(new Date(2026, 8, 30));
   mocks.update.mockResolvedValue({ data: { id: "one" } });
   render(<ProjectPhaseControl value="one" readOnly row={{
     id: "project-1", permissions: [], status: "open",
@@ -84,12 +85,13 @@ test("only a milestone writer can edit dates through the milestone resource", as
 });
 
 test("the project lifecycle projection mutes the path and replaces the title badge", () => {
+  vi.setSystemTime(new Date(2026, 8, 30));
   render(<ProjectPhaseControl value="one" row={{
     id: "project-1", permissions: ["write"], status: "dropped", on_path: false,
     status_changed_at: "2026-09-24", current_milestone: { id: "one", name: "First" },
     selectable_milestones: [],
   }} />);
-  expect(screen.getByText("Dropped · Sep 24, 2026")).toBeTruthy();
+  expect(screen.getByText("Dropped · Sep 24")).toBeTruthy();
   expect(screen.getByText("First").closest("[role='listitem']")?.className).toContain("bg-border-strong");
   expect(screen.queryByRole("button", { name: "project.action.resume" })).toBeNull();
 });

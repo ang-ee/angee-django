@@ -3,7 +3,6 @@ import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/m
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
 import { useUiT } from "../../i18n";
-import { toneColorVar } from "../../lib/tones";
 import { useValueStable } from "../../lib/use-value-stable";
 import { useStatusTone } from "../../widgets/use-status-tone";
 import { relationValueId } from "../../widgets/types";
@@ -20,6 +19,7 @@ import { calendarAnchorToDate, calendarDateToAnchor } from "../calendar/calendar
 import { GanttView, type GanttEvent, type GanttResource } from "./GanttView";
 import { ganttLaneFilter, useGanttRecords } from "./gantt-collection-query";
 import { ganttBarEvent } from "./gantt-bar-event";
+import { GanttLane, withGanttLaneNotes, type GanttLaneDetails } from "./gantt-lane";
 
 interface LinkedGanttCollectionSurfaceProps<TRow extends Row> extends Pick<ListViewProps<TRow>,
   "availableViews" | "onCreate" | "createLabel" | "toolbarActions" | "className" | "presentation" | "toolbarWrap" | "onRowClick" | "rowHref" | "maxGroupDepth" | "selectable"> {
@@ -52,7 +52,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     if (!field?.row) throw new Error(`Gantt current field "${gantt.current}" has no lane value projection.`);
     return field.row.paths;
   }, [gantt.current, laneQuery]);
-  const laneFields = useValueStable([...(surfaceProps.fields ?? []), laneLabel, ...currentPaths, ...(gantt.rowFields ?? [])]);
+  const laneFields = useValueStable([...(surfaceProps.fields ?? []), laneLabel, ...currentPaths, ...(gantt.lane?.fields ?? [])]);
   const laneFacts = useResourceViewQueryFacts({ columns, fields: laneFields, order: surfaceProps.order, resourceView, modelMetadata });
   const pageSize = Math.min(MAX_PAGE_SIZE, resourceView.state.pagination.pageSize);
   const scope = React.useMemo(() => ({ filter: laneFacts.mergedFilter, order: laneFacts.sortOrder,
@@ -86,9 +86,13 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
   useResourceRowsSnapshot<TRow>(list, { onListStateChange, navigation: { filter: scope.filter, order: scope.order } });
   const projection = React.useMemo(() => {
     const laneSet = new Set(laneIds);
+    const detailsByLane = new Map<string, GanttLaneDetails>(rows.flatMap((row) => {
+      const id = rowPublicId(row, laneResource);
+      return id && gantt.lane ? [[id, gantt.lane.content(row)] as const] : [];
+    }));
     const resources: GanttResource[] = rows.flatMap((row) => {
       const id = rowPublicId(row, laneResource);
-      return id ? [{ id, title: String(readPath(row, laneLabel) ?? id) }] : [];
+      return id ? [{ id, title: detailsByLane.get(id)?.title || String(readPath(row, laneLabel) ?? id) }] : [];
     });
     let skipped = bars.skipped;
     const events: GanttEvent[] = bars.rows.flatMap((bar) => {
@@ -99,11 +103,11 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       const tone = gantt.tone ? resolveTone(String(readPath(bar, gantt.tone) ?? "")) : "brand";
       const current = rows.some((row) => rowPublicId(row, laneResource) === laneId && gantt.current && relationValueId(readPath(row, gantt.current)) === id);
       const event = ganttBarEvent(bar, { id, resourceId: laneId, start: gantt.start, end: gantt.end,
-        label: barLabel, color: toneColorVar(tone), dateOnly: allDay, current });
+        label: barLabel, tone, dateOnly: allDay, current });
       if (!event && readPath(bar, gantt.start) != null && readPath(bar, gantt.end) != null) skipped += 1;
       return event ? [event] : [];
     });
-    return { resources, events, skipped };
+    return { resources, events: withGanttLaneNotes(events, detailsByLane), detailsByLane, skipped };
   }, [rows, laneIds, laneLabel, laneResource, barResource, bars.rows, bars.skipped, linkedMetadata, gantt, linked, barLabel, resolveTone]);
   const toolbarInputs = useListViewToolbarInputs({ ...input, rows, list, serverGrouping: false });
   const toolbar = useResourceToolbarProps({ ...toolbarInputs, resourceView, availableViews, view: "gantt",
@@ -118,6 +122,14 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     if (onRowClick) onRowClick(row);
     else if (rowHref) void navigate({ to: rowHref(row) });
   }, [rows, laneResource, onRowClick, rowHref, navigate]);
+  const renderResourceContent = React.useCallback((resource: GanttResource) => {
+    const row = rows.find((candidate) => rowPublicId(candidate, laneResource) === resource.id);
+    if (!row) return null;
+    const details = projection.detailsByLane.get(resource.id) ?? { title: resource.title };
+    return <GanttLane details={{ ...details, href: details.href ?? rowHref?.(row) }}
+      onOpen={onRowClick ? () => onRowClick(row) : undefined}
+      onNavigate={(href) => void navigate({ to: href })} />;
+  }, [rows, laneResource, projection.detailsByLane, rowHref, onRowClick, navigate]);
   const selectedIds = Object.keys(resourceView.state.rowSelection).filter((id) => resourceView.state.rowSelection[id]);
   return <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className}
     error={list.error} onRetry={refetch} loadingFooter={fetching}
@@ -126,11 +138,8 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     <GanttView resources={projection.resources} events={projection.events} date={anchor} onDateChange={onDateChange}
       defaultScale="quarter" loading={fetching} fitToEvents={resourceView.state.anchor === calendarDateToAnchor(new Date())}
       laneHeader={modelMetadata?.pluralLabel ?? modelMetadata?.label}
-      sidebarWidth={gantt.sidebarWidth} minRowHeight={gantt.minRowHeight}
-      renderRowContent={gantt.renderRowContent ? (resource) => {
-        const row = rows.find((candidate) => rowPublicId(candidate, laneResource) === resource.id);
-        return row ? gantt.renderRowContent?.(row) : null;
-      } : undefined}
+      sidebarWidth={gantt.sidebarWidth ?? (gantt.lane ? 280 : undefined)} minRowHeight={gantt.minRowHeight ?? (gantt.lane ? 4.5 : undefined)}
+      renderRowContent={gantt.lane || rowHref || onRowClick ? renderResourceContent : undefined}
       onResourceClick={onRowClick || rowHref ? (resource) => openLane(resource.id) : undefined}
       onEventClick={onRowClick || rowHref ? (event) => { if (event.resourceId) openLane(event.resourceId); } : undefined}
       selectedRows={selectedIds}

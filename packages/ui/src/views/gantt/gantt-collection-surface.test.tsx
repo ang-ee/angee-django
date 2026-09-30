@@ -31,7 +31,7 @@ const { Provider, dataProvider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 beforeEach(() => { drawing.props = null; });
-afterEach(() => { cleanup(); clearClients(); });
+afterEach(() => { cleanup(); clearClients(); vi.useRealTimers(); });
 
 function renderCollection(options: {
   rows?: Row[]; total?: number; page?: number; pageSize?: number; strict?: boolean; anchor?: string;
@@ -50,7 +50,9 @@ function renderCollection(options: {
     return <ListView resource={ganttRecord.modelLabel}
       columns={[{ field: "name", header: "Name" }]}
       baseFilter={{ status: { exact: "active" } }}
-      gantt={{ start: "start", end: "end", tone: "status", rowFields: ["code"], renderRowContent: (row) => <span>Code {String(row.code)}</span>, ...options.gantt }}
+      gantt={{ start: "start", end: "end", tone: "status",
+        lane: { fields: ["code"], content: (row) => ({ title: String(row.name), href: `/lanes/${String(row.id)}`, secondary: `Code ${String(row.code)}` }) },
+        ...options.gantt }}
       laneSource={{ field: "lane" }} onRowClick={options.onRowClick} />;
   }
   const view = render(<RouterContextProvider router={router}><Provider resources={options.resources ?? ganttResources} dataProvider={{ getList }}>
@@ -72,12 +74,18 @@ describe("Gantt collection over native list data", () => {
       <ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
         <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]}
           gantt={{ linked: { resource: ganttRecord.modelLabel, lane: "lane" }, start: "start", end: "end", label: "name" }}
-          onRowClick={onRowClick} />
+          onRowClick={onRowClick} rowHref={(row) => `/lanes/${String(row.id)}`} />
       </ResourceViewProvider>
     </Provider></RouterContextProvider>);
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
     expect(drawing.props?.resources.map(({ id }) => id)).toEqual(["lane-a", "lane-b"]);
+    expect(drawing.props?.laneHeader).toBe(ganttLane.pluralLabel ?? ganttLane.label);
     expect(drawing.props?.events[0]?.resourceId).toBe("lane-a");
+    const title = screen.getByRole("link", { name: "Alpha" });
+    expect(title.getAttribute("href")).toBe("/lanes/lane-a");
+    fireEvent.click(title);
+    expect(onRowClick).toHaveBeenCalledWith(ganttLanes[0]);
+    onRowClick.mockClear();
     expect(getList.mock.calls.find(([params]) => params.resource === "lanes")?.[0].pagination?.currentPage).toBe(1);
     expect(JSON.stringify(getList.mock.calls.find(([params]) => params.resource === "schedules")?.[0].meta?.gqlVariables?.where)).toContain("lane-a");
     act(() => drawing.props?.onEventClick?.(drawing.props!.events[0]!));
@@ -104,6 +112,28 @@ describe("Gantt collection over native list data", () => {
       { id: "schedule-a", current: true }, { id: "schedule-b", current: false },
     ]);
     expect(JSON.stringify(f.getList.mock.calls.find(([params]) => params.resource === "lanes")?.[0].meta?.fields)).toContain("current");
+  });
+
+  test("declares linked lane title, secondary line, people and last-bar note without empty parts", async () => {
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterContextProvider router={router}><Provider resources={ganttResources} dataProvider={{
+      getList: async ({ resource }) => resource === "lanes"
+        ? { data: ganttLanes, total: 2 }
+        : { data: [scheduledRecord], total: 1 },
+    }}><ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
+      <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]}
+        gantt={{ linked: { resource: ganttRecord.modelLabel, lane: "lane" }, start: "start", end: "end",
+          lane: { fields: ["code"], content: (row) => ({ title: String(row.name), href: `/lanes/${String(row.id)}`,
+            secondary: row.code ? `Code ${String(row.code)}` : null,
+            people: row.id === "lane-a" ? [{ id: "ada", name: "Ada Lovelace" }] : [],
+            note: row.id === "lane-a" ? "Next: review" : null }) } }} />
+    </ResourceViewProvider></Provider></RouterContextProvider>);
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    expect(drawing.props?.events[0]?.note).toBe("Next: review");
+    expect(screen.getByRole("link", { name: "Alpha" }).getAttribute("href")).toBe("/lanes/lane-a");
+    expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+    expect(screen.getByText("Code A")).toBeTruthy();
+    expect(screen.queryByText("Code undefined")).toBeNull();
   });
 
   test("loads every marker page on the same lanes, using its own filter and point dates", async () => {
@@ -195,10 +225,11 @@ describe("Gantt collection over native list data", () => {
     expect(drawing.props?.fitToEvents).toBe(false);
   });
   test.each([
-    ["2026-09-24", "2026-10-08", "Sep 24 - Oct 8, 2026"],
-    ["2026-09-24", "2026-09-24", "Sep 24, 2026"],
-    ["2026-03-07", "2026-03-09", "Mar 7 - Mar 9, 2026"],
+    ["2026-09-24", "2026-10-08", "Sep 24 – Oct 8"],
+    ["2026-09-24", "2026-09-24", "Sep 24"],
+    ["2026-03-07", "2026-03-09", "Mar 7 – Mar 9"],
   ])("preserves Date calendar days, including inclusive ends: %s to %s", async (start, end, label) => {
+    vi.setSystemTime(new Date(2026, 8, 30));
     renderCollection({ rows: [{ ...scheduledRecord, start, end }] });
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
     const event = drawing.props!.events[0]!;

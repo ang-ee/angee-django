@@ -53,20 +53,23 @@ export { slugify } from "./slug";
 export { useStatusTone } from "./use-status-tone";
 export { STATUS_TONES, statusTone, type StatusToneMap, type StatusToneOptions } from "./status-tones";
 export {
-  DATE_DISPLAY_FORMAT,
-  DATETIME_DISPLAY_FORMAT,
   DATE_STORAGE_FORMAT,
   DATETIME_STORAGE_FORMAT,
   TIME_INPUT_FORMAT,
   dateFromValue,
   formatDate,
+  formatDateRange,
   formatDateStorage,
   formatDateTime,
   formatDateTimeStorage,
+  formatDuration,
+  formatRelativeTime,
   formatTimeInput,
+  setHumanDateLocale,
   valueLabel,
   type DateFormatValue,
   type DateWidgetValue,
+  type HumanDateOptions,
 } from "./date-format";
 export { DatePopover, type DatePopoverProps } from "./date-popover";
 export {

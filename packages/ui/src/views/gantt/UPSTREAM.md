@@ -39,7 +39,8 @@ Local (non-upstream) files in this directory: `GanttView.tsx` (public lazy
 boundary), `gantt-surface.tsx` (read-only presentation wrapper) and
 `gantt-collection-surface.tsx` (resource-view collection adapter), with
 `gantt-collection-query.ts` sharing lane scoping and complete paging for bars and
-markers.
+markers. `gantt-lane.tsx` renders the declared lane facts and attaches its note
+to the last scheduled bar.
 `gantt-recurrence.tsx` replaces the unary `+y` coercion with `Number(y)`.
 `warnOnce` drops upstream's `process.env.NODE_ENV` guard: the composed host
 typechecks without Node types, and a once-per-key warning is harmless in production.
@@ -58,3 +59,13 @@ The event contract adds `current` for a lane's declared current bar. The bar
 exposes it through `aria-current="step"`, `data-current`, and token-based emphasis,
 independently of user selection. Collection markers reuse the unmodified
 zero-duration milestone/diamond renderer and packing; no marker layer was added.
+The current bar now uses the full status color, while earlier bars retain the
+soft fill. A short lane note can follow the final bar through the event's `note`
+field and the existing bar-label layer. The native now indicator keeps its line
+and gains a translated Today cap in the sticky header.
+
+Fix round 1 binds Gantt date ranges to the shared `formatDateRange` owner and
+the app runtime language. Solid current bars pair their tone fill with its
+`text-on-*` foreground token; the Today cap uses `text-on-brand`.
+Fix round 2 passes the resolved chart time zone to those date ranges and the
+week header. Timed multi-day labels use one span with two date-time endpoints.

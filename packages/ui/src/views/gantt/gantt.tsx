@@ -299,10 +299,10 @@ function resolveSettings<TData>(
   const getEventPriority =
     options.getEventPriority ??
     ((event: GanttEvent<TData>) => event.priority ?? 0)
+  const timeZone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   return {
     ...rest,
-    timeZone:
-      options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timeZone,
     locale: options.locale,
     // locale-first default: a de/fr locale gets Monday weeks without also
     // having to set weekStartsOn; an explicit weekStartsOn always wins
@@ -310,7 +310,7 @@ function resolveSettings<TData>(
       options.weekStartsOn ?? options.locale?.options?.weekStartsOn ?? 0,
     slotDuration: options.slotDuration ?? 30,
     snapDuration: options.snapDuration ?? 15,
-    i18n: mergeGanttI18n(options.i18n),
+    i18n: mergeGanttI18n(options.i18n, timeZone),
     rangeBounds: options.rangeBounds,
     resources: options.resources ?? [],
     overlap: options.overlap ?? "allow",

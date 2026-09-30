@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMatches, useRouterState } from "@tanstack/react-router";
 import type {
   MessageResources,
@@ -33,6 +33,7 @@ import type { ResourceViewPreset } from "../views/resource/model/favorites";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
+import { setHumanDateLocale } from "../widgets/date-format";
 
 export const DEFAULT_LOGIN_PATH = "/login";
 export const HOME_PATH_PREFERENCE_KEY = "homePath";
@@ -126,6 +127,8 @@ export interface AppRuntime {
 
 export interface RuntimeI18n {
   language?: string;
+  on?: (event: "languageChanged", listener: (language: string) => void) => unknown;
+  off?: (event: "languageChanged", listener: (language: string) => void) => unknown;
   getFixedT: (
     lng: string | readonly string[] | null,
     ns: string,
@@ -246,10 +249,23 @@ export function AppRuntimeProvider(props: {
 }): React.ReactNode {
   const { runtime } = props;
   const parent = RuntimeContext.useMaybe();
+  const [languageRevision, setLanguageRevision] = useState(0);
   const value = useMemo<AppRuntime>(
     () => ({ ...EMPTY_RUNTIME, ...(parent ?? {}), ...runtime }),
-    [parent, runtime],
+    [parent, runtime, languageRevision],
   );
+  // Set before descendants render: the formatter API is pure and has no hook.
+  if (value.i18n?.language) setHumanDateLocale(value.i18n.language);
+  useEffect(() => {
+    const i18n = value.i18n;
+    if (!i18n?.on || !i18n.off) return;
+    const onLanguageChanged = (language: string) => {
+      setHumanDateLocale(language);
+      setLanguageRevision((revision) => revision + 1);
+    };
+    i18n.on("languageChanged", onLanguageChanged);
+    return () => { i18n.off?.("languageChanged", onLanguageChanged); };
+  }, [value.i18n]);
   return RuntimeContext.Provider({ value, children: props.children });
 }
 

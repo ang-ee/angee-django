@@ -25,6 +25,7 @@ import type { ColumnDescriptor, FacetDescriptor } from "../page";
 import type { Occurrence } from "../calendar/CalendarView";
 import type { AnyCalendarWindowSource } from "../calendar/use-calendar-window";
 import type { GanttRowLayout } from "../gantt/gantt-types";
+import type { GanttLaneDetails } from "../gantt/gantt-lane";
 import type { DndPayload } from "../../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
@@ -96,10 +97,11 @@ export interface GanttViewSpec extends GanttRowLayout {
     /** Marker-specific scope; the bars' filters and search never apply to this resource. */
     filter?: ResourceFilter<ResourceTypeName>;
   };
-  /** Additional fields selected on the related row for renderRowContent. */
-  rowFields?: readonly string[];
-  /** Replaces the related row's name, including rows without schedules. */
-  renderRowContent?: (row: Row) => ReactNode;
+  /** Declared lane content, selected from the lane resource even for empty lanes. */
+  lane?: {
+    fields?: readonly string[];
+    content: (row: Row) => GanttLaneDetails;
+  };
 }
 
 /** One card's optimistic board placement while its server write settles. */
