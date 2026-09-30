@@ -1,4 +1,4 @@
-"""Review changes to the workflows and decisions public Python surface."""
+"""Review changes to the workflows, decisions, and extraction Python surface."""
 
 from __future__ import annotations
 
@@ -25,9 +25,21 @@ from angee.workflows.testing import drivers as test_drivers
 EXPECTED_MODELS = {
     "workflows": "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun WorkflowVersion",
     "decisions": "Decision DecisionEvidence DecisionGroup",
+    "extraction": "Extraction ExtractionLineage ExtractionPage ExtractionPart ExtractionSource",
 }
 
 EXPECTED_VERBS = {
+    "extraction.Extraction.manager": (
+        "authorized_document_sources identity_preserving_pipeline_successor inference_authority_base "
+        "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
+        "prepare_correction_binding prepare_pages resync_target_access retain_result "
+        "reviewed_correction_authority revise_from_decision"
+    ),
+    "extraction.Extraction.queryset": "validate_insert",
+    "extraction.ExtractionLineage.queryset": "validate_insert",
+    "extraction.ExtractionPage.queryset": "validate_insert",
+    "extraction.ExtractionPart.queryset": "validate_insert",
+    "extraction.ExtractionSource.queryset": "validate_insert",
     "workflows.StepAttempt.queryset": "close",
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
@@ -71,6 +83,7 @@ EXPECTED_SETTINGS = {
         "ANGEE_DECISION_ACTION_CLASSES ANGEE_DECISION_MAX_ATTEMPTS ANGEE_DECISION_POLICY_CLASSES "
         "ANGEE_IMPL_REGISTRIES:append"
     ),
+    "extraction": "ANGEE_EXTRACTION_MAX_BYTES ANGEE_EXTRACTION_PROFILE_CLASSES ANGEE_IMPL_REGISTRIES:append",
     "workflows": (
         "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES "
         "ANGEE_WORKFLOW_RETENTION_DAYS ANGEE_WORKFLOW_STEP_CLASSES ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
@@ -166,7 +179,7 @@ def test_workflows_public_surface() -> None:
         declared = importlib.import_module(module_name).SETTINGS
         names = tuple(sorted(
             key for key in declared
-            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_")) and "." not in key)
+            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_", "ANGEE_EXTRACTION_")) and "." not in key)
             or (config.label in EXPECTED_SETTINGS and key == "ANGEE_IMPL_REGISTRIES:append")
         ))
         if names:

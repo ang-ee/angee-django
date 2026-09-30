@@ -22,7 +22,14 @@ class ExtractionRole(StrEnum):
         }[self]
 
 
-class ExtractionErrorCode(TextChoices, StrEnum):
+class ExtractionSourceKind(StrEnum):
+    """The two retained source record kinds."""
+
+    FILE = "file"
+    MESSAGE_PART = "message_part"
+
+
+class ExtractionErrorCode(TextChoices):
     """Stable retained failure codes with explicit recovery semantics."""
 
     IDENTITY_CORRESPONDENCE_REQUIRED = (

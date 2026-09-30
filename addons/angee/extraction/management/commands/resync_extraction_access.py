@@ -13,5 +13,5 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Dispatch to the retention model's relationship owner."""
-        written = apps.get_model("workflows_extraction.Extraction").objects.resync_target_access()
+        written = apps.get_model("extraction.Extraction").objects.resync_target_access()
         self.stdout.write(self.style.SUCCESS(f"Restored {written} extraction target relationship(s)."))

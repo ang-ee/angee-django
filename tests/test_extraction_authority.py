@@ -5,8 +5,8 @@ from copy import deepcopy
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.workflows_extraction.contracts import DocumentResult
-from angee.workflows_extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
+from angee.extraction.contracts import DocumentResult
+from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
 from tests.extraction_models import Extraction
 
 

@@ -9,46 +9,21 @@ from unittest.mock import patch
 
 import pypdfium2 as pdfium
 from django.apps import apps
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TransactionTestCase, override_settings
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.extraction.acquisition import RecognitionOutput
+from angee.extraction.contracts import PipelineError, RecognitionResult, Result
+from angee.extraction.inference import derive_text_claims
+from angee.extraction.profiles import ExtractionProfile
 from angee.integrate.credentials import CredentialKind
 from angee.jobs.enqueue import celery_app
 from angee.workflows.maps import MapItem
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows_extraction.contracts import PipelineError, RecognitionResult, Result
-from angee.workflows_extraction.inference import derive_text_claims
-from angee.workflows_extraction.profiles import ExtractionProfile
-from angee.workflows_extraction.providers import (
-    NativeExtractionConfig,
-    NativeExtractionProvider,
-    RecognitionOutput,
-)
 from angee.workflows_extraction.steps import ProcessEvidenceInput
-
-
-class RecognitionConfig(NativeExtractionConfig):
-    """Select one deterministic recognition failure without changing acquisition."""
-
-    fail_page: int | None = None
-
-
-class DeterministicRecognition(NativeExtractionProvider):
-    """Use real PDF preparation and deterministic recognition without a network."""
-
-    key = "native"
-    config_model = RecognitionConfig
-
-    def recognize(self, page, file, model, *, config):
-        """Read the protected raster, then return text or the requested failure."""
-        page.image(file)
-        if page.page_position == config.fail_page:
-            raise PipelineError("Recognition unavailable.", stage="recognition", code="unavailable")
-        return RecognitionResult(f"Page {page.page_position}")
 
 
 class DeterministicProfile(ExtractionProfile):
@@ -73,16 +48,10 @@ class ExtractionWorkflowTests(TransactionTestCase):
     def setUp(self):
         """Build native storage and model fixtures with restored test overrides."""
         self.enterContext(patch.object(celery_app, "send_task"))
+        self.enterContext(patch("angee.workflows_extraction.steps.recognize_page", side_effect=self.recognize))
         call_command("rebac", "sync", verbosity=0)
         self.enterContext(override_settings(
-            ANGEE_EXTRACTION_BACKEND_CLASSES={
-                **settings.ANGEE_EXTRACTION_BACKEND_CLASSES,
-                "native": f"{__name__}.DeterministicRecognition",
-            },
-            ANGEE_EXTRACTION_PROFILE_CLASSES={
-                **settings.ANGEE_EXTRACTION_PROFILE_CLASSES,
-                "none": f"{__name__}.DeterministicProfile",
-            },
+            ANGEE_EXTRACTION_PROFILE_CLASSES={"none": f"{__name__}.DeterministicProfile"},
         ))
         storage = self.enterContext(TemporaryDirectory(prefix="extraction-composed-", dir="/private/tmp"))
         with system_context(reason="composed extraction fixtures"):
@@ -130,14 +99,21 @@ class ExtractionWorkflowTests(TransactionTestCase):
             ).target_instance()
             self.assertEqual(installed.pk, self.workflow.pk)
 
+    def recognize(self, page, file, model, *, config):
+        """Read the protected raster and supply deterministic model text."""
+        page.image(file)
+        if page.page_position == self.fail_page:
+            raise PipelineError("Recognition unavailable.", stage="recognition", code="unavailable")
+        return RecognitionResult(f"Page {page.page_position}")
+
     def execute_document(self, pages, *, fail_page=None):
-        """Author only the profile schema and test provider config on the installed graph."""
+        """Author the profile schema on the installed graph."""
+        self.fail_page = fail_page
         draft = deepcopy(self.workflow.draft)
         draft["nodes"]["process_evidence"]["config"]["schema"] = {
             "$id": "urn:test:composed-extraction", "type": "object",
             "properties": {"text": {"type": "string"}}, "required": ["text"],
         }
-        draft["nodes"]["map_pages"]["body"]["config"] = {"backend_config": {"fail_page": fail_page}}
         saved = type(self.workflow).objects.save_draft(
             self.workflow, draft=draft, expected_revision=self.workflow.draft_revision, actor=self.actor,
         )
@@ -185,7 +161,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
                 else:
                     self.assertEqual(item.outcome, "recognized")
                     self.assertIsInstance(item.output, RecognitionOutput)
-            evidence = apps.get_model("workflows_extraction.Extraction").objects.get(
+            evidence = apps.get_model("extraction.Extraction").objects.get(
                 sqid=run.output["extraction_id"],
             )
             successful = [index for index in range(pages) if index != fail_page]

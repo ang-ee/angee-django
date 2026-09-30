@@ -7,7 +7,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import system_context
 
-from angee.workflows_extraction.contracts import DocumentPart, DocumentSource, ExtractionPartKind
+from angee.extraction.contracts import DocumentPart, DocumentSource, ExtractionPartKind
 from tests.conftest import Drive, File
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive

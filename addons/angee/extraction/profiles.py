@@ -5,9 +5,29 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
+from jsonpointer import JsonPointer, JsonPointerException
+from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
+
 from angee.base.impl import ImplBase
-from angee.base.jsonschema import validate
-from angee.workflows_extraction.contracts import DocumentPart, Result, Source
+from angee.extraction.contracts import DocumentPart, Result, Source
+
+
+class EvidenceLayout(BaseModel):
+    """Immutable pointers locating logical documents and their lines."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    document_collection: str = ""
+    line_collection: str = ""
+    root_document_on_missing: StrictBool = False
+
+    @field_validator("document_collection", "line_collection")
+    @classmethod
+    def valid_pointer(cls, value: str) -> str:
+        try:
+            JsonPointer(value)
+        except JsonPointerException as error:
+            raise ValueError("Expected a JSON pointer.") from error
+        return value
 
 
 class ExtractionProfile(ImplBase):
@@ -16,19 +36,7 @@ class ExtractionProfile(ImplBase):
 
     category = "Extraction"
     label = "Extraction profile"
-    evidence_layout: ClassVar[dict[str, Any]] = {}
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        validate({
-            "type": "object",
-            "properties": {
-                "document_collection": {"type": "string", "format": "json-pointer"},
-                "line_collection": {"type": "string", "format": "json-pointer"},
-                "root_document_on_missing": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        }, cls.evidence_layout)
+    evidence_layout: ClassVar[EvidenceLayout] = EvidenceLayout()
 
     def detect_carriers(self, source: Source) -> tuple[DocumentPart, ...]:
         """Return format-specific evidence before generic acquisition, without I/O."""

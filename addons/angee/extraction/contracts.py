@@ -1,20 +1,22 @@
-"""Immutable values shared by extraction profiles, providers and retained evidence."""
+"""Immutable values shared by extraction profiles, inference and retained evidence."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from django.db.models import TextChoices
+
+from angee.base.evidence import FactAuthority as FactAuthorityKind
+from angee.extraction.enums import ExtractionRole, ExtractionSourceKind
 
 
 @dataclass(frozen=True, slots=True)
 class FactAuthority:
     """Provenance classification for one retained result fact."""
 
-    kind: Literal["source", "correction", "unverified"]
+    kind: FactAuthorityKind
     decision_id: str = ""
 
 
@@ -22,9 +24,9 @@ class FactAuthority:
 class SourceRef:
     """Public identity and digest of one immutable evidence source."""
 
-    kind: Literal["file", "message_part"]
+    kind: ExtractionSourceKind
     public_id: str
-    content_digest: str
+    content_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +98,7 @@ class CorrectionBinding:
         }
 
 
-class ExtractionPartKind(TextChoices, StrEnum):
+class ExtractionPartKind(TextChoices):
     """Closed carrier kinds retained for an extraction part."""
 
     STRUCTURED = "structured", "Structured"
@@ -179,7 +181,7 @@ class Result:
     value: dict[str, Any]
     parts: tuple[DocumentPart, ...]
     claims: dict[str, list[dict[str, Any]]]
-    used_model_roles: tuple[Literal["mapping", "recognition"], ...] = ()
+    used_model_roles: tuple[ExtractionRole, ...] = ()
     duration_ms: int = 0
     provider_metadata: dict[str, Any] | None = None
 

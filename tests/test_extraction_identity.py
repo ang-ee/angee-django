@@ -6,8 +6,8 @@ from dataclasses import replace
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.workflows_extraction.contracts import ExtractionPartKind, PipelineError
-from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.extraction.contracts import ExtractionPartKind, PipelineError
+from angee.extraction.enums import ExtractionErrorCode
 from tests.extraction_models import Extraction
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive

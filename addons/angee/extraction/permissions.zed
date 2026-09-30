@@ -1,8 +1,8 @@
-// @rebac_package: workflows_extraction
+// @rebac_package: extraction
 // @rebac_package_version: 0.1.0
 // @rebac_schema_revision: 3
 
-definition workflows_extraction/extraction {
+definition extraction/extraction {
     relation owner: auth/user // rebac:field=created_by
     relation viewer: auth/user | auth/group#member
     relation target: storage/file | messaging/message
@@ -11,21 +11,21 @@ definition workflows_extraction/extraction {
     permission share = owner + admin->member
 }
 
-definition workflows_extraction/extraction_source {
-    relation extraction: workflows_extraction/extraction // rebac:field=extraction
+definition extraction/extraction_source {
+    relation extraction: extraction/extraction // rebac:field=extraction
     relation file: storage/file // rebac:field=file
     relation message_part: messaging/part // rebac:field=message_part
     permission read = extraction->read
     permission read_content = file->read + message_part->read
 }
 
-definition workflows_extraction/extraction_page {
-    relation extraction: workflows_extraction/extraction // rebac:field=extraction
+definition extraction/extraction_page {
+    relation extraction: extraction/extraction // rebac:field=extraction
     permission read = extraction->read
 }
 
-definition workflows_extraction/extraction_part {
-    relation extraction: workflows_extraction/extraction // rebac:field=extraction
-    relation source: workflows_extraction/extraction_source // rebac:field=source
+definition extraction/extraction_part {
+    relation extraction: extraction/extraction // rebac:field=extraction
+    relation source: extraction/extraction_source // rebac:field=source
     permission read = extraction->read & source->read_content
 }

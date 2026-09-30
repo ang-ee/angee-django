@@ -16,10 +16,10 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.storage.schema import FileType
 
-Extraction = apps.get_model("workflows_extraction.Extraction")
-ExtractionSource = apps.get_model("workflows_extraction.ExtractionSource")
-ExtractionPage = apps.get_model("workflows_extraction.ExtractionPage")
-ExtractionPart = apps.get_model("workflows_extraction.ExtractionPart")
+Extraction = apps.get_model("extraction.Extraction")
+ExtractionSource = apps.get_model("extraction.ExtractionSource")
+ExtractionPage = apps.get_model("extraction.ExtractionPage")
+ExtractionPart = apps.get_model("extraction.ExtractionPart")
 
 
 @strawberry_django.type(Extraction)

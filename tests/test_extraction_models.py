@@ -17,16 +17,16 @@ from django.db import close_old_connections, connection, connections
 from django.test import override_settings
 from rebac import actor_context, delete_relationship, system_context
 
-from angee.storage.models import File as AbstractFile
-from angee.workflows_extraction.contracts import (
+from angee.extraction.acquisition import PageCarrier
+from angee.extraction.contracts import (
     DocumentPart,
     DocumentResult,
     DocumentSource,
     ExtractionPartKind,
 )
-from angee.workflows_extraction.managers import StaleExtraction
-from angee.workflows_extraction.profiles import ExtractionProfile
-from angee.workflows_extraction.providers import PageCarrier
+from angee.extraction.managers import StaleExtraction
+from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
+from angee.storage.models import File as AbstractFile
 from tests.conftest import Drive, File, create_platform_admin
 from tests.extraction_models import Extraction, ExtractionLineage, ExtractionPage, ExtractionPart, ExtractionSource
 from tests.test_storage import drive as drive
@@ -36,7 +36,7 @@ class NotesProfile(ExtractionProfile):
     """Declare document and line locations independently of their values."""
 
     key = "retention_notes"
-    evidence_layout = {"document_collection": "/documents", "line_collection": "/lines"}
+    evidence_layout = EvidenceLayout(document_collection="/documents", line_collection="/lines")
 
 
 SCHEMA = {

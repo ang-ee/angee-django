@@ -4,8 +4,8 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 
-from angee.workflows_extraction import schema as evidence_schema
-from angee.workflows_extraction.providers import PageCarrier
+from angee.extraction import schema as evidence_schema
+from angee.extraction.acquisition import PageCarrier
 from tests.conftest import addon_schema, execute_schema, result_data
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
@@ -19,8 +19,8 @@ def schema():
 def test_evidence_resources_expose_reads_without_generic_mutations(schema):
     resources = {resource.model_label for resource in schema.angee_resources}
     assert resources == {
-        "workflows_extraction.Extraction", "workflows_extraction.ExtractionSource",
-        "workflows_extraction.ExtractionPage", "workflows_extraction.ExtractionPart",
+        "extraction.Extraction", "extraction.ExtractionSource",
+        "extraction.ExtractionPage", "extraction.ExtractionPart",
     }
     assert schema._schema.mutation_type is None
     for name in ("extraction", "extractionsource", "extractionpage", "extractionpart"):

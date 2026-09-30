@@ -24,7 +24,8 @@ from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
-from angee.workflows_extraction.contracts import (
+from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PreparedDocument, prepare_pages
+from angee.extraction.contracts import (
     CorrectionBinding,
     DocumentPart,
     DocumentResult,
@@ -32,9 +33,8 @@ from angee.workflows_extraction.contracts import (
     ExtractionPartKind,
     PipelineError,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
-from angee.workflows_extraction.pointers import json_pointer_value, result_selectors
-from angee.workflows_extraction.providers import PageCarrier
+from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
+from angee.extraction.pointers import json_pointer_value, result_selectors
 
 
 class StaleExtraction(ValidationError):
@@ -53,6 +53,13 @@ EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
 
 class ExtractionManager(EvidenceManager):
     """Retain evidence after actor, schema, source and identity validation."""
+
+    def prepare_pages(
+        self, files: Sequence[Any], message_parts: Sequence[Any], *, profile: Any,
+        config: ExtractionConfig, actor: Any, heartbeat: Any,
+    ) -> PreparedDocument:
+        """Acquire bounded carriers through the extraction domain owner."""
+        return prepare_pages(files, message_parts, profile=profile, config=config, actor=actor, heartbeat=heartbeat)
 
     def resync_target_access(self) -> int:
         """Restore model-derived target tuples after a grant reset or schema sync.
@@ -79,7 +86,7 @@ class ExtractionManager(EvidenceManager):
             raise PermissionDenied("Write access to the extraction target is required.")
 
     def authorized_document_sources(self, extraction: Any, *, actor: Any) -> tuple[DocumentSource, ...]:
-        """Authorize retained inputs before disclosing their carriers to a provider."""
+        """Authorize retained inputs before disclosing their carriers to inference."""
         if actor is None or not (extraction).with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to retained evidence and its sources is required.")
         sources = extraction.document_sources()
@@ -152,20 +159,22 @@ class ExtractionManager(EvidenceManager):
                 if actor is None or not (candidate).with_actor(actor).has_access("read"):
                     raise PermissionDenied("Read access to retained evidence and its sources is required.")
         roles = set(result.used_model_roles)
-        if not roles <= {"mapping", "recognition"}:
+        if not roles <= set(ExtractionRole):
             raise ValidationError("Extraction reported an unsupported model role.")
-        if ("mapping" in roles and model is None) or ("recognition" in roles and recognition_model is None):
+        if (ExtractionRole.MAPPING in roles and model is None) or (
+            ExtractionRole.RECOGNITION in roles and recognition_model is None
+        ):
             raise ValidationError("Extraction reported use of an unconfigured inference model.")
         profile_type = self.model.impl_field("profile").resolve_class(profile)
         if (
             profile_config is not None and "evidence_layout" in profile_config
-            and profile_config["evidence_layout"] != profile_type.evidence_layout
+            and profile_config["evidence_layout"] != profile_type.evidence_layout.model_dump()
         ):
             raise ValidationError("The selected profile owns its evidence layout.")
         config = profile_type.normalize_config(
             {key: value for key, value in (profile_config or {}).items() if key != "evidence_layout"}
         )
-        config["evidence_layout"] = profile_type.evidence_layout
+        config["evidence_layout"] = profile_type.evidence_layout.model_dump()
         schema_id = schema.get("$id") or schema.get("x-version")
         if schema.get("type") != "object" or not isinstance(result.value, dict) or not isinstance(result.claims, dict):
             raise ValidationError("Extraction schema, result and claims must be objects.")
@@ -319,7 +328,7 @@ class ExtractionManager(EvidenceManager):
         envelope.extend((sources, pages, parts, mapping, retirement))
         if strip_null_bytes(envelope) != envelope:
             raise ValidationError("Retained evidence cannot contain null characters.")
-        lineage_model = self.model._meta.apps.get_model("workflows_extraction.ExtractionLineage")
+        lineage_model = self.model._meta.apps.get_model("extraction.ExtractionLineage")
         with transaction.atomic(), system_context(reason="retain authorized extraction snapshot"):
             lineage = lineage_model.objects.filter(pk=values["lineage_key"]).first()
             if lineage is None:
@@ -423,7 +432,7 @@ class ExtractionManager(EvidenceManager):
         base: Any,
     ) -> None:
         registry = self.model._meta.apps
-        source_model = registry.get_model("workflows_extraction.ExtractionSource")
+        source_model = registry.get_model("extraction.ExtractionSource")
         retained = source_model._base_manager.owner_bulk_create(
             [source_model(extraction=extraction, **value) for value in sources]
         )
@@ -443,7 +452,7 @@ class ExtractionManager(EvidenceManager):
                 for row in base.pages.order_by("position")
             ]
         for name, rows in (("ExtractionPage", pages), ("ExtractionPart", parts)):
-            child_model = registry.get_model("workflows_extraction", name)
+            child_model = registry.get_model("extraction", name)
             children = []
             for position, raw in enumerate(rows):
                 values = dict(raw)
@@ -512,7 +521,7 @@ class ExtractionManager(EvidenceManager):
         """Return this lineage's current actor-readable evidence contract."""
         if actor is None or not (base).with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to retained evidence and its sources is required.")
-        lineage_model = self.model._meta.apps.get_model("workflows_extraction.ExtractionLineage")
+        lineage_model = self.model._meta.apps.get_model("extraction.ExtractionLineage")
         with system_context(reason="resolve extraction lineage head"):
             head = lineage_model.objects.get(pk=base.lineage_key).head
         if head is None or head.schema_digest != base.schema_digest:

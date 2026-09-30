@@ -16,7 +16,7 @@ from typing import Any, ClassVar, cast
 from asgiref.sync import async_to_sync
 from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -113,6 +113,13 @@ class InferenceBackend(ImplBase):
         cause = error.__cause__ if isinstance(error, ModelAPIError) else error
         return isinstance(
             cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types)
+        )
+
+    def request_error_types(self) -> tuple[type[BaseException], ...]:
+        """Expose the typed API and transport failures callers may classify."""
+        return (
+            ModelAPIError, UnexpectedModelBehavior, TimeoutError, ConnectionError, TimeoutException, NetworkError,
+            *self.transient_error_types,
         )
 
     def connect_oauth_client(self, owner_label: str) -> Any:

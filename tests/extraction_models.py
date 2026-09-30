@@ -1,10 +1,10 @@
 """Concrete extraction evidence used by the bare Django test runtime."""
 
-from angee.workflows_extraction.models import Extraction as AbstractExtraction
-from angee.workflows_extraction.models import ExtractionLineage as AbstractExtractionLineage
-from angee.workflows_extraction.models import ExtractionPage as AbstractExtractionPage
-from angee.workflows_extraction.models import ExtractionPart as AbstractExtractionPart
-from angee.workflows_extraction.models import ExtractionSource as AbstractExtractionSource
+from angee.extraction.models import Extraction as AbstractExtraction
+from angee.extraction.models import ExtractionLineage as AbstractExtractionLineage
+from angee.extraction.models import ExtractionPage as AbstractExtractionPage
+from angee.extraction.models import ExtractionPart as AbstractExtractionPart
+from angee.extraction.models import ExtractionSource as AbstractExtractionSource
 
 
 class ExtractionLineage(AbstractExtractionLineage):
@@ -12,7 +12,7 @@ class ExtractionLineage(AbstractExtractionLineage):
 
     class Meta(AbstractExtractionLineage.Meta):
         abstract = False
-        app_label = "workflows_extraction"
+        app_label = "extraction"
         db_table = "test_extraction_lineage"
 
 
@@ -23,9 +23,9 @@ class Extraction(AbstractExtraction):
 
     class Meta(AbstractExtraction.Meta):
         abstract = False
-        app_label = "workflows_extraction"
+        app_label = "extraction"
         db_table = "test_extraction"
-        rebac_resource_type = "workflows_extraction/extraction"
+        rebac_resource_type = "extraction/extraction"
 
 
 class ExtractionSource(AbstractExtractionSource):
@@ -33,9 +33,9 @@ class ExtractionSource(AbstractExtractionSource):
 
     class Meta(AbstractExtractionSource.Meta):
         abstract = False
-        app_label = "workflows_extraction"
+        app_label = "extraction"
         db_table = "test_extraction_source"
-        rebac_resource_type = "workflows_extraction/extraction_source"
+        rebac_resource_type = "extraction/extraction_source"
 
 
 class ExtractionPage(AbstractExtractionPage):
@@ -43,9 +43,9 @@ class ExtractionPage(AbstractExtractionPage):
 
     class Meta(AbstractExtractionPage.Meta):
         abstract = False
-        app_label = "workflows_extraction"
+        app_label = "extraction"
         db_table = "test_extraction_page"
-        rebac_resource_type = "workflows_extraction/extraction_page"
+        rebac_resource_type = "extraction/extraction_page"
 
 
 class ExtractionPart(AbstractExtractionPart):
@@ -53,6 +53,6 @@ class ExtractionPart(AbstractExtractionPart):
 
     class Meta(AbstractExtractionPart.Meta):
         abstract = False
-        app_label = "workflows_extraction"
+        app_label = "extraction"
         db_table = "test_extraction_part"
-        rebac_resource_type = "workflows_extraction/extraction_part"
+        rebac_resource_type = "extraction/extraction_part"
