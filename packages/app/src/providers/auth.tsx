@@ -172,10 +172,14 @@ export function createAngeeAuthProviderFromRequest(
     const data = await request(AngeeCurrentUserDocument);
     return currentUserPayload(data.current_user);
   };
+  const sharedIdentity = async (): Promise<AuthIdentity | null> => {
+    const query = identityQueryOptions(provider);
+    return options.queryClient ? options.queryClient.fetchQuery(query) : query.queryFn();
+  };
   const provider: RefineAuthProvider = {
     async check() {
       try {
-        const user = await currentUser();
+        const user = await sharedIdentity();
         return user
           ? { authenticated: true }
           : { authenticated: false, redirectTo: loginPath };
@@ -207,8 +211,8 @@ export function createAngeeAuthProviderFromRequest(
       } satisfies AuthIdentity : null;
     },
     async getPermissions() {
-      const payload = await currentUser();
-      return payload?.roleRefs ?? [];
+      const identity = await sharedIdentity();
+      return identity?.roles ?? [];
     },
     async login(params) {
       try {
@@ -269,7 +273,8 @@ export function createAngeeAuthProviderFromRequest(
  * react-query entry keyed `keys().auth().action("identity")`; the route gate
  * (`@angee/app` `beforeLoad`) reaches that SAME entry through
  * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, so the gate
- * and `useRuntimeAuthState` below share one session/preview identity query.
+ * `useRuntimeAuthState`, `check`, and `getPermissions` share one
+ * session/preview identity query.
  * Its public session read gates the console-only preview projection.
  * `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout) refreshes
