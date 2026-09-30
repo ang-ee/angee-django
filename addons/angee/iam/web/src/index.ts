@@ -21,7 +21,8 @@ export {
   type IamLoginPageProps,
 } from "./IamLoginPage";
 export { userDisplayName, type UserDisplayNameInput } from "./identity-labels";
-export { ShareAccessDialog, type ShareAccessDialogProps } from "./ShareAccess";
+export { ShareAccessCompact, ShareAccessDialog, ShareAccessRailGroup, useAccessRole, useAccessVisibility,
+  type AccessRoleOwnerProps, type AccessRoleState, type ShareAccessDialogProps } from "./ShareAccess";
 export {
   assignmentSubjectOptions,
   useAssignmentSubjects,
@@ -90,6 +91,7 @@ const iam = defineBaseAddon({
   menus: identityMenu,
   i18n: { iam: enIamMessages },
   slots: [
+    { slot: "access.direct", id: "iam.direct", content: null },
     { ...formViewRecordActionsSlot("iam.User"), id: "iam.issue-password", recordActionPlacement: "menu", requiredFields: ["can_issue_password"], content: createElement(IssuePasswordRecordAction) },
     { slot: FORM_VIEW_RECORD_CHROME_SLOT, id: "iam.share-record", sequence: 20, content: createElement(ShareRecordChrome) },
     { slot: RESOURCE_VIEW_UTILITIES_SLOT, id: "iam.share-list", sequence: 20, content: createElement(ShareListChrome) },

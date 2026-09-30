@@ -8,6 +8,7 @@ credentials, connect/disconnect) lives in ``integrate``; OIDC *login* lives in
 
 from __future__ import annotations
 
+from itertools import islice
 from typing import Any, cast
 
 import strawberry
@@ -19,8 +20,10 @@ from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from django.db.models import QuerySet
-from rebac import RebacQuerySet, system_context, to_subject_ref
+from rebac import RebacQuerySet, resolve_subjects, system_context, to_object_ref, to_subject_ref
+from rebac import backend as rebac_backend
 from rebac.models import active_relationship_model
+from rebac.resources import model_for_resource_type
 from rebac.roles import (
     roles_of as rebac_roles_of,
 )
@@ -29,12 +32,14 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id, public_subject_ref
+from angee.base.models import AngeeModel
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import authorized_permission_target
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
+from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
 from angee.graphql.writes import write_queryset
@@ -295,6 +300,16 @@ class IAMPrincipalAccessType:
     roles: list[IAMPrincipalRoleType]
     grants: list[IAMPrincipalGrantType]
     permissions: list[IAMPrincipalPermissionType]
+
+
+@strawberry.type
+class RecordReaderType:
+    """One named effective person reader; provenance is supplied by role owners."""
+
+    subject: str
+    label: str
+    you: bool
+    following: bool
 
 
 @strawberry.type
@@ -817,6 +832,44 @@ class IAMConsoleQuery:
     """Session identity reads and admin permission-hub queries."""
 
     @strawberry.field
+    def record_readers(
+        self, info: strawberry.Info, target_type: str, target_id: PublicID,
+    ) -> list[RecordReaderType]:
+        """List named effective person readers through the REBAC reverse index.
+
+        The reverse index gives identities but no permission-path provenance.
+        Anonymous, wildcard, and authenticated audiences have no finite person
+        roster here. This surface never claims to enumerate those audiences.
+        Direct relation rows come from sharing's ``record_access`` query;
+        role owners contribute their derived labels separately.
+        """
+
+        model = model_for_resource_type(target_type)
+        if model is None or not issubclass(model, AngeeModel):
+            raise ValueError("Unknown record target type.")
+        target = (authorized_record_access(info, model, target_id)[0]
+                  if model.get_rebac_grantable()
+                  else authorized_permission_target(info, model, target_id, "read"))
+        refs = tuple(islice(rebac_backend().lookup_subjects(
+            resource=to_object_ref(target), action="read", subject_type="auth/user",
+        ), 100))
+        resolved = resolve_subjects(refs)
+        viewer = to_subject_ref(session_user(info))
+        following = set()
+        if apps.is_installed("angee.messaging"):
+            follower_model = apps.get_model("messaging", "ThreadFollower")
+            following = set(follower_model.objects.subjects_for_record(target))
+        return [
+            RecordReaderType(
+                subject=str(public_subject_ref(ref)),
+                label=user_label(resolved[ref]),
+                you=ref == viewer,
+                following=ref in following,
+            )
+            for ref in refs if ref in resolved and getattr(resolved[ref], "kind", None) == "person"
+        ]
+
+    @strawberry.field
     def real_user(self, info: strawberry.Info) -> CurrentUserType | None:
         """Return the real identity during preview, and null otherwise."""
 
@@ -1083,6 +1136,7 @@ schemas = {
             IAMPrincipalGrantType,
             IAMPrincipalPermissionType,
             IAMPrincipalAccessType,
+            RecordReaderType,
             IAMGroupMemberType,
             IAMGroupBindingType,
             IAMRelationType,

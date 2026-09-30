@@ -54,6 +54,9 @@ describe("proposals addon manifest", () => {
       "proposals.proposals",
     ]);
     expect(proposals.slots?.map((slot) => slot.id)).toEqual([
+      "proposals.responder",
+      "proposals.opening",
+      "proposals.people-rail",
       "proposals.round-open",
       "proposals.project-round-open",
       "proposals.round-verbs",

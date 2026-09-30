@@ -34,6 +34,35 @@ def assert_read(row: Any, actor: Any, expected: bool) -> None:
         )
 
 
+def test_removing_responder_ends_their_round_follow(campaign: ProposalCampaign) -> None:
+    """Retiring the seat removes its reader's follow on the affected record."""
+
+    c = campaign
+    round = c.round()
+    responder = c.person("responder")
+    c.admit(round, "responder")
+    with system_context(reason="tests.proposals.responder_follow"):
+        round.message_subscribe(user=responder)
+    assert round.message_is_follower(user=responder)
+    manager = c.person("facilitator")
+    with actor_context(manager):
+        as_actor(round, manager).remove_responder(responder)
+    assert not round.message_is_follower(user=responder)
+
+
+def test_admitting_a_following_responder_grants_read_and_follow_together(campaign: ProposalCampaign) -> None:
+    """The role owner's opt-in admission writes both facts atomically."""
+
+    c = campaign
+    round = c.round()
+    responder = c.person("new-responder")
+    manager = c.person("facilitator")
+    with actor_context(manager):
+        as_actor(round, manager).admit(responder, follow=True)
+    assert_read(round, responder, True)
+    assert round.message_is_follower(user=responder)
+
+
 @pytest.mark.parametrize("policy", ("facilitator_only", "answers", "answers_and_tracks", "drafts_and_tracks"))
 @pytest.mark.parametrize("target_kind", ("project", "task"))
 def test_each_seat_reads_only_its_round_proposals_tracks_questions_and_answers(

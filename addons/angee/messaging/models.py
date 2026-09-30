@@ -187,6 +187,15 @@ class ThreadedModelMixin(models.Model):
     thread_attachment_role: ClassVar[str] = "chatter"
     """The attachment role used for the model's primary chatter thread."""
 
+    @transaction.atomic
+    def revoke_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """End person follows whose read disappears with this direct grant."""
+
+        cast(Any, super()).revoke_record_access(relation, subject)
+        apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(
+            self, role=self.thread_attachment_role,
+        )
+
     @classmethod
     def thread_messages_expression(cls, record_id: Any) -> models.QuerySet:
         """Return messages of the record's primary thread for a SQL subquery.
@@ -656,8 +665,9 @@ class ThreadedModelMixin(models.Model):
     ) -> models.Model:
         """Follow this record as a party, or resolve the acting user's person.
 
-        Repeated follows preserve preferences unless explicitly changed. Following
-        records notification state only and grants no access.
+        Repeated follows preserve preferences unless explicitly changed. The
+        follower manager requires the person's live record read; a role owner
+        grants access before adding a new follower.
         """
 
         return apps.get_model("messaging", "ThreadFollower").objects.subscribe(
@@ -873,11 +883,13 @@ class ThreadedModelMixin(models.Model):
             # System bookkeeping on an already-authorized create; see the
             # autofollow elevation note in MessageManager.post_to_thread.
             with system_context(reason="messaging.autofollow"):
-                follower_model.objects.subscribe(
-                    self,
-                    user_id=created_by_id,
-                    role=self.thread_attachment_role,
-                )
+                account = get_user_model()._base_manager.get(pk=created_by_id)
+                if account.kind != "person" or self.thread_reader_allowed(account):
+                    follower_model.objects.subscribe(
+                        self,
+                        user=account,
+                        role=self.thread_attachment_role,
+                    )
         message_model = apps.get_model("messaging", "Message")
         if self.thread_create_log:
             self._message_system_post(

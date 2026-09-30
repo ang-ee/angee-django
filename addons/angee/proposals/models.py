@@ -625,7 +625,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if subject_reaches_user(subject, self.requester_user_id()):
             raise RecordAccessSubjectRefused()
 
-    def admit(self, user: models.Model, party: models.Model | None = None, track: bool = False) -> Any:
+    def admit(self, user: models.Model, party: models.Model | None = None, track: bool = False,
+              follow: bool = False) -> Any:
         """Create the unique shell and optionally its owning track, idempotently."""
         if not self.has_access("write"):
             raise PermissionDenied("Round write access is required.")
@@ -644,6 +645,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                     raise ValidationError({"party": "The shell has a different party."})
                 if track:
                     proposal.create_track()
+                if follow and getattr(user, "kind", None) == "person":
+                    locked.message_subscribe(user=user)
         return proposal.with_actor(actor)
 
     def remove_responder(self, user: models.Model, expected_revision: int | None = None) -> dict[str, Any]:
@@ -760,6 +763,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                             optional_subject_relation=holder_relation,
                         )
                     )
+            apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_collections(
+                [rows for rows, _track_rows in collections],
+            )
             locked.save(update_fields=("updated_at",))
         _adopt(self, locked, ("updated_at", "updated_by"))
         return result
@@ -2271,6 +2277,22 @@ class TaskProposalAccess(ImmutableFieldsMixin):
     extends = "projects.Task"
     runtime = False
     rebac_grantable = {"proposal_viewer": "share"}
+
+    @classmethod
+    def visibility_audience_fields(cls) -> tuple[str, ...]:
+        """Include the proposal facts consulted by this audience override."""
+
+        return (*super().visibility_audience_fields(), "clarification_round_id", "shared_with_responders")
+
+    def visibility_audience_label(self) -> str:
+        """Name the clarification audience from the task's proposal facts."""
+
+        if self.clarification_round_id is not None:
+            return ("Round readers and question participants" if self.visibility == "inherited"
+                    else "Question participants")
+        if self.shared_with_responders:
+            return "Responders and task participants"
+        return super().visibility_audience_label()
     clarification_round = models.ForeignKey(
         "proposals.Round",
         null=True,

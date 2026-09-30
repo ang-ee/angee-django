@@ -65,6 +65,7 @@ export interface ResourceVocabulary {
   label?: string;
   pluralLabel?: string;
   fields?: Readonly<Record<string, string>>;
+  relations?: Readonly<Record<string, string>>;
 }
 
 /** Project validated vocabulary onto this schema's existing presentation index. */
@@ -78,6 +79,9 @@ export function schemaFieldMetadataWithVocabulary(
       ...model,
       label: words.label,
       pluralLabel: words.pluralLabel,
+      ...(words.relations ? { resource: { ...model.resource, grantable: model.resource.grantable?.map((relation) => ({
+        ...relation, label: words.relations?.[relation.relation] ?? relation.label,
+      })) } } : {}),
       fields: Object.fromEntries(Object.entries(model.fields).map(([field, facts]) => [
         field, words.fields?.[field] === undefined ? facts : { ...facts, label: words.fields[field] },
       ])),

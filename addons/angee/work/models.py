@@ -772,6 +772,36 @@ class ProjectWork(models.Model):
         related_name="projects",
     )
 
+    @transaction.atomic
+    def admit_manager(self, user: models.Model) -> models.Model:
+        """Add a team moderator and follow this project in the same transaction."""
+
+        if not self.has_access("share") or self.team_id is None:
+            raise PermissionDenied("Project share and a team are required to add a manager.")
+        if getattr(user, "kind", None) != "person":
+            raise ValidationError({"user": "Choose a person account."})
+        with system_context(reason="work.project.manager.party"):
+            party = apps.get_model("parties", "Party").objects.for_user(user)
+        membership_model = apps.get_model("spaces", "Membership")
+        membership = membership_model.objects.add_confirmed(
+            group=self.team, party=party, role=membership_model.MembershipRole.MODERATOR,
+        )
+        with system_context(reason="work.project.manager.follow"):
+            self.message_subscribe(user=user)
+        return membership
+
+    @transaction.atomic
+    def remove_manager(self, membership: models.Model) -> None:
+        """Dismiss one team moderator through the roster's removal owner."""
+
+        if not self.has_access("share") or self.team_id is None:
+            raise PermissionDenied("Project share and a team are required to remove a manager.")
+        if membership.group_id != self.team_id or membership.role != membership.MembershipRole.MODERATOR:
+            raise ValidationError({"membership": "Choose a manager of this project's team."})
+        if not membership.has_access("write"):
+            raise PermissionDenied("Team roster management is required.")
+        membership.dismiss()
+
     class Meta:
         """Abstract contribution folded into the concrete project table."""
 

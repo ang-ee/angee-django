@@ -1,3 +1,4 @@
+import { rowValueAtPath } from "@angee/metadata";
 import { useMutation } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
@@ -19,10 +20,11 @@ export interface VisibilityControlProps extends VisibilityBinding {
   options: readonly WidgetOption[];
   label?: string;
   readOnly?: boolean;
+  audienceLabel?: string;
 }
 
 /** Inline audience label. Only returned choices can invoke the record's verb. */
-export function VisibilityControl({ value, options, label, readOnly, ...binding }: VisibilityControlProps): ReactElement {
+export function VisibilityControl({ value, options, label, readOnly, audienceLabel, ...binding }: VisibilityControlProps): ReactElement {
   const t = useUiT();
   const preview = useRuntimeViewAs();
   const settle = useActionResultRun();
@@ -37,20 +39,19 @@ export function VisibilityControl({ value, options, label, readOnly, ...binding 
     await settle(() => state.binding.onSelect(selected));
   } });
   const badge = <Badge tone="neutral" density="compact" shape="pill">
-    <Glyph decorative name="eye" />{optionLabel(options, current ?? String(value ?? ""))}
+    <Glyph decorative name="eye" />{audienceLabel ?? optionLabel(options, current ?? String(value ?? ""))}
   </Badge>;
   const destinations = options.filter((option) => option.value !== current && allowed.has(option.value) && !option.disabled);
-  const onlyDestination = options.every((option) => allowed.has(option.value)) && destinations.length === 1
-    ? destinations[0] : undefined;
-  if (onlyDestination) {
-    const visibility = typeof onlyDestination.label === "string" ? onlyDestination.label : onlyDestination.value;
-    return <Button type="button" variant="ghost" size="sm" disabled={disabled || mutation.isPending}
-      aria-label={t("visibility.change", { visibility })}
-      onClick={() => { if (!mutation.isPending) mutation.mutate(onlyDestination.value); }}>
-      {badge}<Glyph decorative name="arrow-right" />{onlyDestination.label}
-    </Button>;
+  if (destinations.length === 0) return badge;
+  if (destinations.length === 1) {
+    const destination = destinations[0]!;
+    const visibility = typeof destination.label === "string" ? destination.label : destination.value;
+    return <span className="inline-flex items-center gap-2">{badge}<Button type="button" variant="ghost" size="sm"
+      disabled={disabled || mutation.isPending}
+      onClick={() => { if (!mutation.isPending) mutation.mutate(destination.value); }}>
+      {t("visibility.change", { visibility })}
+    </Button></span>;
   }
-  if (options.length < 2) return badge;
   return <DropdownMenu.Root>
     <DropdownMenu.Trigger render={<Button type="button" variant="ghost" size="sm"
       disabled={disabled || mutation.isPending} aria-label={label ?? t("visibility.label")} />}>
@@ -59,10 +60,10 @@ export function VisibilityControl({ value, options, label, readOnly, ...binding 
     <DropdownMenu.Portal><DropdownMenu.Positioner><DropdownMenu.Content>
       <DropdownMenu.Group>
       <DropdownMenu.Label>{label ?? t("visibility.label")}</DropdownMenu.Label>
-      {options.map((option) => <DropdownMenu.Item key={option.value}
-        disabled={disabled || mutation.isPending || option.value === current || !allowed.has(option.value) || Boolean(option.disabled)}
+      {destinations.map((option) => <DropdownMenu.Item key={option.value}
+        disabled={disabled || mutation.isPending}
         onClick={() => { if (!mutation.isPending) mutation.mutate(option.value); }}>
-        {option.label}{!allowed.has(option.value) || option.disabled ? <Glyph decorative name="lock" /> : null}
+        {option.label}
       </DropdownMenu.Item>)}
       </DropdownMenu.Group>
     </DropdownMenu.Content></DropdownMenu.Positioner></DropdownMenu.Portal>
@@ -88,6 +89,8 @@ function RecordVisibilityWidget({ field }: WidgetRenderProps): ReactElement {
   const allowedValues = Array.isArray(record?.allowed_visibility)
     ? record.allowed_visibility.filter((value): value is string => typeof value === "string") : [];
   return <VisibilityControl value={record?.visibility} options={action.options ?? field?.options ?? []}
+    audienceLabel={action.audienceField && record
+      ? String(rowValueAtPath(record, action.audienceField) ?? "") || undefined : undefined}
     readOnly={formReadOnly || actionsBlocked || state.fetching}
     allowedValues={allowedValues}
     onSelect={(value) => {

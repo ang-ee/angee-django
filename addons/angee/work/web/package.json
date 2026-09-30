@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/iam": "workspace:*",
     "@angee/projects": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",

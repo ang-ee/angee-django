@@ -7,6 +7,7 @@ import {
   formViewRecordActionsSlot,
   formViewSectionsSlot,
   Field,
+  FormView,
   Group,
   type BaseMenuItem,
 } from "@angee/ui";
@@ -23,7 +24,9 @@ import {
   XCircle,
 } from "lucide-react";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { ShareAccessRailGroup } from "@angee/iam";
 
+import { ProjectManagerAccessRole } from "./access-role";
 import { enWorkMessages } from "./i18n";
 import { QUEUE_MODEL } from "./resources";
 import { StageStatusbar } from "./stage-statusbar";
@@ -149,6 +152,9 @@ const work = defineBaseAddon({
   i18n: { work: enWorkMessages },
   widgets: { "work.stage": { read: StageStatusbar, edit: StageStatusbar } },
   slots: [
+    { slot: "access.roles", model: PROJECT_MODEL, id: "work.manager", content: ProjectManagerAccessRole },
+    { ...FormView.railSlot(PROJECT_MODEL), id: "work.people-rail", sequence: 40,
+      content: ShareAccessRailGroup },
     {
       ...formViewSectionsSlot(PROJECT_MODEL),
       id: "work.project-team",

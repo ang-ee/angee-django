@@ -130,10 +130,11 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       readOnlyWhen={selection.readOnlyWhen}>
       <Field name="title" title label={selection.titleLabel} />
       <Field name="allowed_visibility" hidden readOnly />
+      <Field name="audience_label" hidden readOnly />
       <Field name="revision" readOnly hidden />
       <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
         visibilityAction={{ document: SetTaskVisibilityDocument, resultField: "set_task_visibility",
-          idArgument: "id", revisionArgument: "expected_revision" }} />
+          idArgument: "id", revisionArgument: "expected_revision", audienceField: "audience_label" }} />
       {selection.statusField && selection.statusField !== "status"
         ? <Field name={selection.statusField.name} widget={selection.statusField.widget} status readOnly />
         : <Field name="status" widget="statusbar" status options={statusOptions} createOnly />}

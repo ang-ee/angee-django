@@ -60,7 +60,7 @@ class RecordAccessQuery:
             raise ValueError("Record access requires at least one target id.")
         accesses: list[tuple[PublicID, DirectRecordAccess]] = []
         for target_id in target_ids:
-            target, allowed = _authorized_record_access(info, model, target_id)
+            target, allowed = authorized_record_access(info, model, target_id)
             accesses.extend((target_id, access) for access in target.direct_record_access(allowed))
         subjects = resolve_subjects(access.subject for _, access in accesses)
         return [
@@ -80,7 +80,7 @@ class RecordAccessQuery:
         declaration = model.get_rebac_grantable()
         allowed = set(declaration)
         for target_id in dict.fromkeys(target_ids):
-            _target, target_allowed = _authorized_record_access(info, model, target_id)
+            _target, target_allowed = authorized_record_access(info, model, target_id)
             allowed.intersection_update(target_allowed)
         return [
             RecordAccessOption(relation=relation, permission=permission)
@@ -168,7 +168,7 @@ def _grant_subject(value: str) -> SubjectRef:
     return subject
 
 
-def _authorized_record_access(
+def authorized_record_access(
     info: strawberry.Info,
     model: type[AngeeModel],
     target_id: PublicID,

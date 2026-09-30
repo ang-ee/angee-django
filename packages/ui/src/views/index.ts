@@ -399,7 +399,10 @@ export type {
   TabProps,
 } from "./page";
 
-export { ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry } from "./access/ManageAccessDialog";
+export {
+  ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry,
+  type AccessPerson, type AccessRole, type AccessVisibility,
+} from "./access/ManageAccessDialog";
 export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
 
 export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";

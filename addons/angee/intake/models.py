@@ -577,9 +577,13 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 # This owner-controlled FK write is part of the same save/revision.
                 self.access_decision = self._new_access_decision()
                 system_queryset(type(self)).filter(pk=self.pk).update(access_decision=self.access_decision)
+            if reset_decision:
+                apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(self.target)
             if assignment_changed and values["task_id"] is not None and values["party_id"] is not None:
                 with system_context(reason="intake.need.follow_requester"):
-                    candidate.target.message_subscribe(party=candidate.party)
+                    account = candidate._account_for_party(values["party_id"])
+                    if account is None or account.kind != "person" or candidate.target.thread_reader_allowed(account):
+                        candidate.target.message_subscribe(party=candidate.party)
 
     def _link_requester(self, *, allow_create: bool, system_reason: str | None = None) -> Any:
         """Resolve and assign the account; the caller persists it atomically.
@@ -621,6 +625,30 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
         return self._decide_access(action, {"reason": reason}, expected_revision=expected_revision)
 
+    @transaction.atomic
+    def admit_requester(self, user: models.Model) -> Any:
+        """Assign, approve, and follow one person through the existing decision owner."""
+
+        if getattr(user, "kind", None) != "person":
+            raise ValidationError({"user": "Choose a person account."})
+        with system_context(reason="intake.need.admit_requester.party"):
+            party = apps.get_model("parties", "Party").objects.for_user(user)
+        self.party = party
+        self.save(update_fields=("party", "updated_at"))
+        approved = self.decide_access("approve")
+        if approved is None or not self.target.thread_reader_allowed(user):
+            raise PermissionDenied("The admitted requester must be able to read the record.")
+        with system_context(reason="intake.need.admit_requester.follow"):
+            self.target.message_subscribe(user=user)
+        return approved
+
+    @transaction.atomic
+    def remove_requester(self) -> None:
+        """Remove the requester seat and its decision-backed read together."""
+
+        self.party = None
+        self.save(update_fields=("party", "updated_at"))
+
     def reset_access(self, *, confirmed: bool, expected_revision: int) -> Any:
         """Retain requester identity and supersede its access answer atomically.
 
@@ -644,6 +672,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 _access_decision=True, expected_revision=expected_revision,
                 update_fields=("access_decision", "updated_at"),
             )
+            apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(locked.target)
         self.refresh_from_db()
         return self
 
@@ -663,7 +692,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 "share"
             ):
                 raise PermissionDenied("Deciding request access requires need write and target share.")
-            if action == "approve":
+            if action == "approve" and locked._account_for_party(locked.party_id) is None:
                 get_user_model().objects.check_create()
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
@@ -697,6 +726,10 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 _access_decision=True, expected_revision=expected_revision,
                 update_fields=("party", "access_decision"),
             )
+            if action == "approve" and user is not None and getattr(user, "kind", None) == "person":
+                with system_context(reason="intake.need.follow_approved_requester"):
+                    if locked.target.thread_reader_allowed(user):
+                        locked.target.message_subscribe(user=user)
         self.refresh_from_db()
         return user
 

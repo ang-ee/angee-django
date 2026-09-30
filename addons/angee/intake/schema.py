@@ -9,6 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -18,11 +19,12 @@ from angee.decisions.schema import DecisionVerdict, HumanDecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.intake.models import NeedAccessAction
 from angee.messaging.schema import ChannelType, MessageType
@@ -31,6 +33,7 @@ from angee.projects.schema import ProjectType, TaskType
 from angee.work.schema import WorkQueueType
 
 Need = apps.get_model("intake", "Need")
+User = apps.get_model("iam", "User")
 Channel = apps.get_model("messaging", "Channel")
 Party = apps.get_model("parties", "Party")
 Project = apps.get_model("projects", "Project")
@@ -71,6 +74,18 @@ class NeedType(AngeeNode):
     permissions = permissions_field(("write",))
     claimed_name: auto
     claimed_email: str | None
+
+    @strawberry_django.field(annotate={
+        "_requester_user_id": lambda info: models.Subquery(
+            apps.get_model("parties", "Person")._base_manager.filter(
+                pk=models.OuterRef("party_id"),
+            ).values("user_id")[:1],
+        ),
+    })
+    def requester_user(self) -> strawberry.ID | None:
+        """Project the linked account without resolving each party separately."""
+
+        return optional_public_id(user_public_id(cast(Any, self)._requester_user_id))
     access_decision: HumanDecisionType | None = actor_scoped_to_one("access_decision")
     access_verdict: NeedAccessVerdict | None = strawberry_django.field(  # type: ignore[valid-type]
         only=["access_decision_id"], prefetch_related=["access_decision"],
@@ -192,6 +207,25 @@ class IntakeActionMutation:
         except (StaleRevisionError, RetryableDecisionError) as error:
             raise ValidationError({"conflict": error.code}) from error
         return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
+
+    @strawberry.mutation
+    @action_guard("Requester admission failed.")
+    def admit_need_requester(self, info: strawberry.Info, need: PublicID, user: PublicID) -> ActionResult:
+        """Assign the selected account, approve read, and follow in one act."""
+
+        target = authorized_permission_target(info, Need, need, "write")
+        account = authorized_permission_target(info, User, user, "read")
+        target.admit_requester(account)
+        return ActionResult(ok=True, message="Requester admitted.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Requester removal failed.")
+    def remove_need_requester(self, info: strawberry.Info, need: PublicID) -> ActionResult:
+        """Remove the Need's requester seat and its decision-backed read."""
+
+        target = authorized_permission_target(info, Need, need, "write")
+        target.remove_requester()
+        return ActionResult(ok=True, message="Requester removed.", id=target.sqid)
 
 
 _NEED_RESOURCE = hasura_model_resource(

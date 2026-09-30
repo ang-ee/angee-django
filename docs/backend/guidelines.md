@@ -573,9 +573,16 @@ data through REBAC, never a queryset bypass.
   and let its owning verb supply it.
 - **Following is notification state, never access.** Messaging's
   `ThreadFollower` is keyed by party; follow/unfollow write no relationship
-  tuples. Explicit `Thread.grant_reader` / `revoke_reader` remain shares governed
-  by `share`. Team and record audiences are read live through the messaging
-  contracts; they are not copied into followers. See
+  tuples. A person account follows a record only while it passes that record's
+  `thread_reader_allowed` gate. Explicit add may grant read through the selected
+  role owner and follow in one transaction; automatic follows skip nonreaders.
+  The access owner's direct revoke or seat removal calls
+  `ThreadFollower.objects.end_unreadable_for_record` in the same transaction to
+  end follows that lost read. Accountless parties and service accounts remain delivery
+  routes without this read condition. Unfollow leaves access intact. Explicit
+  `Thread.grant_reader` / `revoke_reader` remain shares governed by `share`.
+  Team and record audiences are read live through the messaging contracts;
+  they are not copied into followers. See
   [`ThreadedModelMixin`](../../addons/angee/messaging/models.py) and
   [`ThreadNotificationManager`](../../addons/angee/messaging/managers.py).
 - **Posture is data, not schema.** `permissions.extends.zed` fragments union

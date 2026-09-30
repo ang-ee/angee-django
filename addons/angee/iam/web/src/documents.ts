@@ -18,6 +18,14 @@ export const RecordAccessDocument = graphql(`
   }
 `);
 
+export const RecordReadersDocument = graphql(`
+  query RecordReaders($targetType: String!, $targetId: ID!) {
+    record_readers(target_type: $targetType, target_id: $targetId) {
+      subject label you following
+    }
+  }
+`);
+
 export const IamOverview = graphql(`
   query IamOverview($peekLimit: Int = 6) {
     iam_roles(limit: 1000, order_by: [{ namespace: asc }, { role_id: asc }]) {

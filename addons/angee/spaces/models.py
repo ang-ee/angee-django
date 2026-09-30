@@ -153,6 +153,22 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
     subtype_keys = models.JSONField(blank=True, default=list)
     objects = MembershipManager()
 
+    @transaction.atomic
+    def dismiss(self) -> None:
+        """End follows whose team read disappears with this roster seat."""
+
+        super().dismiss()
+        apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_party(self.party)
+
+    @transaction.atomic
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Apply the same read cleanup when removing the seat altogether."""
+
+        party = self.party
+        result = super().delete(*args, **kwargs)
+        apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_party(party)
+        return result
+
     class Meta:
         """Django options for the canonical group roster edge."""
 

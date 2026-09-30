@@ -56,6 +56,13 @@ export const enUiMessages: Record<string, string> = {
   "gantt.year": "Year",
 
   "access.share": "Share",
+  "access.people": "People",
+  "access.visibility": "Visibility",
+  "access.following": "Following",
+  "access.you": "you",
+  "access.addPerson": "Add a person",
+  "access.noReaders": "No readers yet.",
+  "access.direct": "Shared directly",
   "access.title": "Share {label}",
   "access.selection": "{count} selected records",
   "access.directOnly": "Manage direct access to the selected records.",

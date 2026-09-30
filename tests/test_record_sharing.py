@@ -112,7 +112,7 @@ def test_relation_options_are_authorized_independently(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(sharing, "authorized_permission_target", authorize)
 
-    resolved, allowed = sharing._authorized_record_access(None, ShareModel, "row_1")
+    resolved, allowed = sharing.authorized_record_access(None, ShareModel, "row_1")
 
     assert resolved is target
     assert allowed == ["viewer"]

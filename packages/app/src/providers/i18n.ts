@@ -92,6 +92,11 @@ export function composeAppVocabulary(
       for (const field of Object.keys(words.fields ?? {})) {
         if (!fields.has(field)) throw new Error(`Vocabulary references unknown field "${model}.${field}".`);
       }
+      const relations = new Set(resources.filter((resource) => resource.modelLabel === model)
+        .flatMap((resource) => (resource.grantable ?? []).map((relation) => relation.relation)));
+      for (const relation of Object.keys(words.relations ?? {})) {
+        if (!relations.has(relation)) throw new Error(`Vocabulary references unknown relation "${model}.${relation}".`);
+      }
       if (normalized[model]) throw new Error(`Vocabulary claims resource "${model}" twice.`);
       normalized[model] = words;
     }

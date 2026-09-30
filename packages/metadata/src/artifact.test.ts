@@ -18,6 +18,20 @@ test("scoped vocabulary projects labels without altering resource or query ident
   expect(base.labels["notes.Note"]!.fields.title?.label).toBeUndefined();
 });
 
+test("scoped vocabulary labels declared grant relations without changing their ids", () => {
+  const resource = testDataResource("notes.Note", { grantable: [{
+    relation: "reader", permission: "share", subjects: [],
+  }] });
+  const base = schemaFieldMetadataFromDataResources([resource]);
+  const scoped = schemaFieldMetadataWithVocabulary(base, {
+    "notes.Note": { relations: { reader: "Can read" } },
+  });
+  expect(scoped.labels["notes.Note"]?.resource.grantable?.[0]).toMatchObject({
+    relation: "reader", label: "Can read", permission: "share",
+  });
+  expect(base.labels["notes.Note"]?.resource.grantable?.[0]?.label).toBeUndefined();
+});
+
 describe("generated subtitle metadata", () => {
   test("accepts declared dotted selection paths", () => {
     const resource = testDataResource("knowledge.Page", {

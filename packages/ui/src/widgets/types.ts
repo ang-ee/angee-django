@@ -18,6 +18,8 @@ export interface VisibilityAction {
   revisionArgument?: string;
   /** Verb enum values may differ from create-input values. */
   options?: readonly WidgetOption[];
+  /** Readable server projection carrying the current audience's human label. */
+  audienceField?: string;
 }
 
 export interface WidgetOption {
