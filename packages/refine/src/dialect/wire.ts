@@ -1,5 +1,17 @@
 import type { MetaQuery } from "@refinedev/core";
-import { assertName as assertGraphQLName } from "graphql";
+import { assertName as assertGraphQLName, parse, print, type DocumentNode } from "graphql";
+
+/** One guarded document and printed cache identity for authored GraphQL reads. */
+export function graphqlDocumentIdentity(value: unknown): { document: DocumentNode; identity: string } {
+  let document: DocumentNode;
+  if (typeof value === "string") document = parse(value);
+  else if (isRecord(value) && value.kind === "Document") {
+    document = value as unknown as DocumentNode;
+  } else {
+    throw new TypeError('Expected a GraphQL document string or AST with kind "Document".');
+  }
+  return { document, identity: print(document) };
+}
 
 export function queryMeta(
   gqlQuery: unknown,
