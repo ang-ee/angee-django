@@ -8,7 +8,8 @@ vendor parsing and idempotent target ingest. Each attempt reports progress
 through `ArchiveExecutionReporter.heartbeat()`; the workflow retains source
 and target artifacts.
 
-Extractor declarations use `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.<key>`.
+`ArchiveExtractor` owns the `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES` registry;
+its addon declares that base through `ANGEE_IMPL_REGISTRIES`.
 Implementations import `ArchiveExtractor` and `ArchiveExecutionReporter` from
 `angee.workflows_integrate.archive_steps`. Safe ZIP helpers live in
 `angee.storage.archives`. The framework's workflow and decision owners handle

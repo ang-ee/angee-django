@@ -65,3 +65,11 @@ provider ids in the response are retained evidence, not stable hash or reuse key
 [`normalize_inference_usage`](../../addons/angee/agents/models.py) is the one
 usage projection for direct requests and agent sessions. It emits non-zero
 `input_tokens`, `output_tokens`, `tokens`, `requests`, and `tool_calls` values.
+
+The independent [`extraction`](../../addons/angee/extraction/README.md) domain
+uses `InferenceModel.infer` for grounded recognition and mapping. Its
+[`workflows_extraction`](../../addons/angee/workflows_extraction/README.md)
+adapter owns the workflow graph and steps: `infer_evidence` reads a pinned
+extraction revision, rechecks source access, and routes an unavailable model to
+the `inference_failed` outcome with a reader-facing reason. Provider selection,
+source retention and correction authority stay with extraction and agents.

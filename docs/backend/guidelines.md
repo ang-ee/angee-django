@@ -435,6 +435,12 @@ data through REBAC, never a queryset bypass.
   implementation changes. A refused trigger disables with a reason; a refused
   child start fails its step. The enable preview shows prospective grants and
   workflow monitor readers through REBAC's native subject lookup.
+  A `TriggerSource` declares its grant targets; a model captured by
+  `record_changed` explicitly opts in and declares its own grant targets.
+  Enablement writes listable, revocable tuples to the workflow principal, not
+  an implicit permission on the enabling user. Workflow monitoring grants
+  readers access to triggered runs; per-reader record references remain redacted
+  when their target is no longer readable.
   An agent's `kind=service` account is selected by
   `Agent.principal_subject()`; permissions and audit stamps use
   that same user. The agent's reach is its grants, independent of its owner's
@@ -790,6 +796,13 @@ and current contracts before applying a historical example to a new deployment.
   `--fake` must not hide a mismatch. A consumer repository must explicitly
   authorize any reset of its own labels on a rebuilt database; framework upgrades
   do not authorize a reset.
+- **Fresh-stack reset debt (Decision 29).**
+  [`Runtime.clean_configured`](../../angee/compose/runtime.py) preserves migration
+  history by policy. There is no owner for resetting generated migration history
+  together with a throwaway stack, so those stacks currently delete generated
+  runtime migrations by hand. The fix needs a stack-owned reset operation that
+  proves the stack and its database are disposable before removing that history;
+  the preservation policy blocks using `angee clean` for this purpose.
 - **Data migrations access REBAC-scoped models through `_base_manager`, and
   backfills need a rows-present proof.** A manager with `use_in_migrations = True`
   (iam's `UserManager`, inherited from Django's) rides into the historical model,
@@ -922,6 +935,12 @@ and current contracts before applying a historical example to a new deployment.
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
   `ModelLabelField` from [`angee.base.fields`](../../angee/base/fields.py), so
   instance saves and queryset writes share their storage rules.
+  **Messaging field adoption debt:**
+  [`MessageSubtype.model_label`](../../addons/angee/messaging/models.py) and
+  [`ThreadNotification.failure_reason`](../../addons/angee/messaging/models.py)
+  still use plain Django fields. Adopt `ModelLabelField` and
+  `DiagnosticTextField` at those models after live-data migrations preserve and
+  normalize existing values; the required migration is the blocker.
   Never replace these rules with a database trigger or function.
 - **Resource imports use the native import-export lifecycle.** Models composing
   [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare
@@ -1377,25 +1396,33 @@ validated at the driver boundary.
   class resolution, input bindings, readiness, failure routing and result
   projection. Callers use its methods rather than inspecting node declarations
   to make their own execution decisions. `WorkflowManager` owns identity,
-  conditional draft saves and numbered publication.
+  conditional draft saves and numbered publication. Publication resolves each
+  `await_run` child's outcome contract under the author's read scope and freezes
+  it in the parent document. Execution reads that frozen contract; a child
+  outcome outside it fails the await step, and a changed child contract requires
+  affected parents to be republished.
 - **A `Step` declares typed input, output and config.** Register its key through
   `ANGEE_WORKFLOW_STEP_CLASSES`. Its `run` method receives a `StepContext` and
   returns a settlement. The context supplies the admitted
   actor, input, checkpoint and attempt identity. Database steps execute inside
   the run's transaction; keep external I/O out of their bodies. IO bodies run
   after the claim commits, outside every transaction. Helpers construct plain
-  settlements; `Step.check` validates and serializes once at the body boundary.
+  settlements; each settlement type validates its own values through
+  `Step.check` at the body boundary. Retryability, timeouts and stack traces
+  belong to the runner's attempt record, not to consumer settlements.
   A failed IO attempt cannot roll back writes already committed by its body.
 - **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
-  ready-row dispatch on successful commit. `advance` requires that lock and
-  composes `Definition` with the persistence owners. It isolates settlement,
+  ready-row dispatch on successful commit. [`Runner.advance`](../../addons/angee/workflows/runner.py)
+  requires that lock and composes `Definition` with the persistence owners.
+  The runner owns execution and the tick; managers and querysets own row-set
+  verbs. It isolates settlement,
   planning and failure recording with savepoints so a later planning failure
   does not discard a successful body write.
 - **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
   owns `claim`, `settle`, `to_waiting`, `to_ready`, `cancel_open`, `dispatch` and
   `count_redispatch`; `StepAttemptQuerySet.close` owns attempt closure.
-  Conditional updates check the attempt fence. The periodic tick rechecks due
-  waits, expired claims and stale deliveries under `hold`, then delegates to
+  Conditional updates check the attempt fence. The runner's periodic tick
+  rechecks due waits, expired claims and stale deliveries under `hold`, then delegates to
   those verbs. The effect marker and heartbeat check the same attempt fence
   under the step lock used by the reaper. Uncertain non-idempotent effects wait
   for explicit operator acknowledgement; dispatch exhaustion also waits for an
@@ -1407,7 +1434,13 @@ validated at the driver boundary.
   planning, and retry replans from all retained rows.
   Reprocessing records its predecessor and uses the requesting actor on the
   current publication. Artifacts reference actor-readable records without
-  granting access to them. Paging carries the checkpoint into a fresh claim.
+  granting access to them. Admission retains the subject and each declared
+  record-reference input as shared `DerivedFrom` evidence, after checking the
+  run actor's standing read access. Run readers see those references through the
+  shared record-reference projection, which redacts target identities when
+  access has gone. Paging carries the checkpoint into a fresh claim. A run
+  records one protected cause with its origin at start; retention cannot prune
+  a cited cause before its effects, and a retained event protects its trigger.
 - **Reviews compose the independent decisions lifecycle.**
   [`ReviewStep`](../../addons/angee/workflows/reviews.py) freezes typed basis,
   asks seats, and applies settled answers as the run actor. Decisions owns
@@ -1427,6 +1460,15 @@ validated at the driver boundary.
 ## Framework Contracts
 
 ### Direct record access
+
+[`RecordRefMixin`](../../angee/base/refs.py) owns the canonical content-type
+and public-ID projection for a generic record pointer.
+[`RecordReferenceNode`](../../addons/angee/graphql/relations.py) and
+`with_record_reference_access` project it into GraphQL under the current
+reader's scope. A hidden target yields null identity fields; its model and ID
+must also stay unavailable through resource filters and aggregate counts. Addon
+resources declare their record-reference filter axes through the shared Hasura
+resource owner instead of reimplementing this projection.
 
 Models opt into direct sharing with `rebac_grantable`, mapping each relation to
 the permission required to manage it. The model remains the policy owner:

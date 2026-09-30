@@ -20,16 +20,20 @@ contract.
 Schema declaration checks, format validation and structural schema operations
 come from [`angee.base.jsonschema`](../../../angee/base/jsonschema.py).
 
-[`Step`](steps.py) composes the existing implementation registry and supplies its
-input, output and config types. [`StepContext`](context.py) carries those parsed
+[`Step`](steps.py) owns `ANGEE_WORKFLOW_STEP_CLASSES` through the shared
+implementation registry and supplies its input, output and config types.
+[`StepContext`](context.py) carries those parsed
 values, the execution actor, record access, identity and checkpoint state. Domain
 code executes under the actor's permissions. It must keep external effects out
-of database steps.
+of database steps. Consumer settlements validate their own values; the runner
+records retry, timeout and diagnostic facts on attempts.
 
 [`ReviewStep`](reviews.py) asks through the independent decisions addon and
 applies settled answers in a worker as the run actor. Each answer carries its
 resolver and frozen basis. Rejected application starts another review round;
-other failures retain the answers for operator recovery. Decision admission
+`ReviewStep.max_rounds` bounds re-asks, while each decision's `max_attempts`
+bounds invalid submissions to that seat. Other failures retain the answers for
+operator recovery. Decision admission
 requires standing evidence access and creates no grants. The built-in `review`
 uses this same contract for configured seats. Under `all`, differing actions
 take an explicitly routed `disputed` branch.
@@ -41,13 +45,17 @@ requires workflow monitoring access. Execution rows and artifacts are engine-own
 the console exposes read resources and explicit operator actions through the
 shared GraphQL resource and action owners.
 
-[`WorkflowRunManager` and `StepRunManager`](managers.py) own admission, claims,
-results, cancellation and recovery. A database step holds its run lock for its
+[`Runner`](runner.py) owns execution and the tick. The run and step managers and
+querysets in [`managers.py`](managers.py) own admission, locked row transitions,
+cancellation and retention. A database step holds its run lock for its
 whole transaction. The domain writes, fenced result and successor planning
 commit together. After commit, every ready row of an active run is sent to the job
 queue, including parallel branches whose earlier message encountered a busy run.
 Run admission stores its origin and exactly one protected cause in the same
 insert: a parent step, a prior run, or a trigger event. Manual runs have no cause.
+Each `TriggerSource` declares grant targets through
+`ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES`; a `record_changed` model opts in with
+`RecordChangedOptIn` and declares its own grant scope.
 When the actor is a workflow principal, admission also checks the pinned
 version's human publisher against every delegation permission held through that
 principal's enabled triggers. The source-owned `TriggerGrantTarget` stores the
@@ -72,7 +80,8 @@ appear. The console shows this disclosure before it confirms enablement.
 Grant listings identify each target by its model noun and disclose its record
 label only while the reader retains access to that target.
 Retention prunes a cited run only after its continuations and reprocesses are
-pruned; retained events protect their trigger and survive pruning of their run.
+pruned. An admitted event survives pruning of its run, and retained events
+protect their trigger; the purge preview blocks deleting that trigger.
 IO bodies run after their claim commits, without a transaction. Their result is
 fenced by the attempt counter and deadline. IO timeouts leave a settlement window
 below the worker's soft and hard limits; [`Step`](steps.py) owns those bounds.
