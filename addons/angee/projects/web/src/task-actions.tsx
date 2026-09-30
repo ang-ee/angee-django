@@ -70,7 +70,6 @@ export function useTaskRowActions<
 export interface TaskFormSelection {
   groups?: readonly ("placement" | "assignment" | "details")[];
   verbs?: readonly ("complete" | "drop" | "reopen" | "promote")[];
-  verbLabels?: Partial<Record<"complete" | "drop" | "reopen" | "promote", string>>;
   contextLine?: FormProps["contextLine"];
   returning?: FormProps["returning"];
   /**
@@ -78,11 +77,8 @@ export interface TaskFormSelection {
    * rendered by that owner's widget (e.g. a queue stage contributed by work).
    */
   statusField?: "status" | { name: string; widget: string };
-  titleLabel?: string;
-  bodyLabel?: string;
   extraFields?: React.ReactNode;
   extraActions?: React.ReactNode;
-  readOnlyWhen?: FormProps["readOnlyWhen"];
 }
 
 /** Shared task form for collection routes and board create flows. */
@@ -125,10 +121,24 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
     [dropReasonOptions, dropTask, t],
   );
 
+  const standardActions = <>
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("complete") ? <Action
+      id="complete" placement="toolbar" label={t("task.action.complete")} permission="write"
+      icon="check" run={complete} visibleWhen={isOpenTask} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("drop") ? <Action
+      id="drop" label={t("task.action.drop")} permission="write" icon="circle-x" danger
+      args={[{ name: "reason", label: t("task.action.reason"), widget: "select", options: dropReasonOptions }]}
+      submit={dropSubmit} visibleWhen={isOpenTask} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("reopen") ? <Action
+      id="reopen" label={t("task.action.reopen")} permission="write"
+      icon="activity" run={reopen} visibleWhen={(record) => !isOpenTask(record)} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
+      id="promote" label={t("task.action.promote")} permission="write"
+      icon="projects" run={promote} /> : null}
+  </>;
   return (
-    <Form resource={TASK_MODEL} layout="tabs" contextLine={selection.contextLine} returning={selection.returning}
-      readOnlyWhen={selection.readOnlyWhen}>
-      <Field name="title" title label={selection.titleLabel} />
+    <Form resource={TASK_MODEL} layout="tabs" contextLine={selection.contextLine} returning={selection.returning}>
+      <Field name="title" title />
       <Field name="allowed_visibility" hidden readOnly />
       <Field name="revision" readOnly hidden />
       <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
@@ -156,45 +166,9 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />
       </Group> : null}
-      <Field name="note" widget="markdown.editor" body label={selection.bodyLabel} />
+      <Field name="note" widget="markdown.editor" body />
       {selection.extraFields}
-      {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("complete") ? <Action
-        id="complete"
-        placement="toolbar"
-        label={selection.verbLabels?.complete ?? t("task.action.complete")}
-        icon="check"
-        run={complete}
-        visibleWhen={isOpenTask}
-      /> : null}
-      {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("drop") ? <Action
-        id="drop"
-        label={selection.verbLabels?.drop ?? t("task.action.drop")}
-        icon="circle-x"
-        danger
-        args={[
-          {
-            name: "reason",
-            label: t("task.action.reason"),
-            widget: "select",
-            options: dropReasonOptions,
-          },
-        ]}
-        submit={dropSubmit}
-        visibleWhen={isOpenTask}
-      /> : null}
-      {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("reopen") ? <Action
-        id="reopen"
-        label={selection.verbLabels?.reopen ?? t("task.action.reopen")}
-        icon="activity"
-        run={reopen}
-        visibleWhen={(record) => !isOpenTask(record)}
-      /> : null}
-      {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
-        id="promote"
-        label={selection.verbLabels?.promote ?? t("task.action.promote")}
-        icon="projects"
-        run={promote}
-      /> : null}
+      {standardActions}
       {selection.extraActions}
     </Form>
   );

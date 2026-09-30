@@ -59,7 +59,6 @@ export function ResourceListBody<TRow extends Row = Row>({
   createDefaults,
   recordExtras,
   recordTabs,
-  admitContributions,
   recordPresentation,
   defaultRecordTab,
   overviewTab,
@@ -283,7 +282,6 @@ export function ResourceListBody<TRow extends Row = Row>({
       groups={resolvedFormGroups}
       actions={resolvedFormActions}
       {...formRenderProps}
-      admitContributions={admitContributions ?? formRenderProps.admitContributions}
       defaultValues={
         resolvedCreating ? resolvedCreateDefaults : undefined
       }

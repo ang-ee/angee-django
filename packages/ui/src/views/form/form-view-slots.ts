@@ -1,14 +1,14 @@
 import { optionToken } from "../../widgets/types";
 import {
   FORM_VIEW_RECORD_ACTIONS_SLOT,
+  FORM_VIEW_RAIL_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
 } from "../../runtime/contracts";
 import type { ModelSlotTarget } from "../../runtime";
 
 /** Passive record chrome rendered at the right edge of a saved form toolbar. */
 export const FORM_VIEW_RECORD_CHROME_SLOT = "form-view.record-chrome";
-
-export { FORM_VIEW_RECORD_ACTIONS_SLOT, FORM_VIEW_SECTIONS_SLOT };
+export { FORM_VIEW_RECORD_ACTIONS_SLOT, FORM_VIEW_RAIL_SLOT, FORM_VIEW_SECTIONS_SLOT };
 
 /** Resolve the model/implementation-scoped record-action contribution target. */
 export function formViewRecordActionsSlot(
@@ -32,4 +32,9 @@ export function formViewRecordActionsSlot(
 /** Resolve model-scoped contributed form groups/actions and saved-record tabs. */
 export function formViewSectionsSlot(resource: string): ModelSlotTarget {
   return { slot: FORM_VIEW_SECTIONS_SLOT, model: resource };
+}
+
+/** Address model-scoped groups rendered beside every saved-record tab. */
+export function formViewRailSlot(resource: string): ModelSlotTarget {
+  return { slot: FORM_VIEW_RAIL_SLOT, model: resource };
 }

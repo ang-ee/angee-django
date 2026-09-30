@@ -484,7 +484,9 @@ shared UI copy through an addon bundle.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title and its lead body before the overview's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget
-  with the addon. Do not repeat that state as another strip.
+  with the addon. Add `fill` when it should use the measured hero width; the
+  widget receives `field.fill` and `field.containerWidth`. Do not repeat that
+  state as another strip.
   Keep the one metadata-owned subtitle line and place operational fields in a
   collapsed Details group when their create-default behavior must remain available.
   Projects exports its [standard declarations](../../addons/angee/projects/README.md)
@@ -515,7 +517,14 @@ shared UI copy through an addon bundle.
 - **Record verbs compose the shared action owner.** A slot contribution may render
   [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
-  carries the form's dirty/pending gate to toolbar and menu verbs.
+  carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
+  and record-action slot contributions declare a projected `permission` when
+  their verbs require one; unavailable verbs are omitted.
+- **Record rails reuse form fields.** Contribute a `FormView.RailGroup` through
+  `FormView.railSlot(model)` with standard field descriptors and optional
+  group/row permissions. The form selects those fields and binds them to its
+  save state; unreadable rows stay absent. The rail follows the active record
+  tab and stacks beneath the body in a narrow container.
 - **Inline visibility controls bind a server verb.** Declare a
   `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record

@@ -126,6 +126,8 @@ export interface FieldPresentation {
 
 export interface WidgetField extends FieldPresentation {
   name?: string;
+  fill?: boolean;
+  containerWidth?: number;
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
   /** DOM association supplied by a descriptor-form owner for its actual control. */

@@ -20,13 +20,38 @@ describe("markdown widgets", () => {
     expect(screen.getByText("two")).toBeTruthy();
   });
 
-  test("renders editor toolbar controls", () => {
+  test("shows editor toolbar only while the prose control has focus", () => {
     const Editor = markdownEditorWidget.edit;
-    render(<Editor value="Body" field={{ label: "Body" }} />);
+    render(<Editor value="" field={{ label: "Body" }} />);
 
+    expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
+    fireEvent.focus(screen.getByLabelText("Body"));
     expect(screen.getByRole("button", { name: "Bold" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Rendered preview" })).toBeTruthy();
     expect(screen.getByLabelText("Body")).toBeTruthy();
+    fireEvent.blur(screen.getByLabelText("Body"), { relatedTarget: document.body });
+    expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
+  });
+
+  test("renders prose as text when read only", () => {
+    const Editor = markdownEditorWidget.edit;
+    render(<Editor value="**Saved prose**" readOnly />);
+    expect(screen.getByText("Saved prose").tagName).toBe("STRONG");
+    expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
+  });
+
+  test("opens saved prose as rendered text with a reachable source view", () => {
+    const Editor = markdownEditorWidget.edit;
+    render(<Editor value="**Saved prose**" field={{ label: "Body" }} />);
+    expect(screen.getByText("Saved prose").tagName).toBe("STRONG");
+    const sourceButton = screen.getByRole("button", { name: "Markdown source" });
+    const preview = screen.getByText("Saved prose").closest("[tabindex]");
+    expect(preview).not.toBeNull();
+    fireEvent.focus(preview!);
+    expect(screen.getByRole("button", { name: "Bold" })).toBeTruthy();
+    fireEvent.click(sourceButton);
+    expect(screen.queryByText("Saved prose")).toBeNull();
+    expect(screen.getByLabelText("Body").className).not.toContain("hidden");
   });
 
   test("defers editor change notifications outside CodeMirror transactions", () => {
@@ -35,6 +60,7 @@ describe("markdown widgets", () => {
     const Editor = markdownEditorWidget.edit;
     render(<Editor value="" field={{ label: "Body" }} onChange={onChange} />);
 
+    fireEvent.focus(screen.getByLabelText("Body"));
     fireEvent.click(screen.getByRole("button", { name: "Bold" }));
 
     expect(onChange).not.toHaveBeenCalled();

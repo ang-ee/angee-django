@@ -16,6 +16,7 @@ import {
   type RecordPanelContext,
   type RecordTabDescriptor,
   type FormProps,
+  type ListProps,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -31,7 +32,6 @@ import { TaskManagementTab } from "./task-declarations";
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
   verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
-  verbLabels?: Partial<Record<"pause" | "resume" | "complete" | "drop", string>>;
   contextLine?: FormProps["contextLine"];
   returning?: FormProps["returning"];
   extraActions?: React.ReactNode;
@@ -58,6 +58,21 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
   const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
   const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
+  const standardActions = <>
+    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
+      id="pause" label={t("project.action.pause")} permission="write"
+      icon="archive" run={pauseProject} visibleWhen={(record) => projectStatus(record) === "open"} /> : null}
+    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
+      id="resume" label={t("project.action.resume")} permission="write"
+      icon="activity" run={resumeProject}
+      visibleWhen={(record) => ["paused", "dropped"].includes(projectStatus(record))} /> : null}
+    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
+      id="complete" placement="toolbar" label={t("project.action.complete")} permission="write"
+      icon="check" run={completeProject} visibleWhen={isActiveProject} /> : null}
+    {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("drop") ? <Action
+      id="drop" label={t("project.action.drop")} permission="write"
+      icon="circle-x" danger run={dropProject} visibleWhen={isActiveProject} /> : null}
+  </>;
   return (
     <Form
       resource={PROJECT_MODEL}
@@ -68,7 +83,7 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
       <Field name="status" readOnly hidden />
-      <Field name="current_milestone" status widget="projects.phase" fill />
+      <Field name="current_milestone" status fill widget="projects.phase" />
       {(selection.groups ?? ["planning", "details"]).includes("planning") ? <Group label={t("project.group.planning")} columns={2}>
         <Field name="owner" readOnly />
         <Field name="lead" />
@@ -83,36 +98,7 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
         <Field name="converted_from" readOnly />
       </Group> : null}
       <Field name="body" widget="markdown.editor" body />
-      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
-        id="pause"
-        label={selection.verbLabels?.pause ?? t("project.action.pause")}
-        icon="archive"
-        run={pauseProject}
-        visibleWhen={(record) => projectStatus(record) === "open"}
-      /> : null}
-      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
-        id="resume"
-        label={selection.verbLabels?.resume ?? t("project.action.resume")}
-        icon="activity"
-        run={resumeProject}
-        visibleWhen={(record) => ["paused", "dropped"].includes(projectStatus(record))}
-      /> : null}
-      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
-        id="complete"
-        placement="toolbar"
-        label={selection.verbLabels?.complete ?? t("project.action.complete")}
-        icon="check"
-        run={completeProject}
-        visibleWhen={isActiveProject}
-      /> : null}
-      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("drop") ? <Action
-        id="drop"
-        label={selection.verbLabels?.drop ?? t("project.action.drop")}
-        icon="circle-x"
-        danger
-        run={dropProject}
-        visibleWhen={isActiveProject}
-      /> : null}
+      {standardActions}
       {selection.extraActions}
     </Form>
   );
@@ -191,9 +177,13 @@ export const projectGanttSpec: GanttViewSpec = {
   start: "start_date", end: "target_date", label: "name", current: "current_milestone",
 };
 
-/** The project collection's columns, facets and initial group. */
-export const projectListDeclaration = (
-  <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }} order={{ updated_at: "DESC" }} gantt={projectGanttSpec}>
+/** The project collection's columns, facets and view-specific initial group. */
+export function useProjectListDeclaration(options: Partial<Omit<ListProps, "resource">> = {}): React.ReactElement {
+  const { children, defaultGroups, ...listOptions } = options;
+  return <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }}
+    defaultGroups={{ gantt: null, ...defaultGroups }} order={{ updated_at: "DESC" }}
+    gantt={projectGanttSpec} {...listOptions}>
+    {children ?? <>
     <Facet field="lead" />
     <Column field="title" />
     <Column field="current_milestone" />
@@ -201,8 +191,11 @@ export const projectListDeclaration = (
     <Column field="lead" />
     <Column field="target_date" />
     <Column field="updated_at" />
-  </List>
-);
+    </>}
+  </List>;
+}
+
+export const projectListDeclaration = useProjectListDeclaration();
 
 /** Milestone bars and task due-date markers on project lanes, including empty projects. */
 export const projectTimelineSpec: GanttViewSpec = {

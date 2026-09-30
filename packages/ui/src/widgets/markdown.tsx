@@ -67,6 +67,16 @@ const MARKDOWN_EXTENSIONS = [
 
 function MarkdownEdit({
   value,
+  readOnly,
+  ...props
+}: WidgetRenderProps<string>): ReactElement {
+  return readOnly
+    ? <MarkdownRead value={value} />
+    : <MarkdownEditable value={value} {...props} />;
+}
+
+function MarkdownEditable({
+  value,
   onChange,
   field,
   readOnly,
@@ -75,6 +85,7 @@ function MarkdownEdit({
   const t = useUiT();
   // Saved prose opens rendered; an empty field opens ready for writing.
   const [mode, setMode] = useState<MarkdownMode>(value ? "preview" : "source");
+  const [focused, setFocused] = useState(false);
   const [linkDraft, setLinkDraft] = useState("");
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useCodeMirrorEditor(hostRef, {
@@ -103,6 +114,10 @@ function MarkdownEdit({
 
   return (
     <div
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+      }}
       className={widgetControlSurface({
         focus: "within",
         readOnly,
@@ -110,7 +125,7 @@ function MarkdownEdit({
         className: "w-full overflow-hidden",
       })}
     >
-      {!readOnly ? (
+      {focused ? (
         <Toolbar surface="preview" className="min-h-11 flex-wrap gap-1">
           <ToolbarButton
             label={t("markdown.bold")}
@@ -174,7 +189,7 @@ function MarkdownEdit({
             />
           </div>
           <Toolbar.Spacer />
-          <ModeButton mode="source" current={mode} onSelect={setMode} />
+          {mode === "source" ? <ModeButton mode="source" current={mode} onSelect={setMode} /> : null}
           <ModeButton mode="preview" current={mode} onSelect={setMode} />
         </Toolbar>
       ) : null}
@@ -184,7 +199,13 @@ function MarkdownEdit({
         className={mode === "preview" ? "hidden" : undefined}
       />
       {mode === "preview" ? (
-        <div className="min-h-48 px-3 py-2">
+        <div tabIndex={0} className="min-h-48 px-3 py-2 outline-none focus-visible:focus-ring">
+          <div className="flex justify-end">
+            <ModeButton mode="source" current={mode} onSelect={() => {
+              setMode("source");
+              requestAnimationFrame(() => viewRef.current?.focus());
+            }} />
+          </div>
           <MarkdownRead value={value} />
         </div>
       ) : null}

@@ -187,11 +187,11 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
   const source = React.useMemo<FormViewAcknowledgedSource>(() => ({
     record: acknowledged?.record ?? null,
     values,
-    loading: definition.isFetching,
+    loading: definition.isPending || definition.isFetching || Boolean(snapshot && projected && !acknowledged),
     reload: () => {
       void definition.refetch();
     },
-  }), [acknowledged?.record, definition.isFetching, definition.refetch, values]);
+  }), [acknowledged, definition.isFetching, definition.isPending, definition.refetch, projected, snapshot, values]);
   const readOnly = props.readOnly || (acknowledged !== null && String(acknowledged.record.status) !== "DRAFT");
   const history = useDefinitionHistory(formSurface, Boolean(readOnly));
   const inputPreview = React.useMemo(() => ({

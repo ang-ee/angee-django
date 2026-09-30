@@ -12,10 +12,12 @@ import type { RouteHrefParams } from "./route-href";
 
 export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
 export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
+export const FORM_VIEW_RAIL_SLOT = "form-view.rail";
 
 const MODEL_SCOPED_SLOTS: ReadonlySet<string> = new Set([
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  FORM_VIEW_RAIL_SLOT,
 ]);
 
 /** Whether every contribution to this slot must carry a canonical model. */
@@ -150,6 +152,8 @@ export interface SlotContribution {
   model?: string;
   impl?: string;
   id: string;
+  /** Projected record permission required to render this contribution. */
+  permission?: string;
   sequence?: number;
   /** Toolbar placement for content in the form-view record-actions slot. */
   recordActionPlacement?: "primary" | "menu";
