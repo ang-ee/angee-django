@@ -120,8 +120,6 @@ export const enProposalsMessages: Record<string, string> = {
     "The server has not returned any proposal columns for this viewer.",
   "comparison.loading": "Loading proposal comparison…",
   "comparison.error": "The proposal comparison could not be loaded.",
-  "comparison.saveError": "The answer could not be saved: its resource or revision is unavailable.",
-  "comparison.statementError": "The commitment could not be saved: the proposal's revision is unavailable.",
   "comparison.fact.cost": "Cost and currency",
   "comparison.fact.staffing": "Staffing",
   "comparison.fact.timeframeStart": "Timeframe start",

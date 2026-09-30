@@ -20,8 +20,8 @@ export function useComparisonAnswerWrite() {
     dataProviderName: resource?.schemaName,
     meta: { fields: refineFieldsFromPaths(["id", "body", "visibility", "revision"]) },
     invalidates: ["list", "many", "detail"] as ("list" | "many" | "detail")[],
-    successNotification: false,
-    errorNotification: false,
+    successNotification: false as const,
+    errorNotification: false as const,
   };
   const create = useCreate<RowRecord, HttpError, Record<string, unknown>>(options);
   const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>(options);

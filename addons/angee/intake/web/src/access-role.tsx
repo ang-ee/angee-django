@@ -39,8 +39,9 @@ export function TaskRequesterAccessRole({ targetId, record }: AccessRoleOwnerPro
     return result?.ok === true;
   }, [admit, settle, vacant]);
   const removePerson = React.useCallback(async (person: { seatId?: string }) => {
-    if (!person.seatId) return;
-    await settle(async () => extractActionOutcome(await remove({ need: person.seatId }), "remove_need_requester"));
+    const seatId = person.seatId;
+    if (!seatId) return;
+    await settle(async () => extractActionOutcome(await remove({ need: seatId }), "remove_need_requester"));
   }, [remove, settle]);
   const state = React.useMemo<AccessRoleState>(() => ({
     role: { id: "intake.requester", label: t("access.requester"), subjectResource: "iam.User",

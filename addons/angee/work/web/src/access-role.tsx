@@ -33,9 +33,10 @@ export function ProjectManagerAccessRole({ targetId }: AccessRoleOwnerProps): nu
     return result?.ok === true;
   }, [admit, settle, targetId]);
   const removePerson = React.useCallback(async (person: { seatId?: string }) => {
-    if (!person.seatId) return;
+    const seatId = person.seatId;
+    if (!seatId) return;
     await settle(async () => extractActionOutcome(await remove({
-      project: targetId, seat: person.seatId,
+      project: targetId, seat: seatId,
     }), "remove_project_manager"));
   }, [remove, settle, targetId]);
   const state = React.useMemo<AccessRoleState>(() => ({

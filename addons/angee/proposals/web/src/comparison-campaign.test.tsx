@@ -18,9 +18,9 @@ test("custom headers, cells and selected facts compose the shared comparison gri
   const answers: ComparisonAnswer[] = [{
     id: "answer-one", proposal: { id: "proposal-one" }, topic: { id: "topic-scope" }, body: "Visible answer",
   }];
-  const cell = vi.fn<NonNullable<RoundComparisonGridProps["renderCell"]>>(
-    (_row, proposal, answer) => <span>{answer?.body ?? `Cell ${proposal.id}`}</span>,
-  );
+  const renderCell: NonNullable<RoundComparisonGridProps["renderCell"]> =
+    (_row, proposal, answer) => <span>{String(answer?.body ?? `Cell ${proposal.id}`)}</span>;
+  const cell = vi.fn(renderCell);
   render(
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <RoundComparisonGrid topics={topics} proposals={proposals} answers={answers}

@@ -71,6 +71,11 @@ vi.mock("@angee/storage", () => ({
 import { RecordThreadConversation } from "./RecordThreadConversation";
 import { RecordThreadStream } from "./RecordThreadStream";
 
+function part(id: string, text: string): RecordMessageRow["parts"][number] {
+  return { id, name: "body", type: "text/plain", position: 0, role: "BODY", disposition: "INLINE", cid: "",
+    parent: null, fragment: { id: `frag-${id}`, text }, file: null };
+}
+
 function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   return {
     id: "msg_1",
@@ -94,7 +99,7 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
     created_at: "2026-07-06T00:00:00Z",
     reaction_groups: [],
     tracking_values: [],
-    parts: [{ role: "user", fragment: { text: "Ping the room" }, file: null }],
+    parts: [part("part-1", "Ping the room")],
     ...overrides,
   } as unknown as RecordMessageRow;
 }
@@ -192,7 +197,7 @@ describe("RecordThreadConversation", () => {
     mocks.threadData = threadPayload([
       message({ id: "own", is_self: true, author_label: "Account name", edited_at: "2026-07-07T12:00:00Z" }),
       message({ id: "hidden", is_self: false, is_reply: true, author_label: "A contributor", sender: null,
-        preview: "Second entry", parts: [{ role: "user", fragment: { text: "Second entry" }, file: null }] }),
+        preview: "Second entry", parts: [part("part-2", "Second entry")] }),
     ]);
     render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1"
       stream={{ audience: "Team readers", verbs: { root: "answered", reply: "replied" } }} />);
@@ -210,10 +215,10 @@ describe("RecordThreadConversation", () => {
 
   test("a late reply retains its parent quote after another entry", () => {
     mocks.threadData = threadPayload([
-      message({ id: "a", preview: "First entry", parts: [{ role: "user", fragment: { text: "First entry" }, file: null }] }),
-      message({ id: "b", preview: "Second entry", parts: [{ role: "user", fragment: { text: "Second entry" }, file: null }] }),
+      message({ id: "a", preview: "First entry", parts: [part("part-3", "First entry")] }),
+      message({ id: "b", preview: "Second entry", parts: [part("part-4", "Second entry")] }),
       message({ id: "reply", is_reply: true, parent: { id: "a", preview: "First entry", message_type: "COMMENT", subtype: null } as never,
-        preview: "A late reply", parts: [{ role: "user", fragment: { text: "A late reply" }, file: null }] }),
+        preview: "A late reply", parts: [part("part-5", "A late reply")] }),
     ]);
     render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" stream={{}} />);
     const feed = screen.getByRole("list", { name: "Comments" }).textContent ?? "";
@@ -415,8 +420,8 @@ describe("RecordThreadConversation", () => {
 
   test("merges exchanges without reordering equal instants from the server", () => {
     mocks.threadData = threadPayload([
-      message({ id: "first", preview: "First from server", parts: [{ role: "user", fragment: { text: "First from server" }, file: null }], sent_at: "2026-07-06T12:00:00+02:00" }),
-      message({ id: "second", preview: "Second from server", parts: [{ role: "user", fragment: { text: "Second from server" }, file: null }], sent_at: "2026-07-06T10:00:00Z" }),
+      message({ id: "first", preview: "First from server", parts: [part("part-first", "First from server")], sent_at: "2026-07-06T12:00:00+02:00" }),
+      message({ id: "second", preview: "Second from server", parts: [part("part-second", "Second from server")], sent_at: "2026-07-06T10:00:00Z" }),
     ], [activity({ due_date: "2026-07-05" })]);
     render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
     const text = screen.getByRole("list", { name: "Comments" }).textContent ?? "";

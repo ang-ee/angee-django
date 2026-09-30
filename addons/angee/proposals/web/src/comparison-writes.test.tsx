@@ -19,6 +19,7 @@ vi.mock("@refinedev/core", () => ({
   useUpdate: () => ({ mutateAsync: mocks.update, mutation: { isPending: false } }),
 }));
 vi.mock("@angee/ui", () => ({
+  createNamespaceT: () => () => (key: string) => key,
   optionToken: (value: unknown) => String(value ?? "").toLowerCase(),
   useAuthoredResourceMutation: () => [mocks.visibility, { fetching: false }],
   useActionResultRun: () => (fire: () => Promise<unknown>) => fire(),

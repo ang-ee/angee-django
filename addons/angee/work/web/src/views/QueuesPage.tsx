@@ -13,10 +13,10 @@ import {
   useRouteRecordId,
   type RecordPanelContext,
   type RecordSmartButtonDescriptor,
-  type RecordTabDescriptor,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
+import { useQueueRecordTabs } from "../queue-record-tabs";
 
 import { useWorkT } from "../i18n";
 import { QUEUE_MODEL, STAGE_MODEL } from "../resources";
@@ -110,7 +110,7 @@ export function QueuesPage(): React.ReactElement {
   );
 }
 
-function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
+export function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useWorkT();
   const categoryOptions = useEnumOptions(STAGE_MODEL, "category").filter((option) =>
     CUSTOM_STAGE_CATEGORIES.includes(
@@ -178,17 +178,3 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
   );
 }
 
-/** The queue record's tabs (stages), for a host that shows a queue on its own page. */
-export function useQueueRecordTabs(): readonly RecordTabDescriptor[] {
-  const t = useWorkT();
-  return React.useMemo<readonly RecordTabDescriptor[]>(
-    () => [
-      {
-        id: "stages",
-        label: t("queue.stages.tab"),
-        render: (context) => <QueueStagesTab {...context} />,
-      },
-    ],
-    [t],
-  );
-}

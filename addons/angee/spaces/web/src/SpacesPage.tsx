@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useGroupRecordTabs } from "./group-record-tabs";
 import type { DocumentType } from "@angee/gql/console";
 import { holdsPermission } from "@angee/metadata";
 import {
@@ -22,7 +23,6 @@ import {
   type MutationDialogField,
   type MutationDialogValues,
   type RecordPanelContext,
-  type RecordTabDescriptor,
   type RowActionDeclaration,
   type StringIdRow,
   useAuthoredResourceMutation,
@@ -96,7 +96,7 @@ function threadColumns(
   ];
 }
 
-function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElement {
+export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [addOpen, setAddOpen] = React.useState(false);
   const [roleRow, setRoleRow] = React.useState<MembershipRow | null>(null);
@@ -327,7 +327,7 @@ function parseNotificationValues(
   return { policy };
 }
 
-function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
+export function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [selectedThread, setSelectedThread] = React.useState<{
     groupId: string;
@@ -374,31 +374,10 @@ function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   );
 }
 
-/** The group record's tabs (roster, threads), for a host that shows a group on its own page. */
-export function useGroupRecordTabs(): readonly RecordTabDescriptor[] {
-  const t = useSpacesT();
-  return React.useMemo(() => groupRecordTabs(t), [t]);
-}
-
-function groupRecordTabs(t: ReturnType<typeof useSpacesT>): readonly RecordTabDescriptor[] {
-  return [
-    {
-      id: "roster",
-      label: t("group.tabs.roster"),
-      render: (context) => <GroupRosterTab key={context.recordId} {...context} />,
-    },
-    {
-      id: "threads",
-      label: t("group.tabs.threads"),
-      render: (context) => <GroupThreadsTab {...context} />,
-    },
-  ];
-}
-
 /** Shared spaces compose the common resource list, roster list, and messaging thread detail. */
 export function SpacesPage(): React.ReactElement {
   const t = useSpacesT();
-  const tabs = React.useMemo(() => groupRecordTabs(t), [t]);
+  const tabs = useGroupRecordTabs();
   return (
     <ResourceList resource={MODEL} placement="inline" routed recordTabs={tabs}>
       <List resource={MODEL}>

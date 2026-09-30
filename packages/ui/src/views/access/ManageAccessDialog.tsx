@@ -325,7 +325,8 @@ function PeopleContents({
       <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">{t("access.addPerson")}</div>
       {choices.length > 1 ? <Select aria-label={t("access.relation")} value={choice?.id ?? ""}
         disabled={pending || fetching} options={choices.map(({ id, label }) => ({ value: id, label }))}
-        onValueChange={(value) => { setSelected(value ?? ""); setSubject(""); }} /> : null}
+        onValueChange={(value) => { setSelected(value ?? ""); setSubject(""); }} />
+        : <span className="text-sm text-fg-muted">{choice?.label}</span>}
       {choice?.resource ? <SubjectPicker key={choice.id} resource={choice.resource} value={subject}
         aria-label={t("access.recipient")} readOnly={pending || fetching} onChange={setSubject} /> : null}
       <Button type="button" size="sm" variant="primary" disabled={!subject || !choice?.resource || pending || fetching}

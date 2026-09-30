@@ -36,11 +36,11 @@ const { Provider, clearClients } = createUiTestProviders();
 const topic: ComparisonTopic = { id: "topic-1", name: "Scope", sort_order: 1 };
 const own: ComparisonProposal = {
   id: "proposal-own", responder: { id: "user-own", display_name: "Alice" },
-  permissions: ["write"], revision: 4,
+  permissions: ["write", "read_offer"], revision: 4,
 };
 const other: ComparisonProposal = {
   id: "proposal-other", responder: { id: "user-other", display_name: "Bob" },
-  permissions: [], revision: 3,
+  permissions: ["read_offer"], revision: 3,
 };
 const auth = { user: { id: "user-own", name: "Alice" }, status: "authenticated" as const, hasRole: () => false };
 

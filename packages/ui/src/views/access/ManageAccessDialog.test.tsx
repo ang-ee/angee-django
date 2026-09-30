@@ -55,9 +55,9 @@ test("compact People has its own name and shows the mounted reader roster", () =
     onRevoke: vi.fn(async () => undefined), compact: true,
     people: [{ subject: "auth/user:ada", label: "Ada" }] };
   const { rerender } = render(<ManageAccessDialog {...base} peopleLoaded={false} />);
-  const trigger = screen.getByRole("button", { name: "People", exact: true });
+  const trigger = screen.getByRole("button", { name: /^People/ });
   expect(trigger.textContent).toBe("PeopleA");
-  expect(screen.queryByRole("button", { name: "Share", exact: true })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Share$/ })).toBeNull();
   rerender(<ManageAccessDialog {...base} peopleLoaded />);
   expect(trigger.textContent).toBe("People · 1A");
 });
