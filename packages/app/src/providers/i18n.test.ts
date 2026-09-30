@@ -63,6 +63,7 @@ describe("scoped vocabulary validation", () => {
     { app: "desk", menus: { missing: "Unknown" } },
     { app: "desk", resources: { "missing.Model": { label: "Unknown" } } },
     { app: "desk", resources: { "notes.Note": { fields: { missing: "Unknown" } } } },
+    { app: "desk", resources: { "notes.Note": { relations: { missing: "Unknown" } } } },
   ];
   test.each(invalidVocabulary)("rejects unknown vocabulary references: %j", (declaration) => {
     expect(() => compose([declaration])).toThrow(/unknown/i);

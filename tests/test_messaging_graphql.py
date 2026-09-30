@@ -2235,9 +2235,9 @@ def test_record_thread_unread_count_is_record_read_scoped(composed_tables: None)
     outsider = User.objects.create_user(username="msg-count-outsider", email="msg-count-outsider@example.com")
     with system_context(reason="test.messaging.record_unread_count.seed"):
         doc = messaging_models.ChatterDoc.objects.create(title="Gated count", status="open")
+        _grant(doc, "reader", reader)
         doc.message_subscribe(user=reader)
         doc.message_post("Unread for the reader.")
-    _grant(doc, "reader", reader)
     schema = _schema()
     query = """
         query RecordThreadUnreadCount($model: String!, $id: ID!) {

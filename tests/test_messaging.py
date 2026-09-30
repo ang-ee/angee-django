@@ -823,7 +823,8 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
                     resource=to_object_ref(doc),
                     relation="owner",
                     subject=to_subject_ref(owner),
-                )
+                ),
+                RelationshipTuple(resource=to_object_ref(doc), relation="reader", subject=to_subject_ref(watcher)),
             ]
         )
         doc.message_subscribe(user=watcher)

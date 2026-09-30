@@ -23,6 +23,17 @@ const CLOSE_OUTCOMES = [
 ] as const;
 export type CloseOutcome = (typeof CLOSE_OUTCOMES)[number]["value"];
 
+const OPENING_POLICY_LABELS: Record<string, string> = {
+  FACILITATOR_ONLY: "round.policy.facilitatorOnly",
+  ANSWERS: "round.policy.answers",
+  ANSWERS_AND_TRACKS: "round.policy.answersAndTracks",
+  DRAFTS_AND_TRACKS: "round.policy.draftsAndTracks",
+};
+
+export function openingPolicyLabelKey(value: unknown): string {
+  return OPENING_POLICY_LABELS[String(value ?? "").toUpperCase()] ?? "round.action.open.unknown";
+}
+
 export interface RoundActionRow extends Row {
   id: string;
   opening_policy?: unknown;
@@ -125,10 +136,8 @@ export function useRoundCeremonyActions(
       widen: {
         id: "widen-round", label: t("round.action.widen"),
         args: [{ name: "policy", widget: "select", options: [
-          { value: "ANSWERS", label: t("round.policy.answers") },
-          { value: "ANSWERS_AND_TRACKS", label: t("round.policy.answersAndTracks") },
-          { value: "DRAFTS_AND_TRACKS", label: t("round.policy.draftsAndTracks") },
-        ] }],
+          "ANSWERS", "ANSWERS_AND_TRACKS", "DRAFTS_AND_TRACKS",
+        ].map((value) => ({ value, label: t(openingPolicyLabelKey(value)) })) }],
         submit: async (values, context) => extractActionOutcome(await widen({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
           policy: openingPolicyValue(values.policy),

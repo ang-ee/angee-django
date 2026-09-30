@@ -90,6 +90,7 @@ const SubjectTypeSchema = v.looseObject({
 });
 const GrantableRelationSchema = v.looseObject({
   relation: v.string(),
+  label: v.optional(v.string()),
   permission: v.string(),
   subjects: v.pipe(v.array(SubjectTypeSchema), v.readonly()),
 });

@@ -23,16 +23,20 @@ def test_every_audience_source_requires_the_record_read_permission(audience_reco
     case = audience_record
     # A record may require stronger read access than its team's default grant.
     monkeypatch.setattr(Project, "thread_read_access", "write")
+    if readable:
+        grant(case.record, "editor", case.recipient)
     with system_context(reason="test.audience.read-gate"):
         if source == "follow":
-            ThreadFollower.objects.subscribe(case.record, party=case.party)
+            if readable:
+                ThreadFollower.objects.subscribe(case.record, party=case.party)
+            else:
+                with pytest.raises(PermissionDenied, match="read access"):
+                    ThreadFollower.objects.subscribe(case.record, party=case.party)
         elif source == "team":
             add_member(case)
         elif source == "named":
             case.record.lead = case.recipient
             case.record.save(update_fields=("lead",))
-    if readable:
-        grant(case.record, "editor", case.recipient)
     message = fanout(case, direct=source == "direct")
     assert ThreadNotification._base_manager.filter(message=message, user=case.recipient).count() == int(readable)
 
@@ -76,6 +80,7 @@ def test_inbox_delivery_always_creates_one_independently_acknowledged_row(audien
 @pytest.mark.parametrize("policy", [None, "inbox", "email", "muted"])
 def test_matching_follow_selects_delivery_otherwise_email_wins_derived_sources(audience_record, policy):
     case = audience_record
+    grant(case.record, "reader", case.recipient)
     add_member(case, policy="email")
     with system_context(reason="test.audience.union"):
         case.record.lead = case.recipient
@@ -89,6 +94,7 @@ def test_matching_follow_selects_delivery_otherwise_email_wins_derived_sources(a
 
 def test_direct_address_bypasses_mute_but_never_notifies_the_author(audience_record):
     case = audience_record
+    grant(case.record, "reader", case.recipient)
     add_member(case)
     with system_context(reason="test.audience.direct"):
         ThreadFollower.objects.subscribe(case.record, party=case.party, notification_policy="muted")
@@ -103,6 +109,7 @@ def test_direct_address_bypasses_mute_but_never_notifies_the_author(audience_rec
 
 def test_subtype_rejection_by_a_nonmuted_follow_does_not_silence_the_team(audience_record):
     case = audience_record
+    grant(case.record, "reader", case.recipient)
     add_member(case, policy="email")
     with system_context(reason="test.audience.subtypes"):
         ThreadFollower.objects.subscribe(case.record, party=case.party, notification_policy="inbox",
@@ -123,6 +130,35 @@ def test_roster_add_dismiss_and_remove_take_effect_without_copying_followers(aud
         Membership._base_manager.filter(pk=member.pk).delete()
     assert not ThreadNotification._base_manager.filter(message=fanout(case)).exists()
     assert not ThreadFollower._base_manager.filter(thread=case.attachment.thread, party=case.party).exists()
+
+
+def test_team_seat_removal_ends_an_unreadable_follow(audience_record):
+    """The team's dismiss and delete verbs end follows when team read ends."""
+
+    case = audience_record
+    with system_context(reason="test.audience.team_follow"):
+        member = add_member(case)
+        assert case.record.thread_reader_allowed(case.recipient)
+        ThreadFollower.objects.subscribe(case.record, party=case.party)
+        member.dismiss()
+        assert not ThreadFollower.objects.is_following(case.record, party=case.party)
+        member.confirm()
+        ThreadFollower.objects.subscribe(case.record, party=case.party)
+        member.delete()
+        assert not ThreadFollower.objects.is_following(case.record, party=case.party)
+
+
+def test_project_manager_role_grants_read_and_follow_then_removes_both(audience_record):
+    """The work owner composes the spaces roster and messaging follow atomically."""
+
+    case = audience_record
+    with system_context(reason="test.audience.project_manager"):
+        seat = case.record.admit_manager(case.recipient)
+        assert case.record.thread_reader_allowed(case.recipient)
+        assert case.record.message_is_follower(user=case.recipient)
+        case.record.remove_manager(seat)
+        assert not case.record.thread_reader_allowed(case.recipient)
+        assert not case.record.message_is_follower(user=case.recipient)
 
 
 def test_changing_the_record_named_account_moves_the_audience(audience_record):
@@ -165,6 +201,7 @@ def test_accountless_party_follows_and_unfollows_without_delivery_or_access_gran
 def test_relinking_a_person_moves_the_follow_and_preserves_its_receipt(audience_record):
     case = audience_record
     replacement = make_user("relinked-account")
+    grant(case.record, "reader", case.recipient)
     grant(case.record, "reader", replacement)
     with system_context(reason="test.audience.relink"):
         follower = ThreadFollower.objects.subscribe(case.record, party=case.party)
@@ -196,13 +233,13 @@ def test_team_declaration_refuses_unknown_nonforeign_and_nonteam_fields(audience
 def test_undeclared_or_null_team_keeps_only_explicit_followers(audience_record, monkeypatch, declaration):
     case = audience_record
     add_member(case)
+    grant(case.record, "reader", case.recipient)
     with system_context(reason="test.audience.no-team"):
         if declaration:
             case.record.team = None
             case.record.save(update_fields=("team",))
         ThreadFollower.objects.subscribe(case.record, party=case.party)
     monkeypatch.setattr(Project, "thread_team_field", declaration)
-    grant(case.record, "reader", case.recipient)
     assert ThreadNotification._base_manager.filter(message=fanout(case)).count() == 1
 
 
@@ -231,6 +268,7 @@ def test_roster_expansion_uses_one_query_at_team_size(audience_record, django_as
 def test_fanout_checks_each_distinct_account_once_even_when_all_sources_match(audience_record):
     case = audience_record
     add_member(case)
+    grant(case.record, "reader", case.recipient)
     with system_context(reason="test.audience.read-budget"):
         case.record.lead = case.recipient
         case.record.save(update_fields=("lead",))
@@ -258,10 +296,13 @@ def test_follow_and_unfollow_do_not_grant_or_remove_a_read_share(audience_record
     assert not case.record.thread_reader_allowed(case.recipient)
     with system_context(reason="test.audience.follow-without-access"):
         before = list(active_relationship_model().objects.order_by("pk").values())
-        ThreadFollower.objects.subscribe(case.record, party=case.party)
+        with pytest.raises(PermissionDenied, match="read access"):
+            ThreadFollower.objects.subscribe(case.record, party=case.party)
         assert list(active_relationship_model().objects.order_by("pk").values()) == before
     assert not case.record.thread_reader_allowed(case.recipient)
     grant(case.record, "reader", case.recipient)
+    with actor_context(case.recipient):
+        ThreadFollower.objects.subscribe(case.record, party=case.party)
     with actor_context(case.recipient):
         ThreadFollower.objects.unsubscribe(case.record, party=case.party)
     assert case.record.thread_reader_allowed(case.recipient)

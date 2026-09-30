@@ -35,21 +35,24 @@ from zoneinfo import ZoneInfo
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
 from django.utils import timezone
-from rebac import PermissionDenied, SubjectRef, current_actor, system_context
+from rebac import PermissionDenied, SubjectRef, current_actor, system_context, to_subject_ref
 from rebac.actors import is_anonymous_actor, is_sudo
+from rebac.backends import backend
 from rebac.relation_loading import relation_actor
+from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.refs import canonical_record_target
+from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
@@ -1137,6 +1140,130 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if not record.can_moderate():
             raise PermissionDenied("Managing another party's follow requires record write access.")
 
+    def _person_account(self, party_id: Any) -> Any | None:
+        """Return the human account for a party, if this is an account follow."""
+
+        user_id = (apps.get_model("parties", "Person")._base_manager.filter(pk=party_id)
+                   .values_list("user_id", flat=True).first())
+        if user_id is None:
+            return None
+        user = get_user_model()._base_manager.get(pk=user_id)
+        return user if getattr(user, "kind", None) == "person" else None
+
+    def end_unreadable_for_record(self, record: Any, *, role: str = "chatter") -> int:
+        """End person-account follows after an access owner's revoke or seat removal."""
+
+        attachment = _record_attachment(record, role=role)
+        if attachment is None:
+            return 0
+        people = list(apps.get_model("parties", "Person")._base_manager.filter(
+            pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
+            user__kind="person",
+        ).select_related("user"))
+        allowed = record.thread_reader_ids(person.user for person in people)
+        with system_context(reason="messaging.follower.read_revoked"):
+            removed, _ = self.model._base_manager.filter(
+                attachment=attachment,
+                party_id__in=[person.pk for person in people if person.user_id not in allowed],
+            ).delete()
+        return removed
+
+    def end_unreadable_for_party(self, party: Any) -> int:
+        """Recheck a removed seat's account follows, including indirect record reads."""
+
+        with system_context(reason="messaging.follower.seat_revoked"):
+            attachment_model = apps.get_model("messaging", "ThreadAttachment")
+            attachments = attachment_model._base_manager.filter(
+                pk__in=self.model._base_manager.filter(party_id=party.pk).values("attachment_id"),
+                role=attachment_model.AttachmentRole.CHATTER,
+            ).values_list("pk", "content_type_id", "object_id")
+            return self._end_unreadable_attachments(attachments, party_id=party.pk)
+
+    def end_unreadable_for_collections(self, collections: Sequence[models.QuerySet[Any]]) -> int:
+        """Recheck record follows across several changed access collections in batches."""
+
+        from angee.messaging.models import ThreadedModelMixin
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        selection = models.Q(pk__in=[])
+        for rows in collections:
+            if not issubclass(rows.model, ThreadedModelMixin):
+                continue
+            content_type = ContentType.objects.get_for_model(canonical_record_model(rows.model))
+            selection |= models.Q(
+                content_type=content_type,
+                object_id__in=rows.order_by().values("pk"),
+                role=rows.model.thread_attachment_role,
+            )
+        with system_context(reason="messaging.follower.access_revoked"):
+            attachments = attachment_model._base_manager.filter(selection).values_list(
+                "pk", "content_type_id", "object_id",
+            )
+            return self._end_unreadable_attachments(attachments)
+
+    def _end_unreadable_attachments(self, attachments: Any, *, party_id: Any | None = None) -> int:
+        """Use each model's native account read scope and delete revoked follows together."""
+
+        from angee.messaging.models import ThreadedModelMixin
+
+        edges = {pk: (content_type_id, object_id) for pk, content_type_id, object_id in attachments}
+        if not edges:
+            return 0
+        follows = self.model._base_manager.filter(attachment_id__in=edges)
+        if party_id is not None:
+            follows = follows.filter(party_id=party_id)
+        follow_rows = list(follows.values_list("pk", "attachment_id", "party_id"))
+        people = apps.get_model("parties", "Person")._base_manager.filter(
+            pk__in={party for _, _, party in follow_rows}, user__kind="person",
+        ).select_related("user")
+        accounts = {person.pk: person.user for person in people}
+        types = ContentType.objects.in_bulk({content_type_id for content_type_id, _ in edges.values()})
+        grouped: dict[tuple[Any, Any], set[Any]] = {}
+        for _, attachment_id, follower_party_id in follow_rows:
+            if follower_party_id in accounts:
+                content_type_id, object_id = edges[attachment_id]
+                grouped.setdefault((content_type_id, follower_party_id), set()).add(object_id)
+        allowed: dict[tuple[Any, Any], set[Any]] = {}
+        for (content_type_id, follower_party_id), record_ids in grouped.items():
+            model = types[content_type_id].model_class()
+            if model is None or not issubclass(model, ThreadedModelMixin):
+                continue
+            if not callable(getattr(model, "has_access", None)) or not model_resource_type(model):
+                allowed[(content_type_id, follower_party_id)] = record_ids
+                continue
+            subject = to_subject_ref(accounts[follower_party_id])
+            predicate = backend().queryset_filter(
+                model=model, subject=subject, action=model.thread_read_access,
+                using=self.db,
+            )
+            readable = (
+                model._base_manager.using(self.db).filter(predicate, pk__in=record_ids)
+                if predicate is not None else
+                model._default_manager.using(self.db).with_actor(subject)
+                .with_action(model.thread_read_access).filter(pk__in=record_ids).scoped()
+            )
+            allowed[(content_type_id, follower_party_id)] = set(readable.order_by().values_list("pk", flat=True))
+        revoked = []
+        for pk, attachment_id, follower_party_id in follow_rows:
+            content_type_id, record_id = edges[attachment_id]
+            readable = allowed.get((content_type_id, follower_party_id))
+            if readable is not None and record_id not in readable:
+                revoked.append(pk)
+        removed, _ = self.model._base_manager.filter(pk__in=revoked).delete()
+        return removed
+
+    def subjects_for_record(self, record: Any, *, role: str = "chatter", limit: int = 100) -> list[SubjectRef]:
+        """List a bounded panel roster of human account follower subjects."""
+
+        attachment = _record_attachment(record, role=role)
+        if attachment is None:
+            return []
+        people = (apps.get_model("parties", "Person")._base_manager.filter(
+            pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
+            user__kind="person",
+        ).select_related("user").order_by("pk")[:limit])
+        return [to_subject_ref(person.user) for person in people]
+
     def for_record(self, record: Any, *, role: str = "chatter") -> Any:
         """Return followers for ``record`` and ``role``."""
 
@@ -1173,12 +1300,26 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
     ) -> Any:
         """Follow as a party; omitted preferences preserve an existing follow.
 
-        Following never writes or removes an access grant.
+        A person account requires an existing record read; accountless parties
+        and service accounts remain delivery routes. Access is granted by the
+        chosen role owner before this call. Unfollowing never revokes that read.
         """
 
-        party_id = self.get_party_id(party=party, user=user, user_id=user_id, create=True)
-        if party_id is None:
-            raise ValueError("A party or user is required to follow a thread.")
+        if party is None:
+            resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
+            if resolved_user_id is None:
+                raise ValueError("A party or user is required to follow a thread.")
+            account = user if user is not None else get_user_model()._base_manager.get(pk=resolved_user_id)
+            if getattr(account, "kind", None) == "person" and not record.thread_reader_allowed(account):
+                raise PermissionDenied("Only a person with record read access may follow.")
+            party_id = self.get_party_id(user=account, create=True)
+        else:
+            if user is not None or user_id is not None:
+                raise ValueError("Pass a party or a user, not both.")
+            party_id = self.get_party_id(party=party)
+            account = self._person_account(party_id)
+            if account is not None and not record.thread_reader_allowed(account):
+                raise PermissionDenied("Only a person with record read access may follow.")
         self._require_follow_access(record, party_id)
         attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
             record,
@@ -2730,14 +2871,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             )
             follower_model = apps.get_model("messaging", "ThreadFollower")
             if attachment is not None and (autofollow_author or autofollow_recipients):
+                if record is None:
+                    raise ValueError("An attached record is required for automatic follows.")
                 # The record already authorized the post. Keep its follow bookkeeping
                 # in the same transaction, after fan-out, and never repeat it on replay.
                 with system_context(reason="messaging.autofollow"):
+                    candidates = set(recipient_user_ids if autofollow_recipients else ())
                     if autofollow_author and created_by_id is not None:
-                        follower_model.objects.subscribe(record, user_id=created_by_id, role=attachment.role)
-                    if autofollow_recipients:
-                        for user_id in recipient_user_ids:
-                            follower_model.objects.subscribe(record, user_id=user_id, role=attachment.role)
+                        candidates.add(created_by_id)
+                    accounts = list(get_user_model()._base_manager.filter(pk__in=candidates))
+                    readers = record.thread_reader_ids(account for account in accounts if account.kind == "person")
+                    for account in accounts:
+                        if account.kind != "person" or account.pk in readers:
+                            follower_model.objects.subscribe(record, user=account, role=attachment.role)
             if created_by_id is not None:
                 follower_model.objects.mark_read_up_to(thread, user_id=created_by_id, message=message)
             self._advance_thread(thread, sent_at)

@@ -1722,7 +1722,7 @@ class MessagingMutation:
             else:
                 cast(Any, record).message_unsubscribe(user=user)
                 follower = None
-        except ValueError as error:
+        except (ValueError, PermissionDenied) as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_FOLLOWER")
         payload = _record_thread_payload(record, info, role=input.role)
         return RecordFollowPayload(

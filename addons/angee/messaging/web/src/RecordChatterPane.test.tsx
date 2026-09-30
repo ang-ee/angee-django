@@ -149,11 +149,9 @@ describe("RecordChatterPane", () => {
 
     expect(screen.getByText("Hello there")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
-    // Server-resolved follower count, interpolated through the namespace.
-    expect(screen.getByText(/3 following/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Following" }).getAttribute("aria-pressed")).toBe("false");
     // The composer send affordance.
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Follow" })).toBeTruthy();
   });
 
   test("passes the host's submit key to its record conversation", () => {

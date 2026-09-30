@@ -30,8 +30,22 @@ export const TaskAccessNeedsDocument = graphql(`
       revision
       permissions
       claimed_name
+      requester_user
+      party { id display_name }
       access_decision { id is_open verdict }
     }
+  }
+`);
+
+export const AdmitNeedRequesterDocument = graphql(`
+  mutation IntakeAdmitRequester($need: ID!, $user: ID!) {
+    admit_need_requester(need: $need, user: $user) { ok message id code validation_errors }
+  }
+`);
+
+export const RemoveNeedRequesterDocument = graphql(`
+  mutation IntakeRemoveRequester($need: ID!) {
+    remove_need_requester(need: $need) { ok message id code validation_errors }
   }
 `);
 

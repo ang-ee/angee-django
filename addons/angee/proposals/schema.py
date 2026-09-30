@@ -312,7 +312,7 @@ class ProposalFields(AuthoredRefMixin, AngeeNode):
     disclosed_at: auto
     track_published_at: auto
     retired_at: auto
-    permissions = permissions_field(("write", "publish", "withdraw"))
+    permissions = permissions_field(("write", "publish", "withdraw", "share"))
 
     @strawberry_django.field(annotate={"_track_status": lambda info: Proposal.track_status_expression(current_actor())})
     def track_status(self) -> str | None:
@@ -524,12 +524,13 @@ class ProposalActionMutation:
         responder: PublicID,
         party: PublicID | None = None,
         track: bool = False,
+        follow: bool = False,
     ) -> ActionResult:
         """Admit a responder through the shell owner."""
         row = authorized_permission_target(info, Round, round, "write")
         user = authorized_permission_target(info, User, responder, "read")
         party_row = authorized_permission_target(info, Party, party, "read") if party else None
-        proposal = row.admit(user, party_row, track)
+        proposal = row.admit(user, party_row, track, follow=follow)
         return ActionResult(ok=True, message="Responder admitted.", id=proposal.sqid)
 
     @strawberry.mutation

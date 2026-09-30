@@ -41,8 +41,8 @@ export const TRANSFER_ROUND = graphql(`
 `);
 
 export const ADMIT_RESPONDER = graphql(`
-  mutation AdmitProposalResponder($round: ID!, $responder: ID!, $track: Boolean!) {
-    admit_proposal_round_responder(round: $round, responder: $responder, track: $track) {
+  mutation AdmitProposalResponder($round: ID!, $responder: ID!, $track: Boolean!, $follow: Boolean = false) {
+    admit_proposal_round_responder(round: $round, responder: $responder, track: $track, follow: $follow) {
       ok message id code validation_errors
     }
   }

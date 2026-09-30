@@ -1,5 +1,7 @@
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { ShareAccessRailGroup } from "@angee/iam";
 import {
+  FormView,
   Glyph,
   ListView,
   Tab,
@@ -16,6 +18,8 @@ import { enProposalsMessages, useProposalsT } from "./i18n";
 import { ProjectRoundRecord, RoundRecordSection } from "./round-record";
 import { ROUND_MODEL } from "./resources";
 import { TaskResponderShareAction } from "./task-responder-share";
+import { RoundResponderAccessRole } from "./access-role";
+import { RoundOpeningAccessVisibility } from "./access-visibility";
 
 const ROUND_RECORD_FIELDS = ["id", "name", "status", "opening_policy", "permissions", "revision", "can_open", "can_admit",
   "roster.user", "roster.name", "roster.track_status"] as const;
@@ -86,6 +90,19 @@ function RoundTabLabel({ name }: { name: "roster" | "comparison" }): React.React
 }
 
 export const roundRecordSlots = [
+  {
+    slot: "access.roles", model: ROUND_MODEL, id: "proposals.responder",
+    content: RoundResponderAccessRole,
+  },
+  {
+    slot: "access.visibility", model: ROUND_MODEL, id: "proposals.opening",
+    content: RoundOpeningAccessVisibility,
+  },
+  {
+    ...FormView.railSlot(ROUND_MODEL), id: "proposals.people-rail", sequence: 40,
+    requiredFields: ROUND_RECORD_FIELDS,
+    content: ShareAccessRailGroup,
+  },
   {
     ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-open", sequence: 30,
     requiredFields: ROUND_RECORD_FIELDS,

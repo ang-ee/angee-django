@@ -299,6 +299,12 @@ class TaskProjectionMixin:
     setup_state: ProjectSetupState = setup_state_field(Task)
     overdue_milestone_count: int = overdue_milestone_count_field(Task)
 
+    @strawberry_django.field(only=Task.visibility_audience_fields())
+    def audience_label(self) -> str:
+        """Project the task owner's audience explanation beside the visibility verb."""
+
+        return cast(Any, self).visibility_audience_label()
+
     @strawberry_django.field(annotate={
         f"_visibility_allowed_{value}": partial(_visibility_allowed, value) for value in Task.TaskVisibility.values
     })

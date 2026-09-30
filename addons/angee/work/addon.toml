@@ -4,6 +4,7 @@ description = "Operational queues, named stages, cycles, and triage folded into 
 keywords = ["work", "queues", "stages", "cycles", "triage", "planning"]
 category = "Productivity"
 depends_on = [
+  "angee.iam",
   "angee.jobs",
   "angee.messaging",
   "angee.projects",

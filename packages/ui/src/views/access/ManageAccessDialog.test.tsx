@@ -13,14 +13,16 @@ vi.mock("../../fragments/DialogForm", () => ({
 }));
 
 vi.mock("./SubjectPicker", () => ({
-  SubjectPicker: ({ resource }: { resource: string }) => (
-    <div>Recipient picker: {resource}</div>
+  SubjectPicker: ({ resource, onChange }: { resource: string; onChange: (value: string) => void }) => (
+    <div>Recipient picker: {resource}<button type="button" onClick={() => onChange("auth/user:person-2")}>Choose person</button></div>
   ),
 }));
 
 vi.mock("../resource/RowsListView", () => ({
-  RowsListView: ({ rows }: { rows: readonly { label: string }[] }) => (
-    <div>{rows.map((row) => <div key={row.label}>{row.label}</div>)}</div>
+  RowsListView: ({ rows, rowActions }: { rows: readonly { label: string; relation?: string }[];
+    rowActions?: readonly { onSelect: (row: { label: string }) => Promise<void> }[] }) => (
+    <div>{rows.map((row) => <div key={row.label}>{row.label}{row.relation ? <span>{row.relation}</span> : null}{rowActions?.[0] ?
+      <button type="button" onClick={() => void rowActions[0]!.onSelect(row)}>Revoke {row.label}</button> : null}</div>)}</div>
   ),
 }));
 
@@ -45,6 +47,19 @@ test("provides the canonical Share trigger and selection label", () => {
   const trigger = screen.getByRole("button", { name: "Share" });
   expect(trigger.querySelector("svg")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Share 2 selected records" })).toBeTruthy();
+});
+
+test("compact People has its own name and shows the mounted reader roster", () => {
+  const base = { open: false, onOpenChange: vi.fn(), targetIds: ["one"], grantable: [], entries: [],
+    fetching: false, error: null, onRetry: vi.fn(), onGrant: vi.fn(async () => true),
+    onRevoke: vi.fn(async () => undefined), compact: true,
+    people: [{ subject: "auth/user:ada", label: "Ada" }] };
+  const { rerender } = render(<ManageAccessDialog {...base} peopleLoaded={false} />);
+  const trigger = screen.getByRole("button", { name: "People", exact: true });
+  expect(trigger.textContent).toBe("PeopleA");
+  expect(screen.queryByRole("button", { name: "Share", exact: true })).toBeNull();
+  rerender(<ManageAccessDialog {...base} peopleLoaded />);
+  expect(trigger.textContent).toBe("People · 1A");
 });
 
 test("explains an empty grantable intersection while retaining existing access entries", () => {
@@ -144,4 +159,58 @@ test("keeps recipient resources distinct when they share a REBAC subject type", 
   await waitFor(() => {
     expect(screen.getByText("Recipient picker: agents.Agent")).toBeTruthy();
   });
+});
+
+test("shows reader roles and adds a person through the offered role", async () => {
+  const onAddRole = vi.fn(async () => true);
+  render(<ManageAccessDialog open onOpenChange={vi.fn()} targetIds={["one"]}
+    grantable={[]} entries={[]} fetching={false} error={null} onRetry={vi.fn()}
+    onGrant={vi.fn()} onRevoke={vi.fn()}
+    people={[{ subject: "auth/user:person-1", label: "Avery", roleLabel: "Coordinator", you: true, following: true }]}
+    roles={[{ id: "contributor", label: "Contributor", subjectResource: "iam.User", offered: true }]}
+    onAddRole={onAddRole}
+  />);
+  expect(screen.getByText("Coordinator")).toBeTruthy();
+  expect(screen.getByText("you")).toBeTruthy();
+  expect(screen.getByLabelText("Following")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Choose person" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add access" }));
+  await waitFor(() => expect(onAddRole).toHaveBeenCalledExactlyOnceWith("contributor", "auth/user:person-2"));
+});
+
+test("an app that admits no direct share offers no direct add verb", () => {
+  render(<ManageAccessDialog open onOpenChange={vi.fn()} targetIds={["one"]}
+    grantable={[{ relation: "reader", permission: "share", subjects: [{ type: "auth/user", relation: null, resource: "iam.User" }] }]}
+    directShare={false} entries={[]} fetching={false} error={null} onRetry={vi.fn()}
+    onGrant={vi.fn()} onRevoke={vi.fn()} people={[]}
+  />);
+  expect(screen.queryByRole("button", { name: "Add access" })).toBeNull();
+  expect(screen.queryByText("Shared directly")).toBeNull();
+});
+
+test("a direct-only grant revokes through the direct share owner", async () => {
+  const onRevoke = vi.fn(async () => undefined);
+  const onRemovePerson = vi.fn(async () => undefined);
+  const direct = { id: "grant", targetId: "one", relation: "editor", subject: "auth/group:team",
+    subjectType: "auth/group", label: "Team" };
+  render(<ManageAccessDialog open onOpenChange={vi.fn()} targetIds={["one"]}
+    grantable={[]} entries={[direct]} fetching={false} error={null} onRetry={vi.fn()}
+    onGrant={vi.fn()} onRevoke={onRevoke} onRemovePerson={onRemovePerson} people={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Revoke Team" }));
+  await waitFor(() => expect(onRevoke).toHaveBeenCalledExactlyOnceWith(direct));
+  expect(onRemovePerson).not.toHaveBeenCalled();
+  expect(screen.getByText("editor")).toBeTruthy();
+});
+
+test("the People add choice uses a declared relation label and retains the relation id", async () => {
+  const onGrant = vi.fn(async () => true);
+  render(<ManageAccessDialog open onOpenChange={vi.fn()} targetIds={["one"]}
+    grantable={[{ relation: "reader", label: "Can read", permission: "share",
+      subjects: [{ type: "auth/user", relation: null, resource: "iam.User" }] }]}
+    entries={[]} fetching={false} error={null} onRetry={vi.fn()}
+    onGrant={onGrant} onRevoke={vi.fn()} people={[]} />);
+  expect(screen.getByText("Shared directly · Can read · User")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Choose person" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add access" }));
+  await waitFor(() => expect(onGrant).toHaveBeenCalledExactlyOnceWith("reader", "auth/user:person-2"));
 });

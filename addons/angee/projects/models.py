@@ -828,6 +828,18 @@ class Task(
 
     visibility = StateField(choices_enum=TaskVisibility, default=TaskVisibility.INHERITED)
 
+    @classmethod
+    def visibility_audience_fields(cls) -> tuple[str, ...]:
+        """Fields the task's audience label reads from a projected row."""
+
+        return ("visibility",)
+
+    def visibility_audience_label(self) -> str:
+        """Describe the task's declared read audience for its current visibility."""
+
+        return ("Project readers and task participants" if self.visibility == self.TaskVisibility.INHERITED
+                else "Task participants")
+
     class TaskStatus(models.TextChoices):
         """Coarse task lifecycle states."""
 

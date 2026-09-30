@@ -9,8 +9,10 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import F
+from rebac import system_context, to_subject_ref
 from strawberry import auto
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -26,7 +28,7 @@ from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_public_id
+from angee.iam.identity import user_label, user_public_id
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 
@@ -35,6 +37,9 @@ Stage = apps.get_model("work", "Stage")
 Cycle = apps.get_model("work", "Cycle")
 Task = apps.get_model("projects", "Task")
 Project = apps.get_model("projects", "Project")
+User = apps.get_model("iam", "User")
+Membership = apps.get_model("spaces", "Membership")
+Person = apps.get_model("parties", "Person")
 Milestone = apps.get_model("projects", "Milestone")
 
 
@@ -239,9 +244,81 @@ def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int) -
     target.remove(expected_revision=expected_revision)
     return ActionResult(ok=True, message="Task removed.", id=target.sqid)
 
+
+@strawberry.type
+class ProjectManagerPersonType:
+    """One account holding the project's team moderator seat."""
+
+    subject: str
+    label: str
+    seat_id: PublicID
+    removable: bool
+
+
+@strawberry.type
+class ProjectManagerRosterType:
+    """The manager seats and admission offer under the same roster policy."""
+
+    offered: bool
+    people: list[ProjectManagerPersonType]
+
+
+@strawberry.type
+class WorkPeopleQuery:
+    """Project team managers, derived from the live spaces roster."""
+
+    @strawberry.field
+    def project_manager_roster(self, info: strawberry.Info, project: PublicID) -> ProjectManagerRosterType:
+        """List only person accounts on the project's current team."""
+
+        target = authorized_permission_target(info, Project, project, "read")
+        if target.team_id is None:
+            return ProjectManagerRosterType(offered=False, people=[])
+        offered = target.has_access("share") and (
+            Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
+        )
+        with system_context(reason="work.project.manager_roster"):
+            seats = list(Membership._base_manager.filter(
+                group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
+                is_confirmed=True, is_dismissed=False,
+            ).order_by("pk")[:100])
+            people = {
+                person.pk: person.user for person in Person._base_manager.filter(
+                    pk__in=[seat.party_id for seat in seats], user__kind="person",
+                ).select_related("user")
+            }
+        return ProjectManagerRosterType(offered=offered, people=[
+            ProjectManagerPersonType(
+                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))),
+                label=user_label(people[seat.party_id]), seat_id=seat.sqid, removable=offered,
+            )
+            for seat in seats if seat.party_id in people
+        ])
+
+
 @strawberry.type
 class WorkActionMutation:
     """Row-authorized task triage and cycle lifecycle actions."""
+
+    @strawberry.mutation
+    @action_guard("Project manager admission failed.")
+    def admit_project_manager(self, info: strawberry.Info, project: PublicID, user: PublicID) -> ActionResult:
+        """Use the team's roster verb and follow the project atomically."""
+
+        target = authorized_permission_target(info, Project, project, "share")
+        account = authorized_permission_target(info, User, user, "read")
+        target.admit_manager(account)
+        return ActionResult(ok=True, message="Project manager admitted.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Project manager removal failed.")
+    def remove_project_manager(self, info: strawberry.Info, project: PublicID, seat: PublicID) -> ActionResult:
+        """Dismiss the selected moderator seat on this project's team."""
+
+        target = authorized_permission_target(info, Project, project, "share")
+        membership = authorized_action_target(info, Membership, seat, "write")
+        target.remove_manager(membership)
+        return ActionResult(ok=True, message="Project manager removed.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Start task failed.")
@@ -475,14 +552,15 @@ _CYCLE_RESOURCE = hasura_model_resource(
 _RESOURCE_TYPES = [*_QUEUE_RESOURCE.types, *_STAGE_RESOURCE.types, *_CYCLE_RESOURCE.types]
 
 _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
-    "query": [_QUEUE_RESOURCE.query, _STAGE_RESOURCE.query, _CYCLE_RESOURCE.query],
+    "query": [WorkPeopleQuery, _QUEUE_RESOURCE.query, _STAGE_RESOURCE.query, _CYCLE_RESOURCE.query],
     "mutation": [
         WorkActionMutation,
         _QUEUE_RESOURCE.mutation,
         _STAGE_RESOURCE.mutation,
         _CYCLE_RESOURCE.mutation,
     ],
-    "types": [WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
+    "types": [ProjectManagerPersonType, ProjectManagerRosterType,
+              WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
     "input_extensions": [ProjectWorkSetupInput, MilestoneWorkSetupInput],
     "type_extensions": [TaskWorkExtension, ProjectWorkExtension, MilestoneWorkExtension],
 }

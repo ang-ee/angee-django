@@ -147,6 +147,27 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertIsNotNone(needs[0].party_id)
         self.assertEqual(needs[0].party_id, needs[1].party_id)
 
+    def test_domain_capture_skips_requester_follow_without_record_read(self):
+        channel = self.webform(domains=("example.com",))
+        self.submit(channel)
+        need = self.Need._base_manager.get()
+        requester = get_user_model()._base_manager.get(email="alex@example.com")
+        self.assertFalse(need.task.thread_reader_allowed(requester))
+        self.assertFalse(need.task.message_is_follower(user=requester))
+
+    def test_requester_role_admission_and_removal_track_the_read(self):
+        channel = self.webform()
+        self.submit(channel)
+        need = self.Need._base_manager.get()
+        with system_context(reason="test.intake.requester_role"):
+            requester = get_user_model().objects.create_user(username="requester-role-person", kind="person")
+            need.admit_requester(requester)
+            self.assertTrue(need.task.thread_reader_allowed(requester))
+            self.assertTrue(need.task.message_is_follower(user=requester))
+            need.remove_requester()
+            self.assertFalse(need.task.thread_reader_allowed(requester))
+            self.assertFalse(need.task.message_is_follower(user=requester))
+
     def test_refused_email_holder_retains_capture_and_rolls_back_identity(self):
         channel = self.webform(domains=("example.com",))
         task_model = apps.get_model("projects", "Task")

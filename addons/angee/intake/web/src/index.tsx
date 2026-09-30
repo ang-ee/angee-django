@@ -1,9 +1,11 @@
 import { decisionRecordTab } from "@angee/decisions";
 import { defineBaseAddon } from "@angee/app";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { ShareAccessRailGroup } from "@angee/iam";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   ErrorBanner,
+  FormView,
   Glyph,
   Group,
   Skeleton,
@@ -23,6 +25,7 @@ import { TaskAccessActions } from "./TaskAccessActions";
 import { TaskAccessNeedsDocument } from "./documents";
 import { NEED_MODEL } from "./resources";
 import { RecordNeedsPane } from "./RecordNeedsPane";
+import { TaskRequesterAccessRole } from "./access-role";
 
 export { NEED_MODEL } from "./resources";
 
@@ -36,6 +39,9 @@ const intake = defineBaseAddon({
     render: (context) => <TaskAccessChatter context={context} />,
   }],
   slots: [
+    { slot: "access.roles", model: TASK_MODEL, id: "intake.requester", content: TaskRequesterAccessRole },
+    { ...FormView.railSlot(TASK_MODEL), id: "intake.people-rail", sequence: 40,
+      content: ShareAccessRailGroup },
     decisionRecordTab(NEED_MODEL),
     {
       ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
