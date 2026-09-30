@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.apps import apps
-from django.conf import settings
-from django.utils.module_loading import import_string
 from rebac import system_context
 
 from angee.agents.grants import grant_resource_reader_role
@@ -198,7 +196,6 @@ def deprovision_agent(id: PublicID) -> ActionResult:
         if agent.runtime_backend.runs_in_process:
             try:
                 agent.mark_deprovisioning()
-                _run_teardown_hooks(agent)
                 agent.mark_deprovisioned()
             except TransitionNotAllowed as error:
                 return ActionResult(ok=False, message=f"Teardown failed: {error}")
@@ -207,7 +204,6 @@ def deprovision_agent(id: PublicID) -> ActionResult:
             try:
                 if agent.lifecycle == AgentLifecycle.PROVISIONING:
                     agent.mark_deprovisioning()
-                _run_teardown_hooks(agent)
                 agent.mark_deprovisioned()
             except TransitionNotAllowed as error:
                 return ActionResult(ok=False, message=f"Teardown failed: {error}")
@@ -216,7 +212,6 @@ def deprovision_agent(id: PublicID) -> ActionResult:
         service = agent.service
         try:
             agent.mark_deprovisioning()
-            _run_teardown_hooks(agent)
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Teardown failed: {error}")
     daemon = OperatorDaemon.from_settings()
@@ -374,11 +369,3 @@ def _agent_model() -> Any:
     """Return the composed runtime Agent model without pinning it at import time."""
 
     return apps.get_model("agents", "Agent")
-
-
-def _run_teardown_hooks(agent: Any) -> None:
-    """Run installed agent teardown hooks in configured order."""
-
-    for dotted in settings.ANGEE_AGENT_TEARDOWN_HOOKS:
-        hook = import_string(str(dotted))
-        hook(agent)

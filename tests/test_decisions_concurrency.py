@@ -28,7 +28,7 @@ pytestmark = [
 ]
 
 
-class RecordNote(Action, value="record", label="Record", verdict=Verdict.COMPLETED):
+class RecordNote(Action, key="record", label="Record", verdict=Verdict.COMPLETED):
     """A minimal durable answer for competing requests."""
 
     note: str

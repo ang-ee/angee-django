@@ -303,6 +303,7 @@ class StubVCSBackend(VCSBackend):
     ``stub_repos``/``stub_tree``/``stub_blobs`` through the bridge config.
     """
 
+    key = "stub"
     repository_search_scope_config_key = "stub_org"
 
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
@@ -361,6 +362,8 @@ class StubInferenceBackend(InferenceBackend):
     an ``InferenceProvider(backend_class="stub_inference")`` resolves to it. Each test injects
     ``stub_models`` (a list of ``InferenceModelSpec`` kwargs) through the provider config.
     """
+
+    key = "stub_inference"
 
     def list_models(self) -> list[InferenceModelSpec]:
         """Return the models configured on the provider's ``config``."""

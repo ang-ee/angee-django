@@ -29,8 +29,7 @@ class DecisionGroup(AppendOnlyModel, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "dcg_"
-    policy = ImplClassField(
-        base_class=DecisionPolicy, registry_setting="ANGEE_DECISION_POLICY_CLASSES", default="first",
+    policy = ImplClassField(DecisionPolicy, default="first",
     )
     issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     reasked_from = models.ForeignKey(

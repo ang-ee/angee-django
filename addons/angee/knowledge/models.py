@@ -124,9 +124,7 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
     description = models.TextField(blank=True, default="")
     icon = models.CharField(max_length=64, blank=True, default="")
     accent = models.CharField(max_length=32, blank=True, default="")
-    retrieval_class = ImplClassField(
-        base_class=RetrievalBackend,
-        registry_setting="ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES",
+    retrieval_class = ImplClassField(RetrievalBackend,
         default="lexical",
     )
     """Registry key for the retrieval backend this vault searches through."""

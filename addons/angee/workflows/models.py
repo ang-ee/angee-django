@@ -511,7 +511,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     resource_class = TriggerResource
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
-    source = ImplClassField(base_class=TriggerSource, registry_setting="ANGEE_WORKFLOW_TRIGGER_SOURCES")
+    source = ImplClassField(TriggerSource)
     model_label: str = ModelLabelField(max_length=200, blank=True, default="")
     condition = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False, editable=False)

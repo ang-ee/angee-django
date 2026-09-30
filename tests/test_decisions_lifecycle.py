@@ -34,13 +34,14 @@ from tests.conftest import addon_schema, create_platform_admin, create_user, exe
 from tests.decisions_models import Decision, DecisionEvidence, DecisionGroup
 
 
-class Complete(Action, value="complete", label="Complete", verdict=Verdict.COMPLETED):
+class Complete(Action, key="complete", label="Complete", verdict=Verdict.COMPLETED):
     """Record a bounded note as the answer."""
 
     note: str = Field(min_length=2)
 
 
 class RetainClosed(DecisionPolicy):
+    key = "all"
     """A registered strategy may retain a group after an unanswered closure."""
 
     @classmethod
@@ -48,19 +49,19 @@ class RetainClosed(DecisionPolicy):
         return False
 
 
-class Decline(Action, value="decline", label="Decline", verdict=Verdict.REJECTED):
+class Decline(Action, key="decline", label="Decline", verdict=Verdict.REJECTED):
     """Decline with a reason."""
 
     reason: str
 
 
-class ChooseDocument(Action, value="choose", label="Choose document", verdict=Verdict.COMPLETED):
+class ChooseDocument(Action, key="choose", label="Choose document", verdict=Verdict.COMPLETED):
     """Select one readable record from a frozen picker."""
 
     document_id: Annotated[str, Relation("knowledge.Vault")]
 
 
-class EditDocument(Action, value="edit", label="Edit document", verdict=Verdict.COMPLETED):
+class EditDocument(Action, key="edit", label="Edit document", verdict=Verdict.COMPLETED):
     """A picker requiring the selected record's write permission."""
 
     document_id: Annotated[str, Relation("knowledge.Vault", permission="write")]
@@ -398,7 +399,7 @@ def test_omitted_values_use_stored_initial_defaults_before_recording_the_answer(
     completed = answer(seat(group), reviewer, values={})
     assert completed.resolution == {"action": "complete", "note": "Frozen initial"}
 
-    class CurrentComplete(Action, value="complete", label="Complete", verdict=Verdict.COMPLETED):
+    class CurrentComplete(Action, key="complete", label="Complete", verdict=Verdict.COMPLETED):
         note: str = "A different current default"
 
     resolved = Decision.objects.resolution(completed.pk, actor=issuer, actions=(CurrentComplete,))

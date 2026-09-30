@@ -93,8 +93,7 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    profile = ImplClassField(
-        base_class=ExtractionProfile, registry_setting="ANGEE_EXTRACTION_PROFILE_CLASSES", editable=False
+    profile = ImplClassField(ExtractionProfile, editable=False
     )
     model = models.ForeignKey(
         "agents.InferenceModel", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_evidence"

@@ -161,6 +161,7 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
 
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """One replica stream per address book, mapped through Party.ingest_contact."""
+    registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
 
     category = "directory"
     label = "Directory"

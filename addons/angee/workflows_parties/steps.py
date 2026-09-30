@@ -74,7 +74,7 @@ class IdentityOutput(BaseModel):
     handle_result: str | None = None
 
 
-class ApplyIdentity(Action, value="apply_identity", label="Apply identity choices",
+class ApplyIdentity(Action, key="apply_identity", label="Apply identity choices",
                     verdict=Verdict.COMPLETED, outcome="applied"):
     """Explicit field choices, leaving every unselected fact unchanged."""
 
@@ -83,14 +83,14 @@ class ApplyIdentity(Action, value="apply_identity", label="Apply identity choice
     handle_action: Literal["keep", "confirm", "dismiss"] = Field(default="keep", title="Contact")
 
 
-class RejectIdentity(Action, value="reject_identity", label="Reject identity change",
+class RejectIdentity(Action, key="reject_identity", label="Reject identity change",
                      verdict=Verdict.REJECTED, outcome="rejected"):
     """Retain the reason for leaving the current identity unchanged."""
 
     note: str = Field(min_length=1, json_schema_extra={"widget": "textarea"})
 
 
-class EscalateIdentity(Action, value="escalate_identity", label="Escalate identity review",
+class EscalateIdentity(Action, key="escalate_identity", label="Escalate identity review",
                        verdict=Verdict.ESCALATED, outcome="escalated"):
     """Route a proposal requiring another review with its explanation."""
 
@@ -215,19 +215,19 @@ class DuplicateOutput(BaseModel):
     result: str
 
 
-class MergeParties(Action, value="merge_parties", label="Merge parties",
+class MergeParties(Action, key="merge_parties", label="Merge parties",
                    verdict=Verdict.COMPLETED, outcome="merged"):
     """Choose the party to retain; both identities remain on the frozen basis."""
 
     survivor: Literal["left", "right"] = "left"
 
 
-class KeepPartiesSeparate(Action, value="keep_parties_separate", label="Keep separate",
+class KeepPartiesSeparate(Action, key="keep_parties_separate", label="Keep separate",
                           verdict=Verdict.COMPLETED, outcome="kept_separate"):
     """Remember a durable veto through the parties owner."""
 
 
-class SkipDuplicatePair(Action, value="skip_duplicate_pair", label="Decide later",
+class SkipDuplicatePair(Action, key="skip_duplicate_pair", label="Decide later",
                        verdict=Verdict.COMPLETED, outcome="skipped"):
     """Leave the pair eligible for a later scan."""
 

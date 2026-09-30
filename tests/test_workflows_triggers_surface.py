@@ -99,8 +99,8 @@ def test_resolved_model_and_title_share_source_owner_without_row_queries(
 ):
     """Stored lowercase and fixed source models use the metadata's canonical identity."""
     schema, workflow, editor, viewer, _starter = trigger_surface
-    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
-        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES,
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
         "record_changed": source_path,
     }
     assert FixedVaultSource.choice().defaults["source_model"] == "knowledge.Vault"
@@ -123,8 +123,8 @@ def test_resolved_model_and_title_share_source_owner_without_row_queries(
 
 def test_message_source_defaults_and_record_model_use_the_same_canonical_identity(settings):
     """New message-source forms receive the same model as a retained trigger."""
-    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
-        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES,
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
         "message_ingested": "angee.workflows_messaging.sources.MessageIngested",
     }
     trigger = Trigger(source="message_ingested")

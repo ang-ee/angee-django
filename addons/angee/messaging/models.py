@@ -876,9 +876,7 @@ class Channel(Bridge):
     integration_kind_label = "Channel"
     live_impl_field = "backend_class"
 
-    backend_class = ImplClassField(
-        base_class=ChannelBackend,
-        registry_setting="ANGEE_CHANNEL_BACKEND_CLASSES",
+    backend_class = ImplClassField(ChannelBackend,
         default="manual",
         create_only=True,
     )

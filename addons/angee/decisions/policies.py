@@ -8,6 +8,7 @@ from angee.decisions.states import ClosedReason
 
 class DecisionPolicy(ImplBase):
     """Registered strategy deciding when a group's answers are sufficient."""
+    registry_setting = "ANGEE_DECISION_POLICY_CLASSES"
 
     @classmethod
     def settled(cls, decisions: list[Any]) -> bool:

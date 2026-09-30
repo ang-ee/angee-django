@@ -21,7 +21,7 @@ from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
 from tests.decisions_models import Decision
 
 
-class Accept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
+class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
     """One plain answer keeps these proofs focused on contribution ownership."""
 
 

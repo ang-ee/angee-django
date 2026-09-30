@@ -354,11 +354,11 @@ def test_entry_requires_exactly_one_registered_source(tmp_path: Path) -> None:
         ResourceEntry.from_declaration(owner, "master", {"model": "base.ImportNote"})
 
 
-def test_unregistered_source_key_raises_with_install_hint(tmp_path: Path) -> None:
-    """Materializing an entry whose source kind is not registered fails with a hint."""
+def test_unregistered_source_key_uses_shared_registry_error(tmp_path: Path) -> None:
+    """Materializing an unknown source reports the configured registry keys."""
 
     unknown = ResourceEntry(addon=addon(tmp_path), tier="master", source_key="ipfs", source_value="x")
-    with pytest.raises(ImproperlyConfigured, match="not registered"):
+    with pytest.raises(ImproperlyConfigured, match="No impl for key 'ipfs'.*known: path, url"):
         unknown.materialize()
 
 

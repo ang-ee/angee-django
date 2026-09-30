@@ -50,7 +50,7 @@ def test_compatibility_aliases_and_failure_retain_evidence(text_part):
 
 
 def test_profile_resolves_through_existing_registry_and_fails_closed():
-    profile_class = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", "none", ExtractionProfile)
+    profile_class = resolve_impl_class(ExtractionProfile, "none")
     assert profile_class is UnconfiguredExtractionProfile
     with pytest.raises(ValueError, match="Select a document extraction profile"):
         profile_class().process_parts([], [], {}, config={})

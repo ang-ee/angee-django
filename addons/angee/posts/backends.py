@@ -93,6 +93,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
     and ``self.bridge.credential`` authenticates — and ``self.http`` is the shared
     SSRF-pinned client. Incremental state lives on ``self.bridge.cursor``.
     """
+    registry_setting = "ANGEE_POSTS_FEED_BACKEND_CLASSES"
 
     category = "feed"
     label = "Feed"

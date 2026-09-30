@@ -12,14 +12,14 @@ from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
 
 
-class Accept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
+class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
     """Accept with a defaulted note and the retained, read-only record identity."""
 
     note: str = "Reviewed"
     reference: str = Field(json_schema_extra={"readOnly": True})
 
 
-class Reject(Action, value="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
+class Reject(Action, key="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
     """Reject with a nonempty explanation."""
 
     reason: str = Field(min_length=3)

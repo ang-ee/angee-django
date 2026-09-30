@@ -5,6 +5,7 @@ from __future__ import annotations
 from angee.integrate.constants import ENSURE_SESSIONS_TASK, RECONCILER_INTERVAL
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.integrate.oauth.providers.OAuthProviderType"],
     "CELERY_BEAT_SCHEDULE:append": {
         "integrate.sync_due_bridges": {
             "task": "integrate.sync_due_bridges",
@@ -22,11 +23,11 @@ SETTINGS = {
     # discovery TTL belongs to the ``iam_integrate_oidc`` addon.
     "ANGEE_INTEGRATE_OAUTH_CLIENTS": (),
     "ANGEE_INTEGRATE_OAUTH_STATE_TTL": 600,
-    "ANGEE_OAUTH_PROVIDER_TYPES": {
+    "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": {
         "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
     },
     # Networked resource manifests belong to integrate's outbound HTTP owner; the
     # resources addon reads the settings registry lazily when entries materialize.
-    "ANGEE_RESOURCE_SOURCE_CLASSES.url": "angee.integrate.resource_source.url_source",
+    "ANGEE_RESOURCE_SOURCE_CLASSES.url": "angee.integrate.resource_source.UrlSource",
 }
 """Django settings contributed when the integrate addon is installed."""

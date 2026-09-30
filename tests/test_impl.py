@@ -26,6 +26,7 @@ from angee.base.impl import (
     materialize_form_schema,
     model_config_form_spec,
     resolve_all_impl_classes,
+    resolve_impl_class,
 )
 from angee.base.jsonschema import validation_issues
 from angee.integrate_github.backend import GitHubBackend
@@ -91,6 +92,7 @@ def test_empty_array_form_defaults_preserve_valid_item_schemas(declared_default)
 
 
 class _BaseImpl(ImplBase):
+    registry_setting = "ANGEE_TEST_IMPLS"
     key = "base"
     label = "Base"
     category = "demo"
@@ -129,12 +131,24 @@ class _ScalarConfig(BaseModel):
     retries: int
 
 
-class _TypedConfigImpl(ImplBase):
+class _TypedConfigImpl(_BaseImpl):
     key = "typed"
     config_model = _ScalarConfig
 
 
-class _UnsupportedConfigImpl(ImplBase):
+class _EmptyImpl(ImplBase):
+    registry_setting = "ANGEE_EMPTY_IMPLS"
+
+
+class _EnumImpl(_BaseImpl):
+    registry_setting = "ANGEE_ENUM_TEST_CLASSES"
+
+
+class _EnumRefinedImpl(_EnumImpl):
+    key = "refined"
+
+
+class _UnsupportedConfigImpl(_BaseImpl):
     key = "unsupported"
 
     class Config(BaseModel):
@@ -177,7 +191,7 @@ def test_impl_owner_public_import_contract() -> None:
 def test_resolve_all_impl_classes_is_sorted_and_validates_keys() -> None:
     """Registry enumeration is deterministic and owns declaration-key agreement."""
 
-    assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", _BaseImpl) == (
+    assert resolve_all_impl_classes(_BaseImpl) == (
         _BaseImpl,
         _RefinedImpl,
     )
@@ -186,7 +200,12 @@ def test_resolve_all_impl_classes_is_sorted_and_validates_keys() -> None:
         override_settings(ANGEE_TEST_IMPLS={"wrong": "tests.test_impl._RefinedImpl"}),
         pytest.raises(ImproperlyConfigured, match="with key 'refined'"),
     ):
-        resolve_all_impl_classes("ANGEE_TEST_IMPLS", _BaseImpl)
+        resolve_all_impl_classes(_BaseImpl)
+    with (
+        override_settings(ANGEE_TEST_IMPLS={"wrong": "tests.test_impl._RefinedImpl"}),
+        pytest.raises(ImproperlyConfigured, match="with key 'refined'"),
+    ):
+        resolve_impl_class(_BaseImpl, "wrong")
 
 
 @override_settings(
@@ -203,7 +222,6 @@ def test_impl_registry_and_field_collect_every_registry_fault() -> None:
     faults: list[Exception] = []
 
     assert resolve_all_impl_classes(
-        "ANGEE_TEST_IMPLS",
         _BaseImpl,
         on_error=faults.append,
     ) == (_BaseImpl,)
@@ -212,33 +230,33 @@ def test_impl_registry_and_field_collect_every_registry_fault() -> None:
     assert isinstance(faults[1], ImproperlyConfigured)
     assert isinstance(faults[2], ImproperlyConfigured)
 
-    field = ImplClassField(base_class=_BaseImpl, registry_setting="ANGEE_TEST_IMPLS")
-    errors = field.check()
+    field = ImplClassField(_BaseImpl)
+    assert [error.id for error in field.check()] == ["angee.E025"]
+    errors = check_impl_registry(_BaseImpl, obj=field)
     assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
     assert all(error.obj is field for error in errors)
     assert "MissingImpl" in errors[0].msg
     assert "is not a _BaseImpl" in errors[1].msg
     assert "with key 'refined'" in errors[2].msg
-    assert check_impl_registry("ANGEE_TEST_IMPLS", _BaseImpl, obj=field) == errors
 
 
 @override_settings(ANGEE_TEST_IMPLS={"unsupported": "tests.test_impl._UnsupportedConfigImpl"})
 def test_rowless_registry_checks_config_form_declarations() -> None:
     """A registry needs the same form declaration checks with or without a column."""
 
-    errors = check_impl_registry("ANGEE_TEST_IMPLS", ImplBase)
+    errors = check_impl_registry(_BaseImpl)
 
     assert [error.id for error in errors] == ["angee.E005"]
     assert "config.headers" in errors[0].msg
-    field = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS")
-    assert check_impl_registry("ANGEE_TEST_IMPLS", ImplBase, obj=field) == field.check()
+    field = ImplClassField(_BaseImpl)
+    assert [error.id for error in field.check()] == ["angee.E025"]
 
 
 @override_settings(ANGEE_TEST_IMPLS=["not a registry"])
 def test_registry_checks_report_a_malformed_mapping() -> None:
     """System checks report an invalid registry container without raising."""
 
-    errors = check_impl_registry("ANGEE_TEST_IMPLS", ImplBase)
+    errors = check_impl_registry(_BaseImpl)
 
     assert [error.id for error in errors] == ["angee.E002"]
     assert "must be a mapping" in errors[0].msg
@@ -248,10 +266,10 @@ def test_registry_checks_report_a_malformed_mapping() -> None:
 def test_empty_rowless_registry_is_valid_but_cannot_project_an_enum() -> None:
     """Empty catalogues need no artificial implementation to pass checks or list choices."""
 
-    assert check_impl_registry("ANGEE_EMPTY_IMPLS", ImplBase) == []
-    assert impl_choices("ANGEE_EMPTY_IMPLS", ImplBase) == []
+    assert check_impl_registry(_EmptyImpl) == []
+    assert impl_choices(_EmptyImpl) == []
     with pytest.raises(ImproperlyConfigured, match="registry .* is empty"):
-        impl_choices_enum("ANGEE_EMPTY_IMPLS")
+        impl_choices_enum(_EmptyImpl)
 
 
 @override_settings(
@@ -263,46 +281,48 @@ def test_empty_rowless_registry_is_valid_but_cannot_project_an_enum() -> None:
 def test_rowless_choices_share_field_metadata_and_order() -> None:
     """Registry choices retain implementation labels, defaults and config forms."""
 
-    field = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS")
-    choices = impl_choices("ANGEE_TEST_IMPLS", ImplBase)
+    field = ImplClassField(_BaseImpl)
+    choices = impl_choices(_BaseImpl)
 
     assert choices == field.impl_choices() == [_BaseImpl.choice(), _TypedConfigImpl.choice()]
 
 
-@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._BaseImpl"})
+@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
 def test_registry_enum_identity_tracks_keys_and_preserves_names() -> None:
     """Native enum identity depends on the composed keys, not import paths or input order."""
 
-    enum = impl_choices_enum("ANGEE_ENUM_TEST_CLASSES")
-    field = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_ENUM_TEST_CLASSES")
+    enum = impl_choices_enum(_EnumImpl)
+    field = ImplClassField(_EnumImpl)
     assert field.choices_enum is enum
     assert enum.__name__ == "EnumTestImpl"
     assert enum.choices == [("base", "base")]
-    with override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._RefinedImpl"}):
-        assert impl_choices_enum("ANGEE_ENUM_TEST_CLASSES") is enum
+    with override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumRefinedImpl"}):
+        assert impl_choices_enum(_EnumImpl) is enum
     with override_settings(
         ANGEE_ENUM_TEST_CLASSES={
-            "refined": "tests.test_impl._RefinedImpl",
-            "base": "tests.test_impl._BaseImpl",
+            "refined": "tests.test_impl._EnumRefinedImpl",
+            "base": "tests.test_impl._EnumImpl",
         }
     ):
-        expanded = impl_choices_enum("ANGEE_ENUM_TEST_CLASSES")
+        expanded = impl_choices_enum(_EnumImpl)
         assert expanded is not enum
         assert expanded.choices == [("base", "base"), ("refined", "refined")]
-    assert impl_choices_enum("ANGEE_ENUM_TEST_CLASSES") is enum
+    assert impl_choices_enum(_EnumImpl) is enum
 
 
-@override_settings(ANGEE_TEST_IMPLS={"local": "angee.storage.backends.LocalBackend"})
+@override_settings(ANGEE_STORAGE_BACKEND_CLASSES={"local": "angee.storage.backends.LocalBackend"})
 def test_native_impl_field_uses_its_registry_key() -> None:
     """Native storage classes need no ImplBase contract or duplicate key."""
 
-    field = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_TEST_IMPLS")
+    field = ImplClassField(StorageBackend)
 
-    assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", StorageBackend) == (LocalBackend,)
+    assert resolve_all_impl_classes(StorageBackend) == (LocalBackend,)
     assert field.check() == []
-    assert impl_choices("ANGEE_TEST_IMPLS", StorageBackend) == field.impl_choices() == [
-        ImplChoice(key="local", label="local", icon="", category="", defaults={}, config_schema=None)
-    ]
+    assert (
+        impl_choices(StorageBackend)
+        == field.impl_choices()
+        == [ImplChoice(key="local", label="local", icon="", category="", defaults={}, config_schema=None)]
+    )
 
 
 @override_settings(ANGEE_EMPTY_IMPLS={})
@@ -310,11 +330,7 @@ def test_historical_impl_field_reconstructs_without_removed_registry() -> None:
     """Serialized migration fields retain their stored default after their registry is removed."""
 
     with pytest.raises(ImproperlyConfigured, match="registry .* is empty"):
-        ImplClassField(
-            base_class=ImplBase,
-            registry_setting="ANGEE_EMPTY_IMPLS",
-            default="none",
-        )
+        ImplClassField(_EmptyImpl, default="none")
 
     historical = ImplClassField(registry_setting="ANGEE_EMPTY_IMPLS", default="none")
     _, _, args, kwargs = historical.deconstruct()
@@ -353,7 +369,7 @@ def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
     """Inherited validation refreshes deferred config before normalizing a write."""
 
     class DeferredConfigRecord(ImplDefaultsMixin):
-        adapter = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS", create_only=True)
+        adapter = ImplClassField(_BaseImpl, create_only=True)
         config = models.JSONField(default=dict)
 
         class Meta:
@@ -379,7 +395,7 @@ def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_n
     """An unrelated save neither reads nor rewrites the deferred config and selector."""
 
     class DeferredConfigRecord(ImplDefaultsMixin):
-        adapter = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS", create_only=True)
+        adapter = ImplClassField(_BaseImpl, create_only=True)
         config = models.JSONField(default=dict)
         label = models.CharField(max_length=50)
 

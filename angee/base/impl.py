@@ -452,19 +452,23 @@ def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, A
 
 
 class ImplBase:
-    """Base for an implementation selectable by an ``ImplClassField`` key.
+    """Base for a keyed implementation selected by a field or rowless contract.
 
-    Subclasses declare class-level ``key``/``label``/``icon``/``category`` and a
-    ``defaults`` mapping of model-field values to seed. Behaviour lives on the
+    Registry bases name their composed setting. Subclasses declare class-level
+    ``key``/``label``/``icon``/``category`` and a ``defaults`` mapping of model-field
+    values to seed. Behaviour lives on the
     domain subclass (e.g. ``IntegrationImpl``, ``OAuthProviderType``).
     """
 
     key: ClassVar[str] = ""
+    registry_setting: ClassVar[str] = ""
     label: ClassVar[str] = ""
     icon: ClassVar[str] = ""
     category: ClassVar[str] = ""
     defaults: ClassVar[dict[str, Any]] = {}
     config_model: ClassVar[type[BaseModel] | None] = None
+    check_config_form_spec: ClassVar[bool] = True
+    """False for rowless contracts whose typed config is never offered as a FormSpec."""
 
     @classmethod
     def effective_defaults(cls) -> dict[str, Any]:
@@ -657,13 +661,23 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) -> type[T]:
-    """Return the impl class ``registry_setting`` binds to ``key``.
+def declared_impl_registries() -> tuple[str, ...]:
+    """Return dotted implementation bases listed by installed addons."""
+
+    declared = getattr(settings, "ANGEE_IMPL_REGISTRIES", ())
+    if not isinstance(declared, list | tuple) or not all(isinstance(path, str) for path in declared):
+        raise ImproperlyConfigured("settings.ANGEE_IMPL_REGISTRIES must be a list of dotted base classes.")
+    return tuple(declared)
+
+
+def resolve_impl_class[T](base_class: type[T], key: str) -> type[T]:
+    """Return the impl class the base's named registry binds to ``key``.
 
     The dotted path comes from composed, trusted settings and is checked against
     ``base_class`` before returning.
     """
 
+    registry_setting = getattr(base_class, "registry_setting")
     registry = impl_registry(registry_setting)
     try:
         dotted = registry[key]
@@ -676,32 +690,32 @@ def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) 
     if not (isinstance(base_class, type) and isinstance(impl, type) and issubclass(impl, base_class)):
         base_name = getattr(base_class, "__name__", base_class)
         raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
+    declared_key = getattr(impl, "key", None)
+    if declared_key is not None and declared_key != key:
+        raise ImproperlyConfigured(
+            f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {declared_key!r}."
+        )
     return impl
 
 
 def resolve_all_impl_classes[T](
-    registry_setting: str,
     base_class: type[T],
     *,
     on_error: Callable[[Exception], None] | None = None,
 ) -> tuple[type[T], ...]:
     """Resolve and validate every configured impl in deterministic key order.
 
-    ``ImplBase`` owns stable class keys, which must agree with their registry
-    keys. Native implementation classes without that contract use the registry
-    key alone. System-check callers may supply ``on_error`` to collect every
+    Implementations that declare class keys must agree with their registry keys.
+    Native implementation classes without that contract use the registry key
+    alone. System-check callers may supply ``on_error`` to collect every
     invalid declaration while ordinary callers retain fail-fast resolution.
     """
 
+    registry_setting = getattr(base_class, "registry_setting")
     classes: list[type[T]] = []
     for key in sorted(impl_registry(registry_setting)):
         try:
-            impl = resolve_impl_class(registry_setting, key, base_class)
-            if issubclass(impl, ImplBase) and impl.key != key:
-                raise ImproperlyConfigured(
-                    f"settings.{registry_setting}[{key!r}] resolves "
-                    f"{impl.__name__} with key {impl.key!r}."
-                )
+            impl = resolve_impl_class(base_class, key)
         except (ImportError, ImproperlyConfigured) as error:
             if on_error is None:
                 raise
@@ -712,12 +726,11 @@ def resolve_all_impl_classes[T](
 
 
 def check_impl_registry(
-    registry_setting: str,
     base_class: type[object],
     *,
     obj: object | None = None,
 ) -> list[checks.CheckMessage]:
-    """Check every registry declaration and config form, including rowless registries.
+    """Check registry declarations and offered config forms, including rowless registries.
 
     Empty registries are valid catalogues. Model fields and enum projections
     require entries, and consumers own any required selected-key policy.
@@ -726,11 +739,11 @@ def check_impl_registry(
     errors: list[checks.CheckMessage] = []
     try:
         classes = resolve_all_impl_classes(
-            registry_setting,
             base_class,
             on_error=lambda error: errors.append(
                 checks.Error(
-                    str(error), obj=obj,
+                    str(error),
+                    obj=obj,
                     id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
                 )
             ),
@@ -738,7 +751,7 @@ def check_impl_registry(
     except ImproperlyConfigured as error:
         return [checks.Error(str(error), obj=obj, id="angee.E002")]
     for impl in classes:
-        if issubclass(impl, ImplBase):
+        if issubclass(impl, ImplBase) and impl.check_config_form_spec:
             try:
                 impl.config_form_spec()
             except ImproperlyConfigured as error:
@@ -746,12 +759,13 @@ def check_impl_registry(
     return errors
 
 
-def impl_choices(registry_setting: str, base_class: type[object]) -> list[ImplChoice]:
+def impl_choices(base_class: type[object]) -> list[ImplChoice]:
     """Project pickable metadata in registry-key order, without requiring a column."""
 
+    registry_setting = getattr(base_class, "registry_setting")
     choices: list[ImplChoice] = []
     for key in sorted(impl_registry(registry_setting)):
-        impl = resolve_impl_class(registry_setting, key, base_class)
+        impl = resolve_impl_class(base_class, key)
         if issubclass(impl, ImplBase):
             choices.append(replace(impl.choice(), key=key))
         else:
@@ -759,9 +773,10 @@ def impl_choices(registry_setting: str, base_class: type[object]) -> list[ImplCh
     return choices
 
 
-def impl_choices_enum(registry_setting: str) -> type[models.TextChoices]:
+def impl_choices_enum(base_class: type[object]) -> type[models.TextChoices]:
     """Return the shared native enum for the current non-empty registry key set."""
 
+    registry_setting = getattr(base_class, "registry_setting")
     keys = tuple(sorted(impl_registry(registry_setting)))
     if not keys:
         raise ImproperlyConfigured(
@@ -784,16 +799,16 @@ def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[mod
 class ImplClassField(TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
-    ``registry_setting`` names the Django setting that maps keys to dotted import
-    paths. Addons contribute impls into that setting through autoconfig, making
+    The base names the Django setting that maps keys to dotted import paths.
+    Addons contribute impls into that setting through autoconfig, making
     the key set closed at composition time. The field renders as a
     ``TextChoices`` enum and resolves only configured, trusted paths.
     """
 
     def __init__(
         self,
-        *,
         base_class: type[object] | None = None,
+        *,
         registry_setting: str = "",
         create_only: bool = False,
         **kwargs: Any,
@@ -802,8 +817,10 @@ class ImplClassField(TextChoicesField):
 
         if base_class is not None and not isinstance(base_class, type):
             raise ImproperlyConfigured("ImplClassField base_class must be a type.")
+        if base_class is not None and registry_setting:
+            raise ImproperlyConfigured("ImplClassField registry_setting is only for historical migration fields.")
         self.base_class = base_class
-        self.registry_setting = registry_setting
+        self.registry_setting = getattr(base_class, "registry_setting") if base_class is not None else registry_setting
         self.create_only = create_only
         self._historical_default = kwargs.get("default")
         kwargs.setdefault("max_length", 100)
@@ -820,14 +837,14 @@ class ImplClassField(TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Validate the declaration, registry key agreement, and config forms."""
+        """Validate the field's base declaration; the base check owns registry content."""
 
         errors = super().check(**kwargs)
         if not isinstance(self.base_class, type):
             errors.append(
                 checks.Error(
                     "ImplClassField requires a base_class type.",
-                    hint="Pass base_class=... naming the implementation base.",
+                    hint="Pass the implementation base as the first argument.",
                     obj=self,
                     id="angee.E001",
                 )
@@ -840,14 +857,22 @@ class ImplClassField(TextChoicesField):
                     id="angee.E002",
                 )
             )
-        elif isinstance(self.base_class, type):
-            errors.extend(check_impl_registry(self.registry_setting, self.base_class, obj=self))
+        elif isinstance(self.base_class, type) and (
+            f"{self.base_class.__module__}.{self.base_class.__qualname__}" not in declared_impl_registries()
+        ):
+            errors.append(
+                checks.Error(
+                    f"{self.base_class.__name__} is not declared in settings.ANGEE_IMPL_REGISTRIES.",
+                    obj=self,
+                    id="angee.E025",
+                )
+            )
         return errors
 
     def resolve_class(self, key: Any) -> type:
         """Return the impl class the configured mapping binds to ``key``."""
 
-        return resolve_impl_class(self.registry_setting, self.key_for(key), cast(type, self.base_class))
+        return resolve_impl_class(cast(type, self.base_class), self.key_for(key))
 
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
@@ -870,18 +895,20 @@ class ImplClassField(TextChoicesField):
     def _build_enum(self) -> type[models.TextChoices]:
         """Return a ``TextChoices`` enum over the registered keys, in deterministic order."""
 
-        if self.base_class is None and not impl_registry(self.registry_setting):
-            # Migration-state fields omit base_class and only describe the old
-            # varchar column, even after its registry was renamed or retired.
-            default = self._historical_default
-            key = default if isinstance(default, str) and default else "historical"
-            return _impl_choices_enum(self.registry_setting, (key,))
-        return impl_choices_enum(self.registry_setting)
+        if self.base_class is None:
+            # Migration-state fields retain their serialized setting, even after
+            # the active base and its setting have changed or been retired.
+            keys = tuple(sorted(impl_registry(self.registry_setting)))
+            if not keys:
+                default = self._historical_default
+                keys = (default if isinstance(default, str) and default else "historical",)
+            return _impl_choices_enum(self.registry_setting, keys)
+        return impl_choices_enum(self.base_class)
 
     def impl_choices(self) -> list[ImplChoice]:
         """Return pickable choices for the registry in deterministic key order."""
 
-        return impl_choices(self.registry_setting, cast(type, self.base_class))
+        return impl_choices(cast(type, self.base_class))
 
 
 class ImplDefaultsMixin(models.Model):
@@ -984,9 +1011,7 @@ class ImplDefaultsMixin(models.Model):
                 if updated is not None and field.name not in updated and field.attname not in updated:
                     continue
                 with system_context(reason="base.impl.validate_stored_key"):
-                    stored_row = (
-                        type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
-                    )
+                    stored_row = type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
                 if stored_row is None and self._state.adding:
                     continue
                 if stored_row is None:

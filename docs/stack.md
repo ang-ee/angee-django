@@ -108,7 +108,9 @@ recursive CTE ownership does not.
 
 Implementation-registry choice: [`angee.base.impl`](../angee/base/impl.py) owns
 Angee's settings-keyed composition contract, shared by `ImplClassField` and
-rowless selectors. Checks, choices and native enums project that same registry;
+rowless selectors. Each base names its setting, and owning addons append the base
+to `ANGEE_IMPL_REGISTRIES` so one startup check covers every catalogue. Checks,
+choices and native enums project that same registry;
 GraphQL adaptation stays in `angee.graphql.impl`. Python entry points were
 evaluated and rejected because composition facts belong to project settings,
 not package metadata.

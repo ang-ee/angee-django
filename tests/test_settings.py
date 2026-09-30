@@ -1168,7 +1168,7 @@ def test_addon_autoconfig_merges_resource_source_classes(
     _write_addon(
         tmp_path,
         "alpha",
-        autoconfig=("SETTINGS = {\n    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.url_source',\n}\n"),
+        autoconfig=("SETTINGS = {\n    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.UrlSource',\n}\n"),
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
@@ -1176,14 +1176,14 @@ def test_addon_autoconfig_merges_resource_source_classes(
         "INSTALLED_APPS": ("alpha",),
         "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
         "ANGEE_RESOURCE_SOURCE_CLASSES": {
-            "path": "angee.resources.sources.path_source",
+            "path": "angee.resources.sources.PathSource",
         },
     }
     Composer(settings).compose_settings()
 
     assert settings["ANGEE_RESOURCE_SOURCE_CLASSES"] == {
-        "path": "angee.resources.sources.path_source",
-        "url": "alpha.sources.url_source",
+        "path": "angee.resources.sources.PathSource",
+        "url": "alpha.sources.UrlSource",
     }
 
 

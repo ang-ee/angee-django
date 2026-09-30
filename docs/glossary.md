@@ -101,7 +101,7 @@ behavior, tabs, and actions.
 
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
-shape stays the same.
+shape stays the same. Its base class names the implementation registry setting.
 
 **`Meta`** — Django's model options class. Keep Angee facts out of `Meta` unless
 the owning library explicitly supports them, such as `rebac_resource_type`.

@@ -291,9 +291,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     integration_create_mode = "FORM"
     integration_kind_label = "Inference provider"
 
-    backend_class = ImplClassField(
-        base_class=InferenceBackend,
-        registry_setting="ANGEE_INFERENCE_BACKEND_CLASSES",
+    backend_class = ImplClassField(InferenceBackend,
         default="manual",
         create_only=True,
     )
@@ -911,9 +909,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     skills = models.ManyToManyField("agents.Skill", blank=True, related_name="agents")
     mcp_servers = models.ManyToManyField("agents.MCPServer", blank=True, related_name="agents")
     mcp_tools = models.ManyToManyField("agents.MCPTool", blank=True, related_name="agents")
-    runtime_class = ImplClassField(
-        base_class=AgentRuntime,
-        registry_setting="ANGEE_AGENT_RUNTIME_CLASSES",
+    runtime_class = ImplClassField(AgentRuntime,
         default="none",
     )
     """Registry key for the agent runtime — the program this agent renders into. The

@@ -1366,9 +1366,7 @@ class Directory(Bridge):
     integration_create_mode = "CONNECT"
     integration_kind_label = "Directory"
 
-    backend_class = ImplClassField(
-        base_class=DirectoryBackend,
-        registry_setting="ANGEE_DIRECTORY_BACKEND_CLASSES",
+    backend_class = ImplClassField(DirectoryBackend,
         default="manual",
         create_only=True,
     )

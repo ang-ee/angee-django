@@ -86,7 +86,7 @@ class _ProviderStep(_IOStep):
 
     def provider(self, ctx: Any) -> tuple[ExtractionProvider, Any]:
         """Parse configuration through the selected implementation's owner."""
-        provider = resolve_impl_class("ANGEE_EXTRACTION_BACKEND_CLASSES", ctx.config.backend, ExtractionProvider)()
+        provider = resolve_impl_class(ExtractionProvider, ctx.config.backend)()
         return provider, provider.parse_config(ctx.config.backend_config)
 
 

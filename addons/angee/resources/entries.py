@@ -20,6 +20,7 @@ from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
 from angee.addons import addon_manifest
+from angee.base.impl import resolve_impl_class
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.tiers import ResourceTier
@@ -129,13 +130,17 @@ def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any
     """
 
     if isinstance(declaration, str | Path):
-        return {"path": sources.normalize_path(app_config, declaration)}
+        return {"path": sources.PathSource.normalize(app_config, declaration)}
     if not isinstance(declaration, Mapping):
         raise ImproperlyConfigured(f"{declaration!r} is not a resource path or mapping")
 
     source_key = _source_key(declaration)
-    entry: dict[str, Any] = {str(key): declaration[key] for key in declaration if key not in sources.source_keys()}
-    entry[source_key] = sources.get_source(source_key).normalize(app_config, declaration[source_key])
+    entry: dict[str, Any] = {
+        str(key): declaration[key] for key in declaration if key not in sources.ResourceSource.registered_keys()
+    }
+    entry[source_key] = resolve_impl_class(sources.ResourceSource, source_key).normalize(
+        app_config, declaration[source_key]
+    )
     if "depends_on" in entry:
         entry["depends_on"] = _normalize_depends_on(entry["depends_on"])
     if "adopt" in entry:
@@ -150,10 +155,11 @@ def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any
 def _source_key(declaration: Mapping[str, Any]) -> str:
     """Return the single configured source key named by ``declaration``, or raise."""
 
-    present = [key for key in sources.source_keys() if declaration.get(key) is not None]
+    present = [key for key in sources.ResourceSource.registered_keys() if declaration.get(key) is not None]
     if len(present) != 1:
+        known = sorted(sources.ResourceSource.registered_keys())
         raise ImproperlyConfigured(
-            f"resource entry {dict(declaration)!r} must set exactly one source of {sorted(sources.source_keys())}"
+            f"resource entry {dict(declaration)!r} must set exactly one source of {known}"
         )
     return present[0]
 
@@ -277,7 +283,7 @@ class ResourceEntry:
         """Return the local file path, materializing the source once."""
 
         if self._local_path is None:
-            self._local_path = sources.get_source(self.source_key).materialize(self)
+            self._local_path = resolve_impl_class(sources.ResourceSource, self.source_key).materialize_entry(self)
         return self._local_path
 
     def read_groups(self) -> tuple[ResourceGroup, ...]:

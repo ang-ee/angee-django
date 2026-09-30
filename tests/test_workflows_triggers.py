@@ -197,8 +197,8 @@ def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, 
     schema = addon_schema(workflow_schema.schemas, "console")
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
-    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
-        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES, "record_changed": source_path,
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES, "record_changed": source_path,
     }
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
@@ -295,12 +295,12 @@ def test_configuration_edits_disable_the_previous_enablers_authority(
     workflow = load_workflow(document("entry"), key="source-stability", actor=actor)
     editor = create_user("trigger-co-editor")
     workflow.with_actor(actor).grant_record_access("editor", editor)
-    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
-        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES,
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
         "other_changed": "tests.test_workflows_triggers.OtherChanged",
     }
     source_field = Trigger._meta.get_field("source")
-    monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(source_field.registry_setting))
+    monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(triggers.TriggerSource))
     with trigger_source(Page):
         with actor_context(actor):
             trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")

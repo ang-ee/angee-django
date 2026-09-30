@@ -135,6 +135,9 @@ class Step[I, O, C](ImplBase):
     errors. Step schema projections are cached by their declared type.
     """
 
+    registry_setting = "ANGEE_WORKFLOW_STEP_CLASSES"
+    check_config_form_spec = False  # Authored step config is validated by the workflow contract.
+
     input_model: ClassVar[Any] = None
     output_model: ClassVar[Any] = None
     _model_parameters: ClassVar[tuple[str, ...]] = ("input_model", "output_model", "config_model")
@@ -162,8 +165,10 @@ class Step[I, O, C](ImplBase):
         cls.outcomes = cls.parse_value(cls.outcomes, dict[Outcome, str], "outcomes")
         for base in get_original_bases(cls):
             origin = get_origin(base)
-            if isinstance(origin, type) and issubclass(origin, Step) and not any(
-                isinstance(arg, TypeVar) for arg in get_args(base)
+            if (
+                isinstance(origin, type)
+                and issubclass(origin, Step)
+                and not any(isinstance(arg, TypeVar) for arg in get_args(base))
             ):
                 for name, model in zip(cls._model_parameters, get_args(base), strict=False):
                     if name in Step._model_parameters or name not in cls.__dict__:
@@ -244,11 +249,10 @@ class Step[I, O, C](ImplBase):
             if outcome == ERROR_OUTCOME or outcome not in cls.available_outcomes(config):
                 raise ValidationError(f"Step {cls.key!r} does not offer success outcome {outcome!r}.")
             adapter = cls._adapter(cls.output_model)
-            parsed = cls.parse_value(
-                {} if settlement.output is None else settlement.output, cls.output_model, "output"
-            )
+            parsed = cls.parse_value({} if settlement.output is None else settlement.output, cls.output_model, "output")
             return Done(
-                output=strip_null_bytes(adapter.dump_python(parsed, mode="json", by_alias=True)), outcome=outcome,
+                output=strip_null_bytes(adapter.dump_python(parsed, mode="json", by_alias=True)),
+                outcome=outcome,
             )
         if not isinstance(settlement, (Wait, NextPage, Fail)):
             raise ValidationError("A step must return Done, Wait, NextPage or Fail.")
@@ -264,14 +268,12 @@ class Step[I, O, C](ImplBase):
 
 def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
     """Resolve one trusted registry key without maintaining a second registry."""
-    step = resolve_impl_class("ANGEE_WORKFLOW_STEP_CLASSES", key, Step)
-    if step.key != key:
-        raise ImproperlyConfigured(f"Step registry key {key!r} disagrees with {step.key!r}.")
+    step = resolve_impl_class(Step, key)
     if step.mode not in {"DATABASE", "IO"}:
         raise ImproperlyConfigured("A step mode must be DATABASE or IO.")
     if step.subject is not None:
         try:
-            step.subject = apps.get_model(step.subject)._meta.label_lower
+            step.subject = apps.get_model(step.subject)._meta.label
         except (LookupError, ValueError) as error:
             raise ImproperlyConfigured(f"Unknown step subject model {step.subject!r}.") from error
     if not timedelta(milliseconds=1) <= step.timeout <= timedelta(seconds=900):

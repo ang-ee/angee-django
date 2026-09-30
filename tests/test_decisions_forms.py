@@ -16,11 +16,11 @@ from angee.decisions.forms import Action, Relation, RelationCandidate, compile_f
 from angee.decisions.states import Verdict
 
 
-class Complete(Action, value="complete", label="Complete", verdict=Verdict.COMPLETED):
+class Complete(Action, key="complete", label="Complete", verdict=Verdict.COMPLETED):
     note: str = Field(min_length=3)
 
 
-class Reject(Action, value="reject", label="Reject", verdict=Verdict.REJECTED):
+class Reject(Action, key="reject", label="Reject", verdict=Verdict.REJECTED):
     reason: str
 
 
@@ -77,7 +77,7 @@ def test_nested_local_references_and_readonly_row_values():
         key: str = Field(json_schema_extra={"readOnly": True})
         note: str
 
-    class Edit(Action, value="edit", label="Edit", verdict=Verdict.COMPLETED):
+    class Edit(Action, key="edit", label="Edit", verdict=Verdict.COMPLETED):
         lines: list[Line] = Field(min_length=2, max_length=2, json_schema_extra={"widget": "rows"})
 
     lines = [{"key": "a", "note": "first"}, {"key": "b", "note": "second"}]
@@ -103,7 +103,7 @@ def test_model_names_and_docstrings_do_not_become_form_field_metadata():
         READY = "ready"
         PENDING = "pending"
 
-    class Edit(Action, value="edit", label="Edit", verdict=Verdict.COMPLETED):
+    class Edit(Action, key="edit", label="Edit", verdict=Verdict.COMPLETED):
         """Developer guidance for an action."""
 
         line: Line
@@ -125,7 +125,7 @@ def test_model_names_and_docstrings_do_not_become_form_field_metadata():
 
 
 def test_declared_readonly_default_is_filled_when_omitted():
-    class Document(Action, value="document", label="Document", verdict=Verdict.COMPLETED):
+    class Document(Action, key="document", label="Document", verdict=Verdict.COMPLETED):
         revision: int = Field(default=3, json_schema_extra={"readOnly": True})
 
     schema = compile_form([Document])
@@ -134,7 +134,7 @@ def test_declared_readonly_default_is_filled_when_omitted():
 
 
 def test_relation_candidates_are_frozen_and_constrain_submissions():
-    class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
+    class Select(Action, key="select", label="Select", verdict=Verdict.COMPLETED):
         document: Annotated[str, Relation("auth.Permission")]
 
     schema = compile_form([Select], refine={"select": {"document": {"options": [
@@ -153,7 +153,7 @@ def test_relation_candidates_are_frozen_and_constrain_submissions():
 
 
 def test_date_formats_are_asserted_by_the_frozen_schema():
-    class Date(Action, value="date", label="Date", verdict=Verdict.COMPLETED):
+    class Date(Action, key="date", label="Date", verdict=Verdict.COMPLETED):
         written_on: date
 
     schema = compile_form([Date])
@@ -181,7 +181,7 @@ def test_invalid_runtime_refinements_fail_at_admission(initial, refine):
 
 
 def test_initial_cannot_replace_a_declared_constant():
-    class Fixed(Action, value="fixed", label="Fixed", verdict=Verdict.COMPLETED):
+    class Fixed(Action, key="fixed", label="Fixed", verdict=Verdict.COMPLETED):
         note: Literal["fixed"] = Field(json_schema_extra={"readOnly": True})
 
     with pytest.raises(ValidationError):
@@ -190,7 +190,7 @@ def test_initial_cannot_replace_a_declared_constant():
 
 @pytest.mark.parametrize("extra", [{"unknown": True}, {"format": "unknown-format"}])
 def test_unsupported_schema_declarations_fail_at_admission(extra):
-    class Unsupported(Action, value="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
+    class Unsupported(Action, key="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
         note: str = Field(json_schema_extra=extra)
 
     with pytest.raises(ImproperlyConfigured):
@@ -199,7 +199,7 @@ def test_unsupported_schema_declarations_fail_at_admission(extra):
 
 @pytest.mark.parametrize("reference", ["https://example.invalid/schema", "#/$defs/missing"])
 def test_unresolvable_references_fail_at_admission(reference):
-    class Unsupported(Action, value="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
+    class Unsupported(Action, key="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
         note: Annotated[str, WithJsonSchema({"$ref": reference})]
 
     with pytest.raises(ImproperlyConfigured):
@@ -210,7 +210,7 @@ def test_recursive_forms_fail_at_admission():
     class Tree(BaseModel):
         children: list["Tree"] = Field(default_factory=list)
 
-    class Recursive(Action, value="recursive", label="Recursive", verdict=Verdict.COMPLETED):
+    class Recursive(Action, key="recursive", label="Recursive", verdict=Verdict.COMPLETED):
         tree: Tree
 
     with pytest.raises(ImproperlyConfigured):
@@ -224,7 +224,7 @@ def test_duplicate_and_empty_actions_are_rejected():
 
 
 def test_nonfinite_values_are_not_json_form_values():
-    class Number(Action, value="number", label="Number", verdict=Verdict.COMPLETED):
+    class Number(Action, key="number", label="Number", verdict=Verdict.COMPLETED):
         number: float
 
     with pytest.raises(ValidationError):
@@ -235,7 +235,7 @@ def test_nested_declared_fields_are_closed():
     class Note(BaseModel):
         text: str
 
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         note: Note
 
     with pytest.raises(ValidationError) as error:
@@ -245,10 +245,10 @@ def test_nested_declared_fields_are_closed():
 
 def test_pending_verdict_and_reserved_action_field_are_rejected():
     with pytest.raises(ImproperlyConfigured):
-        class Pending(Action, value="pending", label="Pending", verdict=Verdict.PENDING):
+        class Pending(Action, key="pending", label="Pending", verdict=Verdict.PENDING):
             pass
 
-    class Reserved(Action, value="reserved", label="Reserved", verdict=Verdict.COMPLETED):
+    class Reserved(Action, key="reserved", label="Reserved", verdict=Verdict.COMPLETED):
         action: str
 
     with pytest.raises(ImproperlyConfigured):
@@ -264,7 +264,7 @@ def test_nested_discriminated_unions_are_not_a_supported_form_shape():
         kind: Literal["count"]
         count: int
 
-    class Nested(Action, value="nested", label="Nested", verdict=Verdict.COMPLETED):
+    class Nested(Action, key="nested", label="Nested", verdict=Verdict.COMPLETED):
         content: Annotated[Text | Count, Field(discriminator="kind")]
 
     with pytest.raises(ImproperlyConfigured):
@@ -272,7 +272,7 @@ def test_nested_discriminated_unions_are_not_a_supported_form_shape():
 
 
 def test_omitted_values_use_stored_initial_instead_of_current_class_default():
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         note: str = "class default"
 
     schema = compile_form([Write], initial={"write": {"note": "shown in the form"}})
@@ -289,7 +289,7 @@ def test_frozen_defaults_fill_nested_submitted_objects():
     class Note(BaseModel):
         text: str = "declared"
 
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         notes: list[Note]
 
     schema = compile_form([Write], initial={"write": {"notes": [{"text": "first"}, {"text": "second"}]}})
@@ -302,7 +302,7 @@ def test_stored_defaults_precede_required_checks_after_jsonb_key_reordering():
     class Note(BaseModel):
         text: str
 
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         note: str
         notes: list[Note]
 
@@ -328,7 +328,7 @@ def test_malformed_runtime_mapping_shapes_have_defined_errors(initial, refine):
 
 
 def test_invalid_declared_default_is_a_configuration_fault_even_with_runtime_values():
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         count: int = Field(default="invalid")
         note: str
 
@@ -342,7 +342,7 @@ def test_invalid_declared_default_is_a_configuration_fault_even_with_runtime_val
     {"resource": "notes.Document", "unexpected": True},
 ])
 def test_relation_metadata_uses_the_base_contract_for_classes_and_runtime_refinements(relation):
-    class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
+    class Select(Action, key="select", label="Select", verdict=Verdict.COMPLETED):
         document: str = Field(json_schema_extra={"relation": relation})
 
     with pytest.raises(ImproperlyConfigured):
@@ -352,7 +352,7 @@ def test_relation_metadata_uses_the_base_contract_for_classes_and_runtime_refine
 
 
 def test_relation_candidate_projection_preserves_permissions_and_ignores_value_metadata():
-    class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
+    class Select(Action, key="select", label="Select", verdict=Verdict.COMPLETED):
         document: Annotated[str, Relation("auth.Permission", permission="write")]
         metadata: dict
 

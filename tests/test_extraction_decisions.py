@@ -28,7 +28,7 @@ from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
 
 
-class CorrectNote(Action, value="correct", label="Correct note", verdict=Verdict.COMPLETED):
+class CorrectNote(Action, key="correct", label="Correct note", verdict=Verdict.COMPLETED):
     """The submitted correction is interpreted by its consumer."""
 
     title: str

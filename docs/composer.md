@@ -145,6 +145,8 @@ Any app may provide `<app>.autoconfig` with a `SETTINGS` mapping. The keys use
 settings, app defaults, list/dict merging, and declared `ANGEE_*` environment
 overlays. Apps still read `django.conf.settings`; process environment is
 normalized during composition.
+An addon that owns an implementation base appends its dotted class path to
+`ANGEE_IMPL_REGISTRIES`; contributors add entries to the base's named setting.
 
 Derived `settings(namespace)` hooks read only their supplied namespace.
 `AutoConfig` gives enabled environment values precedence over project values,

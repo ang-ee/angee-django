@@ -20,11 +20,8 @@ from angee.storage.archives import (
     stage_subtree,
 )
 from angee.workflows_integrate.archive_steps import (
-    ARCHIVE_EXTRACTOR_CLASSES_SETTING,
     ApplyArchiveMappings,
     ArchiveExtractor,
-    archive_extractor_class,
-    archive_extractor_classes,
 )
 
 
@@ -83,12 +80,12 @@ def test_bounded_zip_reader_refuses_unbounded_and_excess_reads():
         bounded.read(2)
 
 
-@override_settings(**{ARCHIVE_EXTRACTOR_CLASSES_SETTING: {"file_test": f"{__name__}.FileExtractor"}})
+@override_settings(ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES={"file_test": f"{__name__}.FileExtractor"})
 def test_registry_uses_canonical_storage_models_and_stable_keys():
-    assert archive_extractor_classes() == (FileExtractor,)
-    assert archive_extractor_class("file_test") is FileExtractor
+    assert ArchiveExtractor.registered_classes() == (FileExtractor,)
+    assert ArchiveExtractor.resolve_class("file_test") is FileExtractor
     with pytest.raises(ImproperlyConfigured):
-        archive_extractor_class("missing")
+        ArchiveExtractor.resolve_class("missing")
 
 
 def test_review_form_freezes_each_proposed_extractor_but_allows_target_choice():

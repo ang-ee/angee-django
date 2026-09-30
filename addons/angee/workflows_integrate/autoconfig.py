@@ -1,6 +1,7 @@
 """Contribute archive extractor, step and review action registrations."""
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.workflows_integrate.archive_steps.ArchiveExtractor"],
     "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES": {},
     "ANGEE_WORKFLOW_STEP_CLASSES.archive_probe": "angee.workflows_integrate.archive_steps.ArchiveProbe",
     "ANGEE_WORKFLOW_STEP_CLASSES.archive_gate": "angee.workflows_integrate.archive_steps.ArchiveGate",

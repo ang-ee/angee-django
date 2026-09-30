@@ -60,6 +60,7 @@ class MountBrowseResult:
 
 class MountBackend(BridgeImpl):
     """Descriptor contract for walking and reading an external storage source."""
+    registry_setting = "ANGEE_STORAGE_MOUNT_BACKEND_CLASSES"
 
     category = "mount"
     label = "Mount"
@@ -326,11 +327,7 @@ def browse_mount_source(
     """Dispatch pre-connection browsing through the configured Mount backend."""
 
     try:
-        impl = resolve_impl_class(
-            "ANGEE_STORAGE_MOUNT_BACKEND_CLASSES",
-            backend_class,
-            MountBackend,
-        )
+        impl = resolve_impl_class(MountBackend, backend_class)
     except ImproperlyConfigured as error:
         raise ValidationError({"backend_class": str(error)}) from error
     return cast(type[MountBackend], impl).browse(credential=credential, token=token)

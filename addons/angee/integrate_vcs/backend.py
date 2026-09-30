@@ -75,6 +75,7 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
     read its credential and bridge-owned config, and reach the shared
     SSRF-pinned client as ``self.http``.
     """
+    registry_setting = "ANGEE_VCS_BACKEND_CLASSES"
 
     category = "vcs"
     label = "VCS"

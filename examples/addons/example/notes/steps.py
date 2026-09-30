@@ -65,13 +65,13 @@ class AwaitNoteReview(Step[None, NotePublicationOutput, None]):
         return ctx.wait()
 
 
-class ApproveNote(Action, value="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):
+class ApproveNote(Action, key="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):
     """Approve publication with an optional retained explanation."""
 
     note: str = ""
 
 
-class RejectNote(Action, value="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
+class RejectNote(Action, key="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
     """Decline publication with an explanation for the author."""
 
     reason: str = Field(min_length=3)

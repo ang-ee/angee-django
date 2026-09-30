@@ -345,15 +345,15 @@ Use these owners instead of maintaining another contract in an addon:
   persisted shape. Do not store a second generic `impl_class` on the child: the
   child model is the integration implementation; the backend field is the adapter.
 - **A row-selected impl is stored as a registry key, never a dotted path.**
-  `ImplClassField(base_class=…, registry_setting=…)` stores a short key and
-  resolves it against a Django setting mapping keys to dotted import paths; an
-  addon contributes its impl into that setting through `autoconfig` (a yamlconf
-  dotted key, `"ANGEE_…_CLASSES.<key>": "<dotted.path>"`). So a writable column
+  `ImplClassField(Base)` stores a short key and resolves it against the Django
+  setting named by `Base.registry_setting`; the owning addon lists `Base` once in
+  `ANGEE_IMPL_REGISTRIES:append`, and contributors add paths through an autoconfig
+  dotted key (`"ANGEE_…_CLASSES.<key>": "<dotted.path>"`). So a writable column
   never feeds `import_string` (the path comes from composed, trusted settings,
   like an addon's `schemas` reference), the available impls are a composition
   fact rather than a base-model import, a project can remap a key to its own
-  class, and `manage.py check` validates every configured path imports and
-  subclasses `base_class`. Because every addon has contributed by schema-build
+  class, and the base system check validates every listed registry's paths, base
+  classes, and keys, including rowless catalogues. Because every addon has contributed by schema-build
   time the key set is closed, so the field is a `TextChoicesField` and
   `strawberry-django` renders the GraphQL enum natively (like `StateField`). It
   therefore requires a **non-empty** registry: an addon whose impl set could
@@ -363,9 +363,10 @@ Use these owners instead of maintaining another contract in an addon:
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.impl`](../../angee/base/impl.py) owns registry checks, choice
   metadata and native enum projection for fields and settings-selected uses.
+  Callers name only the base (`resolve_impl_class(Base, key)`, `impl_choices(Base)`).
   Empty catalogues may pass checks and return no choices; projecting an enum
-  requires entries. Register an addon's checks through Django's native check
-  lifecycle and keep its selected-key policy with that addon. GraphQL adapters
+  requires entries. The base app registers one check for every declared registry;
+  keep any selected-key policy with its addon. GraphQL adapters
   live in [`angee.graphql.impl`](../../addons/angee/graphql/impl.py); callers
   retain authorization policy.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
@@ -965,7 +966,7 @@ and current contracts before applying a historical example to a new deployment.
   `ANGEE_FERNET_KEYS`/`MultiFernet` rotation before such a rename, and treat one
   corrupt row as a row-local unreadable value, not as a reason to break list
   queries.
-- **An `ImplClassField` builds its enum at model-import time from its
+- **An `ImplClassField` builds its enum at model-import time from its base's
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
   installs the addon must carry a **non-empty** mapping. Bare settings modules

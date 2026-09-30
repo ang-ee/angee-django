@@ -99,7 +99,7 @@ def test_policy_registry_can_be_extended_through_settings(settings) -> None:
     group = apps.get_model("decisions", "DecisionGroup")
     field = group._meta.get_field("policy")
     assert field.resolve_class("explicit") is ExplicitPolicy
-    assert resolve_impl_class("ANGEE_DECISION_POLICY_CLASSES", "explicit", DecisionPolicy) is ExplicitPolicy
+    assert resolve_impl_class(DecisionPolicy, "explicit") is ExplicitPolicy
     assert ExplicitPolicy.settled([SimpleNamespace(is_open=False), SimpleNamespace(is_open=False)])
     assert not ExplicitPolicy.settled([SimpleNamespace(is_open=False)])
     with pytest.raises(ImproperlyConfigured):

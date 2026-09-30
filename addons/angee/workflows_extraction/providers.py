@@ -165,6 +165,8 @@ class RecognitionOutput(BaseModel):
 
 class ExtractionProvider(ImplBase):
     """Registry-selected acquisition, recognition and inference implementation."""
+    registry_setting = "ANGEE_EXTRACTION_BACKEND_CLASSES"
+    check_config_form_spec = False  # Provider config is parsed for execution, not projected as a form.
 
     def prepare(
         self,

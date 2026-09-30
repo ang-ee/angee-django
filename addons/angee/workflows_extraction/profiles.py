@@ -12,6 +12,7 @@ from angee.workflows_extraction.contracts import DocumentPart, Result, Source
 
 class ExtractionProfile(ImplBase):
     """Pure interpretation selected through ``ANGEE_EXTRACTION_PROFILE_CLASSES``."""
+    registry_setting = "ANGEE_EXTRACTION_PROFILE_CLASSES"
 
     category = "Extraction"
     label = "Extraction profile"

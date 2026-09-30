@@ -263,7 +263,7 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
     assert system_queryset(StepAttempt).get(step_run=item, number=2).acknowledged_by_id == actor.pk
 
 
-class MapAccept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
+class MapAccept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
     """A typed answer shared by independent item reviews."""
 
 

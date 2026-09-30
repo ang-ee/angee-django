@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.storage_integrate.mounts.MountBackend"],
     "ANGEE_STORAGE_MOUNT_BACKEND_CLASSES": {
         "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",
     },

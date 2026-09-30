@@ -36,13 +36,13 @@ from angee.workflows.testing.models import (
 from tests.decisions_models import Decision, DecisionGroup
 
 
-class Approve(Action, value="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):
+class Approve(Action, key="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):
     """A typed positive answer with one defaulted field."""
 
     note: str = "Accepted"
 
 
-class Reject(Action, value="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
+class Reject(Action, key="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
     """A negative answer requiring a reason."""
 
     reason: str = Field(min_length=3)

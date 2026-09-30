@@ -21,8 +21,6 @@ from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.steps import Settlement, Step
 
-ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
-
 
 class ArchiveProposal(BaseModel):
     """One recognized extractor's immutable review identity."""
@@ -70,14 +68,14 @@ class ArchiveGateConfig(BaseModel):
     assignee: str = ""
 
 
-class ApplyArchiveMappings(Action, value="apply_archive_mappings", label="Import archive",
+class ApplyArchiveMappings(Action, key="apply_archive_mappings", label="Import archive",
                            verdict=Verdict.COMPLETED, outcome="mapped"):
     """Submit fixed extractor rows with one target per row."""
 
     mappings: list[ArchiveMappingRow] = Field(min_length=1, json_schema_extra={"widget": "rows"})
 
 
-class SkipArchive(Action, value="skip_archive", label="Skip archive",
+class SkipArchive(Action, key="skip_archive", label="Skip archive",
                   verdict=Verdict.REJECTED, outcome="skipped"):
     """Leave the source untouched."""
 
@@ -96,6 +94,7 @@ class ArchiveExecutionReporter:
 
 class ArchiveExtractor(ImplBase, ABC):
     """Registered vendor adapter for a storage container and target resource."""
+    registry_setting = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
 
     target_resource: ClassVar[str] = ""
     subject_resource: ClassVar[str] = "storage.File"
@@ -108,40 +107,36 @@ class ArchiveExtractor(ImplBase, ABC):
     def execute(self, subject: Any, target_pk: str, reporter: ArchiveExecutionReporter) -> JsonValue:
         """Idempotently ingest the reviewed target and return JSON journal facts."""
 
+    @classmethod
+    def registered_classes(cls) -> tuple[type[ArchiveExtractor], ...]:
+        """Resolve and validate registered extractors in stable key order."""
+        classes = resolve_all_impl_classes(cls)
+        for extractor in classes:
+            extractor.validate_contract()
+        return classes
 
-def archive_extractor_classes() -> tuple[type[ArchiveExtractor], ...]:
-    """Resolve all registered extractors in stable key order."""
-    # The registry accepts an abstract base and returns its concrete declarations.
-    classes = resolve_all_impl_classes(
-        ARCHIVE_EXTRACTOR_CLASSES_SETTING, ArchiveExtractor,  # type: ignore[type-abstract]
-    )
-    for extractor in classes:
-        _validate_extractor(extractor)
-    return classes
+    @classmethod
+    def resolve_class(cls, key: str) -> type[ArchiveExtractor]:
+        """Resolve and validate one registered extractor."""
+        extractor = resolve_impl_class(cls, key)
+        extractor.validate_contract()
+        return extractor
 
-
-def archive_extractor_class(key: str) -> type[ArchiveExtractor]:
-    """Resolve one registered extractor by its stable key."""
-    extractor = resolve_impl_class(
-        ARCHIVE_EXTRACTOR_CLASSES_SETTING, key, ArchiveExtractor,  # type: ignore[type-abstract]
-    )
-    _validate_extractor(extractor)
-    return extractor
-
-
-def _validate_extractor(extractor: type[ArchiveExtractor]) -> None:
-    if not extractor.key or not extractor.display_label().strip():
-        raise ImproperlyConfigured("Archive extractors require a key and label.")
-    for attr in ("subject_resource", "target_resource"):
-        label = getattr(extractor, attr)
-        try:
-            model = apps.get_model(label)
-        except (LookupError, ValueError) as error:
-            raise ImproperlyConfigured(f"Archive extractor {extractor.key!r} has unknown {attr}.") from error
-        if model._meta.label != label:
-            raise ImproperlyConfigured(f"Archive extractor {extractor.key!r} must use canonical {attr}.")
-    if extractor.subject_resource not in {"storage.File", "storage.Drive"}:
-        raise ImproperlyConfigured("Archive extractors require a storage.File or storage.Drive subject.")
+    @classmethod
+    def validate_contract(cls) -> None:
+        """Require usable labels and a storage subject for this adapter."""
+        if not cls.key or not cls.display_label().strip():
+            raise ImproperlyConfigured("Archive extractors require a key and label.")
+        for attr in ("subject_resource", "target_resource"):
+            label = getattr(cls, attr)
+            try:
+                model = apps.get_model(label)
+            except (LookupError, ValueError) as error:
+                raise ImproperlyConfigured(f"Archive extractor {cls.key!r} has unknown {attr}.") from error
+            if model._meta.label != label:
+                raise ImproperlyConfigured(f"Archive extractor {cls.key!r} must use canonical {attr}.")
+        if cls.subject_resource not in {"storage.File", "storage.Drive"}:
+            raise ImproperlyConfigured("Archive extractors require a storage.File or storage.Drive subject.")
 
 
 def _subject(ctx: Any) -> Any:
@@ -161,7 +156,7 @@ def _validate_proposals(proposals: list[ArchiveProposal]) -> str | None:
     if not proposals or len({proposal.extractor for proposal in proposals}) != len(proposals):
         raise ValidationError("Archive review requires distinct recognized extractors.")
     for proposal in proposals:
-        if proposal != _proposal(archive_extractor_class(proposal.extractor)):
+        if proposal != _proposal(ArchiveExtractor.resolve_class(proposal.extractor)):
             raise ValidationError("Archive extractor metadata changed after recognition.")
     resources = {proposal.target_resource for proposal in proposals}
     return resources.pop() if len(resources) == 1 else None
@@ -178,7 +173,7 @@ class ArchiveProbe(Step[None, ArchiveProbeOutput, None]):
     def run(self, ctx: Any) -> Settlement:
         subject = _subject(ctx)
         proposals = []
-        for extractor in archive_extractor_classes():
+        for extractor in ArchiveExtractor.registered_classes():
             if extractor.subject_resource != subject._meta.label:
                 continue
             ctx.heartbeat()
@@ -255,7 +250,7 @@ class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
     def run(self, ctx: Any) -> Settlement:
         subject = _subject(ctx)
         unit = ctx.input
-        extractor = archive_extractor_class(unit.extractor)
+        extractor = ArchiveExtractor.resolve_class(unit.extractor)
         if extractor.subject_resource != subject._meta.label:
             raise ValidationError("Archive extractor does not accept this storage container.")
         target = ctx.load(apps.get_model(extractor.target_resource), unit.target)

@@ -193,7 +193,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 request = DecisionRequest(
                     kind=decision.kind, subject=decision.subject,
                     assignees=tuple(decision.assignees.all()), requester=decision.requester,
-                    actions=tuple(action for action in actions if action.value in offered), basis=decision.basis,
+                    actions=tuple(action for action in actions if action.key in offered), basis=decision.basis,
                     context=DecisionContext.model_validate(decision.context), supersede=decision.supersede,
                     max_attempts=decision.max_attempts, errors=errors,
                 )
@@ -418,7 +418,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             except PermissionDenied as error:
                 raise ResolverAuthorityError("The resolver no longer has authority to answer this decision.") from error
             value = decision.resolution["action"]
-            action_model = next((cls for cls in actions if cls.value == value), None)
+            action_model = next((cls for cls in actions if cls.key == value), None)
             if action_model is None:
                 raise ValidationError({"action": "The action model is unavailable."})
             _, payload = validate_form(decision.form_schema, value, {

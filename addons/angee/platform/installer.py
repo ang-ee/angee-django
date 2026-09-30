@@ -22,9 +22,8 @@ The backend is chosen by ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
 ``settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES`` key→dotted-path registry. This
 addon's ``autoconfig`` supplies the default (``local``) and the ``local`` entry;
 the ``platform_integrate_operator`` bridge contributes the ``operator`` entry, and a
-deployment flips the key to ``operator``. :func:`register_checks` binds a
-``manage.py check`` guard over that registry, the row-less analogue of
-``ImplClassField.check``.
+deployment flips the key to ``operator``. A platform check validates the selected
+key; the base app checks the registry declarations.
 """
 
 from __future__ import annotations
@@ -33,16 +32,16 @@ import io
 from collections.abc import Mapping, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from django.conf import settings
-from django.core.checks import CheckMessage, Error, register
+from django.core.checks import CheckMessage, Error
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files import locks
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.base.impl import ImplBase, check_impl_registry, impl_registry, resolve_impl_class
+from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
 from angee.fs import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
@@ -58,6 +57,8 @@ class AddonInstallerBackend(ImplBase):
     bytes. Subclasses register a short :attr:`key` selected by
     ``settings.ANGEE_ADDON_INSTALLER_BACKEND``.
     """
+
+    registry_setting = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
 
     def read_settings_text(self) -> str:
         """Return the current ``settings.yaml`` text (``FileNotFoundError`` if absent)."""
@@ -110,13 +111,9 @@ class LocalInstallerBackend(AddonInstallerBackend):
                 try:
                     current = path.read_text(encoding="utf-8")
                 except FileNotFoundError as error:
-                    raise StaleAddonPreviewError(
-                        "The addon preview is stale; review the changes again."
-                    ) from error
+                    raise StaleAddonPreviewError("The addon preview is stale; review the changes again.") from error
                 if current != expected:
-                    raise StaleAddonPreviewError(
-                        "The addon preview is stale; review the changes again."
-                    )
+                    raise StaleAddonPreviewError("The addon preview is stale; review the changes again.")
                 write_atomic(path, text)
             finally:
                 locks.unlock(handle)
@@ -233,7 +230,7 @@ class AddonInstaller:
             return None
         try:
             text = self.backend.read_settings_text()
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             return None
         return InstalledAppsSnapshot(text=text, names=self._parse_app_names(text))
 
@@ -348,9 +345,7 @@ def _validated_app_names(value: Any) -> tuple[str, ...]:
     if not isinstance(value, MutableSequence):
         raise ImproperlyConfigured(f"{_INSTALLED_APPS_KEY} in {_SETTINGS_FILENAME} must be a list.")
     if any(not isinstance(name, str) or not name for name in value):
-        raise ImproperlyConfigured(
-            f"{_INSTALLED_APPS_KEY} in {_SETTINGS_FILENAME} must contain non-empty strings."
-        )
+        raise ImproperlyConfigured(f"{_INSTALLED_APPS_KEY} in {_SETTINGS_FILENAME} must contain non-empty strings.")
     return tuple(value)
 
 
@@ -363,8 +358,7 @@ def _transport_unavailable(error: Exception) -> str:
     # backend's "operator … unavailable: …") supplies its own reason; the fixed
     # message is only the fallback for a bare FileNotFoundError.
     return str(error) or (
-        "This deployment has no editable settings.yaml; "
-        "addons are installed by the operator in production."
+        "This deployment has no editable settings.yaml; addons are installed by the operator in production."
     )
 
 
@@ -385,24 +379,18 @@ def addon_installer() -> AddonInstaller:
     """
 
     key = getattr(settings, _BACKEND_SETTING, "local")
-    backend_cls = resolve_impl_class(_REGISTRY_SETTING, key, AddonInstallerBackend)
-    return AddonInstaller(cast(type[AddonInstallerBackend], backend_cls)())
+    backend_cls = resolve_impl_class(AddonInstallerBackend, key)
+    return AddonInstaller(backend_cls())
 
 
-def register_checks() -> None:
-    """Register the installer-backend system check (called from ``PlatformConfig.ready``)."""
-
-    register(_check_installer_backends)
-
-
-def _check_installer_backends(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """Compose shared registry checks with the installer's required backend selection."""
+def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """Require a non-empty catalogue containing the selected installer backend."""
 
     del app_configs, kwargs
-    errors = check_impl_registry(_REGISTRY_SETTING, AddonInstallerBackend)
-    if any(error.id == "angee.E002" for error in errors):
-        return errors
-    registry = impl_registry(_REGISTRY_SETTING)
+    try:
+        registry = impl_registry(AddonInstallerBackend.registry_setting)
+    except ImproperlyConfigured:
+        return []  # The base registry check reports malformed mappings.
     if not registry:
         return [
             Error(
@@ -412,10 +400,10 @@ def _check_installer_backends(app_configs: Any, **kwargs: Any) -> list[CheckMess
         ]
     selected = getattr(settings, _BACKEND_SETTING, "local")
     if selected not in registry:
-        errors.append(
+        return [
             Error(
                 f"settings.{_BACKEND_SETTING} = {selected!r} is not a key in settings.{_REGISTRY_SETTING}.",
                 id="angee.platform.E004",
             )
-        )
-    return errors
+        ]
+    return []

@@ -136,7 +136,7 @@ class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     sqid_prefix = "bkd_"
     slug = models.SlugField(unique=True)
     label = models.CharField(max_length=200)
-    backend_class = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")
+    backend_class = ImplClassField(StorageBackend)
     backend_config = models.JSONField(default=dict, blank=True)
 
     objects = StorageMasterManager()

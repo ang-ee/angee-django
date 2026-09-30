@@ -213,7 +213,7 @@ def test_run_origin_groups_and_filters_follow_generated_lineage_and_read_scope(s
     assert result_data(execute_schema(schema, query, {"origin": "reprocess"}, user=starter))["workflowrun"] == []
 
 
-class Accept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
+class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
     """One response keeps the decision-group query proof focused on links."""
 
 

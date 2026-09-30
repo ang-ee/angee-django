@@ -677,7 +677,7 @@ class ExtractionManager(EvidenceManager):
                 decision.kind != expected_action
                 or decision.verdict != Verdict.COMPLETED
                 or resolved.action is None
-                or (resolved.action.value != expected_resolution_action)
+                or (resolved.action.key != expected_resolution_action)
             ):
                 raise ValidationError("The correction decision has another resolution action.")
             original, parent = self._correction_basis(decision, actor=actor)
@@ -789,7 +789,7 @@ class ExtractionManager(EvidenceManager):
             resolved.action is None
             or str(resolved.decision.sqid) != correction.decision_id
             or resolved.decision.verdict != Verdict.COMPLETED
-            or resolved.action.value != expected_resolution_action
+            or resolved.action.key != expected_resolution_action
             or (
                 resolved.decision.kind != expected_action
                 or successor.status != ExtractionStatus.SUCCEEDED

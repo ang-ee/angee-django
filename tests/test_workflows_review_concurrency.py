@@ -30,7 +30,7 @@ pytestmark = [
 ]
 
 
-class Accept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
+class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
     """One typed answer whose worker application can be observed separately."""
 
     note: str = "Retained"

@@ -38,6 +38,7 @@ class TriggerSource(ImplBase):
     Signal adapters and explicit bulk writers call ``dispatch(model, record)``
     inside their write transaction to feed admission and watches together.
     """
+    registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
     model_label = ""
     scope_fields: tuple[str, ...] = ()

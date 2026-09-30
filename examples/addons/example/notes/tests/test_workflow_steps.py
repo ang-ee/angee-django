@@ -429,8 +429,8 @@ class NoteWorkflowStepTests(TransactionTestCase):
                 actor=self.admin,
             )
             self.assertIsNotNone(workflow.published_id)
-            self.assertEqual(workflow.subject_model, "notes.note")
-            self.assertEqual(workflow.published.definition.step("validate").subject, "notes.note")
+            self.assertEqual(workflow.subject_model, "notes.Note")
+            self.assertEqual(workflow.published.definition.step("validate").subject, "notes.Note")
 
     def test_permission_removed_after_launch_prevents_publication(self) -> None:
         """An actor who loses access cannot read or modify the note in a later step."""
@@ -479,7 +479,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             installed = Resource.objects.get(source_addon="example.notes", xref="note_publish").target_instance()
             self.assertEqual(installed.pk, self.workflow.pk)
             self.assertEqual(installed.published_id, self.workflow.published_id)
-            self.assertEqual(installed.subject_model, "notes.note")
+            self.assertEqual(installed.subject_model, "notes.Note")
             self.assertEqual(set(installed.published.definition.nodes), {"validate", "review", "publish"})
 
     def test_steps_declare_their_typed_contract(self) -> None:
@@ -488,7 +488,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         for step in (ValidateNotePublication, ReviewNotePublication, PublishNote):
             self.assertEqual(step.output_schema(), NotePublicationOutput.model_json_schema())
         for step in (ValidateNotePublication, PublishNote):
-            self.assertEqual(step.subject, "notes.note")
+            self.assertEqual(step.subject, "notes.Note")
         self.assertIsNone(ReviewNotePublication.subject)
         self.assertEqual(ValidateNotePublication.available_outcomes(None), {
             "needs_review": "Needs review", "ok": "Ready", "error": "Error",

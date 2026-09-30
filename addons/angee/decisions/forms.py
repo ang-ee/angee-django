@@ -65,21 +65,23 @@ def relation_candidates(schema: dict[str, Any]) -> tuple[RelationCandidate, ...]
 class Action(BaseModel):
     """One offered action, its terminal verdict, and its typed submitted fields."""
 
+    registry_setting: ClassVar[str] = "ANGEE_DECISION_ACTION_CLASSES"
+
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    value: ClassVar[str]
+    key: ClassVar[str]
     label: ClassVar[str]
     verdict: ClassVar[Verdict]
     outcome: ClassVar[str | None] = None
 
     def __init_subclass__(
-        cls, *, value: str, label: str, verdict: Verdict, outcome: str | None = None, **kwargs: Any,
+        cls, *, key: str, label: str, verdict: Verdict, outcome: str | None = None, **kwargs: Any,
     ) -> None:
         """Bind action metadata, rejecting class declarations without a terminal verdict."""
         super().__init_subclass__(**kwargs)
-        if not isinstance(value, str) or not value or not isinstance(label, str) or not label:
-            raise ImproperlyConfigured("Actions require a value, label, and terminal verdict.")
+        if not isinstance(key, str) or not key or not isinstance(label, str) or not label:
+            raise ImproperlyConfigured("Actions require a key, label, and terminal verdict.")
         try:
-            cls.value, cls.label, cls.verdict = value, label, Verdict(verdict)
+            cls.key, cls.label, cls.verdict = key, label, Verdict(verdict)
         except (ValueError, TypeError) as error:
             raise ImproperlyConfigured("An action requires a known terminal verdict.") from error
         if cls.verdict == Verdict.PENDING:
@@ -113,9 +115,7 @@ class _FormJsonSchema(GenerateJsonSchema):
 
 def resolve_action(value: str) -> type[Action]:
     """Resolve a trusted action registration, whose key is the authored action value."""
-    action = resolve_impl_class("ANGEE_DECISION_ACTION_CLASSES", value, Action)
-    if action.value != value:
-        raise ImproperlyConfigured(f"Action registration {value!r} disagrees with {action.value!r}.")
+    action = resolve_impl_class(Action, value)
     return action
 
 
@@ -132,7 +132,7 @@ def compile_form(
     initial, refine = initial if initial is not None else {}, refine if refine is not None else {}
     if not all(isinstance(action, type) and issubclass(action, Action) and action is not Action for action in actions):
         raise ValidationError("Decision forms require declared action classes.")
-    names = [action.value for action in actions]
+    names = [action.key for action in actions]
     if not names or len(names) != len(set(names)):
         raise ValidationError("Decision forms require unique actions.")
     if not isinstance(initial, Mapping) or not isinstance(refine, Mapping) or (
@@ -145,11 +145,11 @@ def compile_form(
             original = action.model_json_schema(mode="validation", schema_generator=_FormJsonSchema)
             branch = materialize_form_schema(original)
         except (KeyError, ValueError, TypeError, ValidationError) as error:
-            raise ImproperlyConfigured(f"Invalid schema declaration on action {action.value}.") from error
+            raise ImproperlyConfigured(f"Invalid schema declaration on action {action.key}.") from error
         fields = branch.get("properties", {})
         if "action" in fields or "action" in action.model_fields:
             raise ImproperlyConfigured("The action field is reserved by decision forms.")
-        values, refinements = initial.get(action.value, {}), refine.get(action.value, {})
+        values, refinements = initial.get(action.key, {}), refine.get(action.key, {})
         if not isinstance(values, Mapping) or not isinstance(refinements, Mapping) or (
             values.keys() | refinements.keys()
         ) - fields.keys():
@@ -165,19 +165,19 @@ def compile_form(
             if node.get("type") == "object" and "properties" in node:
                 node["additionalProperties"] = False
             if "default" in node and validation_issues(node, node["default"]):
-                raise ImproperlyConfigured(f"Invalid declared default on action {action.value}.")
-        if action.value in initial:
+                raise ImproperlyConfigured(f"Invalid declared default on action {action.key}.")
+        if action.key in initial:
             freeze_form_schema(branch, dict(values))
         else:
             freeze_form_schema(branch)
         for name, field in fields.items():
             if "default" in field and validation_issues(field, field["default"]):
-                raise ValidationError(f"Invalid initial/default value for {action.value}.{name}.")
-        fields["action"] = {"type": "string", "const": action.value}
+                raise ValidationError(f"Invalid initial/default value for {action.key}.{name}.")
+        fields["action"] = {"type": "string", "const": action.key}
         branch.update(properties=fields, additionalProperties=False)
         branch.setdefault("required", []).append("action")
         branches.append(branch)
-        options.append({"value": action.value, "label": action.label, "verdict": str(action.verdict)})
+        options.append({"value": action.key, "label": action.label, "verdict": str(action.verdict)})
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object",
         "properties": {"action": {"type": "string", "enum": names, "options": options}},

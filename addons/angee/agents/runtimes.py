@@ -78,6 +78,7 @@ class AgentRuntime(ImplBase):
     verbatim. Subclasses override for runtime-specific auth shapes (claude-code's
     OAuth env) or handle conventions.
     """
+    registry_setting = "ANGEE_AGENT_RUNTIME_CLASSES"
 
     category = "agent_runtime"
     icon = "robot"

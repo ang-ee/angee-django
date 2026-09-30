@@ -36,7 +36,6 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
@@ -53,7 +52,6 @@ from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
 from angee.base.fields import EncryptedField, StateField
-from angee.base.identity import public_id_for
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
@@ -277,8 +275,7 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     sqid_prefix = "clt_"
     slug = models.SlugField()
     provider_type = ImplClassField(
-        base_class=OAuthProviderType,
-        registry_setting="ANGEE_OAUTH_PROVIDER_TYPES",
+        OAuthProviderType,
         default="generic_oauth2",
     )
     """Provider preset key whose defaults seed this OAuth client."""
@@ -1996,9 +1993,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     scheduler, but the live-session reconciler does not inspect or dispatch them.
     """
 
-    sync_workflow_key: ClassVar[str] = ""
-    """Optional workflow lineage selected through the installed sync dispatch hook."""
-
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
     cursor = models.JSONField(default=dict, blank=True)
@@ -2545,8 +2539,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if self.sync_is_dispatched:
             return SyncDispatch.DISPATCHED
-        if not self.sync_workflow_key:
-            self.mark_sync_started(now=now)
+        self.mark_sync_started(now=now)
         try:
             with bridge_sync_context(), bridge_progress_context(self):
                 result = self.sync()
@@ -2568,25 +2561,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def sync(self) -> int | SyncDispatch:
         """Drive backend streams; concrete bridges may override this sync seam."""
 
-        dispatched = self.dispatch_sync()
-        if dispatched is not None:
-            return dispatched
         return sync_bridge(self)
-
-    def dispatch_sync(self) -> SyncDispatch | None:
-        """Hand a declared cycle to the composition addon's durable admission hook."""
-
-        if not self.sync_workflow_key:
-            return None
-        handler = getattr(settings, "ANGEE_BRIDGE_SYNC_DISPATCH", "")
-        if not handler:
-            raise ImproperlyConfigured("A sync_workflow_key requires an ANGEE_BRIDGE_SYNC_DISPATCH handler.")
-        return import_string(handler)(self)
-
-    def sync_workflow_input(self) -> dict[str, Any]:
-        """Snapshot immutable cycle input; connectors may add their admitted facts."""
-
-        return {"bridge": {"model": self._meta.label_lower, "id": public_id_for(type(self), self.pk)}}
 
     def handle_webhook(self, payload: Any) -> None:
         """Apply one verified inbound webhook payload to this bridge."""
@@ -3406,6 +3381,7 @@ class RecordRevision(AppendOnlyModel, SqidMixin, AuditMixin, AngeeModel):
         rebac_resource_type = "integrate/record_revision"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("link", "number"), name="uniq_record_revision_number"),)
+
 
 class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
     """Read scopes for retained record quarantine."""

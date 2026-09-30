@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES": [],
     "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": True,
     "REBAC_BACKEND": "local",
     "REBAC_LOCAL_BACKEND_STORAGE": "registry",

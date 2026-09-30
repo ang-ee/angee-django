@@ -46,9 +46,7 @@ class VcsBridge(Bridge):
     integration_create_mode = "FORM"
     integration_kind_label = "VCS bridge"
 
-    backend_class = ImplClassField(
-        base_class=VCSBackend,
-        registry_setting="ANGEE_VCS_BACKEND_CLASSES",
+    backend_class = ImplClassField(VCSBackend,
         default="local",
         create_only=True,
     )

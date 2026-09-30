@@ -57,12 +57,15 @@ EXPECTED_TYPES = {
 EXPECTED_RUNNER = ()
 
 EXPECTED_SETTINGS = {
-    "decisions": "ANGEE_DECISION_ACTION_CLASSES ANGEE_DECISION_MAX_ATTEMPTS ANGEE_DECISION_POLICY_CLASSES",
-    "workflows": (
-        "ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES ANGEE_WORKFLOW_RETENTION_DAYS "
-        "ANGEE_WORKFLOW_STEP_CLASSES ANGEE_WORKFLOW_TRIGGER_SOURCES"
+    "decisions": (
+        "ANGEE_DECISION_ACTION_CLASSES ANGEE_DECISION_MAX_ATTEMPTS ANGEE_DECISION_POLICY_CLASSES "
+        "ANGEE_IMPL_REGISTRIES:append"
     ),
-    "workflows_integrate": "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES",
+    "workflows": (
+        "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES "
+        "ANGEE_WORKFLOW_RETENTION_DAYS ANGEE_WORKFLOW_STEP_CLASSES ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
+    ),
+    "workflows_integrate": "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES",
 }
 
 EXPECTED_TEST_DRIVERS = (
@@ -145,7 +148,8 @@ def test_workflows_public_surface() -> None:
         declared = importlib.import_module(module_name).SETTINGS
         names = tuple(sorted(
             key for key in declared
-            if key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_")) and "." not in key
+            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_")) and "." not in key)
+            or (config.label in EXPECTED_SETTINGS and key == "ANGEE_IMPL_REGISTRIES:append")
         ))
         if names:
             settings[config.label] = names

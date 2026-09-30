@@ -227,6 +227,6 @@ class Review(ReviewStep[None, None, ReviewConfig, None]):
         if not answered:
             return ctx.done(outcome="expired")
         output = {"decisions": [public_id_of(answer.decision) for answer in answered]}
-        actions = {answer.action.value: answer.action for answer in answered if answer.action is not None}
+        actions = {answer.action.key: answer.action for answer in answered if answer.action is not None}
         outcome = "disputed" if len(actions) > 1 else next(iter(actions.values())).outcome
         return ctx.done(output, outcome=outcome)

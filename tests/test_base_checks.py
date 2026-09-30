@@ -16,8 +16,39 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_hierarchy_queryset_order, check_rebac_database
+from angee.base.checks import check_hierarchy_queryset_order, check_impl_registries, check_rebac_database
+from angee.base.impl import ImplClassField
 from angee.base.mixins import HierarchyQuerySet
+from tests.test_impl import _BaseImpl
+
+
+def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
+    """The base check validates rowless catalogues without a model field."""
+
+    with override_settings(
+        ANGEE_IMPL_REGISTRIES=["tests.test_impl._BaseImpl", "tests.test_impl.MissingBase"],
+        ANGEE_TEST_IMPLS={
+            "missing": "tests.test_impl.MissingImpl",
+            "wrong_base": "builtins.str",
+            "wrong_key": "tests.test_impl._BaseImpl",
+        },
+    ):
+        errors = check_impl_registries()
+    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004", "angee.E024"]
+    assert "MissingImpl" in errors[0].msg
+    assert "is not a _BaseImpl" in errors[1].msg
+    assert "with key 'base'" in errors[2].msg
+    assert "MissingBase" in errors[3].msg
+
+
+def test_impl_registry_check_accepts_empty_catalogue_and_rejects_unlisted_field() -> None:
+    """An empty rowless registry is valid, while model selectors must be declared."""
+
+    with override_settings(ANGEE_IMPL_REGISTRIES=["tests.test_impl._EmptyImpl"], ANGEE_EMPTY_IMPLS={}):
+        assert check_impl_registries() == []
+    with override_settings(ANGEE_IMPL_REGISTRIES=[], ANGEE_TEST_IMPLS={"base": "tests.test_impl._BaseImpl"}):
+        [error] = ImplClassField(_BaseImpl).check()
+    assert error.id == "angee.E025"
 
 
 @pytest.mark.parametrize("write_alias", [None, "default", "external"])
@@ -30,6 +61,7 @@ def test_rebac_check_requires_default_write_routing(
     """The native router determines writes; unrelated models and reads are ignored."""
 
     with isolate_apps("django.contrib.contenttypes") as registry:
+
         class Managed(RebacMixin):
             class Meta:
                 app_label = "contenttypes"
@@ -80,7 +112,9 @@ def test_rebac_database_check_registered_by_base() -> None:
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])
 @pytest.mark.parametrize("selected_apps", [False, True])
 def test_hierarchy_queryset_order_checks_every_declared_manager(
-    monkeypatch: pytest.MonkeyPatch, ordering: str, selected_apps: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    ordering: str,
+    selected_apps: bool,
 ) -> None:
     """Path maintenance may skip its own guard, but must retain other update guards."""
 
@@ -103,6 +137,7 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(
 
     queryset = {"first": First, "last": Last, "override": Override, "inherited": Inherited, "plain": Guard}[ordering]
     with isolate_apps("django.contrib.contenttypes") as registry:
+
         class Node(models.Model):
             objects = models.Manager()
             hierarchy = models.Manager.from_queryset(queryset)()

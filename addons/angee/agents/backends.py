@@ -71,6 +71,7 @@ class InferenceBackend(ImplBase):
     Subclasses read the API credential, endpoint, and config directly from the
     provider row that selected them.
     """
+    registry_setting = "ANGEE_INFERENCE_BACKEND_CLASSES"
 
     category = "inference"
     label = "Inference"
