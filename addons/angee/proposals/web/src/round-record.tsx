@@ -54,7 +54,7 @@ function RoundRecordSurface({ surface, round }: {
 
 function RoundVerbs({ round, primary }: { round: RoundRecord; primary: boolean }): ReactElement {
   const actions = useRoundCeremonyActions(round.id);
-  return <RecordActionBar record={round} actions={primary ? [{ ...actions.open, placement: "toolbar" }] : Object.values(actions).filter((action) =>
+  return <RecordActionBar record={round} actions={primary ? [{ ...actions.open, placement: "toolbar", primary: true }] : Object.values(actions).filter((action) =>
     ![actions.open.id, actions.admit.id, actions.remove.id].includes(action.id))} />;
 }
 

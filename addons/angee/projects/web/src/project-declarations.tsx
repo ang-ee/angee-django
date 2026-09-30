@@ -33,6 +33,8 @@ export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
   verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
   contextLine?: FormProps["contextLine"];
+  /** A host whose work is its tabs hides the Overview tab. */
+  overviewTab?: FormProps["overviewTab"];
   returning?: FormProps["returning"];
   extraActions?: React.ReactNode;
 }
@@ -79,6 +81,7 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
       layout="tabs"
       returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
       contextLine={selection.contextLine}
+      overviewTab={selection.overviewTab}
     >
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
