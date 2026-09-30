@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
+import { ANGEE_WATCH_IGNORED } from "./watch";
+
 // The framework owner of the web/package Vitest defaults: the DOM-inline set, the
 // `src/**` test globs, and the generated-schema alias builder. Shipped in `@angee/app` (not a repo-root file) so a project
 // reaches it by package name whether the framework is an editable checkout or an
@@ -36,6 +38,8 @@ export function gqlAliasFor(runtimeGqlDir: string) {
 const srcTestIncludes = ["src/**/*.test.ts", "src/**/*.test.tsx"];
 
 const packageDefaults = defineConfig({
+  // Watch mode reuses Vite's dev-server watcher; keep it off jj's store.
+  server: { watch: { ignored: [...ANGEE_WATCH_IGNORED] } },
   test: {
     // Pure modules run under node; hook/component suites opt into a DOM
     // environment per-file with a `// @vitest-environment happy-dom` pragma.
@@ -51,6 +55,8 @@ const packageDefaults = defineConfig({
 });
 
 const webDefaults = defineConfig({
+  // Watch mode reuses Vite's dev-server watcher; keep it off jj's store.
+  server: { watch: { ignored: [...ANGEE_WATCH_IGNORED] } },
   test: {
     environment: "node",
     include: srcTestIncludes,

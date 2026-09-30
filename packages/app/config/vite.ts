@@ -11,6 +11,7 @@ import {
   THEME_TOKEN_NAMES,
   type ThemeDefinition,
 } from "@angee/ui/theme-runtime";
+import { ANGEE_WATCH_IGNORED } from "./watch";
 
 // The framework owner of the web Vite defaults: the plugin pair, the dev-server
 // host/port/proxy wiring, the generated-schema alias, and the project-derived
@@ -313,6 +314,7 @@ export async function defineAngeeWebViteConfig({
     server: {
       host: true,
       ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),
+      watch: { ignored: [...ANGEE_WATCH_IGNORED] },
       port: uiPort,
       strictPort: true,
       proxy: {
