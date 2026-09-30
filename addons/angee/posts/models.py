@@ -29,8 +29,8 @@ from typing import cast
 from django.db import models
 
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel
 from angee.integrate.models import Bridge
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
@@ -108,7 +108,7 @@ class Feed(Bridge):
         return len(land_posts(self, posts, owner_id=self.owner_id))
 
 
-class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
+class FeedFollow(AuditMixin, AngeeDataModel):
     """A follow of a :class:`Feed` by a ``parties.Handle`` — the timeline subscription.
 
     The following edge behind a public timeline: a handle subscribes to a feed's
@@ -154,7 +154,7 @@ class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.handle_id} → {self.feed_id}"
 
 
-class PostMetrics(SqidMixin, AuditMixin, AngeeModel):
+class PostMetrics(AuditMixin, AngeeDataModel):
     """Rolled-up public engagement counts for one message (the platform snapshot).
 
     Flat one-to-one, not MTI — the counter set overlaps heavily across platforms;
@@ -193,7 +193,7 @@ class PostMetrics(SqidMixin, AuditMixin, AngeeModel):
         return f"metrics:{self.message_id}"
 
 
-class Quota(SqidMixin, AuditMixin, AngeeModel):
+class Quota(AuditMixin, AngeeDataModel):
     """A per-integration API-unit ledger for one billing period.
 
     Feed backends spend platform API units (search, list, insert) against a per-period

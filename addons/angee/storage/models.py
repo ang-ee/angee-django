@@ -67,8 +67,8 @@ from rebac.managers import RebacManager
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
@@ -122,7 +122,7 @@ StorageMasterManager = AngeeManager.from_queryset(StorageMasterQuerySet)
 """Default manager for the archivable storage master rows (Backend, Drive)."""
 
 
-class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
+class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
     """Credentialed storage backend instance.
 
     One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
@@ -196,7 +196,7 @@ class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         return instance
 
 
-class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
+class Drive(AuditMixin, ArchiveMixin, AngeeDataModel):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -405,7 +405,7 @@ class FolderManager(AngeeManager):
             return pruned
 
 
-class Folder(SqidMixin, AuditMixin, AngeeModel):
+class Folder(AuditMixin, AngeeDataModel):
     """Tree node inside a drive, or a per-user smart folder.
 
     A real folder has a ``drive`` and filesystem-style uniqueness on
@@ -542,7 +542,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         return bool({"drive", "drive_id", "parent", "parent_id", "is_virtual"} & set(update_fields))
 
 
-class MimeType(SqidMixin, AngeeModel):
+class MimeType(AngeeDataModel):
     """Reference row for one MIME type.
 
     The master-tier taxonomy seed is the source of truth; rows are read-only
@@ -1140,7 +1140,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         )
 
 
-class File(SqidMixin, AuditMixin, AngeeModel):
+class File(AuditMixin, AngeeDataModel):
     """A stored asset, deduplicated per drive by content hash.
 
     ``created_by`` (stamped by :class:`~angee.base.mixins.AuditMixin`) is the
@@ -1645,7 +1645,7 @@ class FileAttachmentManager(AngeeManager):
         return attachment
 
 
-class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` (which keys

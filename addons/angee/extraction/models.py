@@ -13,8 +13,8 @@ from django.db import models
 from angee.base.evidence import DerivedFrom, FactAuthority
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.mixins import AppendOnlyModel, AuditMixin
+from angee.base.models import AngeeDataModel, AngeeModel
 from angee.base.refs import record_ref_for
 from angee.base.serialization import canonical_json
 from angee.extraction.contracts import (
@@ -75,7 +75,7 @@ class ExtractionLineage(RetainedEvidence, AngeeModel):
         self.head = extraction
 
 
-class Extraction(RetainedEvidence, SqidMixin, AuditMixin, AngeeModel):
+class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
     """One immutable schema candidate and the evidence supporting its facts."""
 
     runtime = True
@@ -544,7 +544,7 @@ class ExtractionSource(DerivedFrom):
         )
 
 
-class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
+class ExtractionPage(RetainedEvidence, AngeeDataModel):
     """One ordered page's recognized content and safe provider metadata."""
 
     runtime = True
@@ -579,7 +579,7 @@ class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
         return PageRef(self.source.reference, self.source_page, carriers)
 
 
-class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
+class ExtractionPart(RetainedEvidence, AngeeDataModel):
     """One immutable text or structured carrier supporting a candidate."""
 
     runtime = True

@@ -13,8 +13,8 @@ from rebac import system_context
 
 from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import VCSBackend
@@ -226,7 +226,7 @@ class RepositoryManager(AngeeManager):
         )
 
 
-class Repository(SqidMixin, AuditMixin, AngeeModel):
+class Repository(AuditMixin, AngeeDataModel):
     """Inventory of one git remote, reached through its ``VcsBridge``.
 
     A plain noun: Django records the remote; the operator clones it. ``org`` groups
@@ -276,7 +276,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class Source(SqidMixin, AuditMixin, AngeeModel):
+class Source(AuditMixin, AngeeDataModel):
     """A pointer into a ``Repository`` at a ``ref`` and ``path``, with a ``kind``.
 
     One noun for every source kind. ``kind`` binds the source to an output model
@@ -393,7 +393,7 @@ class TemplateManager(AngeeManager):
         )
 
 
-class Template(SqidMixin, AuditMixin, AngeeModel):
+class Template(AuditMixin, AngeeDataModel):
     """One Copier template discovered under a ``Source`` (``source_kind="template"``).
 
     The operator renders these; the kind here is the *template* kind from the

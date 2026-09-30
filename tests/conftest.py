@@ -180,7 +180,7 @@ class Page(RecordChangedOptIn, AbstractPage):
 reversion.register(Page, fields=())
 
 
-@reversion.register(fields=("body", "page"))
+@reversion.register(fields=("body", "page_ptr"))
 class MarkdownPage(AbstractMarkdownPage, Page):
     """Concrete knowledge markdown child used by source-addon tests.
 

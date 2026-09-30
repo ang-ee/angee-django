@@ -36,8 +36,8 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
+from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target, concrete_child, concrete_child_models
 from angee.knowledge.retrieval import RetrievalBackend
 
@@ -105,7 +105,7 @@ class VaultManager(AngeeManager):
         return vault.with_actor(actor)
 
 
-class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Vault(AuditMixin, AngeeDataModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
     Deleting a vault cascade-deletes every page inside it; the crud delete
@@ -203,7 +203,7 @@ class PageManager(AngeeManager):
         return self.model._base_manager.get(pk=page.pk).with_actor(actor)
 
 
-class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Page(AuditMixin, AngeeDataModel, HistoryMixin):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
@@ -513,7 +513,7 @@ class RecordBindingManager(AngeeManager):
             raise PermissionDenied(message)
 
 
-class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
@@ -747,13 +747,6 @@ class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
 
-    page = models.OneToOneField(
-        "knowledge.Page",
-        on_delete=models.CASCADE,
-        related_name="markdown",
-        parent_link=True,
-        primary_key=True,
-    )
     kind = StateField(choices_enum=Page.PageKind, default=Page.PageKind.NOTE)
     body = models.TextField(blank=True, default="")
     body_hash = models.CharField(max_length=64, blank=True, default="", editable=False)
@@ -765,6 +758,8 @@ class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
         """Django model options."""
 
         abstract = True
+        # Django creates the concrete MTI page_ptr; preserve Page.markdown.
+        default_related_name = "markdown"
         rebac_resource_type = "knowledge/markdown_page"
         constraints = (
             models.CheckConstraint(condition=~models.Q(kind=Page.PageKind.FOLDER), name="ck_markdown_page_not_folder"),
@@ -995,7 +990,7 @@ class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
         super().save(*args, **kwargs)
         if reversion.is_active():
             # django-reversion follows MTI parent links when reading field_dict.
-            reversion.add_to_revision(self.page)
+            reversion.add_to_revision(self.page_ptr)
 
 
 # ---------------------------------------------------------------------------
@@ -1016,7 +1011,7 @@ class LinkManager(AngeeManager):
         created after the link still resolves on the source page's next save.
         """
 
-        page = markdown.page
+        page = markdown.page_ptr
         assert page is not None
         wanted = parse_wikilinks(markdown.body)
         pages = type(page)._base_manager
@@ -1038,7 +1033,7 @@ class LinkManager(AngeeManager):
             )
 
 
-class Link(SqidMixin, AngeeModel):
+class Link(AngeeDataModel):
     """Wikilink edge from one page to another, derived from the source body.
 
     Indexer-authored (see :class:`LinkManager`) — no user-facing mutation,

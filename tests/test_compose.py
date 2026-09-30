@@ -223,6 +223,26 @@ def test_runtime_rejects_conflicting_donor_grant_authority() -> None:
         ModelComposition({"tests": (source,)}, {"tests.grantsource": (donor,)}, model_owners={donor: module.__name__})
 
 
+def test_runtime_rejects_conflicting_donor_managers() -> None:
+    """Two same-row donors cannot silently shadow one another's manager."""
+
+    module = ModuleType("tests.manager_conflict")
+    source = _source_model(module, "ManagerSource", "tests", runtime=True)
+    first = _source_model(
+        module, "FirstManagerDonor", "tests", extends="tests.ManagerSource", objects=models.Manager(),
+    )
+    second = _source_model(
+        module, "SecondManagerDonor", "tests", extends="tests.ManagerSource", objects=models.Manager(),
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="composes manager 'objects'"):
+        ModelComposition(
+            {"tests": (source,)},
+            {"tests.managersource": (first, second)},
+            model_owners={first: module.__name__, second: module.__name__},
+        )
+
+
 @pytest.mark.parametrize("invalid", [None, [], {"": "write"}, {"reviewer": 42}])
 def test_runtime_validates_donor_grants_with_model_owner(invalid: Any) -> None:
     """Malformed addon declarations retain the model's configuration error contract."""

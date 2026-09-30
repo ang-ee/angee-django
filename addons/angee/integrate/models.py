@@ -51,10 +51,10 @@ from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.fields import EncryptedField, StateField
+from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     RecordRefMixin,
     canonical_record_target,
@@ -261,7 +261,7 @@ class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # ty
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
+class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
@@ -652,7 +652,7 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
                 return None
 
 
-class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
+class ExternalAccount(AuditMixin, AngeeDataModel):
     """A user's identity at a provider, shared by principals through REBAC grants.
 
     Connection identity only: which client minted it (``oauth_client``), which
@@ -682,7 +682,7 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
     )
     status = StateField(choices_enum=AccountStatus, default=AccountStatus.ACTIVE)
     identity_claims = models.JSONField(default=dict, blank=True)
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
 
@@ -996,7 +996,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         }
 
 
-class Credential(SqidMixin, AuditMixin, AngeeModel):
+class Credential(AuditMixin, AngeeDataModel):
     """Per-user credential material for acting against a vendor OAuth client."""
 
     runtime = True
@@ -1296,7 +1296,7 @@ class VendorManager(AngeeManager):
             ) from error
 
 
-class Vendor(SqidMixin, AuditMixin, AngeeModel):
+class Vendor(AuditMixin, AngeeDataModel):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -1463,7 +1463,7 @@ class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # ty
     """Manager for integration and bridge collection scopes."""
 
 
-class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
+class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a
@@ -1674,7 +1674,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     last_used_status = models.CharField(max_length=64, blank=True)
     use_count_24h = models.PositiveIntegerField(default=0)
     error_count_24h = models.PositiveIntegerField(default=0)
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
 
     lifecycle_transitions = StateTransitions(
@@ -1955,7 +1955,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
     sync_stage = StateField(choices_enum=SyncStage, default=SyncStage.IDLE, db_index=True)
-    sync_error = models.TextField(blank=True, default="")
+    sync_error: str = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
     sync_progress = models.JSONField(default=dict, blank=True)
@@ -2650,7 +2650,7 @@ class WebhookSubscriptionManager(AngeeManager):
         return queryset.order_by("pk")
 
 
-class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
+class WebhookSubscription(AuditMixin, AngeeDataModel):
     """Outbound webhook endpoint owned by one user."""
 
     runtime = True
@@ -2674,7 +2674,7 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     enabled = models.BooleanField(default=True, db_index=True)
     last_delivery_at = models.DateTimeField(null=True, blank=True)
     last_delivery_status = models.CharField(max_length=64, blank=True, default="")
-    last_error = models.TextField(blank=True, default="")
+    last_error: str = DiagnosticTextField(blank=True, default="")
     consecutive_failures = models.PositiveIntegerField(default=0)
 
     objects = WebhookSubscriptionManager()
@@ -2962,7 +2962,7 @@ class SyncStreamManager(AngeeManager):
             return stream
 
 
-class SyncStream(SqidMixin, AuditMixin, AngeeModel):
+class SyncStream(AuditMixin, AngeeDataModel):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     runtime = True
@@ -3105,8 +3105,8 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                     "absence_count",
                     "metadata",
                     "parent_id",
-                    "target_ct_id",
-                    "target_id",
+                    "target_content_type_id",
+                    "target_object_id",
                     "updated_at",
                 ],
             )
@@ -3162,8 +3162,8 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                 locked.status = LinkStatus.WITHDRAWN
             locked.tombstoned_at = None
             fields = [
-                "target_ct_id",
-                "target_id",
+                "target_content_type_id",
+                "target_object_id",
                 "remote_base_hash",
                 "local_base_hash",
                 "remote_version",
@@ -3178,13 +3178,13 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
 
     def _set_target(self, link: Any, target: models.Model | None) -> None:
         if target is None:
-            link.target_ct_id = link.target_id = None
+            link.target_content_type_id = link.target_object_id = None
         else:
             if target.pk is None:
                 raise ValidationError("A record target must be saved.")
             canonical = canonical_record_target(target)
-            link.target_ct = canonical.content_type
-            link.target_id = str(canonical.object_id)
+            link.target_content_type = canonical.content_type
+            link.target_object_id = str(canonical.object_id)
 
     def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
         """Count a bounded batch of missing keys, retaining tombstones.
@@ -3227,7 +3227,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             return link
 
 
-class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
+class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
     """A stable remote identity with the two last-applied comparison bases."""
 
     runtime = True
@@ -3235,9 +3235,11 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     external_key = models.CharField(max_length=512)
-    target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
-    target_id = models.CharField(max_length=255, null=True, blank=True)
-    target = GenericForeignKey("target_ct", "target_id")
+    target_content_type = models.ForeignKey(
+        ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    target_object_id = models.CharField(max_length=255, null=True, blank=True)
+    target = GenericForeignKey("target_content_type", "target_object_id")
     status = StateField(choices_enum=LinkStatus, default=LinkStatus.OBSERVED)
     remote_version = models.CharField(max_length=512, blank=True)
     remote_base_hash = models.CharField(max_length=64, blank=True)
@@ -3299,7 +3301,7 @@ class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):
             )
 
 
-class RecordRevision(AppendOnlyModel, SqidMixin, AuditMixin, AngeeModel):
+class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
     """Immutable observed and mapped payload history for one replica identity.
 
     Retention is unbounded by design. Full payload evidence grows with every
@@ -3540,7 +3542,7 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
             return tuple(rows if limit is None else rows[:limit])
 
 
-class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
+class SyncDiscrepancy(AuditMixin, AngeeDataModel):
     """A per-source-version failure to revisit through the adapter's rescan."""
 
     runtime = True

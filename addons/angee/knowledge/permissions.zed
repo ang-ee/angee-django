@@ -62,7 +62,7 @@ definition knowledge/page {
 
 // The concrete markdown child delegates access to its page parent.
 definition knowledge/markdown_page {
-    relation page: knowledge/page // rebac:field=page
+    relation page: knowledge/page // rebac:field=page_ptr
 
     // Parent creation is preflighted by PageManager.create_in.
     permission create = page->write

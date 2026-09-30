@@ -646,7 +646,6 @@ class TaskWork(StagedModelMixin):
     """Same-row work contribution folded into ``projects.Task``."""
 
     extends = "projects.Task"
-    runtime = False
     stage_container_field_name = "queue"
 
     if TYPE_CHECKING:
@@ -1379,7 +1378,6 @@ class UserWork(ResourceLoadMixin):
     """Provision personal queues after IAM user resources load."""
 
     extends = "iam.User"
-    runtime = False
 
     class Meta:
         """Abstract same-row provisioning donor for IAM users."""
