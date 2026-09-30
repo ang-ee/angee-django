@@ -15,8 +15,10 @@ and ``rebac sync`` loads its definitions.
 from __future__ import annotations
 
 from django.db import models
+from rebac import to_object_ref
 
 from angee.base.models import AngeeDataModel
+from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
 class MtiParent(AngeeDataModel):
@@ -35,8 +37,18 @@ class MtiParent(AngeeDataModel):
         rebac_resource_type = "mtidemo/parent"
 
 
-class MtiChild(MtiParent):
+class MtiChild(RecordChangedOptIn, MtiParent):
     """A REBAC-gated multi-table-inheritance child sharing ``MtiParent``'s pk."""
+
+    record_changed_enabled = False
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger):
+        """Grant the fixture's existing concrete subjects for this test source."""
+        return tuple(
+            TriggerGrantTarget(to_object_ref(record), "reader", "write")
+            for record in cls._base_manager.order_by("pk")
+        )
 
     detail = models.CharField(max_length=200, blank=True, default="")
 

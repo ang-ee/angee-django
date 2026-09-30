@@ -96,6 +96,8 @@ class Fragment(AbstractFragment):
 class Channel(ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
 
+    rebac_grantable = AbstractChannel.rebac_grantable
+
     class Meta(AbstractChannel.Meta):
         abstract = False
         app_label = "messaging"

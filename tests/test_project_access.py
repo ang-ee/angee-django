@@ -45,7 +45,7 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
 
     for definition in ("storage/drive", "storage/folder", "integrate/integration", "messaging/thread"):
         assert f"definition {definition}" in projects
-    assert "relation channel: integrate/integration // rebac:field=channel" in messaging
+    assert "relation channel: messaging/channel // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
 
 

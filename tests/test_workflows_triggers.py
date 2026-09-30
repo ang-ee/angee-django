@@ -8,8 +8,10 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from django.db import IntegrityError, OperationalError, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
-from rebac import actor_context, current_actor, system_context, to_subject_ref
+from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
+from rebac.models import active_relationship_model
+from rebac.relationships import delete_relationship
 
 from angee.base.impl import impl_choices_enum
 from angee.base.scoping import system_queryset
@@ -88,6 +90,64 @@ def test_enable_projects_native_subject_refs_to_the_user_foreign_key(trigger_set
     actor, _, _, trigger = trigger_setup
     enabled = Trigger.objects.enable(trigger, actor=to_subject_ref(actor))
     assert enabled.enabled and enabled.run_as_id == actor.pk
+
+
+def test_workflow_principal_grants_are_listable_and_repaired_on_reenable(trigger_setup):
+    """The explicit source grant belongs to the workflow user, not the enabler."""
+    actor, workflow, _, trigger = trigger_setup
+    enabled = Trigger.objects.enable(trigger, actor=actor)
+    workflow.refresh_from_db()
+    assert workflow.user.kind == "service"
+    assert workflow.user.username == f"workflow-{workflow.sqid}"
+    assert workflow.user_id != actor.pk
+    grants = enabled.granted_relationships(actor=actor)
+    assert len(grants) == 1
+    grant = grants[0]
+    assert (grant.resource_type, grant.resource_id, grant.relation) == (
+        "knowledge/role", "vault_viewer", "member",
+    )
+    assert grant.subject_id == str(workflow.user_id)
+
+    delete_relationship(RelationshipTuple(
+        resource=triggers.TriggerGrantTarget.from_stored(enabled.granted_targets[0]).resource,
+        relation="member", subject=to_subject_ref(workflow.user),
+    ))
+    assert not enabled.granted_relationships(actor=actor)
+    enabled = Trigger.objects.enable(enabled, actor=actor)
+    assert len(enabled.granted_relationships(actor=actor)) == 1
+    Trigger.objects.disable(enabled, actor=actor)
+    assert not active_relationship_model().objects.filter(
+        resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+        subject_id=str(workflow.user_id),
+    ).exists()
+
+
+def test_shared_target_survives_until_last_trigger_disables(trigger_setup):
+    """Two triggers on one workflow contribute one native tuple without stealing it."""
+    actor, workflow, _, first = trigger_setup
+    with actor_context(actor):
+        second = Trigger.objects.create(
+            workflow=workflow, source="record_changed", model_label="knowledge.vault",
+        )
+    first = Trigger.objects.enable(first, actor=actor)
+    second = Trigger.objects.enable(second, actor=actor)
+    assert len(second.granted_relationships(actor=actor)) == 1
+    Trigger.objects.disable(first, actor=actor)
+    assert len(second.granted_relationships(actor=actor)) == 1
+    Trigger.objects.disable(second, actor=actor)
+    assert not second.granted_relationships(actor=actor)
+
+
+def test_deleting_trigger_releases_its_grant(trigger_setup):
+    """Queryset deletion runs the same tuple cleanup as explicit disable."""
+    actor, workflow, _, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    with system_context(reason="test.trigger.delete_grants"):
+        Trigger.objects.filter(pk=trigger.pk).delete()
+    assert not active_relationship_model().objects.filter(
+        resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+        subject_id=str(workflow.user_id),
+    ).exists()
 
 
 def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_setup):

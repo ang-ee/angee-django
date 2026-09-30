@@ -129,8 +129,8 @@ person rows authenticate. Real-world faces link to it one way, one shape:
 **Service account** — a `kind=service` user row: the database-layer principal
 of an agent or automation. Non-login (unusable password, excluded from OIDC
 linking and human-only member pickers). Access pickers include readable service
-users; their lifecycle is owned by the thing each represents
-(the agents manager creates, renames, and deactivates it with its `Agent`).
+users; agents and workflows link one service user each, with their row lifecycle
+calling IAM's shared sync and deactivation helper.
 
 **Agent** — an autonomous capability represented by an `agents.Agent` and its
 linked service-account user row. The agent acts as that ordinary `auth/user`

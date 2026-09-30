@@ -7,7 +7,7 @@ from angee.base.scoping import system_queryset
 
 
 class TriggerMessaging(models.Model):
-    """Optionally restrict one message source to one protected channel."""
+    """Declare the protected channel required by a message source."""
 
     extends = "workflows.Trigger"
     hasura_readable_fields = ("channel",)

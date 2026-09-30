@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
@@ -83,12 +83,12 @@ class MessageTriggerTests(TransactionTestCase):
                 vendor=vendor, owner=self.owner, backend_class="manual", lifecycle="connected",
             )
 
-    def trigger(self, *, channel=None, unscoped=False, actor=None, enabled=True):
+    def trigger(self, *, channel=None, actor=None, enabled=True):
         """Create disabled configuration, then use the server-owned enable verb."""
         with actor_context(self.admin):
             trigger = Trigger.objects.create(
                 workflow=self.workflow, source="message_ingested",
-                channel=None if unscoped else channel or self.channel,
+                channel=channel or self.channel,
             )
         return Trigger.objects.enable(trigger, actor=actor or self.admin) if enabled else trigger
 
@@ -103,16 +103,36 @@ class MessageTriggerTests(TransactionTestCase):
 
     def test_scope_records_only_matching_enabled_triggers(self):
         """Different channel and disabled configurations never acquire ledger rows."""
-        scoped, unscoped = self.trigger(), self.trigger(unscoped=True)
+        scoped = self.trigger()
         self.trigger(channel=self.make_channel("other-channel"))
         self.trigger(enabled=False)
         message = self.ingest()
         self.assertEqual(set(system_queryset(TriggerEvent).values_list("trigger_id", flat=True)), {
-            scoped.pk, unscoped.pk,
+            scoped.pk,
         })
         self.assertEqual(
             set(system_queryset(TriggerEvent).values_list("record_object_id", flat=True)), {message.pk},
         )
+
+    def test_channel_grant_is_listable_and_scope_edit_revokes_it(self):
+        """Message read flows through the channel's direct reader grant."""
+        trigger = self.trigger()
+        grants = trigger.granted_relationships(actor=self.admin)
+        self.assertEqual(len(grants), 1)
+        self.assertEqual((grants[0].resource_type, grants[0].resource_id, grants[0].relation), (
+            "messaging/channel", str(self.channel.pk), "reader",
+        ))
+        message = self.ingest()
+        self.assertTrue(Message.objects.with_actor(self.workflow.user).filter(pk=message.pk).exists())
+        self.assertTrue(self.channel.with_actor(self.workflow.user).has_access("read"))
+        self.assertFalse(self.channel.integration_ptr.with_actor(self.workflow.user).has_access("read"))
+        trigger.channel = self.make_channel("replacement-grant-scope")
+        trigger.with_actor(self.admin)
+        with actor_context(self.admin):
+            trigger.save(update_fields=("channel",))
+        trigger.refresh_from_db()
+        self.assertFalse(trigger.enabled)
+        self.assertEqual(trigger.granted_relationships(actor=self.admin), ())
 
     def test_non_admin_enable_requires_channel_read(self):
         """Workflow write alone cannot scope a source to an unreadable channel."""
@@ -127,11 +147,27 @@ class MessageTriggerTests(TransactionTestCase):
         trigger = Trigger.objects.enable(trigger, actor=self.owner)
         self.assertEqual(trigger.run_as_id, self.owner.pk)
 
+    def test_channel_reader_cannot_delegate_source_access(self):
+        """Reading a channel does not authorize granting its reader tuple."""
+        self.workflow.with_actor(self.admin).grant_record_access("editor", self.other)
+        self.channel.with_actor(self.owner).grant_record_access("reader", self.other)
+        trigger = self.trigger(enabled=False)
+        with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
+            Trigger.objects.enable(trigger, actor=self.other)
+        self.assertFalse(system_queryset(Trigger).get(pk=trigger.pk).enabled)
+
+    def test_unscoped_message_trigger_cannot_enable_without_a_grant_target(self):
+        """A message trigger must name the channel its principal may read."""
+        with actor_context(self.admin):
+            trigger = Trigger.objects.create(workflow=self.workflow, source="message_ingested", channel=None)
+        with self.assertRaisesMessage(ValidationError, "channel grant scope"):
+            Trigger.objects.enable(trigger, actor=self.admin)
+        self.assertFalse(system_queryset(Trigger).get(pk=trigger.pk).enabled)
+
     def test_admission_rechecks_channel_read_even_with_message_read(self):
         """A former channel owner retains authored message read, but loses admission."""
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
-        for unscoped in (False, True):
-            self.trigger(unscoped=unscoped, actor=self.owner)
+        self.trigger(actor=self.owner)
         message = self.ingest()
         with system_context(reason="message source transfer channel"):
             self.channel.owner = self.other

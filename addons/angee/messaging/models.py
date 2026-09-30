@@ -871,6 +871,7 @@ class Channel(Bridge):
     """
 
     runtime = True
+    rebac_grantable = {"reader": "write"}
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
@@ -1124,7 +1125,7 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
 
     sqid = SqidField(real_field_name="id", prefix="thr_", min_length=8)
     channel = models.ForeignKey(
-        "integrate.Integration",
+        "messaging.Channel",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -1656,7 +1657,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         db_index=False,
     )
     channel = models.ForeignKey(
-        "integrate.Integration",
+        "messaging.Channel",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,

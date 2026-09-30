@@ -175,7 +175,7 @@ def test_record_wait_admission_and_deadline_recovery(watched_source, register_st
 
     register_step(Observe)
     _run, step = start_watcher(Observe, record, actor)
-    with patch.object(Vault, "workflow_trigger", False) if case == "not_opted" else nullcontext():
+    with patch.object(Vault, "record_changed_enabled", False) if case == "not_opted" else nullcontext():
         assert runner.execute(step.pk)
     step.refresh_from_db()
     if case in {"empty", "io", "not_opted"}:

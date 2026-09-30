@@ -20,6 +20,7 @@ from angee.agents.models import AgentLifecycle
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
+from angee.iam.service_users import sync_service_user
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound
 
 # The inference-credential chains ``_render_plan`` walks: the per-agent override
@@ -63,7 +64,7 @@ def provision_agent(id: PublicID) -> ActionResult:
         select_related=_PROVISION_CHAIN,
     ) as agent:
         if agent.user_id is None:
-            type(agent).objects.sync_service_user(agent)
+            sync_service_user(agent, prefix="agent")
         if agent.runtime_backend.runs_in_process:
             if not agent.inference_credential_ready():
                 return ActionResult(
@@ -133,7 +134,7 @@ def reprovision_agent(id: PublicID) -> ActionResult:
         select_related=_PROVISION_CHAIN,
     ) as agent:
         if agent.user_id is None:
-            type(agent).objects.sync_service_user(agent)
+            sync_service_user(agent, prefix="agent")
         workspace = agent.workspace
         service = agent.service
         if not workspace:
