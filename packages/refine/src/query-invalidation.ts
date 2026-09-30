@@ -50,6 +50,35 @@ export async function invalidateAuthoredQueries(
   );
 }
 
+/** Catch up retained authored reads; a retry restarts running data-holding refetches. */
+export async function catchUpAuthoredQueries(
+  queryClient: Pick<QueryClient, "invalidateQueries">,
+  modelLabels: readonly string[],
+  retainedAtStart: ReadonlySet<string> | undefined,
+  cancelRefetch: boolean,
+): Promise<void> {
+  return queryClient.invalidateQueries({
+    predicate: (query) => authoredQueryWithData(query, modelLabels)
+      && (retainedAtStart === undefined || retainedAtStart.has(query.queryHash)),
+    type: "all",
+    refetchType: "active",
+  }, { cancelRefetch });
+}
+
+/** Snapshot retained reads when an idle socket starts; later first loads are not stale. */
+export function retainedAuthoredQueryHashes(
+  queryClient: Pick<QueryClient, "getQueryCache">,
+  modelLabels: readonly string[],
+): Set<string> {
+  return new Set(queryClient.getQueryCache().findAll({
+    predicate: (query) => authoredQueryWithData(query, modelLabels),
+  }).map((query) => query.queryHash));
+}
+
+function authoredQueryWithData(query: Query, modelLabels: readonly string[]): boolean {
+  return query.state.data !== undefined && authoredQueryReadsAnyModel(query.meta, modelLabels);
+}
+
 /** One live change: an exact row with its related rows, or a whole model when ``id`` is absent. */
 export interface AuthoredLiveChange {
   model: string;
@@ -115,7 +144,11 @@ export function createAuthoredLiveInvalidation(
   };
 }
 
-/** One cancellation/refetch protocol shared by model-wide, exact-row and live invalidation. */
+/**
+ * The cancelling protocol shared by model-wide, exact-row and live invalidation
+ * (mutations included); connection catch-up (`catchUpAuthoredQueries`) is the
+ * separate non-cancelling protocol on first and idle-reopen connections.
+ */
 async function invalidateAuthoredQueriesMatching(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
   predicate: (query: Query) => boolean,

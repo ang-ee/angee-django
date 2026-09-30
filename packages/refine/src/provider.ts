@@ -23,13 +23,14 @@ import {
   stringValue,
 } from "./dialect/wire";
 import {
+  catchUpAuthoredQueries,
   createAuthoredLiveInvalidation,
-  invalidateAuthoredQueries,
+  retainedAuthoredQueryHashes,
   type AuthoredLiveChange,
 } from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
-type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
+export type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
 const noopSubscription = () => undefined;
 
 export const ANGEE_HASURA_PROVIDER_OPTIONS = {
@@ -259,10 +260,10 @@ export interface AngeeChangeLiveProvider extends LiveProvider {
   setEnabled: (enabled: boolean) => void;
 }
 
-type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries">;
+type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">;
 
 export function createAngeeChangeLiveProvider(
-  client: GraphQLWsClient,
+  client: Pick<GraphQLWsClient, "subscribe" | "on">,
   resources: readonly AngeeLiveResource[],
   options: { queryClient?: AuthoredQueryInvalidationClient } = {},
 ): AngeeChangeLiveProvider {
@@ -275,6 +276,10 @@ export function createAngeeChangeLiveProvider(
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
   let enabled = true;
+  let hasConnected = false;
+  let catchUpAfterEnable = false;
+  let startedSubscriptions = 0;
+  let retainedBeforeIdleReopen: Set<string> | undefined;
   let stopConnectionListener: () => void = noopSubscription;
   const liveInvalidation = options.queryClient
     ? createAuthoredLiveInvalidation(options.queryClient)
@@ -284,6 +289,8 @@ export function createAngeeChangeLiveProvider(
     if (subscriptions.size === 0) {
       stopConnectionListener();
       stopConnectionListener = noopSubscription;
+      retainedBeforeIdleReopen = undefined;
+      catchUpAfterEnable = false;
     }
   }
 
@@ -308,18 +315,34 @@ export function createAngeeChangeLiveProvider(
     entry.consumers.add(consumer);
     if (!subscriptions.has(changesRoot)) {
       if (subscriptions.size === 0) {
-        // Changes have no replay cursor. Every new socket connection must catch
-        // up native authored reads, including rows retained outside the head.
-        stopConnectionListener = client.on("connected", () => {
-          if (!enabled) return;
+        // Changes have no replay cursor. Catch-up is owed for retained reads
+        // when subscriptions resume after a gap, not for a page's first socket
+        // connection while its initial reads are still loading. An initial
+        // connection also closes the gap between HTTP and subscribing, but
+        // leaving first loads in flight accepts a possible stale first response.
+        stopConnectionListener = client.on("connected", (_socket, _payload, wasRetry) => {
+          const reconnect = hasConnected || wasRetry || catchUpAfterEnable;
+          hasConnected = true;
+          catchUpAfterEnable = false;
+          const retainedAtStart = retainedBeforeIdleReopen;
+          retainedBeforeIdleReopen = undefined;
+          if (!enabled || !reconnect) return;
           const models = resources
             .filter((resource) => subscriptions.has(resource.roots.changes ?? ""))
             .map((resource) => resource.modelLabel);
-          if (options.queryClient) void invalidateAuthoredQueries(options.queryClient, models);
+          if (options.queryClient) void catchUpAuthoredQueries(
+            options.queryClient, models, wasRetry ? undefined : retainedAtStart, wasRetry,
+          );
         });
       }
       subscriptions.set(changesRoot, entry);
       entry.start = () => {
+        if (startedSubscriptions === 0 && hasConnected && !catchUpAfterEnable && options.queryClient) {
+          retainedBeforeIdleReopen = retainedAuthoredQueryHashes(
+            options.queryClient,
+            resources.filter((candidate) => candidate.roots.changes).map((candidate) => candidate.modelLabel),
+          );
+        }
         // Ignore late deliveries from a disposed subscription, even after resume.
         let active = true;
         const dispose = client.subscribe(
@@ -347,7 +370,14 @@ export function createAngeeChangeLiveProvider(
             complete: () => undefined,
           },
         );
-        entry.dispose = () => { if (active) { active = false; dispose(); } };
+        startedSubscriptions++;
+        entry.dispose = () => {
+          if (active) {
+            active = false;
+            startedSubscriptions--;
+            dispose();
+          }
+        };
       };
       if (enabled) entry.start();
     }
@@ -365,7 +395,9 @@ export function createAngeeChangeLiveProvider(
     setEnabled(next) {
       if (next === enabled) return;
       enabled = next;
+      retainedBeforeIdleReopen = undefined;
       if (!enabled) liveInvalidation?.clear();
+      else catchUpAfterEnable = true;
       subscriptions.forEach((entry) => {
         if (enabled) entry.start();
         else entry.dispose();
