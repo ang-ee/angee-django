@@ -768,7 +768,7 @@ def test_deleting_a_superseding_group_keeps_the_original_history(people):
 
 
 @pytest.mark.parametrize("closure,outcome", [
-    ("resolved", None), ("expired", "expired"), ("invalid_attempts", "expired"),
+    ("resolved", None), ("expired", "expired"), ("invalid_attempts", "invalid_attempts"),
     ("superseded", "superseded"), ("canceled", "canceled"),
 ])
 def test_group_outcome_and_query_verbs_are_available_to_waiters(people, closure, outcome):

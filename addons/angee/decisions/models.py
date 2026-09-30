@@ -64,7 +64,10 @@ class DecisionGroup(AppendOnlyModel, AngeeDataModel):
 
     @property
     def outcome(self) -> ClosedReason | None:
-        """Return expired, superseded or canceled; None leaves answer handling to the waiter."""
+        """Return why an unanswered group closed; None leaves answer handling to the waiter.
+
+        Waiters map the reason to their own outcomes (a review routes invalid attempts as expired).
+        """
         if self.settled_at is None:
             return None
         reason = (system_queryset(self.decisions.model).filter(group_id=self.pk).unanswered()
