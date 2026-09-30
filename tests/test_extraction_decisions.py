@@ -6,24 +6,16 @@ from dataclasses import replace
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models.deletion import ProtectedError
-from rebac import (
-    RelationshipTuple,
-    actor_context,
-    delete_relationship,
-    system_context,
-    to_object_ref,
-    to_subject_ref,
-    write_relationships,
-)
+from rebac import actor_context, system_context
 
 from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
-from tests.conftest import create_platform_admin, create_user
+from tests.conftest import create_platform_admin
 from tests.decisions_models import Decision
 from tests.extraction_models import Extraction
-from tests.mtidemo.models import MtiChild, MtiParent
+from tests.mtidemo.models import MtiChild
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
 
@@ -97,102 +89,14 @@ def _correction(original, values, reviewer, *, subject=None, binding_overrides=N
     return original, values, decision, reviewer, revise, resolve
 
 
-@pytest.fixture
-def mti_correction(evidence, request):
-    """Keep a concrete target while admitting a canonical subject for a plain reviewer."""
+def test_extraction_rejects_targets_outside_file_and_message(evidence):
+    """Explicit target fields cannot reinterpret an unrelated row with the same PK."""
     retain, values = evidence
-    actor = create_platform_admin("mti-evidence-author")
-    reviewer = create_user("mti-evidence-reviewer")
-    source = values["target"]
-    with system_context(reason="tests extraction concrete target setup"):
-        child = MtiChild.objects.create(pk=source.pk, title="Shared target", detail="Concrete target")
-        parent = MtiParent.objects.get(pk=child.pk)
-        subject = parent
-        kind = getattr(request, "param", "parent")
-        if kind == "other_parent":
-            subject = MtiChild.objects.create(title="Unrelated target").mtiparent_ptr
-        elif kind == "source":
-            subject = source
-    with actor_context(actor):
-        original = retain(target=child, actor=actor)
-        original.grant_record_access("viewer", reviewer)
-        source.grant_record_access("viewer", reviewer)
-        write_relationships([
-            RelationshipTuple(resource=to_object_ref(record), relation="reader", subject=to_subject_ref(reviewer))
-            for record in (parent, child, *([subject] if kind == "other_parent" else []))
-        ])
-        yield _correction(original, {**values, "actor": actor, "target": child}, reviewer, subject=subject)
-
-
-def test_mti_correction_matches_parent_and_preserves_concrete_target(mti_correction):
-    original, values, decision, reviewer, revise, resolve = mti_correction
-    child = values["target"]
-    parent = MtiParent.objects.get(pk=child.pk)
-    assert decision.subject_content_type.model_class() is MtiParent
-    assert str(decision.subject_object_id) == str(parent.pk)
-    resolve()
-    revised = revise()
-    assert revised.result["documents"][0]["title"] == "Reviewed"
-    assert revise().pk == revised.pk
-    for row in (original, revised):
-        assert row.content_type.model_class() is MtiChild
-        assert str(row.object_id) == str(child.pk)
-        assert isinstance(row.target, MtiChild)
-        row.require_target(child)
-        with pytest.raises(ValidationError, match="different target"):
-            row.require_target(parent)
-    authority = {
-        "actor": values["actor"], "actions": (CorrectNote,),
-        "expected_action": "correct-note", "expected_resolution_action": "correct",
-    }
-    source, retained_decision = Extraction.objects.reviewed_correction_authority(revised, **authority)
-    assert source.pk == original.pk and retained_decision.pk == decision.pk
-    delete_relationship(RelationshipTuple(
-        resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reviewer),
-    ))
-    assert parent.with_actor(reviewer).has_access("read")
-    assert not child.with_actor(reviewer).has_access("read")
-    with pytest.raises(PermissionDenied, match="target must remain readable"):
-        Extraction.objects.reviewed_correction_authority(revised, **authority)
-
-
-@pytest.mark.parametrize("mti_correction", ["other_parent", "source"], indirect=True)
-def test_mti_correction_rejects_unrelated_subject(mti_correction):
-    original, values, decision, _reviewer, revise, resolve = mti_correction
-    if decision.subject_content_type.model_class() is MtiParent:
-        assert str(decision.subject_object_id) != str(values["target"].pk)
-    else:
-        assert str(decision.subject_object_id) == str(values["target"].pk)
-    resolve()
-    with pytest.raises(ValidationError, match="another target"):
-        revise()
-    assert Extraction.objects.get().pk == original.pk
-
-
-@pytest.mark.parametrize("principal", ["actor", "resolver"])
-def test_mti_correction_requires_concrete_access(mti_correction, principal):
-    original, values, decision, reviewer, revise, resolve = mti_correction
-    resolve()
-    child = values["target"]
-    parent = MtiParent.objects.get(pk=child.pk)
-    grant = RelationshipTuple(resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reviewer))
-    delete_relationship(grant)
-    assert parent.with_actor(reviewer).has_access("read")
-    assert original.with_actor(reviewer).has_access("read")
-    assert original.parts.get().with_actor(reviewer).has_access("read")
-    assert not child.with_actor(reviewer).has_access("read")
-    actor = reviewer if principal == "actor" else values["actor"]
-    assert Decision.objects.resolution(decision.pk, actor=actor, actions=(CorrectNote,)).resolver.pk == reviewer.pk
-    with pytest.raises(PermissionDenied, match="target must remain readable"):
-        revise(actor=actor)
-    assert Extraction.objects.count() == 1
-    write_relationships([grant])
-    assert child.with_actor(reviewer).has_access("read")
-    assert not child.with_actor(reviewer).has_access("write")
-    with pytest.raises(PermissionDenied, match="Write access"):
-        revise(actor=reviewer)
-    assert Extraction.objects.count() == 1
-    assert revise().revision == 2
+    with system_context(reason="tests extraction unsupported target"):
+        child = MtiChild.objects.create(pk=values["target"].pk, title="Unrelated target")
+    with pytest.raises(ValidationError, match="file or message"):
+        retain(target=child)
+    assert Extraction.objects.count() == 0
 
 
 def test_decision_correction_is_exact_reusable_and_retains_its_authority(correction):
@@ -202,10 +106,11 @@ def test_decision_correction_is_exact_reusable_and_retains_its_authority(correct
     assert revised.result["documents"][0]["title"] == "Reviewed"
     assert original.result["documents"][0]["title"] == "Note"
     assert revised.document_refs == original.document_refs
-    assert revised.fact_authority("/documents/0/title").kind == "correction"
+    assert revised.fact_authority("/documents/0/title") == "correction"
+    assert revised.fact_correction("/documents/0/title").decision_id == public_id_of(decision)
     assert revised.claims == {}
     assert revised.correction_decision_id == decision.pk
-    assert revised.provenance["corrections"][-1]["decision_resolved_by"] == public_id_of(reviewer)
+    assert revised.outcome["corrections"][-1]["decision_resolved_by"] == public_id_of(reviewer)
     assert revise().pk == revised.pk
     source, retained_decision = Extraction.objects.reviewed_correction_authority(
         revised,

@@ -7,21 +7,17 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
-from rebac import RelationshipTuple, SubjectRef, write_relationships
-from rebac.resources import model_resource_type, to_object_ref
 
+from angee.base.evidence import DerivedFrom, FactAuthority
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AppendOnlyModel, AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
-from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import RecordRefMixin
-from angee.base.serialization import canonical_json, canonical_json_sha256
-from angee.workflows_extraction.contracts import (
+from angee.base.refs import record_ref_for
+from angee.base.serialization import canonical_json
+from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
     DocumentRef,
@@ -29,15 +25,15 @@ from angee.workflows_extraction.contracts import (
     DocumentSource,
     ExtractionPartKind,
     ExtractionRef,
-    FactAuthority,
     LineRef,
     PageRef,
     SourceRef,
+    outcome_adapter,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
-from angee.workflows_extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
-from angee.workflows_extraction.managers import EvidenceManager, ExtractionManager
-from angee.workflows_extraction.pointers import (
+from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionSourceKind, ExtractionStatus
+from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
+from angee.extraction.managers import EvidenceManager, ExtractionManager
+from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
     fact_pointers,
     json_pointer_value,
@@ -46,7 +42,7 @@ from angee.workflows_extraction.pointers import (
     result_selectors,
     set_json_pointer,
 )
-from angee.workflows_extraction.profiles import ExtractionProfile
+from angee.extraction.profiles import ExtractionProfile
 
 
 class RetainedEvidence(AppendOnlyModel):
@@ -64,8 +60,8 @@ class ExtractionLineage(RetainedEvidence, AngeeModel):
     """Private row locked while allocating a revision and advancing its head."""
 
     runtime = True
-    key = models.CharField(max_length=64, primary_key=True)
-    head = models.ForeignKey("workflows_extraction.Extraction", null=True, on_delete=models.PROTECT, related_name="+")
+    identity = models.CharField(max_length=64, unique=True, editable=False)
+    head = models.ForeignKey("extraction.Extraction", null=True, on_delete=models.PROTECT, related_name="+")
     objects = EvidenceManager()
 
     class Meta:
@@ -73,23 +69,22 @@ class ExtractionLineage(RetainedEvidence, AngeeModel):
 
     def advance_head(self, extraction: Any) -> None:
         """Advance under the retention transaction after checking the lineage."""
-        if extraction.lineage_key != self.pk:
+        if extraction.lineage_id != self.pk:
             raise ValueError("The head must belong to this lineage.")
         type(self).objects.filter(pk=self.pk).owner_update(head=extraction)
         self.head = extraction
 
 
-class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class Extraction(RetainedEvidence, SqidMixin, AuditMixin, AngeeModel):
     """One immutable schema candidate and the evidence supporting its facts."""
 
     runtime = True
     sqid_prefix = "ext_"
     rebac_grantable = {"viewer": "share"}
     revision = models.PositiveIntegerField(default=1, editable=False)
-    lineage_key = models.CharField(max_length=64, db_index=True, editable=False)
+    lineage = models.ForeignKey("extraction.ExtractionLineage", on_delete=models.PROTECT, related_name="revisions")
     reuse_key = models.CharField(max_length=64, unique=True, editable=False)
-    status = StateField(choices_enum=ExtractionStatus, editable=False)
-    error_code = models.CharField(max_length=100, blank=True, editable=False)
+    outcome = models.JSONField(editable=False)
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
@@ -115,47 +110,51 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
         editable=False,
     )
     result = models.JSONField(editable=False)
-    provenance = models.JSONField(default=dict, editable=False)
     document_map = models.JSONField(default=list, editable=False)
     retired_identities = models.JSONField(default=list, editable=False)
-    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
-    object_id = models.CharField(max_length=255)
-    target = GenericForeignKey("content_type", "object_id")
+    file = models.ForeignKey(
+        "storage.File", null=True, blank=True, on_delete=models.PROTECT, related_name="extractions"
+    )
+    message = models.ForeignKey(
+        "messaging.Message", null=True, blank=True, on_delete=models.PROTECT, related_name="extractions"
+    )
     objects = ExtractionManager()
 
     class Meta:
         abstract = True
-        ordering = ("lineage_key", "-revision")
-        rebac_resource_type = "workflows_extraction/extraction"
-        constraints = (models.UniqueConstraint(fields=("lineage_key", "revision"), name="uniq_extraction_revision"),)
+        ordering = ("lineage_id", "-revision")
+        rebac_resource_type = "extraction/extraction"
+        constraints = (
+            models.UniqueConstraint(fields=("lineage", "revision"), name="uniq_extraction_revision"),
+            models.CheckConstraint(
+                condition=models.Q(file__isnull=False, message__isnull=True)
+                | models.Q(file__isnull=True, message__isnull=False),
+                name="extraction_one_target",
+            ),
+        )
+
+    @property
+    def target(self) -> Any:
+        """Return the one protected target record."""
+        return self.file if self.file_id is not None else self.message
+
+    @property
+    def record_model_label(self) -> str:
+        return record_ref_for(self.target).model_label
+
+    @property
+    def record_public_id(self) -> str:
+        return record_ref_for(self.target).public_id
 
     def retain(self) -> None:
-        """Insert evidence and mirror supported target read access atomically."""
+        """Validate the exclusive outcome before inserting immutable evidence."""
+        self.outcome = outcome_adapter.validate_python(self.outcome).model_dump(mode="json", exclude_none=True)
         super().retain()
-        if (relationship := self.target_relationship()) is not None:
-            write_relationships([relationship])
-
-    def target_relationship(self) -> RelationshipTuple | None:
-        """Project the immutable target using the schema-owned allowed types.
-
-        Native field backing cannot traverse a generic foreign key. Retention
-        and the manager's resync therefore share this derived relationship.
-        """
-        target = self.target
-        definition = effective_rebac_definition(type(self))
-        relation = next((item for item in definition.relations if item.name == "target"), None) if definition else None
-        if target is None or relation is None or model_resource_type(type(target)) not in {
-            subject.type for subject in relation.allowed_subjects
-        }:
-            return None
-        return RelationshipTuple(
-            resource=to_object_ref(self), relation="target", subject=SubjectRef(to_object_ref(target))
-        )
 
     @property
     def reference(self) -> ExtractionRef:
         """Return a stable reference to this exact evidence revision."""
-        return ExtractionRef(self.lineage_key, str(self.sqid), self.revision)
+        return ExtractionRef(self.lineage_id, str(self.sqid), self.revision)
 
     @property
     def document_refs(self) -> tuple[DocumentRef, ...]:
@@ -282,7 +281,7 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
     ) -> list[dict[str, Any]]:
         """Carry prior correction provenance only where logical identity and value agree."""
         retained = []
-        for correction in self.provenance.get("corrections", ()):
+        for correction in self.outcome.get("corrections", ()):
             paths = correction.get("corrected_paths")
             if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
                 raise ValidationError("The retained correction provenance is invalid.")
@@ -392,21 +391,8 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
     def document_parts(self) -> tuple[DocumentPart, ...]:
         """Return retained raw carriers without rereading or preparing source bytes."""
         return tuple(
-            DocumentPart(
-                source_position=row.source.position,
-                source_page=row.source_page,
-                mime_type=row.mime_type,
-                kind=ExtractionPartKind(row.kind),
-                value=row.value,
-                method=row.method,
-                content_hash=row.content_hash,
-                width=row.width,
-                height=row.height,
-                dpi=row.dpi,
-                duration_ms=row.duration_ms,
-                metadata=row.metadata,
-            )
-            for row in self.parts.order_by("position")
+            row.document_part()
+            for row in self.parts.select_related("source", "carrier_file").order_by("position")
         )
 
     def authority_carrier_positions(self, current: Extraction) -> dict[int, int]:
@@ -440,45 +426,43 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
 
     def require_target(self, target: Any) -> None:
         """Reject reinterpretation of retained evidence against another target."""
-        if self.content_type_id != ContentType.objects.get_for_model(target).pk or str(self.object_id) != str(
-            target.pk
-        ):
+        if self.target != target:
             raise ValidationError("The extraction names a different target.")
 
     @property
-    def used_model_roles(self) -> tuple[str, ...]:
+    def used_model_roles(self) -> tuple[ExtractionRole, ...]:
         """Return model roles recorded during acquisition and interpretation."""
-        return tuple(self.provenance.get("used_model_roles", ()))
+        return tuple(ExtractionRole(role) for role in self.outcome.get("used_model_roles", ()))
 
     @property
     def claims(self) -> Mapping[str, Any]:
         """Return scalar grounding by JSON pointer."""
-        return self.provenance.get("claims", {})
+        return self.outcome.get("claims", {})
 
     @property
     def stage_provenance(self) -> Mapping[str, Any]:
         """Return acquisition and processing metadata."""
-        return self.provenance.get("document", {})
+        return self.outcome.get("document", {})
 
     @property
     def unresolved_reasons(self) -> tuple[str, ...]:
         """Return explicit reasons a retained candidate requires attention."""
-        return tuple(self.provenance.get("unresolved_reasons", ()))
+        return tuple(self.outcome.get("unresolved_reasons", ()))
 
     @property
     def awaiting_correspondence(self) -> bool:
         """Whether a candidate awaits explicit document/line correspondence."""
         return (
-            self.status == ExtractionStatus.FAILED
-            and self.error_code == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
+            self.outcome["kind"] == ExtractionStatus.FAILED
+            and self.outcome.get("code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
         )
 
     @property
     def failed_at_inference(self) -> bool:
         """Whether the retained failure is explicitly attributed to inference."""
         return (
-            self.status == ExtractionStatus.FAILED
-            and self.stage_provenance.get("failure", {}).get("stage") == "inference"
+            self.outcome["kind"] == ExtractionStatus.FAILED
+            and self.outcome.get("stage") == "inference"
         )
 
     @property
@@ -493,26 +477,35 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
                 item.get("revision_parent_extraction_id"),
                 item.get("revision_parent_extraction_revision"),
             )
-            for item in self.provenance.get("corrections", ())
+            for item in self.outcome.get("corrections", ())
         )
 
     def fact_authority(self, pointer: str) -> FactAuthority:
         """Classify source grounding or retained correction authority for a fact."""
         self.fact(pointer)
         if self.claims.get(pointer):
-            return FactAuthority("source")
+            return FactAuthority.SOURCE
+        if self.fact_correction(pointer) is not None:
+            return FactAuthority.CORRECTION
+        return FactAuthority.UNVERIFIED
+
+    def fact_correction(self, pointer: str) -> CorrectionRef | None:
+        """Return the latest correction governing this fact, unless source grounding wins."""
+        self.fact(pointer)
+        if self.claims.get(pointer):
+            return None
         for correction in reversed(self.corrections):
             if any(pointer == path or pointer.startswith(f"{path}/") for path in correction.corrected_paths):
-                return FactAuthority("correction", correction.decision_id)
-        return FactAuthority("unverified")
+                return correction
+        return None
 
 
-class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
-    """One source's immutable position and content identity."""
+class ExtractionSource(DerivedFrom):
+    """One derived-from source with retained position, digest and REBAC links."""
 
     runtime = True
     sqid_prefix = "exs_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="sources")
+    extraction = models.ForeignKey("extraction.Extraction", on_delete=models.PROTECT, related_name="sources")
     file = models.ForeignKey(
         "storage.File", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_sources"
     )
@@ -527,7 +520,7 @@ class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
     class Meta:
         abstract = True
         ordering = ("position",)
-        rebac_resource_type = "workflows_extraction/extraction_source"
+        rebac_resource_type = "extraction/extraction_source"
         constraints = (
             models.UniqueConstraint(fields=("extraction", "position"), name="uniq_extraction_source_position"),
             models.CheckConstraint(
@@ -536,14 +529,8 @@ class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
                 name="extraction_source_one_input",
             ),
             models.UniqueConstraint(
-                fields=("extraction", "file"),
-                condition=models.Q(file__isnull=False),
-                name="uniq_extraction_source_file",
-            ),
-            models.UniqueConstraint(
-                fields=("extraction", "message_part"),
-                condition=models.Q(message_part__isnull=False),
-                name="uniq_extraction_source_part",
+                fields=("extraction", "content_type", "object_id"),
+                name="uniq_extraction_source_record",
             ),
         )
 
@@ -551,7 +538,7 @@ class ExtractionSource(RetainedEvidence, SqidMixin, AngeeModel):
     def reference(self) -> SourceRef:
         """Return the exact file or message-part identity retained here."""
         return SourceRef(
-            "file" if self.file_id is not None else "message_part",
+            ExtractionSourceKind.FILE if self.file_id is not None else ExtractionSourceKind.MESSAGE_PART,
             str((self.file if self.file_id is not None else self.message_part).sqid),
             self.content_hash,
         )
@@ -562,8 +549,8 @@ class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exp_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="pages")
-    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="pages")
+    extraction = models.ForeignKey("extraction.Extraction", on_delete=models.PROTECT, related_name="pages")
+    source = models.ForeignKey("extraction.ExtractionSource", on_delete=models.PROTECT, related_name="pages")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(editable=False)
     width = models.PositiveIntegerField(editable=False)
@@ -579,7 +566,7 @@ class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
     class Meta:
         abstract = True
         ordering = ("position",)
-        rebac_resource_type = "workflows_extraction/extraction_page"
+        rebac_resource_type = "extraction/extraction_page"
         constraints = (
             models.UniqueConstraint(fields=("extraction", "position"), name="uniq_extraction_page_position"),
             models.UniqueConstraint(fields=("source", "source_page"), name="uniq_extraction_source_page"),
@@ -597,21 +584,47 @@ class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exr_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="parts")
-    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="parts")
+    extraction = models.ForeignKey("extraction.Extraction", on_delete=models.PROTECT, related_name="parts")
+    source = models.ForeignKey("extraction.ExtractionSource", on_delete=models.PROTECT, related_name="parts")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(null=True, blank=True, editable=False)
     mime_type = models.CharField(max_length=200, editable=False)
-    kind = models.CharField(max_length=32, choices=ExtractionPartKind, editable=False)
+    kind = StateField(choices_enum=ExtractionPartKind, editable=False)
     method = models.CharField(max_length=128, editable=False)
     content_hash = models.CharField(max_length=64, editable=False)
     width = models.PositiveIntegerField(null=True, blank=True, editable=False)
     height = models.PositiveIntegerField(null=True, blank=True, editable=False)
     dpi = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    value = models.JSONField(editable=False)
+    carrier_file = models.ForeignKey(
+        "storage.File", on_delete=models.PROTECT, related_name="extraction_parts", editable=False
+    )
+    carrier_digest = models.CharField(max_length=64, editable=False)
     metadata = models.JSONField(default=dict, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     objects = EvidenceManager()
+
+    def document_part(self) -> DocumentPart:
+        """Recover the exact part from its retained, digest-bound file."""
+        from angee.extraction.acquisition import PartCarrier
+
+        carrier = PartCarrier(
+            source_position=self.source.position,
+            source_page=self.source_page,
+            kind=self.kind,
+            file_id=str(self.carrier_file.sqid),
+            content_hash=self.carrier_digest,
+        )
+        part = carrier.read(self.carrier_file)
+        if (part.source_position, part.source_page, part.kind, part.content_hash) != (
+            self.source.position, self.source_page, self.kind, self.content_hash
+        ):
+            raise ValidationError("The retained part carrier differs from its evidence row.")
+        return replace(part, metadata=self.metadata)
+
+    @property
+    def value(self) -> Any:
+        """Read content from the single protected carrier shared by revisions."""
+        return self.document_part().value
 
     @property
     def carrier_identity(self) -> tuple[Any, ...]:
@@ -626,13 +639,12 @@ class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
             self.width,
             self.height,
             self.dpi,
-            canonical_json_sha256(self.value),
         )
 
     class Meta:
         abstract = True
         ordering = ("position",)
-        rebac_resource_type = "workflows_extraction/extraction_part"
+        rebac_resource_type = "extraction/extraction_part"
         constraints = (
             models.UniqueConstraint(fields=("extraction", "position"), name="uniq_extraction_part_position"),
         )

@@ -1743,7 +1743,7 @@ def test_bare_settings_use_addon_owned_defaults(settings):
         "prepare_pages", "recognize_page", "process_evidence", "infer_evidence",
     } <= steps.keys()
     assert {"none", "retention_notes", "step_text"} <= settings.ANGEE_EXTRACTION_PROFILE_CLASSES.keys()
-    assert {"native", "deterministic"} <= settings.ANGEE_EXTRACTION_BACKEND_CLASSES.keys()
+    assert not hasattr(settings, "ANGEE_EXTRACTION_BACKEND_CLASSES")
     assert {"email", "webform", "manual", "fake_live"} <= settings.ANGEE_CHANNEL_BACKEND_CLASSES.keys()
     assert {"anthropic", "openai", "ollama", "stub_inference"} <= settings.ANGEE_INFERENCE_BACKEND_CLASSES.keys()
     assert "pydantic" in settings.ANGEE_AGENT_RUNTIME_CLASSES

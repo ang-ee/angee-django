@@ -449,6 +449,12 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
             provider: Any = self.provider
             return bool(provider.backend.is_transient_error(error))
 
+    def request_error_types(self) -> tuple[type[BaseException], ...]:
+        """Use the selected backend's native request exception types."""
+        with system_context(reason="agents.inference_model.error_types"):
+            provider: Any = self.provider
+            return provider.backend.request_error_types()
+
     def deployment_identity(self) -> InferenceDeploymentIdentity:
         """Return the non-secret endpoint binding used by role approval policy."""
 

@@ -16,10 +16,10 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.storage.schema import FileType
 
-Extraction = apps.get_model("workflows_extraction.Extraction")
-ExtractionSource = apps.get_model("workflows_extraction.ExtractionSource")
-ExtractionPage = apps.get_model("workflows_extraction.ExtractionPage")
-ExtractionPart = apps.get_model("workflows_extraction.ExtractionPart")
+Extraction = apps.get_model("extraction.Extraction")
+ExtractionSource = apps.get_model("extraction.ExtractionSource")
+ExtractionPage = apps.get_model("extraction.ExtractionPage")
+ExtractionPart = apps.get_model("extraction.ExtractionPart")
 
 
 @strawberry_django.type(Extraction)
@@ -27,24 +27,21 @@ class ExtractionType(AngeeNode):
     """One exact retained revision and its separately authorized source records."""
 
     revision: auto
-    lineage_key: auto
-    status: auto
-    error_code: auto
     schema_id: auto
     schema_digest: auto
     profile: auto
     profile_config: JSON
     schema: JSON
     result: JSON
-    provenance: JSON
+    outcome: JSON
     document_map: JSON
     retired_identities: JSON
     created_at: auto
     sources: list[ExtractionSourceType] = actor_scoped_to_many("sources")
     pages: list[ExtractionPageType] = actor_scoped_to_many("pages")
     parts: list[ExtractionPartType] = actor_scoped_to_many("parts")
-    record_model_label: str = strawberry_django.field(only=["content_type_id", "object_id"])
-    record_public_id: str = strawberry_django.field(only=["content_type_id", "object_id"])
+    record_model_label: str = strawberry_django.field(only=["file_id", "message_id"])
+    record_public_id: str = strawberry_django.field(only=["file_id", "message_id"])
 
     @strawberry_django.field(only=["model_id"])
     def model_id(self) -> PublicID | None:
@@ -103,21 +100,25 @@ class ExtractionPartType(AngeeNode):
     kind: auto
     method: auto
     content_hash: auto
-    value: JSON
     metadata: JSON
     width: auto
     height: auto
     dpi: auto
     duration_ms: auto
 
+    @strawberry_django.field(only=["carrier_file_id"])
+    def value(self) -> JSON:
+        """Read part content from its retained storage carrier."""
+        return cast(Any, self).document_part().value
+
 
 _EXTRACTIONS = hasura_model_resource(
     ExtractionType,
     model=Extraction,
-    filterable=["id", "lineage_key", "status", "schema_id", "revision"],
-    sortable=["created_at", "revision", "status"],
+    filterable=["id", "schema_id", "revision"],
+    sortable=["created_at", "revision"],
     aggregatable=["id"],
-    groupable=["status", "schema_id"],
+    groupable=["schema_id"],
     insert=False,
     update=False,
     delete=False,

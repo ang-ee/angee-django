@@ -1,4 +1,4 @@
-"""Extraction steps through the IO runner and deterministic providers."""
+"""Extraction steps through the IO runner and domain inference seams."""
 
 from __future__ import annotations
 
@@ -19,11 +19,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
 from angee.base.scoping import system_queryset
-from angee.workflows.definition import Definition
-from angee.workflows.maps import MapItem
-from angee.workflows.testing.drivers import load_workflow, run_until
-from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
-from angee.workflows_extraction.contracts import (
+from angee.extraction.acquisition import (
+    ExtractionConfig,
+    PageCarrier,
+    PartCarrier,
+    PreparedDocument,
+    RecognitionOutput,
+    SourceSnapshot,
+    prepare_pages,
+)
+from angee.extraction.contracts import (
     DocumentPart,
     ExtractionPartKind,
     MappingResult,
@@ -31,17 +36,12 @@ from angee.workflows_extraction.contracts import (
     RecognitionResult,
     Result,
 )
-from angee.workflows_extraction.inference import derive_text_claims
-from angee.workflows_extraction.profiles import ExtractionProfile
-from angee.workflows_extraction.providers import (
-    ExtractionProvider,
-    NativeExtractionProvider,
-    PageCarrier,
-    PartCarrier,
-    PreparedDocument,
-    RecognitionOutput,
-    SourceSnapshot,
-)
+from angee.extraction.inference import derive_text_claims
+from angee.extraction.profiles import ExtractionProfile
+from angee.workflows.definition import Definition
+from angee.workflows.maps import MapItem
+from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
 from angee.workflows_extraction.steps import (
     InferEvidenceStep,
     PreparePagesStep,
@@ -88,17 +88,23 @@ class TextProfile(ExtractionProfile):
         return Result(value, tuple(parts), claims, ("mapping",), provider_metadata=metadata)
 
 
-class DeterministicConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    recognized: bool = False
-    fail: bool = False
+@pytest.mark.parametrize("config", [
+    {"profile": "none", "schema": SCHEMA},
+    {"profile": "missing_profile", "schema": SCHEMA},
+    {"profile": "step_text", "schema": {}},
+    {"profile": "step_text", "schema": SCHEMA, "profile_config": {"unknown": True}},
+])
+def test_publication_rejects_invalid_extraction_declarations(config):
+    with pytest.raises(ValidationError):
+        ProcessEvidenceStep.parse_config(config)
 
 
-class DeterministicProvider(ExtractionProvider):
+class DeterministicExtraction:
     """Retained test text without network calls."""
 
+    recognized = False
+    fail = False
     key = "deterministic"
-    config_model = DeterministicConfig
     calls: list[str] = []
 
     def prepare(self, files, message_parts, *, profile, config, actor, heartbeat):
@@ -109,7 +115,7 @@ class DeterministicProvider(ExtractionProvider):
             0,
             0,
             "text/plain",
-            ExtractionPartKind.RECOGNIZED_TEXT if config.recognized else ExtractionPartKind.NATIVE_TEXT,
+            ExtractionPartKind.RECOGNIZED_TEXT if type(self).recognized else ExtractionPartKind.NATIVE_TEXT,
             text,
             "test",
             hashlib.sha256(text.encode()).hexdigest(),
@@ -130,16 +136,32 @@ class DeterministicProvider(ExtractionProvider):
 
     def infer(self, parts, schema, model, *, config):
         self.calls.append("infer")
-        if config.fail:
+        if type(self).fail:
             raise PipelineError("Deterministic inference failure.", stage="mapping_request", code="provider_failure")
         value = {"text": "Retained note"}
         return MappingResult(value, derive_text_claims(value, parts), {"provider": self.key})
 
 
 @pytest.fixture
-def step_evidence(execution, drive):
+def step_evidence(execution, drive, monkeypatch):
     actor, _sent = execution
-    DeterministicProvider.calls = []
+    DeterministicExtraction.calls = []
+    DeterministicExtraction.recognized = False
+    DeterministicExtraction.fail = False
+    from angee.extraction.managers import ExtractionManager
+    from angee.workflows_extraction import steps as step_module
+    def prepare(_manager, *args, **kwargs):
+        return DeterministicExtraction().prepare(*args, **kwargs)
+
+    def recognize(page, file, model, *, config):
+        return DeterministicExtraction().recognize(page, file, model, config=config)
+
+    def infer(parts, schema, model, *, config):
+        return DeterministicExtraction().infer(parts, schema, model, config=config)
+
+    monkeypatch.setattr(ExtractionManager, "prepare_pages", prepare)
+    monkeypatch.setattr(step_module, "recognize_page", recognize)
+    monkeypatch.setattr(step_module, "map_parts", infer)
     provider = make_integration("extraction-test", model=InferenceProvider, backend_class="manual", name="Test")
     with actor_context(actor):
         InferenceModel.objects.create(provider=provider, name="deterministic", model_use="multimodal")
@@ -147,17 +169,22 @@ def step_evidence(execution, drive):
     return actor, file
 
 
-def execute(step, value, actor, *, provider="deterministic", config=None):
+def execute(step, value, actor, *, config=None):
     node = {"step": step.key}
+    config = dict(config or {})
+    if step is PreparePagesStep:
+        DeterministicExtraction.recognized = config.pop("recognized", False)
+    if step is InferEvidenceStep:
+        DeterministicExtraction.fail = config.pop("fail", False)
     if step.config_model is not None:
         node["config"] = (
-            {"schema": SCHEMA, "profile": TextProfile.key} if step is ProcessEvidenceStep else {"backend": provider}
+            {"schema": SCHEMA, "profile": TextProfile.key} if step is ProcessEvidenceStep else {}
         )
         if step is PreparePagesStep:
             node["config"]["profile"] = TextProfile.key
-        node["config"].update(config or {})
+        node["config"].update(config)
     workflow = load_workflow(
-        {"nodes": {"entry": node}, "results": [{"from": "entry"}]}, key=f"test_{step.key}_{provider}", actor=actor
+        {"nodes": {"entry": node}, "results": [{"from": "entry"}]}, key=f"test_{step.key}", actor=actor
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, input=value)
     run_until(run)
@@ -170,7 +197,7 @@ def prepare_and_process(actor, file, *, profile_config=None, recognized=False):
         "target_model": "storage.File",
         "target_id": str(file.sqid),
     }
-    prepared = execute(PreparePagesStep, source, actor, config={"backend_config": {"recognized": recognized}})
+    prepared = execute(PreparePagesStep, source, actor, config={"recognized": recognized})
     assert prepared.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
     return execute(
         ProcessEvidenceStep,
@@ -198,7 +225,7 @@ def test_preparation_runs_once_and_retains_native_evidence(step_evidence):
     assert row.result == {"text": "Retained note"}
     with actor_context(actor):
         assert row.sources.count() == row.pages.count() == row.parts.count() == 1
-    assert DeterministicProvider.calls == ["prepare"]
+    assert DeterministicExtraction.calls == ["prepare"]
     assert system_queryset(StepArtifact).filter(step_run__run=run).count() == 1
 
 
@@ -266,7 +293,7 @@ def test_recognition_runs_with_registered_pure_provider(step_evidence):
     assert value.model_copy(update={"recognition": [
         MapItem[RecognitionOutput](index=0, outcome="error", error="unavailable"),
     ]}).carriers()[1] == ["recognition_unavailable:0:0"]
-    assert DeterministicProvider.calls == ["recognize"]
+    assert DeterministicExtraction.calls == ["recognize"]
     assert system_queryset(StepAttempt).get(step_run__run=run).effect_started_at is not None
 
 
@@ -285,12 +312,12 @@ def test_inference_retains_a_successor_including_provider_failure(step_evidence,
             "target_id": str(file.sqid),
         },
         actor,
-        config={"backend_config": {"fail": fail}},
+        config={"fail": fail},
     )
     assert run.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
     assert run.outcome == ("inference_failed" if fail else "inferred")
     assert run.output["revision"] == 2 and system_queryset(Extraction).count() == 2
-    assert DeterministicProvider.calls == ["prepare", "infer"]
+    assert DeterministicExtraction.calls == ["prepare", "infer"]
     stale = execute(
         InferEvidenceStep,
         {
@@ -302,26 +329,25 @@ def test_inference_retains_a_successor_including_provider_failure(step_evidence,
         actor,
     )
     assert stale.outcome == "superseded" and stale.output["superseded_by"] == run.output["extraction_id"]
-    assert DeterministicProvider.calls == ["prepare", "infer"]
+    assert DeterministicExtraction.calls == ["prepare", "infer"]
 
 
 def test_native_text_acquisition_drops_script_and_checks_digest(step_evidence):
     actor, source = step_evidence
     content = b"<p>Retained note</p><script>ignore</script>"
-    provider = NativeExtractionProvider()
     with actor_context(actor):
         MimeType.objects.get_or_create(mime_type="text/html", defaults={"category": "document", "label": "HTML"})
         row = File.objects.ingest_bytes(content, filename="note.html", drive_id=str(source.drive.sqid))
-        prepared = provider.prepare(
-            [row], [], profile=TextProfile(), config=provider.parse_config({}), actor=actor, heartbeat=lambda: None,
+        prepared = prepare_pages(
+            [row], [], profile=TextProfile(), config=ExtractionConfig(), actor=actor, heartbeat=lambda: None,
         )
         retained = File.objects.get(sqid=prepared.parts[0].file_id)
         assert json.loads(retained.read_verified(max_bytes=10000))["value"] == "Retained note"
         assert prepared.recognition_pages == []
         row.content_hash = "0" * 64
         with pytest.raises(ValidationError, match="stored bytes"):
-            provider.prepare(
-                [row], [], profile=TextProfile(), config=provider.parse_config({}), actor=actor, heartbeat=lambda: None,
+            prepare_pages(
+                [row], [], profile=TextProfile(), config=ExtractionConfig(), actor=actor, heartbeat=lambda: None,
             )
 
 
@@ -376,7 +402,7 @@ def test_explicit_correspondence_finalizes_the_held_candidate_without_inference(
     assert run.status == "succeeded" and run.outcome == "inferred"
     finalized = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
     assert finalized.result == held.result and finalized.revision == held.revision + 1
-    assert DeterministicProvider.calls == []
+    assert DeterministicExtraction.calls == []
 
 
 def test_unreadable_original_source_blocks_inference_before_provider_call(step_evidence):
@@ -409,7 +435,7 @@ def test_unreadable_original_source_blocks_inference_before_provider_call(step_e
     assert base.with_actor(reader).has_access("read") and model.with_actor(reader).has_access("read")
     assert not source.with_actor(reader).has_access("read")
     workflow = load_workflow(
-        {"nodes": {"entry": {"step": InferEvidenceStep.key, "config": {"backend": DeterministicProvider.key}}}},
+        {"nodes": {"entry": {"step": InferEvidenceStep.key, "config": {}}}},
         key="protected_source",
         actor=admin,
     )
@@ -426,16 +452,16 @@ def test_unreadable_original_source_blocks_inference_before_provider_call(step_e
     )
     run_until(run)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == "failed"
-    assert "Read access" in system_queryset(StepAttempt).get(step_run__run=run).error
-    assert DeterministicProvider.calls == ["prepare"]
+    assert "declared permission" in system_queryset(StepAttempt).get(step_run__run=run).error
+    assert DeterministicExtraction.calls == ["prepare"]
 
 
 def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
     actor, source = step_evidence
     with actor_context(actor):
         file = File.objects.ingest_bytes(b"\x00opaque", filename="source.bin", drive_id=str(source.drive.sqid))
-        prepared = NativeExtractionProvider().prepare(
-            [file], [], profile=TextProfile(), config=NativeExtractionProvider.parse_config({}), actor=actor,
+        prepared = prepare_pages(
+            [file], [], profile=TextProfile(), config=ExtractionConfig(), actor=actor,
             heartbeat=lambda: None,
         )
     run = execute(
@@ -450,7 +476,7 @@ def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
     )
     assert run.status == "succeeded" and run.outcome == "source_hold"
     row = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
-    assert row.status == "failed" and row.unresolved_reasons == ("unsupported_media_type:0",)
+    assert row.outcome["kind"] == "failed" and row.unresolved_reasons == ("unsupported_media_type:0",)
     inferred = execute(
         InferEvidenceStep,
         {
@@ -461,14 +487,14 @@ def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
         },
         actor,
     )
-    assert inferred.outcome == "source_unavailable" and DeterministicProvider.calls == []
+    assert inferred.outcome == "source_unavailable" and DeterministicExtraction.calls == []
 
 
 def test_partial_recognition_failure_blocks_inference_before_provider_call(step_evidence):
     actor, file = step_evidence
     with actor_context(actor):
-        prepared = DeterministicProvider().prepare(
-            [file], [], profile=TextProfile(), config=DeterministicProvider.parse_config({}), actor=actor,
+        prepared = DeterministicExtraction().prepare(
+            [file], [], profile=TextProfile(), config=ExtractionConfig(), actor=actor,
             heartbeat=lambda: None,
         )
     prepared.pages.append(
@@ -494,7 +520,7 @@ def test_partial_recognition_failure_blocks_inference_before_provider_call(step_
     assert processed.status == "succeeded" and processed.outcome == "source_hold"
     base = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
     with actor_context(actor):
-        assert base.document_parts() and base.error_code == "source_hold"
+        assert base.document_parts() and base.outcome["code"] == "source_hold"
     inferred = execute(
         InferEvidenceStep,
         {
@@ -506,7 +532,7 @@ def test_partial_recognition_failure_blocks_inference_before_provider_call(step_
         actor,
     )
     assert inferred.status == "succeeded" and inferred.outcome == "source_unavailable"
-    assert DeterministicProvider.calls == ["prepare"]
+    assert DeterministicExtraction.calls == ["prepare"]
 
 
 @pytest.mark.parametrize("media_type", ["image/png", "application/pdf"])
@@ -525,11 +551,11 @@ def test_native_acquisition_retains_bounded_rasters(step_evidence, media_type):
     with actor_context(actor):
         MimeType.objects.get_or_create(mime_type=media_type, defaults={"category": "document", "label": media_type})
         file = File.objects.ingest_bytes(content.getvalue(), filename=filename, drive_id=str(source.drive.sqid))
-        prepared = NativeExtractionProvider().prepare(
+        prepared = prepare_pages(
             [file],
             [],
             profile=TextProfile(),
-            config=NativeExtractionProvider.parse_config({"max_edge": 60}),
+            config=ExtractionConfig(max_edge=60),
             actor=actor,
             heartbeat=lambda: None,
         )

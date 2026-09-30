@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from jsonpointer import JsonPointer, JsonPointerException
 
 from angee.base.serialization import canonical_json
+from angee.extraction.profiles import EvidenceLayout
 
 JSON_POINTER_MISSING = object()
 """Sentinel distinguishing an absent path from a retained JSON null."""
@@ -111,9 +112,10 @@ def result_selectors(result: Any, layout: Any) -> tuple[tuple[str, tuple[str, ..
     """Expand profile-declared document and line pointers without interpreting keys."""
     if not isinstance(result, dict) or not result:
         return ()
-    document_collection = layout.get("document_collection", "")
-    line_collection = layout.get("line_collection", "")
-    root_document_on_missing = layout.get("root_document_on_missing", False)
+    declaration = EvidenceLayout.model_validate(layout)
+    document_collection = declaration.document_collection
+    line_collection = declaration.line_collection
+    root_document_on_missing = declaration.root_document_on_missing
     try:
         documents = json_pointer_value(result, document_collection) if document_collection else None
     except KeyError:

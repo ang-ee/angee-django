@@ -5,8 +5,8 @@ from copy import deepcopy
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.workflows_extraction.contracts import DocumentResult
-from angee.workflows_extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
+from angee.extraction.contracts import DocumentResult
+from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
 from tests.extraction_models import Extraction
 
 
@@ -24,7 +24,7 @@ def authority(*, result, claims, lines=(), corrections=()):
                 ],
             }
         ],
-        provenance={"claims": claims, "corrections": list(corrections)},
+        outcome={"kind": "succeeded", "claims": claims, "corrections": list(corrections)},
     )
 
 
@@ -109,6 +109,6 @@ def test_authority_requires_correspondence_and_cannot_cover_identity_containers(
     retained = authority(result={"documents": [{"title": "A"}]}, claims={"/documents/0/title": [{"part_position": 0}]})
     with pytest.raises(ValidationError, match="explicit identity correspondence"):
         retained.preserve_authority(DocumentResult({"documents": [{"title": "B"}]}, (), {}), identity_mapping={})
-    retained.provenance = {"claims": {"/documents": [{"part_position": 0}]}}
+    retained.outcome = {"kind": "succeeded", "claims": {"/documents": [{"part_position": 0}]}}
     with pytest.raises(ValidationError, match="identity container"):
         retained.preserve_authority(DocumentResult({"documents": []}, (), {}), identity_mapping={})

@@ -1,4 +1,4 @@
-"""Review changes to the workflows and decisions public Python surface."""
+"""Review changes to the workflows, decisions, and extraction Python surface."""
 
 from __future__ import annotations
 
@@ -29,9 +29,21 @@ EXPECTED_MODELS = {
         "WorkflowRunEvidence WorkflowVersion"
     ),
     "decisions": "Decision DecisionEvidence DecisionGroup",
+    "extraction": "Extraction ExtractionLineage ExtractionPage ExtractionPart ExtractionSource",
 }
 
 EXPECTED_VERBS = {
+    "extraction.Extraction.manager": (
+        "authorized_document_sources identity_preserving_pipeline_successor inference_authority_base "
+        "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
+        "prepare_correction_binding prepare_pages retain_result reused_inference "
+        "reviewed_correction_authority revise_from_decision"
+    ),
+    "extraction.Extraction.queryset": "validate_insert",
+    "extraction.ExtractionLineage.queryset": "validate_insert",
+    "extraction.ExtractionPage.queryset": "validate_insert",
+    "extraction.ExtractionPart.queryset": "validate_insert",
+    "extraction.ExtractionSource.queryset": "validate_insert",
     "workflows.StepAttempt.queryset": "close",
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
@@ -75,6 +87,7 @@ EXPECTED_SETTINGS = {
         "ANGEE_DECISION_ACTION_CLASSES ANGEE_DECISION_MAX_ATTEMPTS ANGEE_DECISION_POLICY_CLASSES "
         "ANGEE_IMPL_REGISTRIES:append"
     ),
+    "extraction": "ANGEE_EXTRACTION_MAX_BYTES ANGEE_EXTRACTION_PROFILE_CLASSES ANGEE_IMPL_REGISTRIES:append",
     "workflows": (
         "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES "
         "ANGEE_WORKFLOW_RETENTION_DAYS ANGEE_WORKFLOW_STEP_CLASSES ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
@@ -170,7 +183,7 @@ def test_workflows_public_surface() -> None:
         declared = importlib.import_module(module_name).SETTINGS
         names = tuple(sorted(
             key for key in declared
-            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_")) and "." not in key)
+            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_", "ANGEE_EXTRACTION_")) and "." not in key)
             or (config.label in EXPECTED_SETTINGS and key == "ANGEE_IMPL_REGISTRIES:append")
         ))
         if names:
@@ -226,12 +239,16 @@ def test_trigger_principal_and_source_grant_surface() -> None:
 
 
 def test_evidence_owner_surface() -> None:
-    """Decision and run evidence compose the base derivation and admission owners."""
+    """Decision, run and extraction evidence compose the base derivation and admission owners."""
     evidence = apps.get_model("decisions", "DecisionEvidence")
     run_evidence = apps.get_model("workflows", "WorkflowRunEvidence")
+    extraction_source = apps.get_model("extraction", "ExtractionSource")
+    extraction = apps.get_model("extraction", "Extraction")
     decision = apps.get_model("decisions", "Decision")
     assert issubclass(evidence, DerivedFrom)
     assert issubclass(run_evidence, DerivedFrom)
+    assert issubclass(extraction_source, DerivedFrom)
+    assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
     assert issubclass(DecisionRequest, BaseModel)

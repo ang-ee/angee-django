@@ -1,0 +1,32 @@
+// @rebac_package: extraction
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 4
+
+definition extraction/extraction {
+    relation owner: auth/user // rebac:field=created_by
+    relation viewer: auth/user | auth/group#member
+    relation file: storage/file // rebac:field=file
+    relation message: messaging/message // rebac:field=message
+    relation admin: angee/role // rebac:const=admin
+    permission read = owner + viewer + file->read + message->read + admin->member
+    permission share = owner + admin->member
+}
+
+definition extraction/extraction_source {
+    relation extraction: extraction/extraction // rebac:field=extraction
+    relation file: storage/file // rebac:field=file
+    relation message_part: messaging/part // rebac:field=message_part
+    permission read = extraction->read
+    permission read_content = file->read + message_part->read
+}
+
+definition extraction/extraction_page {
+    relation extraction: extraction/extraction // rebac:field=extraction
+    permission read = extraction->read
+}
+
+definition extraction/extraction_part {
+    relation extraction: extraction/extraction // rebac:field=extraction
+    relation source: extraction/extraction_source // rebac:field=source
+    permission read = extraction->read & source->read_content
+}

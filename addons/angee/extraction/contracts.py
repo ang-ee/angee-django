@@ -1,30 +1,26 @@
-"""Immutable values shared by extraction profiles, providers and retained evidence."""
+"""Immutable values shared by extraction profiles, inference and retained evidence."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from django.db.models import TextChoices
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-
-@dataclass(frozen=True, slots=True)
-class FactAuthority:
-    """Provenance classification for one retained result fact."""
-
-    kind: Literal["source", "correction", "unverified"]
-    decision_id: str = ""
+from angee.base.evidence import EvidenceReference
+from angee.base.identity import public_id_of
+from angee.extraction.enums import ExtractionRole, ExtractionSourceKind
 
 
 @dataclass(frozen=True, slots=True)
 class SourceRef:
     """Public identity and digest of one immutable evidence source."""
 
-    kind: Literal["file", "message_part"]
+    kind: ExtractionSourceKind
     public_id: str
-    content_digest: str
+    content_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +53,40 @@ class DocumentRef:
 class ExtractionRef:
     """One retained revision in its immutable lineage."""
 
-    lineage_key: str
+    lineage_id: int
     public_id: str
     revision: int
+
+
+class _Outcome(BaseModel):
+    """Facts shared by the two exclusive retained revision outcomes."""
+
+    model_config = ConfigDict(extra="forbid")
+    claims: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    used_model_roles: list[ExtractionRole] = Field(default_factory=list)
+    unresolved_reasons: list[str] = Field(default_factory=list)
+    document: dict[str, Any] = Field(default_factory=dict)
+    corrections: list[dict[str, Any]] = Field(default_factory=list)
+    request_digest: str
+    identity_correspondence: dict[str, Any] | None = None
+
+
+class SucceededOutcome(_Outcome):
+    """A schema-valid retained candidate."""
+
+    kind: Literal["succeeded"] = "succeeded"
+
+
+class FailedOutcome(_Outcome):
+    """A retained candidate with an explicit failure code and stage."""
+
+    kind: Literal["failed"] = "failed"
+    code: str = Field(min_length=1)
+    stage: str | None = None
+
+
+ExtractionOutcome = Annotated[SucceededOutcome | FailedOutcome, Field(discriminator="kind")]
+outcome_adapter: TypeAdapter[SucceededOutcome | FailedOutcome] = TypeAdapter(ExtractionOutcome)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +123,7 @@ class CorrectionBinding:
         }
 
 
-class ExtractionPartKind(TextChoices, StrEnum):
+class ExtractionPartKind(TextChoices):
     """Closed carrier kinds retained for an extraction part."""
 
     STRUCTURED = "structured", "Structured"
@@ -149,6 +176,17 @@ class Source:
     message_part: Any | None = None
 
     @property
+    def record(self) -> Any:
+        """Return the source record whose standing read permission admits this input."""
+        return self.file if self.file is not None else self.message_part
+
+    @property
+    def evidence_reference(self) -> EvidenceReference:
+        """Supply this input's public record identity to the base admission check."""
+        row = self.record
+        return EvidenceReference(model=row._meta.label, id=public_id_of(row))
+
+    @property
     def filename(self) -> str:
         """Retained file name, or an empty string for message fragments."""
         return str(self.file.filename) if self.file is not None else ""
@@ -179,7 +217,7 @@ class Result:
     value: dict[str, Any]
     parts: tuple[DocumentPart, ...]
     claims: dict[str, list[dict[str, Any]]]
-    used_model_roles: tuple[Literal["mapping", "recognition"], ...] = ()
+    used_model_roles: tuple[ExtractionRole, ...] = ()
     duration_ms: int = 0
     provider_metadata: dict[str, Any] | None = None
 

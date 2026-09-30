@@ -6,8 +6,8 @@ from dataclasses import replace
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.workflows_extraction.contracts import ExtractionPartKind, PipelineError
-from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.extraction.contracts import ExtractionPartKind, PipelineError
+from angee.extraction.enums import ExtractionErrorCode
 from tests.extraction_models import Extraction
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
@@ -30,7 +30,7 @@ def test_repeated_held_candidate_keeps_successful_authority_until_correspondence
 
     repeated = retain(base=held, request_key="repeated-held", result=result)
     assert repeated.awaiting_correspondence
-    assert repeated.provenance["identity_correspondence"] == {
+    assert repeated.outcome["identity_correspondence"] == {
         "last_known_revision": first.revision,
         "expected_base_id": str(first.sqid),
     }
@@ -44,7 +44,7 @@ def test_repeated_held_candidate_keeps_successful_authority_until_correspondence
             reference.lines[1].selector: reference.lines[0].identity,
         },
     )
-    assert resolved.status == "succeeded"
+    assert resolved.outcome["kind"] == "succeeded"
     assert resolved.selected_line(reference.identity, reference.lines[0].identity)[0]["text"] == "First line"
 
 
@@ -85,7 +85,7 @@ def test_correction_binding_freezes_direct_or_failed_parent(evidence, failure_st
         failure=PipelineError("Inference failed", stage="inference", code="unavailable")
         if failure_stage == "inference"
         else None,
-        error_code=ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED if failure_stage == "correspondence" else "",
+        error_code=ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED if failure_stage == "correspondence" else None,
     )
     binding, parent = Extraction.objects.prepare_correction_binding(first, actor=values["actor"])
     assert binding.authority == first.reference
@@ -119,11 +119,11 @@ def test_inference_retention_preserves_source_grounding_before_schema_validation
     candidate["documents"][0]["optional"] = "Inferred"
     result = replace(values["result"], value=candidate, claims={})
     successor = retain(base=first, result=result, request_key="preserved")
-    assert successor.status == "succeeded"
+    assert successor.outcome["kind"] == "succeeded"
     assert successor.fact("/documents/0/title") == "Note"
     assert successor.fact("/documents/0/optional") == "Inferred"
     assert successor.claims == first.claims
-    assert successor.fact_authority("/documents/0/title").kind == "source"
+    assert successor.fact_authority("/documents/0/title") == "source"
     assert retain(base=first, result=result, request_key="preserved").pk == successor.pk
 
 

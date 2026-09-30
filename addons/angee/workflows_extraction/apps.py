@@ -4,6 +4,6 @@ from django.apps import AppConfig
 
 
 class WorkflowsExtractionConfig(AppConfig):
-    """Register immutable extraction source models."""
+    """Register the workflow adapter for extraction."""
 
     name = "angee.workflows_extraction"

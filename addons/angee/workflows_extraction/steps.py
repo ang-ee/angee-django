@@ -1,41 +1,55 @@
-"""Typed workflow dispatch over retained evidence and registry-selected providers."""
+"""Typed workflow adapter over the extraction domain."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Annotated, Any, Literal, cast
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
-from pydantic import BaseModel, ConfigDict, Field
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from angee.base.impl import resolve_impl_class
-from angee.workflows.maps import MapItem
-from angee.workflows.steps import Done, RetryPolicy, Step, StepMode
-from angee.workflows_extraction.contracts import (
-    ExtractionPartKind,
-    PipelineError,
-    Result,
-)
-from angee.workflows_extraction.enums import ExtractionRole, ExtractionStatus
-from angee.workflows_extraction.inference import RETAINED_CARRIER_UNAVAILABLE
-from angee.workflows_extraction.managers import StaleExtraction
-from angee.workflows_extraction.providers import (
-    ExtractionProvider,
+from angee.extraction.acquisition import (
+    ExtractionConfig,
+    ExtractionRequestConfig,
     PageCarrier,
     PartCarrier,
     PreparedDocument,
     RecognitionOutput,
     _text_part,
 )
+from angee.extraction.contracts import (
+    ExtractionPartKind,
+    PipelineError,
+    Result,
+)
+from angee.extraction.enums import ExtractionRole, ExtractionStatus
+from angee.extraction.inference import RETAINED_CARRIER_UNAVAILABLE, TransientInferenceError, map_parts, recognize_page
+from angee.extraction.managers import StaleExtraction
+from angee.extraction.profiles import ExtractionProfile, UnconfiguredExtractionProfile
+from angee.workflows.maps import MapItem
+from angee.workflows.steps import Done, Retryable, RetryPolicy, Step, StepMode
 
 
 class ProfileConfig(BaseModel):
     """Author-controlled deterministic profile settings."""
 
     model_config = ConfigDict(extra="forbid")
-    profile: str = Field(default="none", min_length=1)
+    profile: str = Field(min_length=1)
     profile_config: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def published_profile(self) -> ProfileConfig:
+        """Resolve the declared profile and its native typed settings at publish."""
+        try:
+            selected = resolve_impl_class(ExtractionProfile, self.profile)
+            if selected is UnconfiguredExtractionProfile:
+                raise ValueError("Select a configured extraction profile.")
+            selected.parse_config(self.profile_config)
+        except (ValidationError, ImproperlyConfigured) as error:
+            raise ValueError(str(error)) from error
+        return self
 
 
 class ExtractionSourceInput(BaseModel):
@@ -53,6 +67,16 @@ class ProcessEvidenceConfig(ProfileConfig):
 
     schema_: dict[str, Any] = Field(alias="schema")
 
+    @field_validator("schema_")
+    @classmethod
+    def published_schema(cls, schema: dict[str, Any]) -> dict[str, Any]:
+        """Check schema syntax and version before any recognition can run."""
+        try:
+            ExtractionProfile.check_schema(schema)
+        except ValidationError as error:
+            raise ValueError(str(error)) from error
+        return schema
+
 
 class PreparePagesOutput(BaseModel):
     """The immutable preparation snapshot and its recognition subset."""
@@ -62,16 +86,17 @@ class PreparePagesOutput(BaseModel):
     pages: list[PageCarrier]
 
 
-class ProviderConfig(BaseModel):
-    """Trusted provider implementation selected by the workflow definition."""
+class PreparePagesConfig(ProfileConfig):
+    """Published profile and bounded acquisition settings."""
+
+    acquisition: ExtractionConfig = Field(default_factory=ExtractionConfig)
+
+
+class InferenceConfig(BaseModel):
+    """Published model request settings."""
 
     model_config = ConfigDict(extra="forbid")
-    backend: str = "native"
-    backend_config: dict[str, Any] = Field(default_factory=dict)
-
-
-class PreparePagesConfig(ProviderConfig, ProfileConfig):
-    """Preparation's authored acquisition implementation and profile policy."""
+    request: ExtractionRequestConfig = Field(default_factory=ExtractionRequestConfig)
 
 
 class _IOStep(Step[None, None, None]):
@@ -81,16 +106,7 @@ class _IOStep(Step[None, None, None]):
     retry = RetryPolicy(max_attempts=3)
 
 
-class _ProviderStep(_IOStep):
-    """Resolve the implementation and its authored typed configuration."""
-
-    def provider(self, ctx: Any) -> tuple[ExtractionProvider, Any]:
-        """Parse configuration through the selected implementation's owner."""
-        provider = resolve_impl_class(ExtractionProvider, ctx.config.backend)()
-        return provider, provider.parse_config(ctx.config.backend_config)
-
-
-class PreparePagesStep(_ProviderStep, Step[ExtractionSourceInput, PreparePagesOutput, PreparePagesConfig]):
+class PreparePagesStep(_IOStep, Step[ExtractionSourceInput, PreparePagesOutput, PreparePagesConfig]):
     """Prepare each authorized source once before mapping its raster pages."""
 
     key = "prepare_pages"
@@ -98,7 +114,7 @@ class PreparePagesStep(_ProviderStep, Step[ExtractionSourceInput, PreparePagesOu
     outcomes = {"prepared": "Prepared"}
 
     def run(self, ctx: Any) -> Done:
-        """Resolve source authority and delegate acquisition to the provider."""
+        """Resolve source authority and delegate acquisition to extraction."""
         value = ctx.input
         if not value.files and not value.message_parts:
             raise ValidationError("At least one extraction source is required.")
@@ -108,12 +124,11 @@ class PreparePagesStep(_ProviderStep, Step[ExtractionSourceInput, PreparePagesOu
         files = [ctx.load(apps.get_model("storage.File"), public_id) for public_id in value.files]
         parts = [ctx.load(apps.get_model("messaging.Part"), public_id) for public_id in value.message_parts]
         profile = (
-            apps.get_model("workflows_extraction.Extraction").impl_field("profile").resolve_class(ctx.config.profile)()
+            apps.get_model("extraction.Extraction").impl_field("profile").resolve_class(ctx.config.profile)()
         )
         profile.parse_config(ctx.config.profile_config)
-        provider, config = self.provider(ctx)
-        prepared = provider.prepare(
-            files, parts, profile=profile, config=config, actor=ctx.actor, heartbeat=ctx.heartbeat,
+        prepared = apps.get_model("extraction.Extraction").objects.prepare_pages(
+            files, parts, profile=profile, config=ctx.config.acquisition, actor=ctx.actor, heartbeat=ctx.heartbeat,
         )
         return ctx.done(PreparePagesOutput(prepared=prepared, pages=prepared.recognition_pages), outcome="prepared")
 
@@ -126,7 +141,7 @@ class RecognizePageInput(BaseModel):
     model_id: str | None = None
 
 
-class RecognizePageStep(_ProviderStep, Step[RecognizePageInput, RecognitionOutput, ProviderConfig]):
+class RecognizePageStep(_IOStep, Step[RecognizePageInput, RecognitionOutput, InferenceConfig]):
     """Recognize exactly one page at the fenced external-effect boundary."""
 
     key = "recognize_page"
@@ -138,16 +153,18 @@ class RecognizePageStep(_ProviderStep, Step[RecognizePageInput, RecognitionOutpu
         value = ctx.input
         file = ctx.load(apps.get_model("storage.File"), value.page.image_file_id)
         model = _model(ctx, value.model_id, ExtractionRole.RECOGNITION)
-        provider, config = self.provider(ctx)
         ctx.heartbeat()
         ctx.begin_effect()
-        response = provider.recognize(value.page, file, model, config=config)
+        try:
+            response = recognize_page(value.page, file, model, config=ctx.config.request)
+        except TransientInferenceError as error:
+            raise Retryable(str(error)) from None
         part = _text_part(
             value.page.source_position,
             value.page.page_position,
             response.text,
             "text_recognition",
-            kind=ExtractionPartKind.RECOGNIZED_TEXT,
+            kind=cast(ExtractionPartKind, ExtractionPartKind.RECOGNIZED_TEXT),
             width=value.page.width, height=value.page.height, dpi=value.page.dpi,
             duration_ms=response.duration_ms, metadata=response.provider_metadata,
         )
@@ -202,22 +219,49 @@ class ExtractionOutput(BaseModel):
     revision: int = Field(ge=1)
 
 
-class ProcessEvidenceOutput(ExtractionOutput):
-    """Reference and bounded status facts exposed to calling workflows."""
+class SucceededEvidenceOutcome(BaseModel):
+    """Bounded workflow view of a successful retained outcome."""
 
-    status: str
-    error_code: str
+    kind: Literal["succeeded"]
     unresolved_reasons: list[str]
+
+
+class FailedEvidenceOutcome(BaseModel):
+    """Bounded workflow view of a failed retained outcome."""
+
+    kind: Literal["failed"]
+    code: str
+    stage: str | None = None
+    unresolved_reasons: list[str]
+
+
+EvidenceOutcomeSummary = Annotated[
+    SucceededEvidenceOutcome | FailedEvidenceOutcome, Field(discriminator="kind")
+]
+
+
+class ProcessEvidenceOutput(ExtractionOutput):
+    """Reference and bounded outcome facts exposed to calling workflows."""
+
+    outcome: EvidenceOutcomeSummary
 
     @classmethod
     def from_extraction(cls, extraction: Any) -> ProcessEvidenceOutput:
         """Project only the retained row's public identity and processing outcome."""
+        retained = extraction.outcome
+        if retained["kind"] == ExtractionStatus.FAILED:
+            summary: SucceededEvidenceOutcome | FailedEvidenceOutcome = FailedEvidenceOutcome(
+                kind="failed", code=retained["code"], stage=retained.get("stage"),
+                unresolved_reasons=retained.get("unresolved_reasons", []),
+            )
+        else:
+            summary = SucceededEvidenceOutcome(
+                kind="succeeded", unresolved_reasons=retained.get("unresolved_reasons", []),
+            )
         return cls(
             extraction_id=str(extraction.sqid),
             revision=extraction.revision,
-            status=extraction.status,
-            error_code=extraction.error_code,
-            unresolved_reasons=extraction.unresolved_reasons,
+            outcome=summary,
         )
 
 
@@ -231,7 +275,7 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
     def run(self, ctx: Any) -> Done:
         """Recheck authority, apply the profile and delegate retention atomically."""
         value = ctx.input
-        model = apps.get_model("workflows_extraction.Extraction")
+        model = apps.get_model("extraction.Extraction")
         target = ctx.load(apps.get_model(value.target_model), value.target_id)
         sources = [source.restore(ctx, i) for i, source in enumerate(value.prepared.sources)]
         carriers, holds = value.carriers()
@@ -257,7 +301,9 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
             )
         except PipelineError as error:
             failure = error
-            result = Result({}, tuple(error.parts) or parts, {}, provider_metadata={"unresolved_reasons": [error.code]})
+            result = Result({}, parts, {}, provider_metadata={"unresolved_reasons": [error.code]})
+        if result.parts != parts:
+            raise ValidationError("The selected profile changed the prepared evidence carriers.")
         if holds:
             result = replace(
                 result, provider_metadata={**(result.provider_metadata or {}), "unresolved_reasons": holds}
@@ -265,6 +311,7 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
         evidence = model.objects.retain_result(
             sources=sources,
             pages=value.prepared.pages,
+            part_carriers=carriers,
             result=result,
             target=target,
             actor=ctx.actor,
@@ -275,14 +322,14 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
             recognition_model=_model(ctx, value.recognition_model_id, ExtractionRole.RECOGNITION),
             request_key=ctx.idempotency_key,
             failure=failure,
-            error_code="source_hold" if holds else "",
+            error_code="source_hold" if holds else None,
             identity_mapping=value.identity_mapping,
             retired_identities=value.retired_identities,
         )
         ctx.artifact(evidence, "Document extraction evidence")
         return ctx.done(
             ProcessEvidenceOutput.from_extraction(evidence),
-            outcome="processed" if evidence.status == ExtractionStatus.SUCCEEDED else "source_hold",
+            outcome="processed" if evidence.outcome["kind"] == ExtractionStatus.SUCCEEDED else "source_hold",
         )
 
 
@@ -307,7 +354,7 @@ class InferEvidenceOutput(ProcessEvidenceOutput):
     inference_failure: dict[str, str] | None = None
 
 
-class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOutput, ProviderConfig]):
+class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, InferenceConfig]):
     """Infer unresolved evidence while retaining failures and detecting stale bases."""
 
     key = "infer_evidence"
@@ -322,14 +369,27 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
     }
 
     def run(self, ctx: Any) -> Done:
-        """Authorize the base, call its provider and retain or report the current head."""
+        """Authorize the base, call its model and retain or report the current head."""
         value = ctx.input
-        model = apps.get_model("workflows_extraction.Extraction")
+        model = apps.get_model("extraction.Extraction")
         base = ctx.load(model, value.base_extraction_id)
         if base.revision != value.base_revision:
             raise ValidationError("The inference base revision changed.")
         target = ctx.load(apps.get_model(value.target_model), value.target_id)
         base.require_target(target)
+        reused = model.objects.reused_inference(base, ctx.idempotency_key, actor=ctx.actor)
+        if reused is not None:
+            outcome = "correspondence_required" if reused.awaiting_correspondence else (
+                "inference_failed" if reused.outcome["kind"] == ExtractionStatus.FAILED else "inferred"
+            )
+            return ctx.done(
+                InferEvidenceOutput(
+                    **ProcessEvidenceOutput.from_extraction(reused).model_dump(),
+                    inference_failure={"stage": reused.outcome["stage"], "code": reused.outcome["code"]}
+                    if reused.outcome.get("stage") else None,
+                ),
+                outcome=outcome,
+            )
         current = model.objects.inference_current_head(base, actor=ctx.actor)
         if current.pk != base.pk:
             return ctx.done(
@@ -348,7 +408,7 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
             return ctx.done(InferEvidenceOutput(**output), outcome="unchanged")
         sources = type(base).objects.authorized_document_sources(base, actor=ctx.actor)
         parts = base.document_parts()
-        if base.error_code == "source_hold" or not parts:
+        if base.outcome.get("code") == "source_hold" or not parts:
             return ctx.done(
                 InferEvidenceOutput(
                     **output, inference_failure={"stage": "acquisition", "code": RETAINED_CARRIER_UNAVAILABLE}
@@ -374,10 +434,9 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
             )
         else:
             try:
-                provider, config = self.provider(ctx)
                 ctx.heartbeat()
                 ctx.begin_effect()
-                mapped = provider.infer(parts, base.schema, inference_model, config=config)
+                mapped = map_parts(parts, base.schema, inference_model, config=ctx.config.request)
                 result = profile.normalize_inference_candidate(
                     sources,
                     parts,
@@ -386,15 +445,17 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
                     claims=mapped.claims,
                     metadata=mapped.provider_metadata,
                     config=base.profile_config,
-                    recognition_used="recognition" in base.used_model_roles,
+                    recognition_used=ExtractionRole.RECOGNITION in base.used_model_roles,
                 )
+            except TransientInferenceError as error:
+                raise Retryable(str(error)) from None
             except PipelineError as error:
                 failure = error
                 result = Result(base.result, parts, dict(base.claims), provider_metadata=dict(base.stage_provenance))
             result = replace(
                 result,
                 used_model_roles=tuple(
-                    sorted({*base.used_model_roles, *result.used_model_roles, ExtractionRole.MAPPING.value})
+                    sorted({*base.used_model_roles, *result.used_model_roles, ExtractionRole.MAPPING})
                 ),
             )
         try:
@@ -424,7 +485,7 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
             )
         ctx.artifact(evidence, "Inferred extraction evidence")
         outcome = "correspondence_required" if evidence.awaiting_correspondence else "inferred"
-        if evidence.status != ExtractionStatus.SUCCEEDED and not evidence.awaiting_correspondence:
+        if evidence.outcome["kind"] != ExtractionStatus.SUCCEEDED and not evidence.awaiting_correspondence:
             outcome = "inference_failed"
         return ctx.done(
             InferEvidenceOutput(

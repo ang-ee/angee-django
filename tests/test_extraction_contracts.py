@@ -5,9 +5,11 @@ from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.impl import resolve_impl_class
-from angee.workflows_extraction.contracts import (
+from angee.extraction.acquisition import ExtractionConfig, ExtractionRequestConfig
+from angee.extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
@@ -17,8 +19,8 @@ from angee.workflows_extraction.contracts import (
     Result,
     Source,
 )
-from angee.workflows_extraction.inference import derive_text_claims
-from angee.workflows_extraction.pointers import (
+from angee.extraction.inference import TransientInferenceError, derive_text_claims, map_parts
+from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
     json_pointer_value,
     json_pointer_value_or_missing,
@@ -26,11 +28,12 @@ from angee.workflows_extraction.pointers import (
     result_selectors,
     set_json_pointer,
 )
-from angee.workflows_extraction.profiles import (
+from angee.extraction.profiles import (
+    EvidenceLayout,
     ExtractionProfile,
+    PlainTextExtractionProfile,
     UnconfiguredExtractionProfile,
 )
-from angee.workflows_extraction.providers import NativeExtractionProvider
 from angee.workflows_extraction.steps import PreparePagesStep, RecognizePageStep
 from tests.extraction_models import Extraction
 
@@ -58,6 +61,16 @@ def test_profile_resolves_through_existing_registry_and_fails_closed():
     assert not profile_class().inference_required({}, [])
     with pytest.raises(ValidationError, match="does not accept configuration"):
         profile_class.parse_config({"retry_of_revision": 3})
+
+
+def test_shipped_plain_text_profile_grounds_each_retained_part(text_part):
+    parts = (text_part, replace(text_part, value="Second page"))
+    result = PlainTextExtractionProfile().process_parts([], parts, {}, config={})
+    assert result.value == {"text": "Alpha 12,50 7.00\nSecond page"}
+    assert result.claims == {"/text": [
+        {"part_position": 0, "start": 0, "end": len(parts[0].value)},
+        {"part_position": 1, "start": 0, "end": len(parts[1].value)},
+    ]}
 
 
 def test_claims_use_exact_text_spans_and_escaped_pointers(text_part):
@@ -140,8 +153,8 @@ def test_layout_validates_structure_and_requires_explicit_root_fallback():
         result_selectors({"label": "Alpha"}, layout)
     assert result_selectors({"label": "Alpha"}, layout | {"root_document_on_missing": True}) == (("", ()),)
     for invalid in ({"line_collection": "/~2"}, {"root_document_on_missing": 1}):
-        with pytest.raises(ValidationError):
-            type("InvalidLayout", (ExtractionProfile,), {"evidence_layout": invalid})
+        with pytest.raises(PydanticValidationError):
+            EvidenceLayout.model_validate(invalid)
 
 
 def test_identity_correspondence_does_not_guess_reordered_line_identity():
@@ -168,19 +181,60 @@ def test_identity_correspondence_does_not_guess_reordered_line_identity():
 
 @pytest.mark.parametrize("config", [
     {"max_pages": 101}, {"max_text_bytes": 2_000_001}, {"dpi": 601}, {"max_edge": 3501},
-    {"request": {"extra_headers": {"Authorization": "untrusted"}}},
-    {"request": {"extra_body": {}}}, {"request": {"timeout": float("inf")}},
-    {"request": {"max_tokens": 32769}}, {"request": {"temperature": -1}},
+    {"request": {}},
 ])
-def test_native_configuration_rejects_unbounded_or_transport_settings(config):
-    with pytest.raises(ValidationError):
-        NativeExtractionProvider.parse_config(config)
+def test_acquisition_configuration_rejects_unbounded_or_unused_settings(config):
+    with pytest.raises(PydanticValidationError):
+        ExtractionConfig.model_validate(config)
+
+
+@pytest.mark.parametrize("config", [
+    {"extra_headers": {"Authorization": "untrusted"}},
+    {"extra_body": {}}, {"timeout": float("inf")},
+    {"max_tokens": 32769}, {"temperature": -1},
+])
+def test_inference_configuration_rejects_unbounded_or_transport_settings(config):
+    with pytest.raises(PydanticValidationError):
+        ExtractionRequestConfig.model_validate(config)
 
 
 def test_native_configuration_defaults_and_input_policy_boundary():
-    assert NativeExtractionProvider.parse_config({}).request.temperature == 0
+    assert ExtractionRequestConfig().temperature == 0
     for name in ("max_pages", "max_text_bytes", "dpi", "max_edge", "profile_config"):
         with pytest.raises(ValidationError):
             PreparePagesStep.parse_input({"target_model": "storage.File", "target_id": "file", name: 1})
     with pytest.raises(ValidationError):
         RecognizePageStep.parse_input({"page": {"source_position": 0, "page_position": 0}, "profile_config": {}})
+
+
+def test_mapping_classifies_only_agents_declared_request_errors(text_part):
+    class RequestError(Exception):
+        pass
+
+    class Model:
+        failure: Exception = RequestError("vendor detail")
+        transient = False
+
+        def request_error_types(self):
+            return (RequestError,)
+
+        def is_transient_error(self, error):
+            return self.transient
+
+        def infer(self, messages, **kwargs):
+            raise self.failure
+
+    model = Model()
+    config = ExtractionRequestConfig()
+    with pytest.raises(PipelineError) as failed:
+        map_parts([text_part], {"type": "object"}, model, config=config)
+    assert failed.value.code == "request_failed"
+    assert "RequestError" not in str(failed.value)
+
+    model.transient = True
+    with pytest.raises(TransientInferenceError):
+        map_parts([text_part], {"type": "object"}, model, config=config)
+
+    model.failure = RuntimeError("unexpected")
+    with pytest.raises(RuntimeError, match="unexpected"):
+        map_parts([text_part], {"type": "object"}, model, config=config)
