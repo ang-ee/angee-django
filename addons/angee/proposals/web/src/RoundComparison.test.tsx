@@ -33,7 +33,7 @@ describe("RoundComparisonGrid", () => {
       },
       {
         id: "proposal_orbit",
-        responder: "user_orbit",
+        responder: { id: "user_orbit", display_name: "Orbit" },
         state: "SUBMITTED",
         cost: null,
         currency: null,
@@ -56,15 +56,17 @@ describe("RoundComparisonGrid", () => {
           topics={topics}
           proposals={proposals}
           answers={answers}
+          facts={["cost"]}
         />
       </AppRuntimeProvider>,
     );
 
     expect(screen.getByRole("table", { name: "Proposal comparison" })).toBeTruthy();
     expect(screen.getByText("Northstar")).toBeTruthy();
-    expect(screen.getByText("user_orbit")).toBeTruthy();
+    expect(screen.getByText("Orbit")).toBeTruthy();
     expect(screen.getByText(/€/)).toBeTruthy();
     expect(await screen.findByText("weekly")).toBeTruthy();
-    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Nothing yet").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("rowheader", { name: "Statement" })).toBeNull();
   });
 });

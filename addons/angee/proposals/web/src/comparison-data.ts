@@ -36,7 +36,7 @@ export interface ComparisonTopic extends Row {
 
 export interface ComparisonProposal extends Row {
   id: string;
-  responder?: unknown;
+  responder?: { id?: string; display_name?: string } | string | null;
   party?: { display_name?: unknown } | null;
   state?: unknown;
   statement?: unknown;
@@ -47,6 +47,8 @@ export interface ComparisonProposal extends Row {
   timeframe_end?: unknown;
   confidence?: unknown;
   valid_until?: unknown;
+  revision?: number;
+  permissions?: readonly string[];
 }
 
 export interface ComparisonAnswer extends Row {
@@ -56,6 +58,9 @@ export interface ComparisonAnswer extends Row {
   body?: unknown;
   visibility?: unknown;
   shared_with_responders?: unknown;
+  allowed_visibility?: readonly string[];
+  revision?: number;
+  permissions?: readonly string[];
 }
 
 export interface RoundComparisonState {
@@ -92,6 +97,8 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
         "id",
         "responder.id",
         "responder.display_name",
+        "permissions",
+        "revision",
         "party.display_name",
         "state",
         "statement",
@@ -106,7 +113,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
     [],
   );
   const answerFields = React.useMemo(
-    () => refineFieldsFromPaths(["id", "proposal.id", "topic.id", "body", "visibility", "shared_with_responders"]),
+    () => refineFieldsFromPaths(["id", "proposal.id", "topic.id", "body", "visibility", "shared_with_responders", "allowed_visibility", "permissions", "revision"]),
     [],
   );
 
