@@ -17,6 +17,7 @@ from django.db.models.functions import Now
 from rebac import current_actor, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
+from angee.base.evidence import readable_records
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase
 from angee.base.mixins import AppendOnlyQuerySet
@@ -28,7 +29,6 @@ from angee.decisions.contracts import (
     DecisionContext,
     DecisionRecordReference,
     DecisionRequest,
-    readable_records,
 )
 from angee.decisions.exceptions import ResolverAuthorityError, RetryableDecisionError
 from angee.decisions.forms import Action, compile_form, relation_candidates, validate_form
@@ -235,10 +235,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     self._settle(previous_group)
         except IntegrityError as error:
             constraint = getattr(getattr(error.__cause__, "diag", None), "constraint_name", None)
-            if constraint == "decisions_open_subject_unique" or (
-                "UNIQUE constraint failed:" in str(error) and "subject_content_type_id" in str(error)
-                and "subject_object_id" in str(error)
-            ):
+            if constraint == "decisions_open_subject_unique":
                 raise RetryableDecisionError(
                     "A superseding question was admitted concurrently; retry admission.",
                 ) from error

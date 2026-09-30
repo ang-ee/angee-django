@@ -13,6 +13,7 @@ from django.db.models.deletion import Collector, ProtectedError, RestrictedError
 from django.utils.text import capfirst
 from rebac import system_context
 
+from angee.base.evidence import DerivedFrom
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AppendOnlyModel, retained_set_null
@@ -155,7 +156,7 @@ class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
         ]
         indexes = [
             models.Index(fields=("expires_at",), condition=OPEN_DECISION, name="decisions_open_expiry"),
-            models.Index(fields=("kind", "subject_content_type", "subject_object_id"), name="decisions_subject"),
+            models.Index(fields=("subject_content_type", "subject_object_id", "kind"), name="decisions_subject"),
         ]
 
     @property
@@ -179,15 +180,12 @@ class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
         """Present the authored kind without exposing identifier separators."""
         return capfirst(self.kind.replace("_", " ").replace("-", " "))
 
-class DecisionEvidence(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
+class DecisionEvidence(DerivedFrom):
     """Indexed projection of context references, authored only at admission."""
 
     runtime = True
     sqid_prefix = "dce_"
     decision = models.ForeignKey("decisions.Decision", on_delete=models.CASCADE, related_name="evidence")
-    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
-    object_id = models.PositiveBigIntegerField()
-    record = GenericForeignKey("content_type", "object_id")
     objects = DecisionEvidenceManager()
 
     def __str__(self) -> str:

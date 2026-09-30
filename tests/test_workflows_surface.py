@@ -9,8 +9,11 @@ import pkgutil
 
 from django.apps import apps
 from django.db import models
+from pydantic import BaseModel
 
 import angee.workflows as workflows
+from angee.base.evidence import DerivedFrom, EvidenceFact, EvidenceReference, FactAuthority, readable_records
+from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.workflows.steps import Settlement, Step
 from angee.workflows.testing import drivers as test_drivers
 
@@ -166,3 +169,18 @@ def test_workflow_test_driver_surface() -> None:
         and (inspect.isfunction(member) or inspect.isclass(member))
     ))
     assert public == EXPECTED_TEST_DRIVERS
+
+
+def test_evidence_owner_surface() -> None:
+    """Decision evidence composes the base fact, derivation and admission owners."""
+    evidence = apps.get_model("decisions", "DecisionEvidence")
+    decision = apps.get_model("decisions", "Decision")
+    assert issubclass(evidence, DerivedFrom)
+    assert issubclass(DecisionFact, EvidenceFact)
+    assert issubclass(DecisionRecordReference, EvidenceReference)
+    assert issubclass(DecisionRequest, BaseModel)
+    assert tuple(FactAuthority) == ("source", "correction", "unverified")
+    assert callable(readable_records)
+    assert next(index.fields for index in decision._meta.indexes if index.name == "decisions_subject") == [
+        "subject_content_type", "subject_object_id", "kind",
+    ]

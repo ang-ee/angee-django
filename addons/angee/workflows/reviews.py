@@ -139,7 +139,7 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
                     raise ValidationError("A seat offers an action outside this review's declaration.")
                 parsed = cls.parse_value(request.basis, cls.basis_model, "basis")
                 basis = cls._adapter(cls.basis_model).dump_python(parsed, mode="json", by_alias=True)
-                requests.append(replace(request, basis=basis))
+                requests.append(request.model_copy(update={"basis": basis}))
             return replace(settlement, requests=tuple(requests), state=cls.serialize_state(settlement.state))
         if isinstance(settlement, Done) and settlement.outcome in {"expired", "superseded"}:
             return Done(outcome=settlement.outcome)

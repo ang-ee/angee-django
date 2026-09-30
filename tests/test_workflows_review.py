@@ -169,8 +169,10 @@ def test_requesterless_first_seat_can_be_answered_by_run_actor(review, register_
         def ask(self, ctx):
             original = super().ask(ctx)
             return replace(original, requests=(
-                replace(original.requests[0], assignees=(people[1],)),
-                replace(original.requests[0], assignees=(requester,), requester=None, actions=(Reject,)),
+                original.requests[0].model_copy(update={"assignees": (people[1],)}),
+                original.requests[0].model_copy(update={
+                    "assignees": (requester,), "requester": None, "actions": (Reject,),
+                }),
             ))
 
         def apply(self, ctx, settled):
@@ -295,7 +297,7 @@ def test_apply_rechecks_resolver_authority_and_reasks(review, register_step, ina
     class SharedQuestion(_question):
         def ask(self, ctx):
             original = super().ask(ctx)
-            return replace(original, requests=(replace(original.requests[0], assignees=people),))
+            return replace(original, requests=(original.requests[0].model_copy(update={"assignees": people}),))
 
     register_step(SharedQuestion)
     run, step = start_review(review)
@@ -486,7 +488,7 @@ def test_basis_validation_happens_once_at_the_body_boundary(review, register_ste
 
         def ask(self, ctx):
             raw = super().ask(ctx)
-            return replace(raw, requests=(replace(raw.requests[0], basis={"value": 9}),))
+            return replace(raw, requests=(raw.requests[0].model_copy(update={"basis": {"value": 9}}),))
 
     register_step(CheckedQuestion)
     run, step = start_review(review)

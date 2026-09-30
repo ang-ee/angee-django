@@ -31,7 +31,7 @@ class DecisionGroupType(AngeeNode):
     """The settlement observed by a waiting owner."""
 
     policy: auto
-    issuer: UserType
+    issuer: UserType | None = actor_scoped_to_one("issuer")
     settled_at: auto
 
 
@@ -56,7 +56,7 @@ class DecisionType(AngeeNode):
     errors: JSON
     verdict: auto
     closed_reason: auto
-    superseded_by: DecisionType | None
+    superseded_by: DecisionType | None = actor_scoped_to_one("superseded_by")
     resolution: JSON
     resolved_by: UserType | None = actor_scoped_to_one("resolved_by")
     resolved_at: auto

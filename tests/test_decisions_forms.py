@@ -9,9 +9,10 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field, WithJsonSchema
+from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.jsonschema import validation_issues
-from angee.decisions.contracts import DecisionRequest
+from angee.decisions.contracts import DecisionFact, DecisionRequest
 from angee.decisions.forms import Action, Relation, RelationCandidate, compile_form, relation_candidates, validate_form
 from angee.decisions.states import Verdict
 
@@ -381,7 +382,7 @@ def test_relation_candidate_projection_preserves_permissions_and_ignores_value_m
     {"assignees": "person"}, {"assignees": 3}, {"actions": ()}, {"actions": (Action,)},
 ])
 def test_request_owns_seat_invariants(change):
-    with pytest.raises(ValidationError):
+    with pytest.raises(PydanticValidationError):
         DecisionRequest(**{"kind": "note", "subject": None, "assignees": (object(),), "actions": (Complete,), **change})
 
 
@@ -391,3 +392,16 @@ def test_request_owns_configured_attempt_limit(settings):
     assert request.attempt_limit == 5
     explicit = DecisionRequest(kind="note", subject=None, assignees=(object(),), actions=(Complete,), max_attempts=2)
     assert explicit.attempt_limit == 2
+
+
+def test_request_is_frozen():
+    request = DecisionRequest(kind="note", subject=None, assignees=(object(),), actions=(Complete,))
+    with pytest.raises(PydanticValidationError):
+        request.kind = "changed"
+
+
+def test_fact_uses_the_base_authority_vocabulary():
+    fact = DecisionFact(pointer="/note", label="Note", value="Reviewed", authority="source")
+    assert fact.model_dump(mode="json")["authority"] == "source"
+    with pytest.raises(PydanticValidationError):
+        DecisionFact(pointer="/note", label="Note", value="Reviewed", authority="invented")

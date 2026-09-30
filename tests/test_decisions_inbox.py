@@ -50,6 +50,22 @@ def test_requester_can_read_own_requested_question_and_group_without_being_issue
     assert query(outsider, document) == {"decisions": []}
 
 
+def test_superseded_link_redacts_a_replacement_in_another_group(inbox):
+    issuer, requester, reviewer, _outsider, subject, _group, decision = inbox
+    replacement = Decision.objects.admit_group([DecisionRequest(
+        kind=decision.kind, subject=subject, assignees=(reviewer,), actions=(Reject,),
+        requester=None, supersede=True,
+    )], actor=issuer)
+    new_seat = system_queryset(Decision).get(group=replacement)
+    decision.refresh_from_db()
+    assert decision.superseded_by_id == new_seat.pk
+    document = "query($id: String!) { decisions(where: {id: {_eq: $id}}) { superseded_by { id } } }"
+    assert query(requester, document, {"id": decision.sqid}) == {"decisions": [{"superseded_by": None}]}
+    assert query(reviewer, document, {"id": decision.sqid}) == {
+        "decisions": [{"superseded_by": {"id": new_seat.sqid}}],
+    }
+
+
 def test_kind_label_and_record_representation_share_the_model_owner(inbox):
     _issuer, _requester, reviewer, _outsider, _subject, _group, decision = inbox
     assert query(reviewer, "query { decisions { kind kind_label display_name } }") == {"decisions": [{
