@@ -231,6 +231,7 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
 
     folder: FolderType | None = actor_scoped_to_one("folder")
     converted_from: "TaskType | None" = actor_scoped_to_one("converted_from")
+    links: list["ProjectLinkType"] = actor_scoped_to_many("links")
 
     @strawberry_django.field(only=["lead_id"])
     def lead(self) -> strawberry.ID | None:
