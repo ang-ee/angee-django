@@ -60,13 +60,29 @@ def test_kind_label_and_record_representation_share_the_model_owner(inbox):
 
 
 def test_group_and_evidence_display_names_use_public_identity(inbox):
-    _issuer, _requester, reviewer, _outsider, _subject, group, _decision = inbox
-    result = query(reviewer, "{ decision_groups { display_name } decision_evidence { id display_name } }")
+    _issuer, _requester, reviewer, _outsider, subject, group, _decision = inbox
+    result = query(reviewer, """{
+      decision_groups { display_name }
+      decisions { subject_model subject_id }
+      decision_evidence { id display_name record_model record_id }
+    }""")
     assert result["decision_groups"] == [{"display_name": f"Decision group {group.sqid}"}]
+    assert result["decisions"] == [{
+        "subject_model": subject._meta.label, "subject_id": subject.sqid,
+    }]
     assert result["decision_evidence"] == [{
         "id": row["id"], "display_name": f"Evidence {row['id']}",
+        "record_model": subject._meta.label, "record_id": subject.sqid,
     } for row in result["decision_evidence"]]
     assert len(result["decision_evidence"]) == 1
+    schema = addon_schema(decision_schema.schemas, "console")
+    for type_name, pair in (
+        ("DecisionType", {"subject_model", "subject_id"}),
+        ("DecisionEvidenceType", {"record_model", "record_id"}),
+    ):
+        fields = set(schema._schema.get_type(type_name).fields)
+        assert pair <= fields
+        assert not {"record_model_label", "record_public_id"} & fields
 
 
 def test_can_act_is_the_permission_owners_current_active_person_rule(inbox):

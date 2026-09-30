@@ -74,7 +74,7 @@ test("a record waiter reads its watches on demand and follows the shared record 
   const requests: RunRequest[] = [];
   render(<RunStory run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
     steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
-    watches: [{ id: "wsw_note", record_model_label: "notes.Note", record_public_id: "nte_7" }] })]}
+    watches: [{ id: "wsw_note", record_model: "notes.Note", record_id: "nte_7" }] })]}
     onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   const watches = await within(step).findByRole("tab", { name: "Watched records" });
@@ -83,8 +83,8 @@ test("a record waiter reads its watches on demand and follows the shared record 
   expect((await within(step).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
   const watchRead = requests.find(({ query }) => /\bstepwatch\s*\(/.test(query));
   expect(watchRead?.variables.where).toEqual({ _and: [{ step_run: { _eq: "wsr_inspect" } }] });
-  expect(watchRead?.query).toContain("record_model_label");
-  expect(watchRead?.query).toContain("record_public_id");
+  expect(watchRead?.query).toContain("record_model");
+  expect(watchRead?.query).toContain("record_id");
 });
 
 test("trigger origin links to its retained admission event", async () => {

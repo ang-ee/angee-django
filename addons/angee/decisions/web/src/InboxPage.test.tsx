@@ -19,7 +19,7 @@ afterEach(() => { cleanup(); clearClients(); });
 
 function fixture(initialEntry = "/decisions", authenticated = true) {
   const getList = vi.fn(async (_params: GetListParams) => ({ data: [{
-    id: "decision-1", kind: "review", kind_label: "Review", record_model_label: "notes.Note", record_public_id: "note-1",
+    id: "decision-1", kind: "review", kind_label: "Review", subject_model: "notes.Note", subject_id: "note-1",
     requester: { display_name: "River" }, expires_at: null, verdict: "PENDING",
   }], total: 1 }));
   const root = createRootRoute({

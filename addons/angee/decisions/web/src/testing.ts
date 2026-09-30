@@ -21,7 +21,7 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
   typeNames: { filter: "decisions_bool_exp", order: "decisions_order_by" },
   query: testResourceQuery({ fields: {
     ...Object.fromEntries([
-      "id", "kind", "kind_label", "record_model_label", "record_public_id", "requester.display_name",
+      "id", "kind", "kind_label", "subject_model", "subject_id", "requester.display_name",
       "assignees", "requester", "closed_reason", "expires_at", "group", "group.id",
       "resolved_by", "resolved_at", "resolved_by.display_name", "revision", "can_act", "form_schema", "basis", "context", "resolution",
     ].map((name) => [name, testQueryField(name)])),
@@ -59,7 +59,7 @@ export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
     },
     basis: { reference: "R-7" }, context: { facts: [], references: [] },
     verdict: "PENDING", closed_reason: null, resolution: {}, resolved_at: null,
-    expires_at: "2026-10-01T12:00:00Z", record_model_label: "notes.Note", record_public_id: "nte_7",
+    expires_at: "2026-10-01T12:00:00Z", subject_model: "notes.Note", subject_id: "nte_7",
     requester: { display_name: "Requester" }, resolved_by: null,
     group: { id: "dcg_review" },
     ...overrides,

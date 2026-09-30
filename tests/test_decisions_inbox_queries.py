@@ -18,7 +18,7 @@ from tests.decisions_models import Decision
 from tests.test_decisions_inbox import inbox as inbox
 
 FIELDS = """
-  id kind_label record_public_id record_model_label
+  id kind_label subject_id subject_model
   requester { id display_name } expires_at verdict is_open can_act
 """
 LIST = """query Inbox($viewer: String!) {
@@ -78,7 +78,7 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
                 assert len(rows) == size
                 assert all(row["can_act"] and row["is_open"] for row in rows)
                 assert all(row["requester"] is not None for row in rows)
-                assert {row["record_public_id"] for row in rows} == {
+                assert {row["subject_id"] for row in rows} == {
                     str(subject.sqid) for subject in subjects[:min(size, 3)]
                 }
             elif name == "groups":

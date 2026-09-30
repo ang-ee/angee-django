@@ -71,6 +71,15 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
     assert "draft" not in schema._schema.get_type("WorkflowType").fields
     assert "layout" not in schema._schema.get_type("WorkflowType").fields
+    for type_name, pair, obsolete in (
+        ("WorkflowRunType", {"subject_model", "subject_id"}, set()),
+        ("StepArtifactType", {"record_model", "record_id"}, {"model_label"}),
+        ("StepWatchType", {"record_model", "record_id"}, {"record_model_label", "record_public_id"}),
+        ("TriggerEventType", {"record_model", "record_id"}, set()),
+    ):
+        fields = set(schema._schema.get_type(type_name).fields)
+        assert pair <= fields
+        assert not obsolete & fields
 
 
 def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, callers, register_step):
@@ -105,7 +114,7 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
       workflowrun { id origin run_as { id display_name } input output version { workflow { name } } }
       steprun { id node_key run { id } attempts { id } artifacts { label } }
       stepattempt { id number result step_run { id } }
-      stepartifact { id label model_label record_id step_run { id } }
+      stepartifact { id label record_model record_id step_run { id } }
     }"""
     visible = result_data(execute_schema(schema, query, user=owner))
     assert visible["workflowrun"][0]["input"] == {"value": 7}
@@ -114,7 +123,7 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     assert visible["workflowrun"][0]["run_as"] == {"id": owner.sqid, "display_name": str(owner)}
     assert visible["steprun"][0]["attempts"] == [{"id": attempt.sqid}]
     assert visible["stepartifact"][0]["record_id"] == run.sqid
-    assert visible["stepartifact"][0]["model_label"] == "workflows.WorkflowRun"
+    assert visible["stepartifact"][0]["record_model"] == "workflows.WorkflowRun"
     assert result_data(execute_schema(schema, query, user=other)) == {
         "workflowrun": [], "steprun": [], "stepattempt": [], "stepartifact": [],
     }

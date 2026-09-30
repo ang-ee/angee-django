@@ -17,7 +17,7 @@ export const Waiting = { render: () => <RunStory waiting /> };
 export const Watching = { render: () => <RunStory
   run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
   steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
-    watches: [{ id: "wsw_note", record_model_label: "notes.Note", record_public_id: "nte_7" }] })]} /> };
+    watches: [{ id: "wsw_note", record_model: "notes.Note", record_id: "nte_7" }] })]} /> };
 export const DuplicateRisk = { render: () => <RunStory steps={[stepRunFixture({ requires_duplicate_acknowledgement: true })]} /> };
 export const ReadOnly = { render: () => <RunStory run={runFixture({ can_reprocess: false })} steps={[stepRunFixture({ can_retry: false })]} /> };
 export const Mapped = { render: () => <RunStory steps={mappedSteps} /> };

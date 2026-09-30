@@ -42,20 +42,20 @@ export function InboxPage(): ReactElement {
       ]}
       recordTabs={[{ id: "context", label: t("context.title"), render: (context) => <DecisionDetails {...context} /> }]}
     >
-      <List resource={DECISION_MODEL} fields={["record_model_label"]} order={{ created_at: "DESC" }} emptyContent={t("inbox.empty")}>
+      <List resource={DECISION_MODEL} fields={["subject_model"]} order={{ created_at: "DESC" }} emptyContent={t("inbox.empty")}>
         <Column field="kind_label" header={t("inbox.kind")} />
-        <Column field="record_public_id" header={t("inbox.subject")} render={(row) => {
-          const id = row.record_public_id;
-          return typeof id === "string" && typeof row.record_model_label === "string"
-            ? <RecordReference model={row.record_model_label} id={id} /> : null;
+        <Column field="subject_id" header={t("inbox.subject")} render={(row) => {
+          const id = row.subject_id;
+          return typeof id === "string" && typeof row.subject_model === "string"
+            ? <RecordReference model={row.subject_model} id={id} /> : null;
         }} />
         <Column field="requester.display_name" header={t("inbox.requester")} />
         <Column field="expires_at" header={t("inbox.expiresAt")} />
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
-      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "record_model_label", "record_public_id"]}
-        headerExtras={({ record }) => typeof record?.record_model_label === "string" && typeof record.record_public_id === "string"
-          ? <RecordReference model={record.record_model_label} id={record.record_public_id} /> : null}>
+      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "subject_model", "subject_id"]}
+        headerExtras={({ record }) => typeof record?.subject_model === "string" && typeof record.subject_id === "string"
+          ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
         <Field name="is_open" hidden />
         <Field name="kind_label" title />
         <Field name="verdict" widget="statusbar" options={verdicts} />

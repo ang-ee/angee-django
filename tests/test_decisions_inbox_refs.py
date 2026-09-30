@@ -46,16 +46,16 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
     }}, "console")
     result = result_data(execute_schema(schema, """
         query {
-          decisions { id record_model_label record_public_id }
+          decisions { id subject_model subject_id }
         }
     """, user=reviewer))
     assert result == {"decisions": [{
         "id": str(decision.sqid),
-        "record_model_label": MtiParent._meta.label,
-        "record_public_id": str(parent.sqid),
+        "subject_model": MtiParent._meta.label,
+        "subject_id": str(parent.sqid),
     }]}
     reference = result["decisions"][0]
-    resource = next(item for item in schema.angee_resources if item.model_label == reference["record_model_label"])
+    resource = next(item for item in schema.angee_resources if item.model_label == reference["subject_model"])
     assert resource.record_representation == "title"
     document = f"""
         query($id: String!, $privateId: String!) {{
@@ -64,8 +64,8 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
         }}
     """
     assert result_data(execute_schema(schema, document, {
-        "id": reference["record_public_id"], "privateId": str(inaccessible.sqid),
+        "id": reference["subject_id"], "privateId": str(inaccessible.sqid),
     }, user=reviewer)) == {
-        "subject": {"id": reference["record_public_id"], "title": "Shared subject"},
+        "subject": {"id": reference["subject_id"], "title": "Shared subject"},
         "private": None,
     }

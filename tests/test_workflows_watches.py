@@ -228,10 +228,10 @@ def test_watch_resources_follow_run_reads_and_record_reference_owner(
     run.with_actor(actor).grant_record_access("reader", reader)
     schema = addon_schema(workflow_schema.schemas, "console")
     query = """query($step: String!) {
-      stepwatch(where: {step_run: {_eq: $step}}) { record_model_label record_public_id }
-      steprun(where: {id: {_eq: $step}}) { watches { record_model_label record_public_id } }
+      stepwatch(where: {step_run: {_eq: $step}}) { record_model record_id }
+      steprun(where: {id: {_eq: $step}}) { watches { record_model record_id } }
     }"""
-    reference = {"record_model_label": record._meta.label, "record_public_id": record.sqid}
+    reference = {"record_model": record._meta.label, "record_id": record.sqid}
     for viewer in (actor, reader):
         assert result_data(execute_schema(schema, query, {"step": step.sqid}, user=viewer)) == {
             "stepwatch": [reference], "steprun": [{"watches": [reference]}],

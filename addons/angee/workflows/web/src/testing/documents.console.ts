@@ -16,8 +16,8 @@ const StepRunFields = graphql(`
     can_retry requires_duplicate_acknowledgement
     awaited_run { id }
     attempts { id number result started_at finished_at error stacktrace }
-    artifacts { id label model_label record_id }
-    watches { id record_model_label record_public_id }
+    artifacts { id label record_model record_id }
+    watches { id record_model record_id }
   }
 `);
 const WorkflowFields = graphql(`

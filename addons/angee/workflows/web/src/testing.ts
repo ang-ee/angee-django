@@ -120,11 +120,11 @@ export const attemptResourceFixture = testDataResource("workflows.StepAttempt", 
 });
 export const artifactResourceFixture = testDataResource("workflows.StepArtifact", {
   recordRepresentation: "label",
-  fields: ["id", "step_run", "label", "model_label", "record_id"].map((name) => retainedField(name)),
+  fields: ["id", "step_run", "label", "record_model", "record_id"].map((name) => retainedField(name)),
   capabilities: ["list", "detail"], roots: { list: "stepartifact", detail: "stepartifact_by_pk", aggregate: "stepartifact_aggregate" },
   typeNames: { filter: "stepartifact_bool_exp", order: "stepartifact_order_by" },
   query: testResourceQuery({ fields: Object.fromEntries(
-    ["id", "step_run", "label", "model_label", "record_id"].map((name) => [name, testQueryField(name)]),
+    ["id", "step_run", "label", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
   ) }),
 });
 export const userResourceFixture = testDataResource("iam.User", {
@@ -134,11 +134,11 @@ export const userResourceFixture = testDataResource("iam.User", {
 });
 
 export const watchResourceFixture = testDataResource("workflows.StepWatch", {
-  fields: ["id", "step_run", "record_model_label", "record_public_id"].map((name) => retainedField(name)),
+  fields: ["id", "step_run", "record_model", "record_id"].map((name) => retainedField(name)),
   capabilities: ["list", "detail"], roots: { list: "stepwatch", detail: "stepwatch_by_pk", aggregate: "stepwatch_aggregate" },
   typeNames: { filter: "stepwatch_bool_exp", order: "stepwatch_order_by" },
   query: testResourceQuery({ fields: Object.fromEntries(
-    ["id", "step_run", "record_model_label", "record_public_id"].map((name) => [name, testQueryField(name)]),
+    ["id", "step_run", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
   ) }),
 });
 
@@ -185,7 +185,7 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     input: { reference: "R-7" }, output: {},
     attempts: [{ id: "wsa_inspect", number: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
-    artifacts: [{ id: "wfa_note", label: "Retained note", model_label: "notes.Note", record_id: "nte_7" }],
+    artifacts: [{ id: "wfa_note", label: "Retained note", record_model: "notes.Note", record_id: "nte_7" }],
     watches: [],
     ...overrides,
   };

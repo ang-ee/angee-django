@@ -203,8 +203,16 @@ class StepWatchType(AngeeNode):
     """A waiting step's reference, visible through its execution read policy."""
 
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
-    record_model_label: str = strawberry_django.field(only=["content_type_id", "object_id"])
-    record_public_id: str = strawberry_django.field(only=["content_type_id", "object_id"])
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_model(self) -> str:
+        """Project the watched target through the shared reference owner."""
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_id(self) -> PublicID:
+        """Project the watched target's public identity."""
+        return PublicID(cast(Any, self).record_public_id)
 
 
 @strawberry_django.type(StepArtifact)
@@ -217,7 +225,7 @@ class StepArtifactType(AngeeNode):
     created_at: auto
 
     @strawberry_django.field(only=["content_type_id", "object_id"])
-    def model_label(self) -> str:
+    def record_model(self) -> str:
         """Project target identity through the shared record-reference owner."""
         return cast(Any, self).record_model_label
 

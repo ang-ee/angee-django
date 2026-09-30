@@ -8,7 +8,7 @@ export const DecisionDocument = graphql(`
     decisions_by_pk(id: $id) {
       id kind revision is_open can_act form_schema basis context
       verdict closed_reason resolution resolved_at expires_at
-      record_model_label record_public_id
+      subject_model subject_id
       requester { display_name }
       resolved_by { display_name }
       group { id }

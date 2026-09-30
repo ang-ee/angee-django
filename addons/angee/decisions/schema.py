@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -64,8 +66,6 @@ class DecisionType(AngeeNode):
     revision: auto
     created_at: auto
     updated_at: auto
-    record_model_label: str = strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
-    record_public_id: str = strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
     is_open: bool = strawberry_django.field(annotate={"_is_open": Decision.objects.open_expression()})
     can_act: bool = strawberry_django.field(annotate=lambda info: models.ExpressionWrapper(
@@ -75,14 +75,32 @@ class DecisionType(AngeeNode):
         output_field=models.BooleanField(),
     ))
 
+    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
+    def subject_model(self) -> str:
+        """Project the decision subject through the shared reference owner."""
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
+    def subject_id(self) -> PublicID:
+        """Project the subject's public identity."""
+        return PublicID(cast(Any, self).record_public_id)
+
 
 @strawberry_django.type(DecisionEvidence)
 class DecisionEvidenceType(AngeeNode):
     """A protected public record reference derived at admission."""
 
     decision: DecisionType
-    record_model_label: str = strawberry_django.field(only=["content_type_id", "object_id"])
-    record_public_id: str = strawberry_django.field(only=["content_type_id", "object_id"])
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_model(self) -> str:
+        """Project the evidence target through the shared reference owner."""
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_id(self) -> PublicID:
+        """Project the evidence target's public identity."""
+        return PublicID(cast(Any, self).record_public_id)
 
 
 _GROUPS = hasura_model_resource(

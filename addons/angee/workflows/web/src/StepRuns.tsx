@@ -30,17 +30,17 @@ export function StepRuns({ runId }: { runId: string }) {
       { id: "attempts", label: t("step.attempts"), render: ({ recordId }) => <StepAttempts stepId={recordId} /> },
       { id: "artifacts", label: t("step.artifacts"), render: ({ recordId }) =>
         <List resource="workflows.StepArtifact" scope="local" presentation="embedded"
-          baseFilter={{ step_run: { exact: recordId } }} fields={["model_label", "record_id"]}>
+          baseFilter={{ step_run: { exact: recordId } }} fields={["record_model", "record_id"]}>
           <Column field="label" header={t("step.artifacts")} render={(row) =>
-            typeof row.model_label === "string" && typeof row.record_id === "string"
-              ? <RecordReference model={row.model_label} id={row.record_id} label={typeof row.label === "string" ? row.label : undefined} /> : null} />
+            typeof row.record_model === "string" && typeof row.record_id === "string"
+              ? <RecordReference model={row.record_model} id={row.record_id} label={typeof row.label === "string" ? row.label : undefined} /> : null} />
         </List> },
       { id: "watches", label: t("step.watches"), render: ({ recordId }) =>
         <List resource="workflows.StepWatch" scope="local" presentation="embedded"
-          baseFilter={{ step_run: { exact: recordId } }} fields={["record_model_label"]}>
-          <Column field="record_public_id" header={t("step.watches")} render={(row) =>
-            typeof row.record_model_label === "string" && typeof row.record_public_id === "string"
-              ? <RecordReference model={row.record_model_label} id={row.record_public_id} /> : null} />
+          baseFilter={{ step_run: { exact: recordId } }} fields={["record_model"]}>
+          <Column field="record_id" header={t("step.watches")} render={(row) =>
+            typeof row.record_model === "string" && typeof row.record_id === "string"
+              ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
         </List> },
     ]}>
     <List fields={["is_mapped", "is_map"]} order={{ rank: "ASC", map_index: "ASC" }} pageSize={10} emptyContent={t("run.noSteps")}>
