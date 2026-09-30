@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
-import { ANGEE_WATCH_IGNORED } from "./watch";
+// Never watch Jujutsu's `.jj/` store: a watcher there slows Vitest startup, times
+// out `jj` commands, and corrupts `working_copy.lock` (see the jj FAQ). Vite
+// already ignores `.git/` and `node_modules/`. Kept inline here and in `./vite.ts`:
+// these config modules load through Node's own ESM loader in consumers, which
+// does not resolve extensionless relative imports.
+const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 
 // The framework owner of the web/package Vitest defaults: the DOM-inline set, the
 // `src/**` test globs, and the generated-schema alias builder. Shipped in `@angee/app` (not a repo-root file) so a project
