@@ -8,8 +8,8 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_group
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
-from angee.workflows.testing.models import Decision
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.decisions_models import Decision
 from tests.mtidemo.models import MtiChild, MtiParent
 
 

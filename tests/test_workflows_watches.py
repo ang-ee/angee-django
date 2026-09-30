@@ -1,19 +1,19 @@
 """Transactional record observation, shared wake recovery and permission-safe reads."""
 
+from contextlib import nullcontext
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from django.db import transaction
 from django.db.models.functions import Now
-from django.db.models.signals import post_save
 from rebac import actor_context
 
 from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import load_workflow, run_until, start_run, trigger_source
 from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, WorkflowRun
-from angee.workflows.triggers import RecordChanged
 from tests.conftest import Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.workflow_steps import Echo, document
 
@@ -21,16 +21,12 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 
 
 @pytest.fixture
-def watched_source(execution, monkeypatch):
+def watched_source(execution):
     """Use the native save signal and restore both its opt-in and receiver afterward."""
     actor, sent = execution
-    monkeypatch.setattr(Vault, "workflow_trigger", True, raising=False)
-    RecordChanged.connect()
-    record = vault_for(actor, name="Waiting")
-    try:
+    with trigger_source(Vault, connect=True):
+        record = vault_for(actor, name="Waiting")
         yield actor, sent, record
-    finally:
-        post_save.disconnect(sender=Vault, dispatch_uid="workflows.record_changed.knowledge.vault")
 
 
 def start_watcher(step, record, actor, *, key="watch"):
@@ -161,10 +157,8 @@ def test_retention_cascades_watches_from_a_failed_runs_open_branch(watched_sourc
 
 
 @pytest.mark.parametrize("case", ["timeout", "empty", "io", "not_opted", "same_body_change"])
-def test_record_wait_admission_and_deadline_recovery(watched_source, register_step, monkeypatch, case):
+def test_record_wait_admission_and_deadline_recovery(watched_source, register_step, case):
     actor, _sent, record = watched_source
-    if case == "not_opted":
-        monkeypatch.setattr(Vault, "workflow_trigger", False)
 
     class Observe(Echo):
         key = "watch_contract"
@@ -179,7 +173,8 @@ def test_record_wait_admission_and_deadline_recovery(watched_source, register_st
 
     register_step(Observe)
     _run, step = start_watcher(Observe, record, actor)
-    assert StepRun.objects.execute(step.pk)
+    with patch.object(Vault, "workflow_trigger", False) if case == "not_opted" else nullcontext():
+        assert StepRun.objects.execute(step.pk)
     step.refresh_from_db()
     if case in {"empty", "io", "not_opted"}:
         assert step.status == "failed" and not system_queryset(StepWatch).exists()

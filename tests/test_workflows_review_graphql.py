@@ -16,8 +16,9 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import Decision, StepRun
+from angee.workflows.testing.models import StepRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
+from tests.decisions_models import Decision
 
 
 class Accept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):

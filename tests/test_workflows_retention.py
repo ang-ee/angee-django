@@ -11,7 +11,8 @@ from angee.base.scoping import system_queryset
 from angee.workflows.managers import PRUNE_BATCH_LIMIT
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until
-from angee.workflows.testing.models import Decision, DecisionGroup, StepAttempt, StepRun, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
+from tests.decisions_models import Decision, DecisionGroup
 from tests.tables import model_tables
 from tests.test_workflows_children import age_runs
 from tests.test_workflows_children import child_graph as child_graph

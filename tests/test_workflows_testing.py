@@ -10,21 +10,57 @@ import yaml
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.db.models.signals import post_save
 from django.test import override_settings
 from rebac import actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.base.scoping import system_queryset
+from angee.graphql.publishing import change_published
+from angee.jobs.enqueue import celery_app
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
 from angee.workflows.states import StepRunStatus
 from angee.workflows.steps import Step, resolve_step
 from angee.workflows.testing import drivers
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowVersion
-from tests.conftest import make_addon
+from tests.conftest import Vault, make_addon
 from tests.workflow_steps import Value, document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
+
+
+def test_capture_tasks_fixture_and_scoped_failure(capture_tasks):
+    """The fixture and context manager restore the previous sender after failure."""
+    celery_app.send_task("outer", kwargs={"id": 1})
+    with drivers.capture_tasks(error=RuntimeError("send failed")) as nested:
+        with pytest.raises(RuntimeError, match="send failed"):
+            celery_app.send_task("inner", kwargs={"id": 2})
+    celery_app.send_task("outer-again", kwargs={"id": 3})
+    assert [name for name, _ in capture_tasks] == ["outer", "outer-again"]
+    assert [name for name, _ in nested] == ["inner"]
+
+
+def test_observe_scopes_model_and_disconnects_after_exit():
+    """Observation only records the chosen sender while the context is active."""
+    payload = object()
+    with drivers.observe(Workflow) as published:
+        change_published.send(sender=WorkflowVersion, payload=object())
+        change_published.send(sender=Workflow, payload=payload)
+    change_published.send(sender=Workflow, payload=object())
+    assert published == [payload]
+
+
+def test_trigger_source_restores_opt_in_and_native_receiver():
+    """Native signal wiring stays within its opt-in scope."""
+    assert not getattr(Vault, "workflow_trigger", False)
+    with drivers.trigger_source(Vault, connect=True):
+        assert Vault.workflow_trigger
+        receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
+        assert any(receiver == drivers.RecordChanged.changed for receiver, _ in receivers)
+    assert not getattr(Vault, "workflow_trigger", False)
+    receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
+    assert not any(receiver == drivers.RecordChanged.changed for receiver, _ in receivers)
 
 
 @pytest.fixture

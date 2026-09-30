@@ -63,6 +63,7 @@ from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from tests import (  # noqa: F401 -- register shared FK targets before native database setup
     agents_models,
+    decisions_models,
     extraction_models,
     messaging_models,
 )

@@ -15,8 +15,8 @@ from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.testing.drivers import Accept, Reject, seed_group
-from angee.workflows.testing.models import Decision, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
+from tests.decisions_models import Decision, DecisionGroup
 
 
 @pytest.fixture

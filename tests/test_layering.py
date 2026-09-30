@@ -184,6 +184,19 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
+def test_addon_test_harness_does_not_import_the_composer() -> None:
+    """Build-time permission composition belongs to core test support."""
+    root = PROJECT_ROOT / "addons/angee/workflows/testing"
+    violations = {
+        path.relative_to(PROJECT_ROOT).as_posix(): sorted(
+            name for name in _module_imports(path)
+            if name == "angee.compose" or name.startswith("angee.compose.")
+        )
+        for path in root.rglob("*.py")
+    }
+    assert not {path: names for path, names in violations.items() if names}
+
+
 def test_source_does_not_import_historical_relationships() -> None:
     """Only external materialized history and tests may use the frozen API."""
 

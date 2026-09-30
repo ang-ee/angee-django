@@ -16,14 +16,12 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.scoping import system_queryset
-from angee.graphql.publishing import change_published
-from angee.jobs.enqueue import celery_app
 from angee.workflows import managers
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, Superseded, Wait
-from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
+from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
 from tests.conftest import create_user
 from tests.workflow_steps import Echo, document
@@ -713,26 +711,14 @@ def test_failed_attempt_retains_bound_input_and_database_start_time(execution, r
     assert system_queryset(StepAttempt).get(step_run=last).error == "Keep my input."
 
 
-def test_publish_precedes_failing_commit_send(execution, monkeypatch, caplog):
+def test_publish_precedes_failing_commit_send(execution, caplog):
     """One explicit run publication survives a logged commit-time enqueue failure."""
     actor, _ = execution
     workflow = load_workflow(document("entry", "last"), key="publish_before_send", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
-    published = []
-
-    def observe(sender, payload, **kwargs):
-        published.append(payload)
-
-    def fail_send(*args, **kwargs):
-        raise RuntimeError("Broker unavailable.")
-
-    change_published.connect(observe, sender=WorkflowRun, weak=False)
-    monkeypatch.setattr(celery_app, "send_task", fail_send)
-    try:
+    with observe(WorkflowRun) as published, capture_tasks(error=RuntimeError("Broker unavailable.")):
         assert StepRun.objects.execute(step_run.pk)
-    finally:
-        change_published.disconnect(observe, sender=WorkflowRun)
     assert len(published) == 1
     assert "Broker unavailable" in caplog.text
     assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED

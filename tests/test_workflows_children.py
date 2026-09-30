@@ -7,13 +7,11 @@ from django.db.models.functions import Now
 from pydantic import BaseModel
 
 from angee.base.scoping import system_queryset
-from angee.graphql.publishing import change_published
-from angee.jobs.enqueue import celery_app
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.managers import WorkflowRunQuerySet
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.conftest import create_user
 from tests.workflow_steps import Value, document
@@ -272,21 +270,13 @@ def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
     assert child.status == "failed" and result.children == 0
 
 
-def test_child_delivery_failures_cannot_suppress_parent_publication(child_graph, monkeypatch, caplog):
+def test_child_delivery_failures_cannot_suppress_parent_publication(child_graph, caplog):
     """Nested dispatch and terminal wake failures leave all committed changes observable."""
     _, _, admitted, build = child_graph
     parent, _ = build()
-    published = []
-
-    def observe(sender, payload, **kwargs):
-        published.append(payload)
-
-    def unavailable(*args, **kwargs):
-        raise RuntimeError("Broker unavailable during child delivery.")
-
-    change_published.connect(observe, sender=WorkflowRun, weak=False)
-    monkeypatch.setattr(celery_app, "send_task", unavailable)
-    try:
+    with observe(WorkflowRun) as published, capture_tasks(
+        error=RuntimeError("Broker unavailable during child delivery."),
+    ):
         run_until(parent)
         assert sum(payload.id == str(parent.sqid) for payload in published) == 2
         assert any(payload.id == str(admitted[0].sqid) for payload in published)
@@ -297,6 +287,4 @@ def test_child_delivery_failures_cannot_suppress_parent_publication(child_graph,
         run_until(parent)
         assert parent.status == "succeeded"
         assert sum(payload.id == str(parent.sqid) for payload in published) == 3
-    finally:
-        change_published.disconnect(observe, sender=WorkflowRun)
     assert "Broker unavailable during child delivery" in caplog.text

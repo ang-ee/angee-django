@@ -30,8 +30,8 @@ from angee.decisions.forms import Action, Relation
 from angee.decisions.policies import DecisionPolicy
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
-from angee.workflows.testing.models import Decision, DecisionEvidence, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
+from tests.decisions_models import Decision, DecisionEvidence, DecisionGroup
 
 
 class Complete(Action, value="complete", label="Complete", verdict=Verdict.COMPLETED):

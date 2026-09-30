@@ -647,6 +647,8 @@ and current contracts before applying a historical example to a new deployment.
   [`resources`](../../addons/angee/resources/testing/__init__.py),
   [`workflows`](../../addons/angee/workflows/testing/__init__.py), and
   [`integrate`](../../addons/angee/integrate/testing/__init__.py) test apps.
+  Register one concrete model per decision resource from the root test conftest;
+  decisions tests import those models without workflow test support.
   Framework probes declared after setup, in isolated registries, unmanaged, or
   under uninstalled or migrated
   labels use the single [`model_tables`](../../tests/tables.py) helper. It drops only

@@ -10,9 +10,10 @@ from angee.integrate.testing import models as integrate_models
 from angee.workflows import models as workflow_sources
 from angee.workflows.testing import models as workflow_models
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
+from tests import decisions_models
 
 
-@pytest.mark.parametrize("shared_models", (integrate_models, workflow_models))
+@pytest.mark.parametrize("shared_models", (integrate_models, workflow_models, decisions_models))
 def test_native_database_setup_creates_shared_model_tables(transactional_db: None, shared_models) -> None:
     """Shared tables exist without requesting the permission-sync fixture."""
 
@@ -42,6 +43,17 @@ def test_shared_models_preserve_source_grant_contract(model) -> None:
 
     source = getattr(workflow_sources, model.__name__)
     assert model.get_rebac_grantable() == source.get_rebac_grantable()
+
+
+def test_decision_resources_register_once_from_central_models() -> None:
+    """Decision tests use one concrete registration independent of workflow test models."""
+    assert {model.__name__ for model in apps.get_models() if model._meta.app_label == "decisions"} == {
+        "Decision", "DecisionEvidence", "DecisionGroup",
+    }
+    assert all(
+        apps.get_model("decisions", name).__module__ == decisions_models.__name__
+        for name in ("Decision", "DecisionEvidence", "DecisionGroup")
+    )
 
 
 def test_workflow_run_reads_through_the_version_workflow_relation(composed_tables: None) -> None:

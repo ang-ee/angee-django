@@ -27,14 +27,13 @@ from angee.workflows.states import RunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import (
-    Decision,
-    DecisionGroup,
     StepArtifact,
     StepAttempt,
     StepRun,
     Workflow,
     WorkflowRun,
 )
+from tests.decisions_models import Decision, DecisionGroup
 
 
 class Approve(Action, value="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):

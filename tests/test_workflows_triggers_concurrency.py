@@ -5,12 +5,11 @@ from threading import Event
 
 import pytest
 from django.db import connection, transaction
-from django.db.models.signals import post_save
 from rebac import actor_context
 
 from angee.base.scoping import system_queryset
+from angee.workflows.testing.drivers import trigger_source
 from angee.workflows.testing.models import Trigger, TriggerEvent, WorkflowRun
-from angee.workflows.triggers import RecordChanged
 from tests.conftest import Vault, create_user, vault_for
 from tests.test_workflows_review_concurrency import submit, wait_for_lock
 from tests.test_workflows_triggers import capture
@@ -90,8 +89,6 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
 
     monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", write)
-    RecordChanged.connect()
-
     def save():
         with transaction.atomic(), actor_context(actor):
             current = Vault.objects.get(pk=other.pk)
@@ -99,7 +96,7 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
             captured.set()
             assert release_writer.wait(15)
 
-    try:
+    with trigger_source(type(record), connect=True):
         with ThreadPoolExecutor(max_workers=2) as pool:
             admission, _ = submit(pool, lambda: Trigger.objects.admit(event))
             try:
@@ -117,8 +114,6 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
         assert Trigger.objects.drain() == 0
         assert system_queryset(WorkflowRun).count() == 4
         assert "Workflow trigger capture failed" not in caplog.text
-    finally:
-        post_save.disconnect(sender=Vault, dispatch_uid="workflows.record_changed.knowledge.vault")
 
 
 def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(trigger_setup, monkeypatch):

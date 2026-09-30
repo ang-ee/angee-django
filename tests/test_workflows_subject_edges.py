@@ -12,7 +12,7 @@ from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import load_workflow, run_until, start_run, trigger_source
 from angee.workflows.testing.models import StepRun, Trigger, TriggerEvent, WorkflowRun
 from angee.workflows.triggers import RecordChanged
 from tests.conftest import make_addon
@@ -38,7 +38,8 @@ def child_source(monkeypatch):
         "query": [resource.query], "types": resource.types,
     }})])
     monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
-    monkeypatch.setattr(MtiChild, "workflow_trigger", True, raising=False)
+    with trigger_source(MtiChild):
+        yield
 
 
 def test_trigger_and_manual_mti_subjects_share_identity_through_retention(execution, child_source, settings):

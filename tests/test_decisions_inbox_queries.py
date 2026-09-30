@@ -13,8 +13,8 @@ from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.testing.drivers import Reject
-from angee.workflows.testing.models import Decision
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.decisions_models import Decision
 from tests.test_decisions_inbox import inbox as inbox
 
 FIELDS = """

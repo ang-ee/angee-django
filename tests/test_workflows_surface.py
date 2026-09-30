@@ -12,6 +12,7 @@ from django.db import models
 
 import angee.workflows as workflows
 from angee.workflows.steps import Settlement, Step
+from angee.workflows.testing import drivers as test_drivers
 
 EXPECTED_MODELS = {
     "workflows": "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun WorkflowVersion",
@@ -63,6 +64,11 @@ EXPECTED_SETTINGS = {
     ),
     "workflows_integrate": "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES",
 }
+
+EXPECTED_TEST_DRIVERS = (
+    "RunFactory", "capture_tasks", "decide", "load_workflow", "observe", "register_steps", "run_until",
+    "start_run", "trigger_source",
+)
 
 
 def _public_verbs(cls: type, label: str, base: type) -> tuple[str, ...]:
@@ -144,3 +150,13 @@ def test_workflows_public_surface() -> None:
         if names:
             settings[config.label] = names
     assert settings == {label: tuple(names.split()) for label, names in EXPECTED_SETTINGS.items()}
+
+
+def test_workflow_test_driver_surface() -> None:
+    """Changes to the public test harness require an inventory edit."""
+    public = tuple(sorted(
+        name for name, member in vars(test_drivers).items()
+        if not name.startswith("_") and getattr(member, "__module__", None) == test_drivers.__name__
+        and (inspect.isfunction(member) or inspect.isclass(member))
+    ))
+    assert public == EXPECTED_TEST_DRIVERS

@@ -9,8 +9,9 @@ from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import Decision, StepRun
+from angee.workflows.testing.models import StepRun
 from tests.conftest import create_user, execute_schema, result_data, vault_for
+from tests.decisions_models import Decision
 from tests.test_workflows_review_graphql import Accept
 from tests.test_workflows_review_graphql import schema as schema
 

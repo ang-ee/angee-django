@@ -19,8 +19,9 @@ from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.steps import EmptyOutput, Retryable, RetryPolicy, Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
-from angee.workflows.testing.models import Decision, DecisionGroup, StepAttempt, StepRun
+from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.decisions_models import Decision, DecisionGroup
 
 
 class MapEcho(Step[None, None, None]):

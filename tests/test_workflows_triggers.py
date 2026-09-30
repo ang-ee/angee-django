@@ -19,7 +19,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
-from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.drivers import load_workflow, run_until, trigger_source
 from angee.workflows.testing.models import StepAttempt, StepWatch, Trigger, TriggerEvent, WorkflowRun
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.workflow_steps import document
@@ -32,8 +32,8 @@ def trigger_resource_schema(monkeypatch):
     """Bare tests install just their real, composed resource owner, restoring it afterward."""
     owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
     monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
-    monkeypatch.setattr(Vault, "workflow_trigger", True, raising=False)
-    return owner
+    with trigger_source(Vault):
+        yield owner
 
 
 @pytest.fixture
@@ -60,15 +60,12 @@ def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup
     capture(record)
     assert not system_queryset(TriggerEvent).exists()
     Trigger.objects.enable(trigger, actor=actor)
-    triggers.RecordChanged.connect()
-    try:
+    with trigger_source(Vault, connect=True):
         post_save.send(sender=Vault, instance=record, raw=True, created=False)
         assert not system_queryset(TriggerEvent).exists()
         with actor_context(actor):
             record.save()
         assert system_queryset(TriggerEvent).count() == 1
-    finally:
-        post_save.disconnect(sender=Vault, dispatch_uid="workflows.record_changed.knowledge.vault")
 
 
 def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
@@ -242,14 +239,11 @@ def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypa
         raise IntegrityError("watch capture failed")
 
     monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
-    triggers.RecordChanged.connect()
-    try:
+    with trigger_source(Vault, connect=True):
         with transaction.atomic(), actor_context(actor):
             record.name = "Retained despite capture failure"
             record.save()
             assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
-    finally:
-        post_save.disconnect(sender=Vault, dispatch_uid="workflows.record_changed.knowledge.vault")
     assert not system_queryset(TriggerEvent).exists()
     assert "Workflow source capture failed" in caplog.text
 
@@ -307,19 +301,19 @@ def test_configuration_edits_disable_the_previous_enablers_authority(
     }
     source_field = Trigger._meta.get_field("source")
     monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(source_field.registry_setting))
-    monkeypatch.setattr(Page, "workflow_trigger", True, raising=False)
-    with actor_context(actor):
-        trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
-    trigger = Trigger.objects.enable(trigger, actor=actor)
-    trigger.with_actor(editor)
-    replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
-                   "model_label": "knowledge.page"}[field]
-    setattr(trigger, field, replacement)
-    with actor_context(editor):
-        trigger.save(update_fields=(field,))
-    trigger.refresh_from_db()
-    assert not trigger.enabled and trigger.run_as_id is None
-    assert "changed" in trigger.disabled_reason
+    with trigger_source(Page):
+        with actor_context(actor):
+            trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+        trigger = Trigger.objects.enable(trigger, actor=actor)
+        trigger.with_actor(editor)
+        replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
+                       "model_label": "knowledge.page"}[field]
+        setattr(trigger, field, replacement)
+        with actor_context(editor):
+            trigger.save(update_fields=(field,))
+        trigger.refresh_from_db()
+        assert not trigger.enabled and trigger.run_as_id is None
+        assert "changed" in trigger.disabled_reason
 
 
 class OtherChanged(triggers.RecordChanged):

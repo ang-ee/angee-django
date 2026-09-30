@@ -20,8 +20,8 @@ from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
-from angee.workflows.testing.models import Decision
 from tests.conftest import create_platform_admin, create_user
+from tests.decisions_models import Decision
 from tests.extraction_models import Extraction
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_extraction_models import evidence as evidence

@@ -20,8 +20,9 @@ from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until
-from angee.workflows.testing.models import Decision, DecisionGroup, StepAttempt, StepRun, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.conftest import create_user
+from tests.decisions_models import Decision, DecisionGroup
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

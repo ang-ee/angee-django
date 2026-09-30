@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -12,9 +10,8 @@ from django.test import TransactionTestCase
 from rebac import system_context
 from rebac.roles import grant as grant_role
 
-from angee.jobs.enqueue import celery_app
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
-from angee.workflows.testing.drivers import load_workflow, register_steps, run_until, start_run
+from angee.workflows.testing.drivers import capture_tasks, load_workflow, register_steps, run_until, start_run
 from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePublication, ValidateNotePublication
 
 Note = apps.get_model("notes", "Note")
@@ -41,9 +38,9 @@ class NoteWorkflowStepTests(TransactionTestCase):
     def setUp(self) -> None:
         """Install the shipped document with captured commit-time transport."""
 
-        patcher = patch.object(celery_app, "send_task")
-        self.sent = patcher.start()
-        self.addCleanup(patcher.stop)
+        capture = capture_tasks()
+        self.sent = capture.__enter__()
+        self.addCleanup(capture.__exit__, None, None, None)
         call_command("rebac", "sync", verbosity=0)
         with system_context(reason="note workflow fixtures"):
             self.owner = User.objects.create_user(username="note-owner")
@@ -282,7 +279,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual(note.updated_by_id, self.owner.pk)
             self.assertEqual(note.history.count(), 2)
             self.assertEqual(note.history.first().status, Note.Status.ACTIVE)
-        self.assertGreaterEqual(self.sent.call_count, 4)
+        self.assertGreaterEqual(len(self.sent), 4)
 
     def test_shipped_map_reviews_each_note_and_collects_independent_answers(self) -> None:
         """Two mapped bodies retain distinct seats and a typed successor counts both outcomes."""

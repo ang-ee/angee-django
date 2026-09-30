@@ -11,10 +11,57 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.conf import settings
+from django.db.models.signals import post_save
 from rebac import system_context
 
+from angee.graphql.publishing import change_published
+from angee.jobs.enqueue import celery_app
 from angee.workflows.states import StepRunStatus
 from angee.workflows.steps import Step
+from angee.workflows.triggers import RecordChanged
+
+
+@contextmanager
+def capture_tasks(*, error: Exception | None = None) -> Iterator[list[tuple[str, dict[str, Any]]]]:
+    """Capture Celery sends after commit; optionally simulate a failed delivery."""
+    sent: list[tuple[str, dict[str, Any]]] = []
+
+    def send(name: str, **kwargs: Any) -> None:
+        sent.append((name, kwargs))
+        if error is not None:
+            raise error
+
+    with patch.object(celery_app, "send_task", send):
+        yield sent
+
+
+@contextmanager
+def observe(model: type[Any]) -> Iterator[list[Any]]:
+    """Collect committed change publications for one concrete model."""
+    published: list[Any] = []
+
+    def collect(sender: type[Any], payload: Any, **kwargs: Any) -> None:
+        published.append(payload)
+
+    change_published.connect(collect, sender=model, weak=False)
+    try:
+        yield published
+    finally:
+        change_published.disconnect(collect, sender=model)
+
+
+@contextmanager
+def trigger_source(model: type[Any], *, connect: bool = False) -> Iterator[None]:
+    """Temporarily opt a model in, optionally connecting its native save hook."""
+    with patch.object(model, "workflow_trigger", True, create=True):
+        if connect:
+            RecordChanged.validate_model(model)
+            post_save.connect(RecordChanged.changed, sender=model, weak=False)
+        try:
+            yield
+        finally:
+            if connect:
+                post_save.disconnect(RecordChanged.changed, sender=model)
 
 
 @contextmanager
