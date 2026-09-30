@@ -1,10 +1,16 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import { decisionFixture, decisionGroupFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { describe, expect, test } from "vitest";
 
 import decisions, { DECISION_CONTENT_SLOT, DECISION_ORIGIN_SLOT, decisionContent } from "./index";
 
 describe("decisions fragment", () => {
   test("satisfies the shared manifest contracts", () => expect(() => expectValidBaseAddon(decisions)).not.toThrow());
+  test("publishes its neutral fixtures through the testing entry", () => {
+    expect(decisionFixture().kind).toBe("review");
+    expect(decisionResourceFixture).toBeTruthy();
+    expect(decisionGroupFixture).toBeTruthy();
+  });
   test("registers one routed inbox and an inherited record route", () => {
     expect(decisions.menus).toEqual([{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.inbox" }]);
     expect(decisions.routes?.map(({ name, path }) => ({ name, path }))).toEqual([

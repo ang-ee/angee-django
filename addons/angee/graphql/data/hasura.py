@@ -823,7 +823,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``record_ref_requires_read`` additionally nulls both reference query axes
     unless the viewer can read the target, using the shared reference annotation.
 
-    Nested relation identity filters require read access at every protected hop,
+    Nested relation identity and scalar filters require read access at every protected hop,
     sharing the permission-safe scalar expression used by related grouping axes.
     Model extensions may declare ``hasura_filter_aliases`` mapping public scalar
     filter names to related field paths. These inherit the same read guards and
@@ -886,6 +886,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         path: f"{path}__{getattr(field, 'target_field', field.related_model._meta.pk).name}"
         for path, field in _relation_axis_fields(model, filterable).items() if "__" in path
     }
+    relation_filters.update({
+        path: path for path in filterable
+        if "__" in path and path not in expressions and not require_field_for_path(model, path).is_relation
+    })
     filter_aliases = {path: f"_angee_filter_{index}" for index, path in enumerate(sorted(relation_filters))}
 
     def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:

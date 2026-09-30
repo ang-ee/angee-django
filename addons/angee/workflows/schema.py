@@ -24,6 +24,7 @@ from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one, with_record_reference_access
+from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
@@ -288,7 +289,7 @@ _VERSION_RESOURCE = hasura_model_resource(
 )
 _RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType, model=WorkflowRun,
-    filterable=["id", "version", "version__workflow", "parent_step", "parent_step__run",
+    filterable=["id", "version", "version__workflow", "version__workflow__key", "parent_step", "parent_step__run",
                 "run_as", "status", "origin", "outcome", "reprocess_of", "trigger_event",
                 "created_at", "finished_at"],
     record_ref_filters=("subject_model", "subject_id"),
@@ -406,6 +407,7 @@ schemas = {
     "console": {
         "query": [resource.query for resource in _RESOURCES],
         "mutation": [WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
+        "subscription": [changes(WorkflowRun, field="workflowRunChanged")],
         "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
         "types": [
             RunOrigin,

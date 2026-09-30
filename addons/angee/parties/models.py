@@ -133,6 +133,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
+        verbose_name_plural = "parties"
         rebac_resource_type = "parties/party"
         constraints = (
             # The directory-sync idempotency key: one party per source UID per
@@ -917,6 +918,7 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("party", "label", "sqid")
+        verbose_name_plural = "addresses"
         rebac_resource_type = "parties/address"
         constraints = (
             models.UniqueConstraint(
@@ -1377,6 +1379,7 @@ class Directory(Bridge):
 
         abstract = True
         ordering = ("-updated_at",)
+        verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
 
     @property

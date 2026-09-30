@@ -16,6 +16,7 @@ from angee.graphql.data.hasura import with_filter_aliases
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
+from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
 
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
@@ -124,6 +125,7 @@ schemas = {
     "console": {
         "query": [_GROUPS.query, _DECISIONS.query, _EVIDENCE.query],
         "mutation": [DecisionMutation],
+        "subscription": [changes(Decision, field="decisionChanged")],
         "types": [
             DecisionGroupType, DecisionType, DecisionEvidenceType, *_GROUPS.types, *_DECISIONS.types, *_EVIDENCE.types,
         ],

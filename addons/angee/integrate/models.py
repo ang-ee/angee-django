@@ -3660,6 +3660,7 @@ class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
     class Meta:
         abstract = True
         base_manager_name = "unscoped_objects"
+        verbose_name_plural = "sync discrepancies"
         rebac_resource_type = "integrate/sync_discrepancy"
         rebac_id_attr = "pk"
         constraints = (

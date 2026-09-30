@@ -190,6 +190,7 @@ class PostMetrics(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for the post-metrics source model."""
 
         abstract = True
+        verbose_name_plural = "post metrics"
         rebac_resource_type = "posts/post_metrics"
 
     def __str__(self) -> str:

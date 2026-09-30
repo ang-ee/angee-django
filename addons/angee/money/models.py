@@ -100,6 +100,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
 
         abstract = True
         ordering = ("code",)
+        verbose_name_plural = "currencies"
         rebac_resource_type = "money/currency"
 
     def __str__(self) -> str:

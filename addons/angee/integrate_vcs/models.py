@@ -263,6 +263,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         db_table = "integrate_repository"
         ordering = ("org", "name")
+        verbose_name_plural = "repositories"
         rebac_resource_type = "integrate_vcs/repository"
         constraints = (
             models.UniqueConstraint(

@@ -1,5 +1,7 @@
 """Composed decision links inherit execution visibility and native query axes."""
 
+import asyncio
+
 import pytest
 from rebac import actor_context
 
@@ -8,6 +10,8 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
+from angee.graphql import subscriptions
+from angee.graphql.events import ChangePayload
 from angee.graphql.schema import GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.reviews import ReviewStep
@@ -136,6 +140,71 @@ def test_decision_execution_paths_filter_by_public_identity(schema, linked_decis
     }
     resource = next(resource for resource in schema.angee_resources if resource.model_label == "decisions.Decision")
     assert resource.query.fields[path.replace("__", ".")].filter is not None
+
+
+def test_workflow_key_filters_preserve_related_workflow_read_scope(schema, linked_decision):
+    """A readable run or seat cannot be found through a hidden workflow key."""
+    workflow, run, _step, decision, owner, operator, _stranger, assignee = linked_decision
+    query = """query($key: String!) {
+      workflowrun(where: {version__workflow__key: {_eq: $key}}) { id }
+      workflowrun_aggregate(where: {version__workflow__key: {_eq: $key}}) { aggregate { count } }
+      decisions(where: {group__step_run__run__version__workflow__key: {_eq: $key}}) { id }
+      decisions_aggregate(where: {group__step_run__run__version__workflow__key: {_eq: $key}}) {
+        aggregate { count }
+      }
+    }"""
+    expected = {
+        "workflowrun": [{"id": run.sqid}],
+        "workflowrun_aggregate": {"aggregate": {"count": 1}},
+        "decisions": [{"id": decision.sqid}],
+        "decisions_aggregate": {"aggregate": {"count": 1}},
+    }
+    assert result_data(execute_schema(schema, query, {"key": workflow.key}, user=owner)) == expected
+    for actor in (operator, assignee):
+        assert run.with_actor(actor).has_access("read") is (actor == operator)
+        assert decision.with_actor(actor).has_access("read")
+        assert not workflow.with_actor(actor).has_access("read")
+        assert result_data(execute_schema(schema, query, {"key": workflow.key}, user=actor)) == {
+            "workflowrun": [], "workflowrun_aggregate": {"aggregate": {"count": 0}},
+            "decisions": [], "decisions_aggregate": {"aggregate": {"count": 0}},
+        }
+    resources = {resource.model_label: resource for resource in schema.angee_resources}
+    assert resources["workflows.WorkflowRun"].query.fields["version.workflow.key"].filter is not None
+    assert resources["decisions.Decision"].query.fields["group.step_run.run.version.workflow.key"].filter is not None
+
+
+def test_run_and_decision_change_roots_scope_each_subscriber(schema, linked_decision, monkeypatch):
+    """Source-composed live roots deliver only rows readable by their subscriber."""
+    _workflow, run, _step, decision, owner, operator, stranger, assignee = linked_decision
+    expected = {"workflowRunChanged", "decisionChanged"}
+    assert expected <= schema._schema.subscription_type.fields.keys()
+    assert all(f"{field}: ChangeEvent!" in schema.as_str() for field in expected)
+    resources = {resource.model_label: resource for resource in schema.angee_resources}
+
+    for model, row, surface, field, readers, nonreaders in (
+        (type(run), run, workflow_schema.schemas["console"]["subscription"][0],
+         "workflowRunChanged", (owner, operator), (assignee, stranger)),
+        (type(decision), decision, decision_schema.schemas["console"]["subscription"][0],
+         "decisionChanged", (owner, operator, assignee), (stranger,)),
+    ):
+        assert resources[model._meta.label].roots.changes_name == field
+        payload = ChangePayload.from_instance(row, action="update", update_fields=None).as_message()
+
+        async def stream(subscribed_model):
+            assert subscribed_model is model
+            yield payload
+
+        monkeypatch.setattr(subscriptions, "_subscribe", stream)
+        resolver = surface.__strawberry_definition__.fields[0].base_resolver.wrapped_func
+
+        async def receive(actor):
+            with actor_context(actor):
+                return [event async for event in resolver(object(), object())]
+
+        for actor in readers:
+            assert [event.id for event in asyncio.run(receive(actor))] == [row.sqid]
+        for actor in nonreaders:
+            assert asyncio.run(receive(actor)) == []
 
 
 def test_decision_display_fields_follow_related_read_permissions(schema, linked_decision):

@@ -481,6 +481,7 @@ class StepWatch(RecordRefMixin, AngeeDataModel):
         """Canonical record uniqueness and source capture lookup."""
 
         abstract = True
+        verbose_name_plural = "step watches"
         rebac_resource_type = "workflows/step_watch"
         constraints = [models.UniqueConstraint(
             fields=("step_run", "content_type", "object_id"), name="workflows_watch_record_unique",
@@ -494,6 +495,7 @@ class DecisionWorkflow(models.Model):
     extends: str | None = "decisions.Decision"
     hasura_filterable_fields = (
         "group__step_run", "group__step_run__run", "group__step_run__run__version__workflow",
+        "group__step_run__run__version__workflow__key",
     )
     hasura_filter_aliases = {
         "workflow_name": "group__step_run__run__version__workflow__name",

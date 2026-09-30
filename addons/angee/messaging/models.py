@@ -1454,6 +1454,7 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("status", "due_date", "sqid")
+        verbose_name_plural = "thread activities"
         rebac_resource_type = "messaging/thread_activity"
         indexes = (
             models.Index(fields=("thread", "status", "due_date")),
