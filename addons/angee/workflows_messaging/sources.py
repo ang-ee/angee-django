@@ -45,7 +45,8 @@ class MessageIngested(TriggerSource):
                 raise PermissionDenied("The message no longer belongs to the trigger's channel.")
         visible = read_scoped_queryset(apps.get_model("messaging", "Channel"), actor)
         if visible is None or not visible.filter(pk=channel_id).exists():
-            raise PermissionDenied("The acting user cannot read the channel.")
+            subject = "The enabling user" if record is None else "The workflow principal"
+            raise PermissionDenied(f"{subject} cannot read the channel.")
 
     @classmethod
     def connect(cls) -> None:

@@ -1,6 +1,7 @@
 """Level-triggered admission through native source, filter and permission owners."""
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 import strawberry_django
@@ -32,6 +33,7 @@ from angee.workflows.testing.models import (
     WorkflowRunEvidence,
 )
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.mtidemo.models import MtiParent
 from tests.workflow_steps import document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
@@ -65,6 +67,22 @@ def capture(record):
     triggers.RecordChanged.dispatch(type(record), record)
 
 
+def test_record_changed_system_check_requires_grant_targets(monkeypatch):
+    """The mixin alone opts in, and Django checks its required declaration."""
+    missing = type("MissingGrantTargets", (triggers.RecordChangedOptIn,), {
+        "_meta": SimpleNamespace(label="example.MissingGrantTargets"),
+    })
+    monkeypatch.setattr(triggers.apps, "get_models", lambda: [missing])
+    errors = triggers.check_record_changed_models()
+    assert len(errors) == 1 and errors[0].id == "workflows.E001"
+    assert "record_changed_grant_targets" in errors[0].msg
+
+
+def test_record_changed_requires_the_mixin_for_watch_eligibility():
+    with pytest.raises(ValidationError, match="no registered workflow event source"):
+        triggers.RecordChanged.check_watch_model(MtiParent)
+
+
 def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):
     actor, _, record, trigger = trigger_setup
     capture(record)
@@ -83,13 +101,13 @@ def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
     with system_context(reason="test.workflow actorless trigger"), pytest.raises(PermissionDenied, match="acting user"):
         Trigger.objects.enable(trigger, actor=None)
     trigger.refresh_from_db()
-    assert not trigger.enabled and trigger.run_as_id is None
+    assert not trigger.enabled
 
 
 def test_enable_projects_native_subject_refs_to_the_user_foreign_key(trigger_setup):
     actor, _, _, trigger = trigger_setup
     enabled = Trigger.objects.enable(trigger, actor=to_subject_ref(actor))
-    assert enabled.enabled and enabled.run_as_id == actor.pk
+    assert enabled.enabled and enabled.workflow.user_id != actor.pk
 
 
 def test_workflow_principal_grants_are_listable_and_repaired_on_reenable(trigger_setup):
@@ -132,10 +150,27 @@ def test_shared_target_survives_until_last_trigger_disables(trigger_setup):
     first = Trigger.objects.enable(first, actor=actor)
     second = Trigger.objects.enable(second, actor=actor)
     assert len(second.granted_relationships(actor=actor)) == 1
-    Trigger.objects.disable(first, actor=actor)
+    first = Trigger.objects.revoke_grant(
+        first, actor=actor, resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+    )
+    assert not first.enabled and "workflow principal" in first.disabled_reason
     assert len(second.granted_relationships(actor=actor)) == 1
     Trigger.objects.disable(second, actor=actor)
     assert not second.granted_relationships(actor=actor)
+
+
+def test_revoked_required_grant_disables_admission_with_a_reason(trigger_setup):
+    actor, workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    trigger = Trigger.objects.revoke_grant(
+        trigger, actor=actor, resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+    )
+    assert not trigger.enabled and "workflow principal" in trigger.disabled_reason
+    assert not trigger.granted_relationships(actor=actor)
+    capture(record)
+    assert Trigger.objects.drain() == 0
+    assert not system_queryset(WorkflowRun).exists()
+    assert workflow.user_id is not None
 
 
 def test_deleting_trigger_releases_its_grant(trigger_setup):
@@ -198,7 +233,7 @@ def test_admitted_event_blocks_trigger_purge_preview(trigger_setup):
     assert event.started_run.trigger_event_id == event.pk
 
 
-def test_actor_losing_record_read_rejects_under_system_drain(trigger_setup):
+def test_enabler_losing_record_read_does_not_change_principal_admission(trigger_setup):
     admin, workflow, _, trigger = trigger_setup
     editor = create_user("trigger-actor")
     workflow.with_actor(admin).grant_record_access("editor", editor)
@@ -206,11 +241,11 @@ def test_actor_losing_record_read_rejects_under_system_drain(trigger_setup):
     Trigger.objects.enable(trigger, actor=editor)
     capture(record)
     system_queryset(Vault).filter(pk=record.pk).update(owner=create_user("replacement-owner"))
-    with system_context(reason="test.workflow trigger actor pin"):
-        assert Trigger.objects.drain() == 0
+    with system_context(reason="test.workflow principal admission"):
+        assert Trigger.objects.drain() == 1
     event = system_queryset(TriggerEvent).get(record_object_id=record.pk)
-    assert "inaccessible" in event.rejection
-    assert not system_queryset(WorkflowRun).exists()
+    assert event.admitted_at and not event.rejection
+    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
 
 
 def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
@@ -259,7 +294,7 @@ def test_condition_depth_is_bounded_and_stale_configuration_disables(trigger_set
     system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"removed_field": {"_eq": "x"}})
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
-    assert not trigger.enabled and trigger.run_as_id is None and "removed_field" in trigger.disabled_reason
+    assert not trigger.enabled and "removed_field" in trigger.disabled_reason
 
 
 def test_invalid_persisted_public_id_is_configuration_failure(trigger_setup):
@@ -270,7 +305,7 @@ def test_invalid_persisted_public_id_is_configuration_failure(trigger_setup):
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
     event = system_queryset(TriggerEvent).get()
-    assert not trigger.enabled and trigger.run_as_id is None and trigger.disabled_reason
+    assert not trigger.enabled and trigger.disabled_reason
     assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
 
 
@@ -289,14 +324,14 @@ def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, 
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
     event = system_queryset(TriggerEvent).get()
-    assert not trigger.enabled and trigger.run_as_id is None and "cannot be loaded" in trigger.disabled_reason
+    assert not trigger.enabled and "cannot be loaded" in trigger.disabled_reason
     assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
     data = result_data(execute_schema(schema, """query($id: String!) {
-      trigger(where: {id: {_eq: $id}}) { id source source_model display_name enabled disabled_reason run_as { id } }
+      trigger(where: {id: {_eq: $id}}) { id source source_model display_name enabled disabled_reason }
     }""", {"id": trigger.sqid}, user=actor))["trigger"]
     assert len(data) == 1 and data[0]["source_model"] == "knowledge.Vault"
     assert data[0]["display_name"] == "record_changed: knowledge.Vault"
-    assert data[0]["enabled"] is False and data[0]["run_as"] is None
+    assert data[0]["enabled"] is False
     assert data[0]["disabled_reason"] == trigger.disabled_reason
 
 
@@ -398,7 +433,7 @@ def test_configuration_edits_disable_the_previous_enablers_authority(
         with actor_context(editor):
             trigger.save(update_fields=(field,))
         trigger.refresh_from_db()
-        assert not trigger.enabled and trigger.run_as_id is None
+        assert not trigger.enabled
         assert "changed" in trigger.disabled_reason
 
 
@@ -424,29 +459,29 @@ def test_bulk_authoring_cannot_bypass_trigger_configuration_owner(trigger_setup,
         else:
             queryset.update(condition={})
     trigger.refresh_from_db()
-    assert trigger.condition == original and trigger.enabled and trigger.run_as_id == admin.pk
+    assert trigger.condition == original and trigger.enabled and trigger.workflow.user_id != admin.pk
 
 
 def test_bulk_creation_cannot_borrow_another_users_trigger_authority(trigger_setup):
-    """A workflow editor must use the enable owner to acquire an acting identity."""
+    """A workflow editor must use the enable owner to grant its principal."""
     admin, workflow, _, trigger = trigger_setup
     editor = create_user("trigger-bulk-creator")
     workflow.with_actor(admin).grant_record_access("editor", editor)
     forged = Trigger(
         workflow=workflow, source="record_changed", model_label="knowledge.vault",
-        enabled=True, run_as=admin,
+        enabled=True,
     )
     with pytest.raises(ValidationError, match="save"):
         Trigger.objects.with_actor(editor).bulk_create([forged])
     assert list(system_queryset(Trigger).values_list("pk", flat=True)) == [trigger.pk]
     installed = Trigger(workflow=workflow, source="record_changed", model_label="knowledge.vault")
     assert system_queryset(Trigger).bulk_create([installed]) == [installed]
-    assert not installed.enabled and installed.run_as_id is None
+    assert not installed.enabled
 
 
 @pytest.mark.parametrize("boundary", ["enable", "check_access", "check_admission", "trigger_input"])
 def test_trigger_actor_boundaries_drop_ambient_system_privileges(trigger_setup, monkeypatch, boundary):
-    """Source and domain hooks observe only the non-admin enabling user's rows."""
+    """Enable checks the author; admission hooks act as the workflow principal."""
     admin, workflow, record, trigger = trigger_setup
     actor = create_user("trigger-hook-actor")
     workflow.with_actor(admin).grant_record_access("editor", actor)
@@ -470,35 +505,26 @@ def test_trigger_actor_boundaries_drop_ambient_system_privileges(trigger_setup, 
         capture(record)
         with system_context(reason="test trigger admission actor boundary"):
             assert Trigger.objects.drain() == 1
-    assert seen == [(False, to_subject_ref(actor), False)]
+    assert seen == ([(False, to_subject_ref(actor), False)] if boundary == "enable"
+                    else [(False, to_subject_ref(workflow.user), True)])
 
 
-@pytest.mark.parametrize("active_at_enable", [False, True])
-def test_inactive_trigger_actor_cannot_enable_or_admit(trigger_setup, active_at_enable):
-    """Revocation of the pinned account disables admission without starting a run."""
+def test_enabler_deactivation_does_not_disable_principal_admission(trigger_setup):
+    """The enabling user's lifecycle does not change the standing principal."""
     admin, workflow, record, trigger = trigger_setup
     actor = create_user("trigger-deactivated-actor")
     workflow.with_actor(admin).grant_record_access("editor", actor)
-    if active_at_enable:
-        Trigger.objects.enable(trigger, actor=actor)
-        capture(record)
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
     system_queryset(type(actor)).filter(pk=actor.pk).update(is_active=False)
-    if active_at_enable:
-        assert Trigger.objects.drain() == 0
-    else:
-        with pytest.raises(PermissionDenied, match="active"):
-            Trigger.objects.enable(trigger, actor=to_subject_ref(actor))
+    assert Trigger.objects.drain() == 1
     trigger.refresh_from_db()
-    assert not trigger.enabled and trigger.run_as_id is None
-    if active_at_enable:
-        assert "active" in trigger.disabled_reason
-        event = system_queryset(TriggerEvent).get()
-        assert event.rejection == trigger.disabled_reason and event.evaluated_at
-    assert not system_queryset(WorkflowRun).exists()
+    assert trigger.enabled
+    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
 
 
 def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, monkeypatch):
-    """Domain policy runs as run_as and is rolled back when admission rejects."""
+    """Domain policy runs as the principal and rolls back when admission rejects."""
     admin, workflow, record, trigger = trigger_setup
     actor = create_user("trigger-domain-actor")
     workflow.with_actor(admin).grant_record_access("editor", actor)
@@ -509,15 +535,13 @@ def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, 
 
     def reject(self, record, *, actor):
         seen.append(actor.pk)
-        record.name = "Rolled back"
-        record.save()
         raise ValidationError("Domain admission declined.")
 
     monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", reject)
     assert Trigger.objects.drain() == 0
     record.refresh_from_db()
-    assert record.name == "Ready" and seen == [actor.pk]
+    assert record.name == "Ready" and seen == [workflow.user_id]
     assert system_queryset(Trigger).get(pk=trigger.pk).enabled
     assert "Domain admission declined" in system_queryset(TriggerEvent).get().rejection
     monkeypatch.setattr(Trigger, "check_admission", lambda self, record, *, actor: None)

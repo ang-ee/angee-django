@@ -31,6 +31,21 @@ test("the ledger tab uses native trigger filtering and retains record and run re
   expect((await screen.findByRole("link", { name: "wfr_review" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
 });
 
+test("the principal grants tab lists direct tuples and revokes through the trigger action", async () => {
+  const requests: TriggerRequest[] = [];
+  render(<TriggerStory onRequest={(request) => requests.push(request)} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Principal grants" }));
+  expect((await screen.findAllByText("notes/role:trigger_editor")).length).toBeGreaterThan(0);
+  expect(requests.some(({ query }) => query.includes("TriggerGrants"))).toBe(true);
+  fireEvent.click((await screen.findAllByRole("button", { name: "Actions" })).at(-1)!);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Revoke grant" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Revoke grant" }));
+  await waitFor(() => expect(requests.find(({ query }) => query.includes("revoke_workflow_trigger_grant("))?.variables).toEqual({
+    id: "wft_review", resourceType: "notes/role", resourceId: "trigger_editor", relation: "member",
+  }));
+});
+
 test("a new embedded trigger preserves the workflow default in its native create payload", async () => {
   const requests: TriggerRequest[] = [];
   render(<TriggerStory embedded onRequest={(request) => requests.push(request)} />);

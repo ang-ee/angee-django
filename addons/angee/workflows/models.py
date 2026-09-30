@@ -601,9 +601,6 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     enabled = models.BooleanField(default=False, editable=False)
     granted_targets = models.JSONField(default=list, editable=False)
     """Targets this trigger contributes to the workflow principal's direct tuples."""
-    run_as = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False,
-    )
     disabled_reason: str = DiagnosticTextField(blank=True, default="", editable=False)
     objects = TriggerManager()
 
@@ -632,19 +629,20 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     def granted_relationships(self, *, actor: Any) -> tuple[Any, ...]:
         """List the currently stored direct tuples contributed by this trigger."""
 
-        self.workflow.require_access("write", actor)
+        self.workflow.require_access("read", actor)
         if not self.workflow.user_id or not self.granted_targets:
             return ()
         subject = to_subject_ref(self.workflow.user)
-        keys = {
-            (value["resource_type"], value["resource_id"], value["relation"])
-            for value in self.granted_targets
-        }
-        rows = active_relationship_model().objects.filter(
+        targets = models.Q()
+        for value in self.granted_targets:
+            targets |= models.Q(
+                resource_type=value["resource_type"], resource_id=value["resource_id"],
+                relation=value["relation"],
+            )
+        return tuple(active_relationship_model().objects.filter(
             subject_type=subject.subject_type, subject_id=subject.subject_id,
             optional_subject_relation=subject.optional_relation,
-        )
-        return tuple(row for row in rows if (row.resource_type, str(row.resource_id), row.relation) in keys)
+        ).filter(targets).order_by("resource_type", "resource_id", "relation"))
 
     def validate_configuration(self) -> tuple[Any, Any]:
         """Use the model's final resource input and native filter compiler."""
@@ -694,7 +692,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
             Trigger.check_admission(self, record, actor=actor)
 
     def clean(self) -> None:
-        """Reject invalid authoring at save and preserve the server-owned actor."""
+        """Reject invalid authoring at save and preserve server-owned activation."""
         super().clean()
         self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
@@ -702,7 +700,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         self.granted_targets = previous.granted_targets if previous is not None else []
         if previous is not None and self.workflow_id != previous.workflow_id:
             raise ValidationError("A trigger's workflow cannot be changed.")
-        if self.enabled and (previous is None or not previous.enabled or self.run_as_id != previous.run_as_id):
+        if self.enabled and (previous is None or not previous.enabled):
             raise ValidationError("Enable triggers through the manager action.")
         fields = ("condition", "source", "model_label", *self.source_class.scope_fields)
         if previous is not None and any(
@@ -711,24 +709,22 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         ):
             self.enabled = False
             self.disabled_reason = "Trigger configuration changed; enable it again."
-        if not self.enabled:
-            self.run_as = None
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate native saves as well as resource writes."""
         with transaction.atomic():
             if self.pk:
-                type(self).objects._lock_workflow(self.workflow_id)
+                type(self).objects.lock_grants(self.workflow_id)
             previous = None
             if not self._state.adding:
                 previous = system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
             self.clean()
             self.workflow.require_access("write", self.actor())
             if not self.enabled and kwargs.get("update_fields") is not None:
-                kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "run_as", "disabled_reason"}
+                kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "disabled_reason"}
             super().save(*args, **kwargs)
             if previous is not None and previous.granted_targets and not self.enabled:
-                type(self).objects._set_grants(self, ())
+                type(self).objects.reconcile_grants(self, ())
 
     def __str__(self) -> str:
         """Identify configuration without loading permission-sensitive relations."""
@@ -744,10 +740,6 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 
         abstract = True
         rebac_resource_type = "workflows/trigger"
-        constraints = [models.CheckConstraint(
-            condition=(models.Q(enabled=True, run_as__isnull=False) | models.Q(enabled=False, run_as__isnull=True)),
-            name="workflows_trigger_enabled_actor",
-        )]
 
 
 class TriggerEvent(RecordRefMixin, AngeeDataModel):

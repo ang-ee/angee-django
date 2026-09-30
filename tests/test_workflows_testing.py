@@ -52,13 +52,11 @@ def test_observe_scopes_model_and_disconnects_after_exit():
 
 
 def test_trigger_source_restores_opt_in_and_native_receiver():
-    """Native signal wiring stays within its opt-in scope."""
-    assert not Vault.record_changed_enabled
+    """The mixin declares opt-in; the driver scopes its native receiver."""
+    assert issubclass(Vault, drivers.RecordChangedOptIn)
     with drivers.trigger_source(Vault, connect=True):
-        assert Vault.record_changed_enabled
         receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
         assert any(receiver == drivers.RecordChanged.changed for receiver, _ in receivers)
-    assert not Vault.record_changed_enabled
     receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
     assert not any(receiver == drivers.RecordChanged.changed for receiver, _ in receivers)
 

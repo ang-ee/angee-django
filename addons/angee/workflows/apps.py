@@ -3,6 +3,7 @@
 from typing import Any
 
 from django.apps import AppConfig, apps
+from django.core import checks
 from django.db.models.signals import post_delete, pre_delete
 
 from angee.decisions.signals import decision_group_settled
@@ -25,8 +26,8 @@ def deactivate_workflow_principal(sender: Any, *, instance: Any, **kwargs: Any) 
 def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) -> None:
     """Release a trigger's tuples on instance and queryset deletion alike."""
 
-    sender.objects._lock_workflow(instance.workflow_id)
-    sender.objects._set_grants(instance, ())
+    sender.objects.lock_grants(instance.workflow_id)
+    sender.objects.reconcile_grants(instance, ())
 
 
 class WorkflowsConfig(AppConfig):
@@ -37,6 +38,9 @@ class WorkflowsConfig(AppConfig):
 
     def ready(self) -> None:
         """Subscribe the waiter owner to the decisions lifecycle."""
+        from angee.workflows.triggers import check_record_changed_models
+
+        checks.register(check_record_changed_models, checks.Tags.models)
         decision_group_settled.connect(wake_review, dispatch_uid="workflows.review_settled")
         post_delete.connect(
             deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),

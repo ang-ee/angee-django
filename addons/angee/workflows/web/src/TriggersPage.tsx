@@ -6,6 +6,7 @@ import {
 import { useWorkflowsT } from "./i18n";
 import { TRIGGER_MODEL } from "./triggers";
 import { TriggerEventsList } from "./TriggerEventsPage";
+import { TriggerGrantsTab } from "./TriggerGrantsTab";
 
 export function TriggersPage() { return <TriggersList />; }
 
@@ -24,12 +25,14 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
   return <View resource={TRIGGER_MODEL} {...(workflowId ? {} : { placement: "inline" as const, routed: true })}
     presentation={workflowId ? "embedded" : undefined} baseFilter={workflowId ? { workflow: { exact: workflowId } } : undefined}
     rowHref={workflowId ? (row) => href("workflows.triggers.record", { id: row.id }) : undefined}
-    recordTabs={[{ id: "events", label: t("trigger.events"), render: ({ recordId }) => <TriggerEventsList triggerId={recordId} /> }]}>
+    recordTabs={[
+      { id: "grants", label: t("trigger.grants"), render: ({ recordId }) => <TriggerGrantsTab recordId={recordId} /> },
+      { id: "events", label: t("trigger.events"), render: ({ recordId }) => <TriggerEventsList triggerId={recordId} /> },
+    ]}>
     <List emptyContent={t("trigger.empty")}>
       <Column field="display_name" header={t("trigger.title")} />
       <Column field="source" header={t("trigger.source")} />
       <Column field="enabled" header={t("trigger.enabled")} widget="boolean" />
-      <Column field="run_as" header={t("run.runAs")} />
       <Column field="disabled_reason" header={t("trigger.disabledReason")} />
     </List>
     <Form returning={["enabled", "source", "source_model", "can_edit"]} readOnlyWhen={(row) => row.can_edit !== true}
@@ -41,7 +44,6 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
         <Field name="model_label" label={t("catalogue.subjectModel")} createOnly defaultValue="" description={t("trigger.modelHint")} />
         <Field name="source_model" label={t("trigger.resolvedModel")} readOnly showWhen={(row) => Boolean(row.source_model) && !row.model_label} />
         <Field name="enabled" label={t("trigger.enabled")} readOnly widget="boolean" />
-        <Field name="run_as" label={t("run.runAs")} readOnly />
       </Group>
       <Field name="condition" label={t("trigger.condition")} widget="angee.workflows.condition" defaultValue={{}} />
       <Field name="disabled_reason" label={t("trigger.disabledReason")} readOnly widget="textarea" showWhen={(row) => Boolean(row.disabled_reason)} />

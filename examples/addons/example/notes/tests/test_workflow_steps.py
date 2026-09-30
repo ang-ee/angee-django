@@ -101,17 +101,15 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual(step.attempts.count(), 3)
 
     def test_trigger_installs_disabled_and_writes_no_events_until_enabled(self) -> None:
-        """Demo resources cannot establish an acting identity by themselves."""
+        """Demo resources cannot enable admission by themselves."""
         trigger = self.load_trigger()
         self.note()
         with system_context(reason="disabled note trigger assertions"):
             self.assertFalse(trigger.enabled)
-            self.assertIsNone(trigger.run_as_id)
             self.assertFalse(TriggerEvent.objects.filter(trigger=trigger).exists())
         Trigger.objects.enable(trigger, actor=self.admin)
         trigger = self.load_trigger()
         self.assertTrue(trigger.enabled)
-        self.assertEqual(trigger.run_as_id, self.admin.pk)
 
     def test_note_reader_role_requires_admin_to_delegate(self) -> None:
         """Workflow edit access alone cannot grant global note read to its principal."""
@@ -119,7 +117,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
             Trigger.objects.enable(self.load_trigger(), actor=self.owner)
 
-    def test_entering_review_admits_the_shipped_workflow_as_the_enabling_actor(self) -> None:
+    def test_entering_review_admits_the_shipped_workflow_as_its_principal(self) -> None:
         """The note signal, retained ledger and publication use their actual owners."""
         trigger = Trigger.objects.enable(self.load_trigger(), actor=self.admin)
         note = self.note(status=Note.Status.DRAFT, reviewer=None)
@@ -134,7 +132,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="admitted note trigger assertions"):
             event.refresh_from_db()
             run = event.started_run
-            self.assertEqual(run.run_as_id, self.admin.pk)
+            self.assertEqual(run.run_as_id, trigger.workflow.user_id)
             self.assertEqual(run.origin, "trigger")
             self.assertEqual(run.trigger_event_id, event.pk)
             self.assertEqual(run.record_ref.public_id, note.sqid)
@@ -145,7 +143,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             note.refresh_from_db()
             self.assertEqual(run.status, RunStatus.SUCCEEDED)
             self.assertEqual(note.status, Note.Status.ACTIVE)
-            self.assertEqual(note.updated_by_id, self.admin.pk)
+            self.assertEqual(note.updated_by_id, trigger.workflow.user_id)
         note.status = Note.Status.IN_REVIEW
         note.with_actor(self.owner).save()
         self.assertEqual(Trigger.objects.drain(), 0)
