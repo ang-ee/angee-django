@@ -4,4 +4,8 @@
 
 Install: `pnpm add @angee/app`
 
+The rendered host calls `bootApp({ target, loadSchemas, create })` to load
+generated metadata before composition. `create` receives the loaded schemas and
+returns the app to mount. See the [frontend guidelines](../../docs/frontend/guidelines.md).
+
 [React documentation](https://docs.angee.ai/react/) · [Package reference](https://docs.angee.ai/react/reference/app/)

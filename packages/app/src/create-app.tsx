@@ -157,7 +157,7 @@ export interface CreateAppInput {
 
 export type AngeeAppSchemaConfig =
   Omit<AngeeHasuraSchemaConfig, "metadata"> & {
-    /** Generated schema metadata imported from emitted JSON. */
+    /** Generated schema metadata fetched from its emitted JSON asset. */
     metadata?: unknown;
     /** Generated operation documents imported from emitted project codegen. */
     operationDocuments?: SchemaOperationDocuments;
