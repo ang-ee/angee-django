@@ -101,12 +101,10 @@ describe("app resource projection", () => {
     ])).toThrow(/multiple record routes/);
   });
 
-  test("record projections inherit model-aware chatter and per-route policy", () => {
+  test("record projections retain model-aware aside metadata", () => {
     const index = chatterRouteIndex(routes, [testDataResource("records.Record"), testDataResource("teams.Team")]);
     expect(index.find((route) => route.name === "desk.review.record")).toMatchObject({
-      modelLabel: "records.Record", recordParam: "recordId", viewType: "records/record", chatter: undefined,
+      modelLabel: "records.Record", recordParam: "recordId", viewType: "records/record",
     });
-    const hidden = chatterRouteIndex(resourcePageRoutes("quiet", "/quiet", Page, "records.Record", { chatter: "hidden" }), [testDataResource("records.Record")]);
-    expect(hidden.map((route) => route.chatter)).toEqual(["hidden", "hidden"]);
   });
 });

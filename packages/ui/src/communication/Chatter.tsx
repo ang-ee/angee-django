@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 
 import { Glyph } from "../chrome/Glyph";
+import { admittedAsideTabs, useSurfacePresentation } from "../chrome/surface-policy";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
@@ -44,6 +45,11 @@ export function Chatter({
     select: (state) => state.location.href,
   });
   const runtime = useAppRuntime();
+  const surface = useSurfacePresentation();
+  const [validatedRequest, setValidatedRequest] = React.useState<string | null>(null);
+  // Page publishers register in an effect. Validate after that first commit so
+  // their ids can satisfy route tab lists and aside admission.
+  React.useEffect(() => setValidatedRequest(requestIdentity), [requestIdentity]);
   const [counts, setCounts] = React.useState<Record<string, number>>({});
   const publishCount = React.useCallback(
     (id: string, count: number | undefined) => {
@@ -67,13 +73,12 @@ export function Chatter({
   // replaces its predecessor in place; a new id appends. So a page contributing a
   // `details`/`backlinks` tab keeps the defaults it does not override.
   const { context: viewContext, visible } = useChatterPresentation();
-  const policy = viewContext.route?.chatter;
-  const admit = policy === "hidden" ? [] : policy?.tabs;
+  const admit = admittedAsideTabs(surface);
   const baseTabs = defaultTabs(t);
   const publishedTabs = tabs ?? content?.tabs ?? [];
-  if (admit !== undefined) {
+  if (validatedRequest === requestIdentity) {
     const known = new Set([...baseTabs, ...(runtime.chatter ?? []), ...publishedTabs].map((tab) => tab.id));
-    for (const id of admit) {
+    for (const id of admit ?? []) {
       if (!known.has(id)) throw new Error(`Chatter admits unknown contribution id "${id}".`);
     }
   }
@@ -81,7 +86,7 @@ export function Chatter({
     () =>
       (runtime.chatter ?? []).filter((contribution) =>
         visible && (admit === undefined || admit.includes(contribution.id))
-          && contributionMatches(contribution, viewContext),
+          && contributionMatches(contribution, viewContext, admit?.includes(contribution.id) ?? false),
       ),
     [runtime.chatter, viewContext, admit, visible],
   );
@@ -182,16 +187,25 @@ export function Chatter({
 /** The route owns aside visibility and tab selection for shell and pane alike. */
 export function useChatterPresentation(): { context: ChatterViewContext; visible: boolean } {
   const runtime = useAppRuntime();
+  const surface = useSurfacePresentation();
   const context = useActiveChatterView(runtime.chatterRoutes ?? []);
   const { content } = useChatter();
-  const policy = context.route?.chatter;
-  const admit = policy === "hidden" ? [] : policy?.tabs;
-  const visible = policy !== "hidden" && (
-    (context.view.kind === "record" && (admit === undefined || admit.includes("comments") || admit.includes("activity")))
+  const admit = admittedAsideTabs(surface);
+  const known = new Set([
+    "comments", "activity",
+    ...(runtime.chatter ?? []).map((entry) => entry.id),
+    ...(content?.tabs ?? []).map((tab) => tab.id),
+  ]);
+  const defaultTabVisible = ["comments", "activity"].some((id) =>
+    (admit === undefined || admit.includes(id))
+    && (context.view.kind === "record"
+      || (surface.chatter !== "hidden" && surface.chatter?.tabs?.includes(id))));
+  const visible = surface.chatter !== "hidden" && (
+    defaultTabVisible
     || Boolean(content?.tabs?.some((tab) => admit === undefined || admit.includes(tab.id)))
     || (runtime.chatter ?? []).some((entry) =>
-      Boolean(entry.render) && (admit === undefined || admit.includes(entry.id)) && contributionMatches(entry, context))
-    || Boolean(admit?.length)
+      Boolean(entry.render) && (admit === undefined || admit.includes(entry.id)) && contributionMatches(entry, context, admit?.includes(entry.id) ?? false))
+    || (admit ?? []).some((id) => !known.has(id))
   );
   return { context, visible };
 }
@@ -220,10 +234,14 @@ function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: 
   ))}</>;
 }
 
+// A contribution with no model scope shows on record pages by default; a route
+// that lists it by id admits it on any page.
 function contributionMatches(
   contribution: ChatterContribution,
   context: ChatterViewContext,
+  listed = false,
 ): boolean {
+  if (contribution.model === undefined && context.view.kind !== "record" && !listed) return false;
   if (
     contribution.model !== undefined &&
     (context.route?.canonicalLabel ?? context.route?.modelLabel) !==

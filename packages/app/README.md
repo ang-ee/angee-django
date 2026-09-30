@@ -11,7 +11,7 @@ palette and redirects console routes owned by other roots to home with replaceme
 Unowned console routes (account, profile, preferences) remain reachable. Unknown
 roots and homes outside the selected root fail composition. Public layouts remain
 available; the server still owns access. The project template exposes `home`,
-`confine_to` and `console_chatter` answers. Addons cannot claim the `ui` translation
+`confine_to` answers. Addons cannot claim the `ui` translation
 namespace, which belongs to the rendered package.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
@@ -66,9 +66,42 @@ declaration when the query is reset. Shipped views and user favorites appear
 together in the view switcher. Saved favorites retain their selected preset and
 native column visibility; legacy favorites retain the currently selected preset.
 
-Routes may set inherited `chatter: "hidden" | { tabs?: string[] }`. Record
-routes show their admitted tabs; a non-record route shows only explicitly
-contributed tabs. See [`chatter-routes.ts`](src/chatter-routes.ts).
+## App surface
+
+An addon declares `surface` scopes keyed by menu root and, optionally, route,
+just like vocabulary. An app may scope a route owned by another addon. Each
+named slot shows only its listed ids; an empty list shows none. An omitted slot,
+aside or drawer list keeps its current contributions, whether the host is
+confined or not. Public and sign-in routes are never filtered. A route's
+admission intersects with an inherited list when both name the same address.
+
+```ts
+surface: [{
+  app: "desk",
+  admit: {
+    slots: {
+      "form-view.record-chrome": ["iam.share"],
+    },
+    aside: ["comments", "activity"],
+  },
+  chatter: { tabs: ["comments", "activity"] },
+  shell: { breadcrumb: true, commandSearch: true, asideOpen: false },
+}, {
+  app: "desk", route: "notes.detail", // may be owned by another addon
+  admit: { slots: { "form-view.record-chrome": [] } },
+  chatter: "hidden",
+}],
+```
+
+`chatter: "hidden"` hides the aside. A route's tab list replaces its inherited
+order within the admitted ids. Published tab ids can appear in either list;
+Chatter validates them at runtime. Unscoped contributed tabs appear only on
+record routes. The route policy projects model slots, record chrome, list
+utilities, notices, user-menu items and drawers before their render owners read
+them. `useSurfaceAdmission()` exposes the active policy;
+`isSurfaceSlotAdmitted(admission, slot, id)` answers whether a particular slot
+contribution is available. Unknown static ids and duplicate scopes fail
+composition. See [`route-policy.ts`](src/route-policy.ts).
 
 Resource mutation argument names and GraphQL types are projected from generated metadata at
 [`resourceMutationsForSchema`](src/resource-projection.ts) into the metadata-free

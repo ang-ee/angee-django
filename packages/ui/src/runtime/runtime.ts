@@ -440,16 +440,8 @@ export function useModelSlot(
     const targets: readonly ModelSlotTarget[] = Array.isArray(target)
       ? target as readonly ModelSlotTarget[]
       : [target as ModelSlotTarget];
-    if (options.admit !== undefined) {
-      const models = new Set(targets.map((candidate) => candidate.model));
-      const slotNames = new Set(options.inventorySlots ?? targets.map((candidate) => candidate.slot));
-      const known = new Set(slots.filter((entry) =>
-        models.has(entry.model ?? "") && slotNames.has(entry.slot),
-      ).map((entry) => entry.id));
-      for (const id of options.admit) {
-        if (!known.has(id)) throw new Error(`${options.owner ?? "Model slot"} admits unknown contribution id "${id}".`);
-      }
-    }
+    // The route policy has already projected `slots`. Legacy page admission can
+    // name a contribution excluded by that policy until its prop is removed.
     return targets.flatMap((candidate) =>
       slots.filter(
         (entry) =>
@@ -458,7 +450,7 @@ export function useModelSlot(
           && entry.impl === candidate.impl,
       ).filter((entry) => options.admit === undefined || options.admit.includes(entry.id)),
     );
-  }, [slots, target, options.admit, options.inventorySlots, options.owner]);
+  }, [slots, target, options.admit]);
 }
 
 /** The addon-contributed file-preview renderers, in composed order. */

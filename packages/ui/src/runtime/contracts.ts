@@ -106,7 +106,6 @@ export interface ChatterRoute {
   modelLabel?: string;
   canonicalLabel?: string;
   recordParam?: string;
-  chatter?: "hidden" | { tabs?: readonly string[] };
 }
 
 /** Runtime context for rendering a chatter tab on the active page. */
