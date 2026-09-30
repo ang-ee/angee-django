@@ -101,7 +101,7 @@ function ProposalHeader({
   const t = useProposalsT();
   const visibilityOptions = useEnumOptions(ANSWER_MODEL, "visibility");
   const visibility = [...new Set(answers.flatMap((answer) => {
-    const label = optionLabel(visibilityOptions, answer.visibility);
+    const label = optionLabel(visibilityOptions, answer.visibility == null ? null : String(answer.visibility));
     return [...(label ? [label] : []), ...(answer.shared_with_responders === true ? [t("comparison.visibility.shared")] : [])];
   }))].map(String).join(" · ");
   const label = proposalColumnLabel(proposal);

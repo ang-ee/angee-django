@@ -134,7 +134,6 @@ import {
   createAddonRouteNodes,
   createLayoutRoutes,
   layoutNamesForRoutes,
-  layoutRequiresAuth,
 } from "./route-tree";
 
 export {
@@ -417,7 +416,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const activeRoute = useActiveRoute(routes);
     const app = projection.activeApp(pathname);
     const words = vocabularyForRoute(app, activeRoute?.name);
-    const publicRoute = !layoutRequiresAuth(activeRoute?.layout ?? "console", input.layouts)
+    const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
     const surface = publicRoute ? unrestrictedSurface : surfaceForRoute(app, activeRoute?.name);
     const scopedRuntime = useMemo(() => {

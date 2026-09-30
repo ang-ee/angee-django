@@ -48,7 +48,6 @@ import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
-import { ResourceList } from "../resource/ResourceList";
 import {
   FormView,
   FORM_VIEW_RECORD_CHROME_SLOT,
@@ -2096,7 +2095,13 @@ describe("FormView", () => {
   test("uses every model contribution without a page admission prop", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1">
       <Field name="title" label="Title" title />
-    </FormView>, undefined, undefined, { slots: [
+    </FormView>, { types: { NoteType: {
+      ...defaultModel("NoteType", "notes.Note"),
+      fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+        reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
+      },
+    } } }, undefined, { slots: [
       { ...formViewSectionsSlot("notes.Note"), id: "notes.extra", content:
         <Group label="Extra"><Field name="reminderAt" label="Reminder" /></Group> },
     ] });

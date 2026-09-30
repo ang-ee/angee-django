@@ -220,7 +220,7 @@ export function PassthroughChrome({ children }: { children: ReactNode }): ReactN
   return <>{children}</>;
 }
 
-export function layoutRequiresAuth(
+function layoutRequiresAuth(
   layoutName: string,
   layouts: Record<string, RefineLayoutConfig>,
 ): boolean {

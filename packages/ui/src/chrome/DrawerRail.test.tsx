@@ -6,7 +6,7 @@ import { DrawerProvider, useDrawerState } from "../layouts/drawer-context";
 import { AppRuntimeProvider } from "../runtime";
 import { DrawerRail } from "./DrawerRail";
 
-afterEach(() => { cleanup(); localStorage.clear(); });
+afterEach(() => { cleanup(); globalThis.localStorage?.clear(); });
 
 const logs = { id: "logs", edge: "bottom" as const, title: "Logs", render: () => null };
 

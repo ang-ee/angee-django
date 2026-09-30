@@ -19,7 +19,6 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 test("the stage owner hides side stages from the path and names the state without a verb", () => {
   render(<StageStatusbar value="removed" row={{
-    id: "task-1", status: "DROPPED", permissions: ["write"],
     queue: { id: "queue-1" }, stage: { id: "removed", name: "Removed" },
     dropped_at: "2026-09-24",
   }} />);

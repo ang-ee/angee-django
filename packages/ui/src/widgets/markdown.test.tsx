@@ -43,14 +43,16 @@ describe("markdown widgets", () => {
   test("opens saved prose as rendered text with a reachable source view", () => {
     const Editor = markdownEditorWidget.edit;
     render(<Editor value="**Saved prose**" field={{ label: "Body" }} />);
-    expect(screen.getByText("Saved prose").tagName).toBe("STRONG");
+    // The hidden source editor also holds the words; the rendered preview is the STRONG.
+    const rendered = () => screen.queryAllByText("Saved prose").filter((node) => node.tagName === "STRONG");
+    expect(rendered()).toHaveLength(1);
     const sourceButton = screen.getByRole("button", { name: "Markdown source" });
-    const preview = screen.getByText("Saved prose").closest("[tabindex]");
+    const preview = rendered()[0]!.closest("[tabindex]");
     expect(preview).not.toBeNull();
     fireEvent.focus(preview!);
     expect(screen.getByRole("button", { name: "Bold" })).toBeTruthy();
     fireEvent.click(sourceButton);
-    expect(screen.queryByText("Saved prose")).toBeNull();
+    expect(rendered()).toHaveLength(0);
     expect(screen.getByLabelText("Body").className).not.toContain("hidden");
   });
 
