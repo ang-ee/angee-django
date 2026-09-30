@@ -19,6 +19,9 @@ class GraphQLConfig(AppConfig):
         # Phase-1 AppConfig loading imports this module before schema declarations
         # and concrete runtime models are safe to resolve; defer these imports until
         # Django calls ready() after app population.
+        # Base value fields cannot import GraphQL, so their field types register here
+        # before any schema resource resolves them.
+        from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_schemas
         from angee.graphql.publishing import connect_change_broadcast_receiver
         from angee.graphql.schema import GraphQLSchemas
