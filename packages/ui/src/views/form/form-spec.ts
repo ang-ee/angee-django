@@ -35,7 +35,8 @@ export type FormSpecRelationCreate = Pick<
  * values), and the pure-data `relation` config. The backend supplies relation
  * model names as titles when no field title is declared. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
- * Arrays of objects resolve to the registered fixed-N `rows` view composer.
+ * Arrays of objects default to the registered fixed-N `rows` view composer;
+ * a named widget must declare that it accepts their parsed row template.
  * Properties and items may reference root-local `$defs` or `definitions`;
  * reference siblings override presentation metadata on the referenced schema.
  * A nullable `anyOf` with one non-null alternative projects that alternative's
@@ -288,17 +289,18 @@ function deserializeField(
   const label = field.label ?? field.title ?? titleCase(name);
   const choices = optionsFrom(field);
   const options = choices?.options;
-  if (rowTemplate && authoredWidget && authoredWidget !== "rows") {
-    throw new Error(
-      `Invalid form spec field "${path}": an array of objects uses widget "rows".`,
-    );
-  }
   const widget = rowTemplate
-    ? "rows"
+    ? authoredWidget ?? "rows"
     : authoredWidget ?? (relation ? "many2one" : options ? "select" : objectTemplate ? "object" : TYPE_WIDGETS[type]);
-  if (!isWidgetDefinition(widgets[widget])) {
+  const definition = widgets[widget];
+  if (!isWidgetDefinition(definition)) {
     throw new Error(
       `Unknown form spec widget "${widget}" for field "${path}". Register it in AppRuntime.widgets.`,
+    );
+  }
+  if (rowTemplate && !definition.acceptsRowTemplate) {
+    throw new Error(
+      `Invalid form spec field "${path}": widget "${widget}" does not accept a row template.`,
     );
   }
   return {

@@ -506,6 +506,16 @@ describe("deserializeFormSpec", () => {
     );
   });
 
+  test("rejects a registered widget that does not accept object rows", () => {
+    expect(() => deserializeFormSpec({ properties: {
+      choices: { type: "array", widget: "text", items: { type: "object", properties: {
+        label: { type: "string" },
+      } } },
+    } }, defaultWidgets)).toThrowError(
+      'Invalid form spec field "choices": widget "text" does not accept a row template.',
+    );
+  });
+
   test("rejects an unknown Refine relation-filter operator", () => {
     expect(() =>
       deserializeFormSpec(

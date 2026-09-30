@@ -147,6 +147,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
 }
 
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {
+  /** Accepts a parsed `rowTemplate` for fixed-size arrays of objects in a form spec. */
+  acceptsRowTemplate?: true;
   edit?: ComponentType<WidgetRenderProps<TValue, TRow>>;
   read: ComponentType<WidgetRenderProps<TValue, TRow>>;
   cell?: ComponentType<WidgetRenderProps<TValue, TRow>>;

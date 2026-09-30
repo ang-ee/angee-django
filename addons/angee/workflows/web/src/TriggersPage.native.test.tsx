@@ -37,9 +37,8 @@ test("the principal grants tab lists direct tuples and revokes through the trigg
   fireEvent.click(await screen.findByRole("tab", { name: "Principal grants" }));
   expect((await screen.findAllByText("notes/role:trigger_editor")).length).toBeGreaterThan(0);
   expect(requests.some(({ query }) => query.includes("TriggerGrants"))).toBe(true);
-  fireEvent.click((await screen.findAllByRole("button", { name: "Actions" })).at(-1)!);
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Revoke grant" }));
-  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(await screen.findByRole("button", { name: "Revoke grant" }));
+  const dialog = await screen.findByRole("alertdialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Revoke grant" }));
   await waitFor(() => expect(requests.find(({ query }) => query.includes("revoke_workflow_trigger_grant("))?.variables).toEqual({
     id: "wft_review", resourceType: "notes/role", resourceId: "trigger_editor", relation: "member",

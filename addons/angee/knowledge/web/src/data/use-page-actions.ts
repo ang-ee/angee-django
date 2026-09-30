@@ -45,7 +45,7 @@ export function usePageActions(
   const resource = metadata?.resource ?? null;
   const resourceName = refineResourceName(resource);
   const fields = useMemo(() => refineFieldsFromPaths(["id", "title"]), []);
-  const [createPage] = useAuthoredMutation(KnowledgeCreatePage);
+  const [createPageMutation] = useAuthoredMutation(KnowledgeCreatePage);
   const updatePageMutation = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resourceName,
     dataProviderName: resource?.schemaName,
@@ -59,7 +59,7 @@ export function usePageActions(
   // must stay stable even if Refine refreshes the mutation function identities.
   const { mutateAsync: updateMutate } = updatePageMutation;
   const actionRef = useLatestRef({
-    createPage,
+    createPageMutation,
     deleteWithPreview,
     resource,
     run,
@@ -68,10 +68,10 @@ export function usePageActions(
 
   const createPage = useCallback<PageActions["createPage"]>(
     ({ vault, title, kind, parent }) => {
-      const { createPage, resource, run } = actionRef.current;
+      const { createPageMutation, resource, run } = actionRef.current;
       return run(async () => {
         requirePageResource(resource);
-        const response = await createPage({ vault, title, kind, parent });
+        const response = await createPageMutation({ vault, title, kind, parent });
         return rowPublicId(response?.create_page ?? null);
       });
     },

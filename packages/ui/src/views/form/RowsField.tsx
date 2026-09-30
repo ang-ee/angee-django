@@ -187,6 +187,7 @@ function rowsValue(value: unknown): RowsValue {
 }
 
 export const rowsWidget = {
+  acceptsRowTemplate: true,
   edit: RowsEdit,
   read: RowsRead,
 } satisfies WidgetDefinition<RowsValue>;
