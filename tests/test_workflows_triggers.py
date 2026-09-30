@@ -21,7 +21,14 @@ from angee.knowledge import schema as knowledge_schema
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.testing.drivers import load_workflow, run_until, trigger_source
-from angee.workflows.testing.models import StepAttempt, StepWatch, Trigger, TriggerEvent, WorkflowRun
+from angee.workflows.testing.models import (
+    StepAttempt,
+    StepWatch,
+    Trigger,
+    TriggerEvent,
+    WorkflowRun,
+    WorkflowRunEvidence,
+)
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.workflow_steps import document
 
@@ -103,6 +110,7 @@ def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_set
     run = event.started_run
     assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     assert run.trigger_event_id == event.pk
+    assert [row.record_public_id for row in system_queryset(WorkflowRunEvidence).filter(run=run)] == [record.sqid]
     run_until(run)
     system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
     assert WorkflowRun.objects.prune() == 1

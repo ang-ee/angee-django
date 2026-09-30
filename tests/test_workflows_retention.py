@@ -12,7 +12,8 @@ from angee.workflows.managers import PRUNE_BATCH_LIMIT
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun, WorkflowRunEvidence
+from tests.conftest import vault_for
 from tests.decisions_models import Decision, DecisionGroup
 from tests.tables import model_tables
 from tests.test_workflows_children import age_runs
@@ -51,6 +52,19 @@ def protected_execution(execution):
 def retry_prune(run):
     """Advance only the marked retry deadline, retaining the real lifecycle state."""
     system_queryset(WorkflowRun).filter(pk=run.pk).update(prune_after=Now() - timedelta(seconds=1))
+
+
+def test_prune_removes_derived_from_rows_with_the_run(execution):
+    """Admission references follow run retention without protecting source deletion."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="evidence-retention", actor=actor)
+    source = vault_for(actor, name="Retained input")
+    run = start_run(workflow, actor=actor, subject=source)
+    run_until(run)
+    assert system_queryset(WorkflowRunEvidence).filter(run=run).count() == 1
+    age_runs(run)
+    assert WorkflowRun.objects.prune() == 1
+    assert not system_queryset(WorkflowRunEvidence).filter(run_id=run.pk).exists()
 
 
 def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_graph, register_step):

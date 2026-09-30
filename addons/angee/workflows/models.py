@@ -14,6 +14,7 @@ from django.db.models.functions import Coalesce, Now
 from django.utils.functional import cached_property
 from rebac import system_context
 
+from angee.base.evidence import DerivedFrom
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
@@ -28,6 +29,7 @@ from angee.workflows.managers import (
     StepRunManager,
     StepWatchManager,
     WorkflowManager,
+    WorkflowRunEvidenceManager,
     WorkflowRunManager,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
@@ -257,6 +259,25 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
                 name="workflows_run_finished",
             ),
         ]
+
+
+class WorkflowRunEvidence(DerivedFrom):
+    """One subject or entry input record retained with its admitted run."""
+
+    runtime = True
+    sqid_prefix = "wre_"
+    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="evidence")
+    objects = WorkflowRunEvidenceManager()
+
+    class Meta:
+        """Keep each canonical evidence target once per run."""
+
+        abstract = True
+        rebac_resource_type = "workflows/run_evidence"
+        constraints = [models.UniqueConstraint(
+            fields=("run", "content_type", "object_id"), name="workflows_run_evidence_unique",
+        )]
+        indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_run_evidence_record")]
 
 
 class StepRun(AngeeDataModel):

@@ -35,6 +35,7 @@ strawberry.enum(cast(Any, RunOrigin))
 Workflow = apps.get_model("workflows", "Workflow")
 WorkflowVersion = apps.get_model("workflows", "WorkflowVersion")
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
+WorkflowRunEvidence = apps.get_model("workflows", "WorkflowRunEvidence")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
@@ -81,6 +82,7 @@ class WorkflowRunType(AngeeNode):
     parent_step: StepRunType | None = actor_scoped_to_one("parent_step")
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
     trigger_event: TriggerEventType | None = actor_scoped_to_one("trigger_event")
+    evidence: list[WorkflowRunEvidenceType] = actor_scoped_to_many("evidence")
     step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
@@ -113,6 +115,31 @@ class WorkflowRunType(AngeeNode):
     def subject_id(self) -> PublicID | None:
         """Return the subject's public identity; navigation rechecks its policy."""
         return optional_public_id(cast(Any, self).record_public_id or None)
+
+
+@strawberry_django.type(WorkflowRunEvidence)
+class WorkflowRunEvidenceType(AngeeNode):
+    """A retained run input reference, redacted when its source is unreadable."""
+
+    @classmethod
+    def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
+        """Compose the canonical record-read annotation for source projection."""
+        return with_record_reference_access(queryset)
+
+    run: WorkflowRunType | None = actor_scoped_to_one("run")
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_model(self) -> str | None:
+        """Expose a target label only while the viewer can read that record."""
+        return cast(Any, self).record_model_label if cast(Any, self)._angee_record_readable else None
+
+    @strawberry_django.field(only=["content_type_id", "object_id"])
+    def record_id(self) -> PublicID | None:
+        """Expose a public ID only while the viewer can read that record."""
+        return (
+            optional_public_id(cast(Any, self).record_public_id or None)
+            if cast(Any, self)._angee_record_readable else None
+        )
 
 
 @strawberry_django.type(StepRun)
@@ -305,6 +332,11 @@ _RUN_RESOURCE = hasura_model_resource(
     aggregatable=["id"], groupable=["status", "origin", "outcome", "version__workflow", "version__workflow__name"],
     insert=False, update=False, delete=False,
 )
+_RUN_EVIDENCE_RESOURCE = hasura_model_resource(
+    WorkflowRunEvidenceType, model=WorkflowRunEvidence, filterable=["id", "run"],
+    record_ref_filters=("record_model", "record_id"), record_ref_requires_read=True,
+    sortable=["id"], aggregatable=["id"], insert=False, update=False, delete=False,
+)
 _STEP_RESOURCE = hasura_model_resource(
     StepRunType, model=StepRun,
     filterable=["id", "run", "decision_group", "awaited_run", "node_key", "map_index",
@@ -408,8 +440,9 @@ class WorkflowActionMutation:
 
 
 _RESOURCES = (
-    _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE,
-    _WATCH_RESOURCE, _TRIGGER_RESOURCE, _TRIGGER_EVENT_RESOURCE,
+    _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _RUN_EVIDENCE_RESOURCE,
+    _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE, _WATCH_RESOURCE,
+    _TRIGGER_RESOURCE, _TRIGGER_EVENT_RESOURCE,
 )
 schemas = {
     "console": {
@@ -419,8 +452,8 @@ schemas = {
         "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
         "types": [
             RunOrigin,
-            WorkflowType, WorkflowVersionType, WorkflowRunType, StepRunType, StepAttemptType, StepArtifactType,
-            StepWatchType, TriggerType, TriggerEventType,
+            WorkflowType, WorkflowVersionType, WorkflowRunType, WorkflowRunEvidenceType,
+            StepRunType, StepAttemptType, StepArtifactType, StepWatchType, TriggerType, TriggerEventType,
             *(type_ for resource in _RESOURCES for type_ in resource.types),
         ],
     },

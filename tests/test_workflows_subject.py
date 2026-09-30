@@ -1,9 +1,11 @@
 """Canonical run references retain the workflow's declared concrete subject behavior."""
 
 from contextlib import nullcontext
+from typing import Annotated
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from pydantic import BaseModel, Field
 from rebac import (
     RelationshipTuple,
     delete_relationship,
@@ -16,9 +18,10 @@ from rebac import (
 from angee.base.scoping import system_queryset
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
+from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import run_until
-from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
-from tests.conftest import create_user
+from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun, WorkflowRunEvidence
+from tests.conftest import create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.workflow_steps import Echo, document
 
@@ -68,6 +71,9 @@ def test_context_preserves_concrete_mti_subject(execution, register_step):
     assert replacement.subject_content_type_id == retained.subject_content_type_id
     assert replacement.subject_model_class is MtiChild
     assert replacement.subject_object_id == subject.pk
+    assert [row.record_model_label for row in system_queryset(WorkflowRunEvidence).filter(run=replacement)] == [
+        MtiParent._meta.label,
+    ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -155,7 +161,7 @@ def test_subject_loading_requires_current_access_to_the_declared_child(execution
     assert run.status == RunStatus.FAILED
     assert "absent or inaccessible" in system_queryset(StepRun).get(run=run).attempts.with_actor(actor).get().error
     with system_context(reason="test.workflow_subject_ambient") if ambient_system else nullcontext():
-        with pytest.raises(PermissionDenied, match="subject"):
+        with pytest.raises(PermissionDenied, match="referenced record"):
             WorkflowRun.objects.reprocess(run, actor=actor)
 
 
@@ -175,7 +181,7 @@ def test_start_requires_read_access_to_subject(execution, ambient_system):
     workflow.with_actor(admin).grant_record_access("starter", actor)
     with (
         system_context(reason="test.explicit_subject_actor") if ambient_system else nullcontext(),
-        pytest.raises(PermissionDenied, match="subject"),
+        pytest.raises(PermissionDenied, match="referenced record"),
     ):
         WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
     assert not system_queryset(WorkflowRun).filter(version__workflow=workflow).exists()
@@ -184,3 +190,55 @@ def test_start_requires_read_access_to_subject(execution, ambient_system):
     with system_context(reason="test.explicit_subject_actor") if ambient_system else nullcontext():
         run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
     assert run.run_as_id == actor.pk and run.subject_object_id == subject.pk
+    evidence = system_queryset(WorkflowRunEvidence).get(run=run)
+    assert (evidence.record_model_label, evidence.record_public_id) == (subject._meta.label, subject.sqid)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_entry_record_input_is_checked_deduplicated_and_retained(execution, register_step):
+    """Only relation-marked values and the subject become canonical retained sources."""
+    admin, _ = execution
+    actor = create_user("record-input-starter")
+    other = create_user("private-input-owner")
+    source = vault_for(actor, name="Source")
+    another = vault_for(actor, name="Another")
+    private = vault_for(other, name="Private")
+
+    class Nested(BaseModel):
+        record: str = Field(json_schema_extra={"relation": {"resource": "knowledge.Vault"}})
+
+    class ReferencedInput(BaseModel):
+        source: str = Field(json_schema_extra={"relation": {"resource": "knowledge.Vault"}})
+        nested: Nested
+        records: list[Annotated[str, Field(json_schema_extra={"relation": {"resource": "knowledge.Vault"}})]]
+        plain: str
+
+    class ReadReferences(Step[ReferencedInput, None, None]):
+        key = "read_input_references"
+
+        def run(self, ctx):
+            return ctx.done()
+
+    register_step(ReadReferences)
+    workflow = Workflow.objects.install_definition(
+        key="record_input", name="Record input", draft=document("entry", step=ReadReferences.key), actor=admin,
+    )
+    workflow.with_actor(admin).grant_record_access("starter", actor)
+    payload = {
+        "source": source.sqid, "nested": {"record": another.sqid},
+        "records": [source.sqid], "plain": private.sqid,
+    }
+    run = WorkflowRun.objects.start(workflow, actor=actor, subject=source, input=payload, request_key="input-evidence")
+    assert {
+        (row.record_model_label, row.record_public_id)
+        for row in system_queryset(WorkflowRunEvidence).filter(run=run)
+    } == {("knowledge.Vault", source.sqid), ("knowledge.Vault", another.sqid)}
+    assert WorkflowRun.objects.start(
+        workflow, actor=actor, subject=source, input=payload, request_key="input-evidence",
+    ).pk == run.pk
+    assert system_queryset(WorkflowRunEvidence).filter(run=run).count() == 2
+
+    payload["nested"]["record"] = private.sqid
+    with pytest.raises(PermissionDenied, match="referenced record"):
+        WorkflowRun.objects.start(workflow, actor=actor, subject=source, input=payload)
+    assert system_queryset(WorkflowRun).filter(version__workflow=workflow).count() == 1

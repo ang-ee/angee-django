@@ -159,6 +159,26 @@ def test_run_subject_filters_use_model_labels_and_public_ids(schema, execution):
     )) == visible
 
 
+def test_run_evidence_redacts_references_after_source_read_is_revoked(schema, execution):
+    """Run readers keep the retained edge but cannot recover a hidden target ID."""
+    admin, _sent = execution
+    starter, viewer = (create_user(name) for name in ("evidence-starter", "evidence-viewer"))
+    workflow = load_workflow(document("entry"), actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", starter)
+    source = vault_for(starter, name="Retained source")
+    run = start_run(workflow, actor=starter, subject=source)
+    run.with_actor(starter).grant_record_access("reader", viewer)
+    query = """query($id: String!) {
+      workflowrun_by_pk(id: $id) { id evidence { id record_model record_id } }
+    }"""
+    own = result_data(execute_schema(schema, query, {"id": run.sqid}, user=starter))["workflowrun_by_pk"]
+    assert len(own["evidence"]) == 1
+    assert own["evidence"][0]["record_model"] == "knowledge.Vault"
+    assert own["evidence"][0]["record_id"] == source.sqid
+    hidden = result_data(execute_schema(schema, query, {"id": run.sqid}, user=viewer))["workflowrun_by_pk"]
+    assert hidden["evidence"] == [{"id": own["evidence"][0]["id"], "record_model": None, "record_id": None}]
+
+
 def test_for_subject_preserves_actor_and_existing_filters(execution):
     """Shared subjects do not turn a starter's query into another starter's runs."""
     admin, _sent = execution

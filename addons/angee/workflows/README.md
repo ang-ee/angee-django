@@ -45,6 +45,12 @@ commit together. After commit, every ready row of an active run is sent to the j
 queue, including parallel branches whose earlier message encountered a busy run.
 Run admission stores its origin and exactly one protected cause in the same
 insert: a parent step, a prior run, or a trigger event. Manual runs have no cause.
+It also checks the actor's standing read access to the subject and each
+record-reference field in the entry step's frozen input schema. The run retains
+one canonical `WorkflowRunEvidence` edge per source; ordinary input fields do
+not create edges. Readers can inspect these references through the run resource,
+with identities redacted when their current record access is gone. Evidence
+edges are pruned with their run and do not protect source records from deletion.
 Retention prunes a cited run only after its continuations and reprocesses are
 pruned; retained events protect their trigger and survive pruning of their run.
 IO bodies run after their claim commits, without a transaction. Their result is

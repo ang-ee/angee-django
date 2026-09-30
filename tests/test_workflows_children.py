@@ -195,7 +195,7 @@ def test_child_admission_enforces_start_and_subject_read(child_graph, missing):
     assert parent.status == "failed" and not admitted
     attempt = system_queryset(StepAttempt).get(step_run__run=parent)
     assert attempt.result == "failed"
-    assert ("Read access" if missing == "subject_read" else "'start'") in attempt.error
+    assert ("referenced record" if missing == "subject_read" else "'start'") in attempt.error
     assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
 
 

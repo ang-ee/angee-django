@@ -43,6 +43,18 @@ class WorkflowRun(sources.WorkflowRun):
         rebac_resource_type = "workflows/run"
 
 
+class WorkflowRunEvidence(sources.WorkflowRunEvidence):
+    """Concrete admission evidence for native workflow source tests."""
+
+    class Meta(sources.WorkflowRunEvidence.Meta):
+        """Django options for the shared run evidence test table."""
+
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_run_evidence"
+        rebac_resource_type = "workflows/run_evidence"
+
+
 class StepRun(sources.StepRun):
     """Concrete node execution used by source-addon tests."""
 

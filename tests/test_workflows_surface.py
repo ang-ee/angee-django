@@ -23,7 +23,10 @@ from angee.workflows.steps import Settlement, Step
 from angee.workflows.testing import drivers as test_drivers
 
 EXPECTED_MODELS = {
-    "workflows": "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun WorkflowVersion",
+    "workflows": (
+        "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun "
+        "WorkflowRunEvidence WorkflowVersion"
+    ),
     "decisions": "Decision DecisionEvidence DecisionGroup",
 }
 
@@ -207,10 +210,12 @@ def test_run_origin_and_trigger_event_surface() -> None:
 
 
 def test_evidence_owner_surface() -> None:
-    """Decision evidence composes the base fact, derivation and admission owners."""
+    """Decision and run evidence compose the base derivation and admission owners."""
     evidence = apps.get_model("decisions", "DecisionEvidence")
+    run_evidence = apps.get_model("workflows", "WorkflowRunEvidence")
     decision = apps.get_model("decisions", "Decision")
     assert issubclass(evidence, DerivedFrom)
+    assert issubclass(run_evidence, DerivedFrom)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
     assert issubclass(DecisionRequest, BaseModel)

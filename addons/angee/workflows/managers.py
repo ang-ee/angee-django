@@ -23,7 +23,10 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
+from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.fields import ModelLabelField
+from angee.base.identity import public_id_of
+from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
@@ -355,6 +358,13 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         )
 
 
+class WorkflowRunEvidenceQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+    """Keep retained admission references immutable until their run is pruned."""
+
+
+WorkflowRunEvidenceManager = AngeeManager.from_queryset(WorkflowRunEvidenceQuerySet)
+
+
 class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
     """Own run admission, cancellation and retained row updates under the run lock."""
 
@@ -398,10 +408,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     request_key = f"child:{parent_step.sqid}:{parent_step.page_index}"
             workflow.refresh_from_db()
             workflow.validate_subject(subject)
-            if subject is not None:
-                readable = read_scoped_queryset(type(subject), actor)
-                if readable is None or not readable.filter(pk=subject.pk).exists():
-                    raise PermissionDenied("Read access to the workflow subject is required.")
             target = canonical_record_target(subject) if subject is not None else None
             identity = dict(
                 run_as_id=actor_user_id(to_subject_ref(actor)),
@@ -433,6 +439,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
             normalized = version.definition.validate_input(payload)
+            references = list(version.definition.input_evidence(normalized))
+            if subject is not None:
+                references.append(EvidenceReference(model=subject._meta.label, id=public_id_of(subject)))
+            records = readable_records(references, (actor,))
+            targets = {canonical_record_target(record) for record in records}
             try:
                 with transaction.atomic():
                     run = self.create(
@@ -443,6 +454,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 if existing is None:
                     raise
                 return replay(existing)
+            evidence_model = apps.get_model("workflows", "WorkflowRunEvidence")
+            evidence_model.objects.bulk_create(
+                evidence_model(run=run, content_type=source.content_type, object_id=source.object_id)
+                for source in sorted(targets, key=lambda item: (item.content_type.pk, item.object_id))
+            )
             with self.hold(run.pk) as locked:
                 from angee.workflows.runner import runner
 

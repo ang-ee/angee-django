@@ -1,7 +1,7 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 19
+// @rebac_schema_revision: 20
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=created_by
@@ -44,6 +44,16 @@ definition workflows/run {
     permission operate = run_as + operator + workflow->operator + admin->member
     permission write = operate + workflow->write
     permission read__error = write
+    permission delete = admin->member
+}
+
+definition workflows/run_evidence {
+    relation run: workflows/run // rebac:field=run
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = run->read + admin->member
+    permission write = admin->member
     permission delete = admin->member
 }
 

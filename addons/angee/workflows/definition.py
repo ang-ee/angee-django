@@ -13,10 +13,13 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 
+from angee.base.evidence import EvidenceReference
 from angee.base.fields import ModelLabelField
+from angee.base.impl import FORM_SCHEMA_ANNOTATIONS
 from angee.base.jsonschema import (
     compose_schema,
     embed_schema,
+    materialize_schema,
     schema_at,
     schemas_match,
     union_schema,
@@ -766,6 +769,38 @@ class Definition(BaseModel):
             value = {**value, **normalized} if isinstance(value, dict) and isinstance(normalized, dict) else normalized
         validate(self._validator(self.input_schema), value)
         return value
+
+    def input_evidence(self, value: Any) -> tuple[EvidenceReference, ...]:
+        """Project record references declared by the entry step's frozen input schema."""
+        schema = materialize_schema(
+            self.node_input_schema(self.entry), annotations=FORM_SCHEMA_ANNOTATIONS | {"default"},
+        )
+        entry_value = self.input_for(self.entry, value, [])
+        references: set[tuple[str, str]] = set()
+
+        def visit(node: Any, item: Any) -> None:
+            if not isinstance(node, dict) or item is None:
+                return
+            if relation := node.get("relation"):
+                if isinstance(item, str):
+                    references.add((relation["resource"], item))
+            if isinstance(item, dict):
+                for name, child in node.get("properties", {}).items():
+                    if name in item:
+                        visit(child, item[name])
+            elif isinstance(item, list):
+                prefix = node.get("prefixItems", ())
+                for index, element in enumerate(item):
+                    visit(prefix[index] if index < len(prefix) else node.get("items"), element)
+            for child in node.get("allOf", ()):
+                visit(child, item)
+            for choice in ("anyOf", "oneOf"):
+                for child in node.get(choice, ()):
+                    if validator(child).is_valid(item):
+                        visit(child, item)
+
+        visit(schema, entry_value)
+        return tuple(EvidenceReference(model=model, id=public_id) for model, public_id in sorted(references))
 
     def _entry_input(self, value: Any, step: type[Step[Any, Any, Any]]) -> Any:
         if not isinstance(value, dict) or step.input_model is None:
