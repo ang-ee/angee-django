@@ -724,6 +724,7 @@ class _FilterInputExtension(FieldExtension):
     def __init__(self, base: type, donor: type | None, aliases: Mapping[str, str]) -> None:
         self.base = base
         self.aliases = aliases
+        self.filter_aliases = frozenset(aliases.values())
         self.combined = base if donor is None else dataclasses.make_dataclass(
             f"{base.__name__}WithExpressions", [], bases=(base, donor), kw_only=True,
         )
@@ -736,6 +737,40 @@ class _FilterInputExtension(FieldExtension):
 
     def map_arguments(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return {key: self._value(value) for key, value in kwargs.items()}
+
+    def used_aliases(self, where: Any) -> set[str]:
+        """Find the mapped filter columns present in a recursive bool expression."""
+        used: set[str] = set()
+        if isinstance(where, list):
+            for item in where:
+                used.update(self.used_aliases(item))
+        elif dataclasses.is_dataclass(where) and not isinstance(where, type):
+            for field in dataclasses.fields(where):
+                value = getattr(where, field.name)
+                if value is strawberry.UNSET or value is None:
+                    continue
+                if field.name in self.filter_aliases:
+                    used.add(field.name)
+                else:
+                    used.update(self.used_aliases(value))
+        return used
+
+    def _remember_aliases(self, info: strawberry.Info, where: Any) -> None:
+        # Aggregate containers resolve their queryset in a child field, so keep
+        # each root's selection on the request context under its response key.
+        selections = getattr(info.context, "_angee_filter_aliases", None)
+        if selections is None:
+            selections = {}
+            info.context._angee_filter_aliases = selections
+        selections[info.path.as_list()[0]] = self.used_aliases(where)
+
+    def resolve(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:
+        self._remember_aliases(info, kwargs.get("where"))
+        return next_(source, info, **kwargs)
+
+    async def resolve_async(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:
+        self._remember_aliases(info, kwargs.get("where"))
+        return await next_(source, info, **kwargs)
 
     def _value(self, value: Any) -> Any:
         if isinstance(value, self.base):
@@ -891,8 +926,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         if "__" in path and path not in expressions and not require_field_for_path(model, path).is_relation
     })
     filter_aliases = {path: f"_angee_filter_{index}" for index, path in enumerate(sorted(relation_filters))}
+    all_filter_aliases = set(filter_aliases.values())
 
-    def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    def prepare_filters(queryset: models.QuerySet[Any], used_aliases: set[str]) -> models.QuerySet[Any]:
         guarded = {}
         if record_ref_requires_read:
             queryset = with_record_reference_access(queryset)
@@ -902,9 +938,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                     default=models.Value(None), output_field=expressions[name].output_field,
                 )
         for path, scalar_path in relation_filters.items():
+            if filter_aliases[path] not in used_aliases:
+                continue
             expression = actor_scoped_relation_expression(queryset, scalar_path)
             guarded[filter_aliases[path]] = expression if expression is not None else models.F(scalar_path)
         return with_filter_aliases(queryset.alias(**(expressions | guarded)))
+
+    def request_filter_aliases(info: strawberry.Info) -> set[str]:
+        selections = getattr(info.context, "_angee_filter_aliases", {})
+        # An absent extension selection fails closed for direct queryset callers.
+        return selections.get(info.path.as_list()[0], all_filter_aliases)
 
     if expressions or relation_filters:
         for key in expressions:
@@ -916,10 +959,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         base_queryset, base_aggregate_queryset = read_queryset, aggregate_queryset
 
         def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-            return prepare_filters(base_queryset(info))
+            return prepare_filters(base_queryset(info), request_filter_aliases(info))
 
         def aggregate_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-            return prepare_filters(base_aggregate_queryset(info))
+            return prepare_filters(base_aggregate_queryset(info), request_filter_aliases(info))
     model_filters = tuple(field for field in filterable if field not in expressions)
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
@@ -1017,7 +1060,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             where, id_column=id_column, id_decode=id_decode,
             field_decoders=field_id_decode, lookups=filter_lookups,
         )
-        return lambda queryset: prepare_filters(queryset).filter(predicate)
+        used_aliases = adapter.used_aliases(where) if adapter is not None else set()
+        return lambda queryset: prepare_filters(queryset, used_aliases).filter(predicate)
 
     return attach_hasura_resource_metadata(
         resource,

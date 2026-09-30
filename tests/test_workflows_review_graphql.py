@@ -153,12 +153,16 @@ def test_workflow_key_filters_preserve_related_workflow_read_scope(schema, linke
       decisions_aggregate(where: {group__step_run__run__version__workflow__key: {_eq: $key}}) {
         aggregate { count }
       }
+      visible: decisions { id }
+      visible_count: decisions_aggregate { aggregate { count } }
     }"""
     expected = {
         "workflowrun": [{"id": run.sqid}],
         "workflowrun_aggregate": {"aggregate": {"count": 1}},
         "decisions": [{"id": decision.sqid}],
         "decisions_aggregate": {"aggregate": {"count": 1}},
+        "visible": [{"id": decision.sqid}],
+        "visible_count": {"aggregate": {"count": 1}},
     }
     assert result_data(execute_schema(schema, query, {"key": workflow.key}, user=owner)) == expected
     for actor in (operator, assignee):
@@ -168,6 +172,8 @@ def test_workflow_key_filters_preserve_related_workflow_read_scope(schema, linke
         assert result_data(execute_schema(schema, query, {"key": workflow.key}, user=actor)) == {
             "workflowrun": [], "workflowrun_aggregate": {"aggregate": {"count": 0}},
             "decisions": [], "decisions_aggregate": {"aggregate": {"count": 0}},
+            "visible": [{"id": decision.sqid}],
+            "visible_count": {"aggregate": {"count": 1}},
         }
     resources = {resource.model_label: resource for resource in schema.angee_resources}
     assert resources["workflows.WorkflowRun"].query.fields["version.workflow.key"].filter is not None
