@@ -55,6 +55,19 @@ DJANGO_READY = {
     "start_period": "30s",
     "retries": 180,
 }
+# The slim node image has neither wget nor curl, so the container probes with node.
+FRONTEND_READY = {
+    "cmd": [
+        "node",
+        "-e",
+        "require('net').connect(5173, '127.0.0.1')"
+        ".on('connect', () => process.exit(0)).on('error', () => process.exit(1))",
+    ],
+    "interval": "5s",
+    "timeout": "3s",
+    "start_period": "30s",
+    "retries": 180,
+}
 
 
 def _command_texts(stack: dict[str, Any]) -> list[str]:
@@ -1148,7 +1161,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "pnpm install" not in frontend_command
     assert "runtime/schemas" not in frontend_command
     assert "codegen" not in frontend_command
-    assert frontend["ready"]["http"] == {"port": 5173, "path": "/"}
+    assert frontend["ready"] == FRONTEND_READY
     assert frontend["after"] == ["django", "codegen"]
     assert frontend["ports"] == ["${ports.ui}:5173"]
     assert "ANGEE_UI_ALLOWED_HOSTS" not in frontend["env"]
@@ -1204,7 +1217,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     }
 
     assert framework["services"]["django"]["ready"] == DJANGO_READY
-    assert framework["services"]["frontend"]["ready"]["http"] == {"port": 5173, "path": "/"}
+    assert framework["services"]["frontend"]["ready"] == FRONTEND_READY
     assert instance["services"]["django"]["ready"] == DJANGO_READY
 
     for name in ("celery-worker", "celery-whatsapp"):
