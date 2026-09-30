@@ -34,6 +34,7 @@ export const enDashboardMessages: Record<string, string> = {
   "surface.byField": "By {field}",
   "surface.total": "Total",
   "widget.authoredUnavailable": "The authored panel is unavailable.",
+  "widget.viewUnavailable": "This resource view is unavailable.",
   "widget.loading": "Loading…",
   "widget.noRows": "No rows",
   "widget.statistic": "Statistic",

@@ -46,13 +46,13 @@ export function useDashboardWidgetData(
   spec: WidgetSpec,
   pageScope?: DashboardPageScope,
 ): DashboardWidgetData {
-  const source = spec.data.shape === "none" ? EMPTY_SOURCE : spec.data.source;
+  const source = spec.data.shape === "none" || spec.data.shape === "resourceView" ? EMPTY_SOURCE : spec.data.source;
   const metadata = useModelMetadata(source.resource);
   const resource = metadata?.resource ?? null;
   const recordMatchFields = useResourceRecordMatchFields(spec.data.shape === "rows" ? source.resource : "");
   const visible = useVisible();
   const prepared = React.useMemo(() => {
-    if (!resource || spec.data.shape === "none") {
+    if (!resource || spec.data.shape === "none" || spec.data.shape === "resourceView") {
       return {
         error: null,
         query: null,
@@ -116,7 +116,7 @@ export function useDashboardWidgetData(
     }
   }, [pageScope?.filter, pageScope?.resource, resource, source, spec.data.shape, recordMatchFields]);
 
-  const refresh = spec.data.shape === "none" ? { mode: "manual" as const } : source.refresh ?? { mode: "live" as const };
+  const refresh = spec.data.shape === "none" || spec.data.shape === "resourceView" ? { mode: "manual" as const } : source.refresh ?? { mode: "live" as const };
   const enabled = visible && prepared.query !== null;
   const aggregateOperation = useAggregateOperation(resource);
   const groupOperation = useGroupOperation(resource);
@@ -196,6 +196,8 @@ export function useDashboardWidgetData(
   ) || null;
   return {
     value: wantsValue ? bucketValue(aggregate.aggregate, prepared.measure ?? COUNT_MEASURE) : null,
+    count: wantsRows ? rows.result.total ?? null : wantsValue && (prepared.measure?.op ?? "count") === "count"
+      ? bucketValue(aggregate.aggregate, prepared.measure ?? COUNT_MEASURE) : null,
     series: seriesResult.series,
     rows: wantsRows ? (rows.result.data as readonly Record<string, unknown>[] ?? []) : [],
     queryFields: prepared.query?.fields ?? EMPTY_FIELDS,

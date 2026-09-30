@@ -56,17 +56,18 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
             raise ValidationError({"visibility": "Declare a resource, key and non-empty value."})
         try:
             model = apps.get_model(policy["resource"])
-            if policy["key"] not in declared_hasura_resource_fields(model, "hasura_container_scope_fields"):
+            key = policy["key"].replace(".", "__")
+            if "." in policy["key"] or key not in declared_hasura_resource_fields(
+                model, "hasura_container_scope_fields"
+            ):
                 raise ValidationError({"visibility": "Use a declared container scope key."})
-            field = require_field_for_path(model, policy["key"])
-            container_path, separator, _leaf = policy["key"].rpartition("__")
-            if not separator:
-                raise ValidationError({"visibility": "Use a related container scope key."})
-            container = require_field_for_path(model, container_path).related_model
+            field = require_field_for_path(model, key)
+            container_path, separator, _leaf = key.rpartition("__")
+            container = require_field_for_path(model, container_path).related_model if separator else model
         except (LookupError, ValueError, FieldDoesNotExist, FieldPathError) as error:
             raise ValidationError({"visibility": "The scope resource or key does not exist."}) from error
         definition = effective_rebac_definition(container)
-        if field.is_relation or not field.unique or definition is None or is_gated_read_axis(model, policy["key"]):
+        if field.is_relation or not field.unique or definition is None or is_gated_read_axis(model, key):
             raise ValidationError({"visibility": "Use a unique, ungated scalar key on a permission-managed scope."})
         scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
     allowed = [False] * len(policies)
@@ -171,9 +172,15 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
                 raise ValidationError({"visibility": "The widget visibility policy must be an object."})
             widget_visibility_answers([raw["visibility"]], None)
         data = raw.get("data")
-        if not isinstance(data, dict) or data.get("shape") not in {"value", "series", "rows", "none"}:
+        if not isinstance(data, dict) or data.get("shape") not in {"value", "series", "rows", "none", "resourceView"}:
             raise ValidationError({"snapshot": f"{path}.data has an invalid shape."})
-        if data["shape"] == "none":
+        if data["shape"] == "resourceView":
+            if set(data) != {"shape", "preset"} or not isinstance(data.get("preset"), str) or not data["preset"]:
+                raise ValidationError({"snapshot": f"{path}.data requires a resource-view preset."})
+            route = raw["options"].get("fullViewRoute")
+            if not isinstance(route, str) or not route.strip():
+                raise ValidationError({"snapshot": f"{path}.options.fullViewRoute is required."})
+        elif data["shape"] == "none":
             binding = data.get("binding")
             if (
                 set(data) != {"shape", "binding"}
@@ -306,7 +313,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
         data = widget["data"]
         if data["shape"] != "rows" and "columns" in widget["options"]:
             _invalid_query(f"widgets[{index}].options.columns", "columns are only valid for row widgets")
-        if data["shape"] == "none":
+        if data["shape"] in {"none", "resourceView"}:
             continue
         if set(data) != {"shape", "source"}:
             _invalid_query(path, "query widgets accept only shape and source")
