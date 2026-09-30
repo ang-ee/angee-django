@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -142,7 +142,7 @@ describe("ResourceToolbar list-kind regression", () => {
     fireEvent.click(screen.getByRole("button", { name: "Filter" }));
     expect(screen.getByRole("searchbox", { name: "Filter records" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-    fireEvent.click(screen.getByRole("button", { name: "Mine" }));
+    fireEvent.click(within(screen.getByLabelText("Filters")).getByRole("button", { name: "Mine" }));
     expect(onToggle).toHaveBeenCalledWith("mine");
     const facet = screen.getByRole("combobox", { name: "Status" });
     fireEvent.click(facet);

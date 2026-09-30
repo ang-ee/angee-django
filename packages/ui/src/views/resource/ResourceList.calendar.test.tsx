@@ -4,9 +4,10 @@ import { act, cleanup, render as rtlRender, screen } from "@testing-library/reac
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type { ReactElement, ReactNode } from "react";
+import { createUiTestProviders } from "../../testing";
 
 import type { CalendarViewSpec } from "./resource-view-types";
 import type { FormViewProps } from "../form/FormView";
@@ -76,6 +77,8 @@ vi.mock("./useBulkDelete", () => ({
 
 import { ResourceList } from "./ResourceList";
 
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://resource-list-calendar" });
+
 const SPEC: ResourceListCalendarSpec = {
   sources: [{ document: {}, variables: () => ({}), select: () => [] } as never],
   createDefaults: (start, end) => ({
@@ -116,8 +119,8 @@ describe("ResourceList create action", () => {
   test("a successful create refreshes the resource and opens its returned record", () => {
     const onSelect = vi.fn();
     const metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]);
-    render(<ModelMetadataProvider metadata={metadata}><ResourceList resource="notes.Note" columns={[]}
-      createAction={action} onSelect={onSelect} /></ModelMetadataProvider>);
+    render(<Provider metadata={metadata}><ResourceList resource="notes.Note" columns={[]}
+      createAction={action} onSelect={onSelect} /></Provider>);
     act(() => captured.onCreate?.());
     act(() => screen.getByRole("button", { name: "Save" }).click());
     expect(captured.invalidate).toHaveBeenCalled();
@@ -125,7 +128,7 @@ describe("ResourceList create action", () => {
   });
 });
 const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; clearClients(); });
 function render(element: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);

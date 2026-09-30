@@ -1,4 +1,4 @@
-import { format, formatDistance, isValid, parseISO, type Locale } from "date-fns";
+import { format, formatDistance, isDate, isValid, parseISO, type Locale } from "date-fns";
 
 /** A date-ish widget value: an ISO string, a `Date`, or empty. */
 export type DateWidgetValue = string | Date | null;
@@ -10,7 +10,7 @@ export const TIME_INPUT_FORMAT = "HH:mm";
 
 /** Parse a widget value to a valid `Date`, or null for empty/invalid input. */
 export function dateFromValue(value: DateFormatValue): Date | null {
-  if (value instanceof Date) return isValid(value) ? value : null;
+  if (isDate(value)) return isValid(value) ? value : null;
   if (typeof value === "number") {
     const date = new Date(value);
     return isValid(date) ? date : null;
@@ -25,7 +25,7 @@ export function dateFromValue(value: DateFormatValue): Date | null {
  * String values use ISO-8601 by design.
  */
 export function dateFromUnknown(value: unknown): Date | null {
-  if (value instanceof Date || typeof value === "number" || typeof value === "string") {
+  if (isDate(value) || typeof value === "number" || typeof value === "string") {
     return dateFromValue(value);
   }
   return null;
@@ -33,7 +33,7 @@ export function dateFromUnknown(value: unknown): Date | null {
 
 /** The raw value as a stable title/string (the ISO form for a `Date`). */
 export function valueLabel(value: DateFormatValue): string {
-  if (value instanceof Date) return isValid(value) ? value.toISOString() : "";
+  if (isDate(value)) return isValid(value) ? value.toISOString() : "";
   if (typeof value === "number") return String(value);
   return value ?? "";
 }

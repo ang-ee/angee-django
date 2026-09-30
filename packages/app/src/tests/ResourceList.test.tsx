@@ -1768,7 +1768,8 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    await screen.findByText("Updated At · Month");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+      .toContain("Group by: Updated At · Month"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
@@ -1786,7 +1787,8 @@ describe("ResourceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
 
-    await screen.findByText("Updated At · Month");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+      .toContain("Group by: Updated At · Month"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
@@ -1855,7 +1857,8 @@ describe("ResourceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
 
-    await screen.findByText("Updated At · Month");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+      .toContain("Group by: Updated At · Month"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("view")).toBe("list");
@@ -1875,15 +1878,15 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    const removeGroup = await screen.findByRole("button", {
-      name: "Remove Updated At \u00b7 Day",
-    });
-    fireEvent.click(removeGroup);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+      .toContain("Group by: Updated At · Day"));
+    fireEvent.click(screen.getByRole("button", { name: "Group by" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear grouping" }));
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Remove Updated At \u00b7 Day" }),
-      ).toBeNull(),
+        screen.getByRole("button", { name: "Group by" }).textContent,
+      ).toBe("Group by"),
     );
   });
 
@@ -2240,7 +2243,8 @@ describe("ResourceList", () => {
     );
 
     await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
-    await screen.findByRole("button", { name: "Remove Updated At \u00b7 Day" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+      .toContain("Group by: Updated At · Day"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("pageSize")).toBeNull();

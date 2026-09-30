@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { formatDateTime } from "@angee/ui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({
@@ -91,7 +92,7 @@ describe("KnowledgePageView", () => {
     expect(sdk.query).toHaveBeenCalledWith(KnowledgePage, { id: "pg_guide" }, { models: PAGE_READ_MODELS });
     expect(screen.getByRole("heading", { name: "Guide" })).toBeTruthy();
     expect(screen.getByText("Published instructions")).toBeTruthy();
-    expect(screen.getByText(/^Updated Jan 1$/)).toBeTruthy();
+    expect(screen.getByText(`Updated ${formatDateTime(detail().updated_at)}`)).toBeTruthy();
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 

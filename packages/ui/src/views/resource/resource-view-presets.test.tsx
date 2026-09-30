@@ -128,7 +128,7 @@ test("a route offers only its declared presets even when another route uses the 
 test("a menu preset is admitted only for its target route", async () => {
   const f = fixture(`/?preset=${archived.id}`, [], false, [archived.id]);
   await waitFor(() => expect(f.view?.state.preset).toBe(archived.id));
-  expect(f.view.state.queryError).toBeNull();
+  expect(f.view.state.queryError).toBeUndefined();
   expect(f.facts.mergedFilter).toEqual(archived.fixedFilter);
 });
 
@@ -158,7 +158,7 @@ test("a local preset mount without presetIds keeps its initial view valid and un
       </ResourceViewProvider>
     </AppRuntimeProvider>
   </ModelMetadataProvider>);
-  expect(view.state.queryError).toBeNull();
+  expect(view.state.queryError).toBeUndefined();
   expect(view.state.preset).toBe(archived.id);
   expect(view.baseFilter).toEqual(archived.fixedFilter);
   expect(view.savedFavorites.map((favorite) => favorite.id)).toEqual([archived.id, open.id]);
@@ -172,7 +172,7 @@ test("a local preset mount without presetIds keeps its initial view valid and un
       </ResourceViewProvider>
     </AppRuntimeProvider>
   </ModelMetadataProvider>);
-  expect(view.state.queryError).toBeNull();
+  expect(view.state.queryError).toBeUndefined();
   expect(view.savedFavorites.map((favorite) => favorite.id)).toEqual([archived.id]);
 });
 
