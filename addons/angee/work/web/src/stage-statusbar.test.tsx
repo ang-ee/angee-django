@@ -8,7 +8,10 @@ import { StageStatusbar } from "./stage-statusbar";
 vi.mock("./i18n", () => ({ useWorkT: () => (key: string) => key }));
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/ui")>(),
-  useRelationOptions: () => ({
+  // Options come back only when the queue is readable, as the owner's hook behaves.
+  useRelationOptions: (_relation: unknown, options: { enabled?: boolean }) => options.enabled === false ? {
+    options: [], rows: [], list: { fetching: false },
+  } : ({
     options: [{ value: "first", label: "First" }, { value: "removed", label: "Removed" }],
     rows: [{ id: "first", on_path: true }, { id: "removed", on_path: false }],
     list: { fetching: false },
@@ -26,4 +29,9 @@ test("the stage owner hides side stages from the path and names the state withou
   expect(screen.getByRole("list").textContent).not.toContain("Removed");
   expect(screen.getByText("Removed · Sep 24, 2026")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "task.action.reopen" })).toBeNull();
+});
+
+test("a reader without the stage row sees the task's projected stage name", () => {
+  render(<StageStatusbar value={null} row={{ queue: null, stage: null, stage_name: "In Development" }} />);
+  expect(screen.getByRole("list").textContent).toContain("In Development");
 });

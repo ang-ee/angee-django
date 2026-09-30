@@ -15,6 +15,8 @@ const stageRelation = { resource: STAGE_MODEL, labelField: "name", canCreate: fa
 type StageRow = {
   queue?: { id?: string } | string | null;
   stage?: { id?: string; name?: string; on_path?: boolean } | string | null;
+  /** The stage's name projected on the task, readable by every task reader. */
+  stage_name?: string | null;
   dropped_at?: string | null;
 };
 
@@ -29,8 +31,9 @@ type StageOptionRow = { id?: unknown; on_path?: unknown };
 export function StageStatusbar({ value, row, field }: WidgetRenderProps<unknown, StageRow>): React.ReactElement | null {
   const t = useWorkT();
   const queueId = relationValueId(row?.queue);
-  const current = relationValueId(value) || relationValueId(row?.stage);
-  const currentName = typeof row?.stage === "object" ? row?.stage?.name : undefined;
+  // A reader who cannot read the stage row still reads the task's projected stage name.
+  const current = relationValueId(value) || relationValueId(row?.stage) || (row?.stage_name ? `name:${row.stage_name}` : "");
+  const currentName = (typeof row?.stage === "object" ? row?.stage?.name : undefined) ?? row?.stage_name ?? undefined;
   const { options, rows, list } = useRelationOptions(stageRelation, {
     enabled: Boolean(queueId),
     fields: ["on_path"],
