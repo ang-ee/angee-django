@@ -119,11 +119,13 @@ beforeEach(() => {
   state.refetch.mockImplementation(async () => ({ data: { workflow_definition: state.snapshot } }));
 });
 
-test("keeps an authored form loading until its successful query is acknowledged", async () => {
+test("mounts the authored form only once its successful query is acknowledged", async () => {
   render(<WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" />);
   expect(await screen.findByLabelText("Workflow name")).toBeTruthy();
-  expect(state.sourceLoadings[0]).toBe(true);
-  expect(state.sourceLoadings.at(-1)).toBe(false);
+  // Until the snapshot is acknowledged the page shows its loading panel, not the
+  // form, so every render the form sees carries an acknowledged, non-loading source.
+  expect(state.sourceLoadings.length).toBeGreaterThan(0);
+  expect(state.sourceLoadings.every((loading) => loading === false)).toBe(true);
 });
 
 test("keeps the admitted revision during a dirty background refresh and submits one atomic edit", async () => {
