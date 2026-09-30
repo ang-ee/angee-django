@@ -43,6 +43,11 @@ depend on addons or a composed project's generated schema.
 | [`@angee/app`](../../packages/app/README.md) | Compose addon declarations, routes, providers, registries and the application shell |
 | Addon / composed project | Domain pages and schema-dependent generated documents |
 
+Knowledge's role-scoped notes compose messaging's `RecordThreadStream` through
+its child item and inline composer contracts. Knowledge owns page creation, body
+writes, binding, and vault permission reads; record hosts declare the role and
+public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.md).
+
 ### Ownership boundaries
 
 - Auth, preferences, and runtime i18n are app-owned providers under

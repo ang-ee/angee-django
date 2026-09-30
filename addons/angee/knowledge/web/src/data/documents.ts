@@ -10,6 +10,7 @@ export const KNOWLEDGE_LIST_LIMIT = 500;
 
 export const PAGE_MODEL = "knowledge.Page";
 export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
+export const RECORD_BINDING_MODEL = "knowledge.RecordBinding";
 export const PAGE_READ_MODELS = [PAGE_MODEL, MARKDOWN_PAGE_MODEL] as const;
 
 export const KnowledgeCreateVaultFrom = graphql(`
@@ -37,6 +38,7 @@ export const KnowledgeUpdatePageBody = graphql(`
   mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String) {
     update_page_body(page: $page, body: $body, expected_hash: $expected_hash) {
       ok
+      error
       error_code
       markdown {
         body
@@ -56,6 +58,19 @@ export const KnowledgeVaults = graphql(`
       icon
       accent
     }
+  }
+`);
+
+export const KnowledgeVault = graphql(`
+  query KnowledgeVault($id: String!) {
+    vaults_by_pk(id: $id) { id permissions }
+  }
+`);
+
+/** A vault by its declared name, for a host whose vault id differs per stack. */
+export const KnowledgeVaultByName = graphql(`
+  query KnowledgeVaultByName($name: String!) {
+    vaults(where: { name: { _eq: $name } }, limit: 1) { id permissions }
   }
 `);
 
@@ -83,6 +98,21 @@ export const KnowledgeRecordPages = graphql(`
       page
       page_title
       page_can_write
+    }
+    record_knowledge_can_bind(model_label: $modelLabel, record_id: $recordId)
+  }
+`);
+
+export const KnowledgeRecordNotes = graphql(`
+  query KnowledgeRecordNotes($modelLabel: String!, $recordId: ID!, $role: String!) {
+    record_knowledge_bindings(model_label: $modelLabel, record_id: $recordId, role: $role) {
+      page_detail {
+        id
+        title
+        created_at
+        created_by_label
+        markdown { body }
+      }
     }
     record_knowledge_can_bind(model_label: $modelLabel, record_id: $recordId)
   }

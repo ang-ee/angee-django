@@ -10,6 +10,7 @@ from angee.graphql.events import ChangePayload
 from angee.knowledge.models import RecordBindingManager
 from angee.knowledge.schema import schemas
 from tests.conftest import (
+    MarkdownPage,
     Page,
     RecordBinding,
     Vault,
@@ -41,6 +42,7 @@ def test_record_pages_projection_respects_role_and_both_write_ends(
     record = vault_for(owner, name="Record")
     with actor_context(owner):
         page = Page.objects.create_in(vault, title="Guide")
+        MarkdownPage.objects.write_body(page, "A private note")
         binding = RecordBinding.objects.upsert(page=page, target=record, role="reference")
         RecordBinding.objects.upsert(page=page, target=record, role="related")
     _grant(record, "viewer", reader)
@@ -58,18 +60,25 @@ def test_record_pages_projection_respects_role_and_both_write_ends(
     query = """query ($id: ID!, $role: String) {
       record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id, role: $role) {
         id page page_title page_can_write role
+        page_detail { id title created_at created_by_label markdown { body } }
       }
       record_knowledge_can_bind(model_label: "knowledge.Vault", record_id: $id)
     }"""
     variables = {"id": str(record.sqid), "role": "reference"}
     visible = result_data(execute_schema(schema, query, variables, user=reader))
-    assert visible == {
-        "record_knowledge_bindings": [{
-            "id": str(binding.sqid), "page": str(page.sqid), "page_title": "Guide",
-            "page_can_write": False, "role": "reference",
-        }],
-        "record_knowledge_can_bind": False,
+    assert visible["record_knowledge_can_bind"] is False
+    assert len(visible["record_knowledge_bindings"]) == 1
+    binding_view = visible["record_knowledge_bindings"][0]
+    assert {key: binding_view[key] for key in ("id", "page", "page_title", "page_can_write", "role")} == {
+        "id": str(binding.sqid), "page": str(page.sqid), "page_title": "Guide",
+        "page_can_write": False, "role": "reference",
     }
+    detail = binding_view["page_detail"]
+    assert detail["id"] == str(page.sqid)
+    assert detail["title"] == "Guide"
+    assert detail["created_at"]
+    assert detail["created_by_label"]
+    assert detail["markdown"] == {"body": "A private note"}
     owner_view = result_data(execute_schema(schema, query, variables, user=owner))
     assert owner_view["record_knowledge_can_bind"] is True
     assert owner_view["record_knowledge_bindings"][0]["page_can_write"] is True

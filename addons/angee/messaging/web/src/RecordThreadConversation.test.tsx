@@ -672,6 +672,24 @@ describe("RecordThreadStream", () => {
     expect(screen.getByPlaceholderText("Add a reply")).toBeTruthy();
   });
 
+  test("standalone child items omit conversation controls and can name the empty state", () => {
+    render(<RecordThreadStream heading={{ label: "Entries" }} source={{
+      kind: "children", modelLabel: "knowledge.Page", items: [{
+        id: "pg_1", title: "A note", body: "Details", authorLabel: "Alex",
+        isSelf: false, audienceLabel: "Editors", createdAt: "2026-09-30T10:00:00Z", thread: false,
+      }],
+    }} />);
+    expect(screen.getByText("A note")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show conversation" })).toBeNull();
+    cleanup();
+    render(<RecordThreadStream heading={{ label: "Entries" }} source={{
+      kind: "children", modelLabel: "knowledge.Page", items: [],
+      empty: { title: "No entries yet.", description: "Start here." },
+    }} />);
+    expect(screen.getByText("No entries yet.")).toBeTruthy();
+    expect(screen.getByText("Start here.")).toBeTruthy();
+  });
+
   test("a complex create action uses the shared dialog instead of throwing", () => {
     render(<RecordThreadStream heading={{ label: "Updates" }} source={{
       kind: "children", modelLabel: "projects.Task", items: [],

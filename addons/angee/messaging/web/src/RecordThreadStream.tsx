@@ -19,7 +19,7 @@ export interface StreamSectionHeading {
   audience?: React.ReactNode;
 }
 
-export interface StreamChildItem {
+interface StreamChildBase {
   id: string;
   title: string;
   body?: string | null;
@@ -28,8 +28,6 @@ export interface StreamChildItem {
   audienceLabel?: string | null;
   createdAt: string;
   kindLabel?: string;
-  /** The item owner names both entry verbs. A question can say answered/replied. */
-  verbs: { root: string; reply: string };
   prompt?: string;
   submitLabel?: string;
   readerLine?: string;
@@ -38,6 +36,12 @@ export interface StreamChildItem {
   record?: Row | null;
   onActed?: () => void;
 }
+
+/** A child may have its own conversation, or be a standalone stream entry. */
+export type StreamChildItem = StreamChildBase & (
+  | { thread: false; verbs?: never }
+  | { thread?: true; verbs: { root: string; reply: string } }
+);
 
 /** px-list owns this shape. The lane compiles against its merged createAction seam. */
 export type StreamCreateAction = NonNullable<ResourceListProps["createAction"]>;
@@ -48,6 +52,7 @@ export type RecordThreadStreamSource =
       kind: "children";
       modelLabel: string;
       items: readonly StreamChildItem[];
+      empty?: { title: string; description?: React.ReactNode };
       createAction?: StreamCreateAction;
       /** Bind a single text argument of createAction to an always-open foot composer. */
       createComposer?: { bodyArg: string; prompt: string; readerLine?: string; audience?: string };
@@ -81,8 +86,8 @@ export function RecordThreadStream({ heading, source, submitKey }: RecordThreadS
           {source.items.map((item) => <ChildStreamItem key={item.id} item={item}
             modelLabel={source.modelLabel} submitKey={source.submitKey ?? submitKey} />)}
         </div>
-      </div> : <EmptyState icon="comments" title={t("stream.empty")}
-        description={t("stream.emptyHint")} className="min-h-32 p-4" />}
+      </div> : <EmptyState icon="comments" title={source.empty?.title ?? t("stream.empty")}
+        description={source.empty?.description ?? t("stream.emptyHint")} className="min-h-32 p-4" />}
       {canCreate && create ? inlineCreate && composer
         ? <InlineCreateComposer key={create.id} action={create} composer={composer}
             submitKey={source.submitKey ?? submitKey} onCreated={source.onCreated} />
@@ -111,18 +116,20 @@ function ChildStreamItem({ item, modelLabel, submitKey }: {
         {item.body ? <div>{item.body}</div> : null}
       </MessageRow>
     </ul>
-    <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="ghost" size="sm" aria-expanded={expanded}
-        onClick={() => setExpanded((open) => !open)}>
-        {t(expanded ? "stream.hideThread" : "stream.showThread")}
-      </Button>
-      {item.actions?.length ? <RecordActionBar record={item.record ?? null} actions={item.actions}
-        reload={item.onActed} /> : null}
-    </div>
-    {expanded ? <RecordThreadConversation modelLabel={modelLabel} recordId={item.id}
-      submitKey={submitKey} stream={{ audience: item.audienceLabel ?? undefined,
-        prompt: item.prompt, submitLabel: item.submitLabel, readerLine: item.readerLine,
-        verbs: item.verbs, messageTypes: ["comment"] }} /> : null}
+    {item.thread !== false ? <>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="ghost" size="sm" aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}>
+          {t(expanded ? "stream.hideThread" : "stream.showThread")}
+        </Button>
+        {item.actions?.length ? <RecordActionBar record={item.record ?? null} actions={item.actions}
+          reload={item.onActed} /> : null}
+      </div>
+      {expanded ? <RecordThreadConversation modelLabel={modelLabel} recordId={item.id}
+        submitKey={submitKey} stream={{ audience: item.audienceLabel ?? undefined,
+          prompt: item.prompt, submitLabel: item.submitLabel, readerLine: item.readerLine,
+          verbs: item.verbs, messageTypes: ["comment"] }} /> : null}
+    </> : null}
   </div>;
 }
 

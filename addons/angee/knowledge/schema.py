@@ -74,6 +74,8 @@ class VaultType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    permissions = permissions_field(("write",))
+
     @strawberry_django.field(only=["owner_id"])
     def owner(self) -> strawberry.ID | None:
         """Return the owner's public id without exposing the user object."""
@@ -236,6 +238,12 @@ class RecordBindingType(AngeeNode):
 
         page = cast(Any, self).page
         return None if page is None else str(page.title)
+
+    @strawberry_django.field(only=["page_id"])
+    def page_detail(self) -> PageType | None:
+        """Expose the readable page through its existing content and author projection."""
+
+        return cast(PageType | None, cast(Any, self).page)
 
     @strawberry_django.field(only=["page_id"])
     def page_can_write(self) -> bool:

@@ -177,6 +177,7 @@ def test_detail_query_resolves_raw_sqid(composed_tables: None) -> None:
               vaults_by_pk(id: $id) {
                 id
                 name
+                permissions
               }
             }
             """,
@@ -185,7 +186,7 @@ def test_detail_query_resolves_raw_sqid(composed_tables: None) -> None:
         )
     )
 
-    assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault"}
+    assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault", "permissions": ["write"]}
 
 
 def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> None:
