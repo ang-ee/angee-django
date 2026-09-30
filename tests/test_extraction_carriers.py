@@ -5,11 +5,14 @@ from dataclasses import replace
 
 import pytest
 from django.core.exceptions import ValidationError
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.extraction.contracts import DocumentPart, DocumentSource, ExtractionPartKind
-from tests.conftest import Drive, File
+from angee.graphql.publishing import mute_changes
+from tests.conftest import create_platform_admin
+from tests.messaging_models import Part
 from tests.test_extraction_models import evidence as evidence
+from tests.test_messaging_part_tree import part_tree as part_tree
 from tests.test_storage import drive as drive
 
 
@@ -30,16 +33,48 @@ def reversed_candidate(values):
     return candidate
 
 
-def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(evidence):
+def message_source_and_part(part, position):
+    """Describe one message part as an input and its acquired text carrier."""
+    text = part.fragment.text
+    digest = part.fragment.hash
+    return (
+        DocumentSource(position, digest, part.type, text, message_part=part),
+        DocumentPart(position, 0, part.type, ExtractionPartKind.NATIVE_TEXT, text, "native", digest),
+    )
+
+
+@pytest.fixture
+def message_evidence(part_tree, evidence):
     retain, values = evidence
+    message, parts = part_tree
+    original_source, original_part = message_source_and_part(parts["plain"], 0)
+    document = deepcopy(values["result"].value)
+    document["documents"][0]["title"] = "Plain"
+    result = replace(
+        values["result"],
+        value=document,
+        parts=(original_part,),
+        claims={"/documents/0/title": [{"part_position": 0, "start": 0, "end": 5}]},
+    )
+    values = {
+        **values,
+        "target": message,
+        "actor": create_platform_admin("carrier-author"),
+        "sources": (original_source,),
+        "result": result,
+    }
+
+    def retain_message(**changes):
+        return retain(**{**values, **changes})
+
+    with actor_context(values["actor"]):
+        yield retain_message, values, parts
+
+
+def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(message_evidence):
+    retain, values, parts = message_evidence
     original = values["sources"][0]
-    extra = File.objects.ingest_bytes(
-        b"Additional evidence", filename="extra.txt", drive_id=str(original.file.drive.sqid)
-    )
-    extra_source = DocumentSource(1, extra.content_hash, "text/plain", b"Additional evidence", file=extra)
-    extra_part = DocumentPart(
-        1, 0, "text/plain", ExtractionPartKind.NATIVE_TEXT, "Additional evidence", "native", extra.content_hash
-    )
+    extra_source, extra_part = message_source_and_part(parts["forwarded_plain"], 1)
     first = retain(
         sources=(original, extra_source), result=replace(values["result"], parts=(*values["result"].parts, extra_part))
     )
@@ -59,36 +94,29 @@ def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(evi
         result=candidate,
         identity_mapping=reviewed_mapping(first),
     )
-    assert resolved.result["documents"][0]["title"] == "Note"
-    assert resolved.claims["/documents/0/title"] == [{"part_position": 1, "start": 0, "end": 4}]
+    assert resolved.result["documents"][0]["title"] == "Plain"
+    assert resolved.claims["/documents/0/title"] == [{"part_position": 1, "start": 0, "end": 5}]
 
 
-def test_identical_text_from_another_source_cannot_inherit_authority(evidence):
-    retain, values = evidence
+def test_identical_text_from_another_message_part_cannot_inherit_authority(message_evidence):
+    retain, values, parts = message_evidence
     first = retain()
     original = values["sources"][0]
-    with system_context(reason="tests.extraction distinct carrier sources"):
-        other_drive = Drive.objects.create(
-            backend=original.file.drive.backend,
-            slug="replacement",
-            name="Replacement",
-            prefix="replacement",
-            created_by=values["actor"],
-            updated_by=values["actor"],
+    with system_context(reason="tests.extraction distinct carrier sources"), mute_changes():
+        replacement = Part.objects.create(
+            message=values["target"],
+            position=2,
+            type="text/plain",
+            role="body",
+            fragment=parts["plain"].fragment,
         )
-    replacement = File.objects.ingest_bytes(
-        original.content,
-        filename="replacement.txt",
-        drive_id=str(other_drive.sqid),
-        owner_id=values["actor"].pk,
-    )
-    assert replacement.pk != original.file.pk and replacement.content_hash == original.content_hash
-    replacement_source = DocumentSource(1, replacement.content_hash, "text/plain", original.content, file=replacement)
+    replacement_source, replacement_part = message_source_and_part(replacement, 1)
+    assert replacement.pk != original.message_part.pk and replacement_source.content_hash == original.content_hash
     candidate = replace(
         values["result"],
         value=reversed_candidate(values),
         claims={},
-        parts=(replace(values["result"].parts[0], source_position=1),),
+        parts=(replacement_part,),
     )
     held = retain(request_key="replacement-hold", sources=(original, replacement_source), result=candidate)
     assert held.awaiting_correspondence and held.lineage_id == first.lineage_id
