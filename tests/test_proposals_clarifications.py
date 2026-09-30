@@ -11,7 +11,15 @@ from django.core.exceptions import FieldDoesNotExist
 from django.core.management import call_command
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.utils import timezone
-from rebac import actor_context, system_context
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.graphql.schema import GraphQLSchemas
 from tests.composed_host import run_composed_tests
@@ -140,6 +148,64 @@ class ClarificationCase(TransactionTestCase):
             task = self.as_user(self.round, self.manager).pass_clarification(task, self.recipient)
             self.as_user(task, self.manager).set_visibility("inherited")
         self.assert_recipient_discusses_only(task)
+
+    def test_widened_question_read_does_not_grant_replies(self):
+        with system_context(reason="tests.proposals_clarifications.named_asker"):
+            round = self.Round.objects.get(pk=self.round.pk)
+            round.clarification_askers = "named"
+            round.save(update_fields=("clarification_askers",))
+        with actor_context(self.manager):
+            self.as_user(self.round, self.manager).admit(self.member)
+        task = self.ask()
+        with actor_context(self.manager):
+            task = self.as_user(self.round, self.manager).pass_clarification(
+                task, self.recipient, audience="asker"
+            )
+            self.as_user(task, self.manager).set_visibility("inherited")
+
+        widened_reader = self.as_user(task, self.member)
+        self.assertTrue(widened_reader.has_access("read"))
+        self.assertFalse(widened_reader.has_access("comment"))
+        with actor_context(self.member), self.assertRaises(PermissionDenied):
+            widened_reader.message_post("Cannot give the first answer")
+
+        for author, body in (
+            (self.recipient, "First answer"),
+            (self.asker, "Asker follow-up"),
+            (self.manager, "Manager follow-up"),
+        ):
+            held = self.as_user(task, author)
+            self.assertTrue(held.has_access("comment"))
+            with actor_context(author):
+                self.assertIsNotNone(held.message_post(body).pk)
+
+        with system_context(reason="tests.proposals_clarifications.requester"):
+            round = self.Round.objects.get(pk=self.round.pk)
+            round.requester_party = apps.get_model("parties", "Person").objects.for_user(self.outsider)
+            round.save(update_fields=("requester_party",))
+        with actor_context(self.manager):
+            task = self.as_user(self.round, self.manager).pass_clarification(
+                task, self.outsider, audience="asker"
+            )
+        self.assertTrue(self.as_user(task, self.recipient).has_access("read"))
+        self.assertFalse(self.as_user(task, self.recipient).has_access("comment"))
+        with actor_context(self.outsider):
+            self.assertIsNotNone(self.as_user(task, self.outsider).message_post("Requester reply").pk)
+        with actor_context(self.member), self.assertRaises(PermissionDenied):
+            self.as_user(task, self.member).message_post("Cannot reply later")
+
+    def test_asker_with_explicit_read_can_reply_after_surrender(self):
+        task = self.ask(audience="managers")
+        self.assertFalse(self.as_user(task, self.asker).has_access("read"))
+        with system_context(reason="tests.proposals_clarifications.asker_share"):
+            write_relationships([
+                RelationshipTuple(to_object_ref(task), "reader", to_subject_ref(self.asker)),
+            ])
+        held = self.as_user(task, self.asker)
+        self.assertTrue(held.has_access("read"))
+        self.assertTrue(held.has_access("comment"))
+        with actor_context(self.asker):
+            self.assertIsNotNone(held.message_post("Further detail").pk)
 
     def test_task_audience_traverses_reverse_source_proposal(self):
         with system_context(reason="tests.proposals_clarifications.track_task"):

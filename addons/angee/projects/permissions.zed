@@ -1,7 +1,7 @@
 // Authorization schema for bounded projects and their work.
 // @rebac_package: projects
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 9
+// @rebac_schema_revision: 10
 
 definition projects/project {
     relation owner:  auth/user // rebac:field=owner
@@ -58,7 +58,8 @@ definition projects/task {
     permission transfer = owner + admin->member
     permission write__owner = transfer
     permission comment_granted = write_granted
-    permission comment = (comment_granted - withheld) + admin->member
+    permission comment_withheld = nil
+    permission comment = (comment_granted - withheld - comment_withheld) + admin->member
     permission write__assignee = share
 }
 

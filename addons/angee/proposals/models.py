@@ -494,18 +494,6 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             return self.project if self.project_id is not None else self.task.project
 
     @staticmethod
-    def opening_phase_condition() -> models.Q:
-        """The phase boundary expressed once for list projections and verbs."""
-        return (
-            models.Q(opens_after__isnull=True)
-            | models.Q(project__current_milestone__sort_order__gt=models.F("opens_after__sort_order"))
-            | models.Q(
-                project__isnull=True,
-                task__project__current_milestone__sort_order__gt=models.F("opens_after__sort_order"),
-            )
-        )
-
-    @staticmethod
     def admission_condition() -> models.Q:
         """The lifecycle states that accept new proposal shells."""
         return models.Q(status=RoundStatus.COLLECTING) | models.Q(
@@ -515,17 +503,11 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
     @classmethod
     def can_open_expression(cls, actor: Any) -> models.Expression:
-        """Combine the native write scope, lifecycle and phase in the list query."""
+        """Offer disclosure to managers until the round has an opening receipt."""
         if actor is None:
             return models.Value(False)
-        rows = cls.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
-        return models.Exists(
-            rows.filter(
-                cls.opening_phase_condition(),
-                pk=models.OuterRef("pk"),
-                status=RoundStatus.COLLECTING,
-            )
-        )
+        rows = cls.objects.with_actor(actor).with_action("manage").scoped_for_aggregate()
+        return models.Exists(rows.filter(pk=models.OuterRef("pk"), opened_at__isnull=True))
 
     @classmethod
     def can_admit_expression(cls, actor: Any) -> models.Expression:
@@ -535,12 +517,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         rows = cls.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
         return models.Exists(rows.filter(cls.admission_condition(), pk=models.OuterRef("pk")))
 
-    def opening_phase_ready(self) -> bool:
-        """Use the same phase predicate as the list projection."""
-        return system_queryset(type(self)).filter(type(self).opening_phase_condition(), pk=self.pk).exists()
-
     def can_open(self) -> bool:
-        """Report the opening verb's permission, lifecycle and phase eligibility."""
+        """Report whether this manager can lift an undisclosed round."""
         return (
             system_queryset(type(self))
             .filter(pk=self.pk)
@@ -1051,20 +1029,22 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         return super().delete(*args, **kwargs)
 
     def open(self, expected_revision: int | None = None) -> Self:
-        """Stamp disclosure once, in round-first lock order."""
-        if not self.has_access("write"):
-            raise PermissionDenied("Round write access is required.")
+        """Lift disclosure once, preserving a cancelled round's terminal state."""
+        if not self.has_access("manage"):
+            raise PermissionDenied("Round management is required.")
         with transaction.atomic():
             locked = type(self).objects.sudo(reason="proposals.round.open").lock_if_supported().get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
-            if locked.status == RoundStatus.COLLECTING:
-                if not locked.opening_phase_ready():
-                    raise ValidationError({"opens_after": "The current phase must follow the opening boundary."})
-                locked._mark_opened()
+            if locked.opened_at is None:
+                if locked.status == RoundStatus.COLLECTING:
+                    locked._mark_opened()
+                elif locked.status == RoundStatus.CANCELLED:
+                    locked._stamp_opening_receipt()
+                    locked.save(update_fields=("opened_at", "opened_by", "updated_at"))
+                else:
+                    raise ValidationError("Only an undisclosed round can be lifted.")
                 locked._disclose()
-            elif locked.status != RoundStatus.OPENED:
-                locked.status_transitions.not_allowed(locked.status, RoundStatus.OPENED)
         _adopt(self, locked, ("status", "opened_at", "opened_by", "updated_at", "updated_by"))
         return self
 
@@ -1241,10 +1221,15 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def _mark_opened(self) -> None:
         """Record the immutable opening receipt."""
 
+        self._stamp_opening_receipt()
+        self._transition_fields = {"opened_at", "opened_by"}
+
+    def _stamp_opening_receipt(self) -> None:
+        """Record disclosure without changing a terminal lifecycle state."""
+
         self.opened_at = timezone.now()
         self.opened_by_id = _receipt_user_id(self.facilitator_id)
         self.allow_immutable_save("opened_at", "opened_by_id")
-        self._transition_fields = {"opened_at", "opened_by"}
 
     @transition(status, source=RoundStatus.OPENED, target=RoundStatus.CLOSED, on_success=save_state)
     def _mark_closed(self, outcome: RoundOutcome) -> None:

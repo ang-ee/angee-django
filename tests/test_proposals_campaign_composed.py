@@ -84,6 +84,56 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
         self.assertIsNotNone(result.data)
         return result.data
 
+    def test_reader_sees_lifted_state_and_date(self) -> None:
+        with system_context(reason="tests.proposals.campaign.lift_before_phase"):
+            round = self.Round.objects.get(pk=self.round.pk)
+            round.opens_after = round.clarifications_shared_until
+            round.save(update_fields=("opens_after",))
+        with actor_context(self.manager):
+            self.assertTrue(self.as_user(self.round, self.manager).can_open())
+            self.as_user(self.round, self.manager).open()
+        result = self.execute_named(
+            """query($id: String!) {
+              proposal_rounds_by_pk(id: $id) { status opened_at can_open }
+            }""",
+            {"id": str(self.round.sqid)},
+            self.asker,
+            "console",
+        )
+        row = self.data(result)["proposal_rounds_by_pk"]
+        self.assertEqual(row["status"], "OPENED")
+        self.assertIsNotNone(row["opened_at"])
+        self.assertFalse(row["can_open"])
+
+    def test_cancelled_round_can_lift_without_reopening(self) -> None:
+        with actor_context(self.manager):
+            self.as_user(self.round, self.manager).cancel()
+            self.assertTrue(self.as_user(self.round, self.manager).can_open())
+            lifted = self.as_user(self.round, self.manager).open()
+        self.assertEqual(lifted.status, "cancelled")
+        self.assertIsNotNone(lifted.opened_at)
+        result = self.execute_named(
+            """query($id: String!) {
+              proposal_rounds_by_pk(id: $id) { status opened_at }
+            }""",
+            {"id": str(self.round.sqid)},
+            self.asker,
+            "console",
+        )
+        row = self.data(result)["proposal_rounds_by_pk"]
+        self.assertEqual(row["status"], "CANCELLED")
+        self.assertIsNotNone(row["opened_at"])
+
+    def test_project_editor_cannot_comment_on_widened_question(self) -> None:
+        with actor_context(self.manager):
+            self.as_user(self.project, self.manager).grant_record_access("editor", self.member)
+        task = self.ask()
+        held = self.as_user(task, self.member)
+        self.assertTrue(held.has_access("read"))
+        self.assertFalse(held.has_access("comment"))
+        with actor_context(self.member), self.assertRaises(PermissionDenied):
+            held.message_post("Not addressed to me")
+
     def execute_named(self, document: str, variables: dict[str, Any], actor: Any, name: str) -> Any:
         request = RequestFactory().post(f"/graphql/{name}/")
         request.user = actor
@@ -585,7 +635,7 @@ class RegistryBridgeCampaign(CampaignIdentities, ProposalsWorkTests):
             published = self.as_user(self.round, self.manager).ask("All responders", "Reply", recipient="responders")
         self.assertEqual((published.queue_id, published.stage_id), (self.queue.pk, self.started.pk))
         self.assertIsNotNone(published.clarification_passed_at)
-        with actor_context(self.member):
+        with actor_context(self.member), self.assertRaises(PermissionDenied):
             self.as_user(published, self.member).message_post("Queue member response")
 
 

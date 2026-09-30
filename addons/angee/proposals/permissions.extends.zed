@@ -1,6 +1,6 @@
 // Proposal access through live planning and identity relations.
 // @rebac_package: proposals
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 7
 
 definition projects/project {
     relation proposal_viewer: auth/user | auth/group#member
@@ -21,6 +21,8 @@ definition projects/task {
     relation named_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_round__clarification_askers":"named"}}
     relation manager_asked_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_by_manager":true}}
     relation clarification_asker: auth/user // rebac:field={"path":"clarification_asker","filters":{"clarification_surrendered":false}}
+    relation comment_asker: auth/user // rebac:field=clarification_asker
+    relation all_responders_question: proposals/round // rebac:field={"path":"clarification_round","filters":{"assignee__isnull":true,"clarification_by_manager":true,"clarification_passed_at__isnull":false}}
     relation responder_shared_round: proposals/round // rebac:field={"path":"project__source_proposal__round","filters":{"shared_with_responders":true}}
     permission read_granted = round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond
     permission withheld = clarification_round->retired
@@ -30,7 +32,8 @@ definition projects/task {
     permission share = track_proposal->manage + clarification_round->manage
     permission narrow = clarification_asker - clarification_round->retired
     permission widen = clarification_round->manage
-    permission comment = read & clarification_round->discuss_clarification
+    permission comment_withheld = (comment_granted & clarification_round->discuss_clarification) - (clarification_round->manage + comment_asker + clarification_recipient + all_responders_question->respond)
+    permission comment = read & (clarification_round->manage + comment_asker + clarification_recipient + all_responders_question->respond)
     permission read__clarification_asker = clarification_round->manage + clarification_asker + named_round->read + manager_asked_round->read
 }
 
