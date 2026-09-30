@@ -312,7 +312,7 @@ class ProposalFields(AuthoredRefMixin, AngeeNode):
     disclosed_at: auto
     track_published_at: auto
     retired_at: auto
-    permissions = permissions_field(("write", "publish", "withdraw", "share"))
+    permissions = permissions_field(("write", "publish", "withdraw", "share", "read_offer"))
 
     @strawberry_django.field(annotate={"_track_status": lambda info: Proposal.track_status_expression(current_actor())})
     def track_status(self) -> str | None:

@@ -33,18 +33,14 @@ const answers: ComparisonAnswer[] = [
 ];
 
 describe("proposal comparison model", () => {
-  test("orders topics before offer facts by sort order and stable key", () => {
+  test("orders topics and includes facts only when requested", () => {
     expect(comparisonRows(topics).map((row) => row.id)).toEqual([
       "topic:top_a",
       "topic:top_z",
       "topic:top_b",
-      "fact:statement",
-      "fact:cost",
-      "fact:staffing",
-      "fact:timeframe_start",
-      "fact:timeframe_end",
-      "fact:confidence",
-      "fact:valid_until",
+    ]);
+    expect(comparisonRows(topics, ["statement", "cost"]).map((row) => row.id)).toEqual([
+      "topic:top_a", "topic:top_z", "topic:top_b", "fact:statement", "fact:cost",
     ]);
   });
 
@@ -61,8 +57,8 @@ describe("proposal comparison model", () => {
     expect(isEmptyComparisonValue("0")).toBe(false);
   });
 
-  test("labels external responders by party before the user label", () => {
-    expect(proposalColumnLabel(proposal)).toBe("Northstar");
+  test("labels responders by their person name with a party and neutral fallback", () => {
+    expect(proposalColumnLabel(proposal)).toBe("Alice");
     expect(
       proposalColumnLabel({
         id: "prp_2",
@@ -71,5 +67,6 @@ describe("proposal comparison model", () => {
     ).toBe(
       "Alice",
     );
+    expect(proposalColumnLabel({ id: "prp_3" }, "Responder")).toBe("Responder");
   });
 });

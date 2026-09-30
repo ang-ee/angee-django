@@ -42,7 +42,7 @@ export function comparisonRows(
         topic,
       }),
     ),
-    ...FACT_ROWS.filter((row) => facts === undefined || facts.includes(row.field)),
+    ...FACT_ROWS.filter((row) => facts?.includes(row.field)),
   ];
 }
 
@@ -64,15 +64,18 @@ export function isEmptyComparisonValue(value: unknown): boolean {
   return value == null || (typeof value === "string" && value.trim() === "");
 }
 
-export function proposalColumnLabel(proposal: ComparisonProposal): string {
-  const party = String(proposal.party?.display_name ?? "").trim();
-  if (party) return party;
+export function proposalColumnLabel(proposal: ComparisonProposal, fallback = ""): string {
   const responder = responderLabel(proposal.responder);
-  return responder || proposal.id;
+  if (responder) return responder;
+  const party = String(proposal.party?.display_name ?? "").trim();
+  return party || fallback;
+}
+
+export function proposalIsOwn(proposal: ComparisonProposal, viewerId: string | undefined): boolean {
+  return Boolean(viewerId && typeof proposal.responder === "object" && proposal.responder?.id === viewerId);
 }
 
 function responderLabel(value: unknown): string {
-  if (typeof value === "string") return value.trim();
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   return String((value as { display_name?: unknown }).display_name ?? "").trim();
 }

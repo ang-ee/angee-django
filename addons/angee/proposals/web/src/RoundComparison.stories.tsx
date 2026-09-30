@@ -15,6 +15,7 @@ import type {
   ComparisonTopic,
 } from "./comparison-data";
 import { RoundComparisonGrid } from "./comparison-grid";
+import { ProposalStatements } from "./proposal-statements";
 
 const round: ComparisonRound = {
   id: "rnd_competitive",
@@ -43,7 +44,7 @@ const topics: ComparisonTopic[] = [
 const proposals: ComparisonProposal[] = [
   {
     id: "prp_north",
-    responder: "user_north",
+    responder: { id: "user_north", display_name: "Avery" },
     party: { display_name: "Northstar Studio" },
     state: "SUBMITTED",
     cost: "72000",
@@ -56,7 +57,7 @@ const proposals: ComparisonProposal[] = [
   },
   {
     id: "prp_orbit",
-    responder: "user_orbit",
+    responder: { id: "user_orbit", display_name: "Morgan" },
     party: { display_name: "Orbit Works" },
     state: "SUBMITTED",
     cost: "64000",
@@ -69,7 +70,7 @@ const proposals: ComparisonProposal[] = [
   },
   {
     id: "prp_field",
-    responder: "user_field",
+    responder: { id: "user_field", display_name: "Reese" },
     party: { display_name: "Field Office" },
     state: "SUBMITTED",
     cost: null,
@@ -88,30 +89,35 @@ const answers: ComparisonAnswer[] = [
     proposal: { id: "prp_north" },
     topic: { id: "top_approach" },
     body: "Weekly increments with a **fortnightly stakeholder review**.",
+    visibility: "ROUND",
   },
   {
     id: "ans_north_risk",
     proposal: { id: "prp_north" },
     topic: { id: "top_risk" },
     body: "Identity-provider migration and test data quality.",
+    visibility: "ROUND",
   },
   {
     id: "ans_orbit_approach",
     proposal: { id: "prp_orbit" },
     topic: { id: "top_approach" },
     body: "A discovery sprint followed by three production releases.",
+    visibility: "RESPONDER",
   },
   {
     id: "ans_orbit_risk",
     proposal: { id: "prp_orbit" },
     topic: { id: "top_risk" },
     body: "Availability of customer-support subject-matter experts.",
+    visibility: "RESPONDER",
   },
   {
     id: "ans_field_approach",
     proposal: { id: "prp_field" },
     topic: { id: "top_approach" },
     body: "Prototype first, then scope the implementation from measured usage.",
+    visibility: "SEALED",
   },
 ];
 
@@ -150,7 +156,7 @@ export const CompetitiveRound = {
       <Page className="h-screen">
         <PageHeader
           title={`Compare ${String(round.name)}`}
-          description="Competitive round fixture: three readable columns, aligned topics, and intentionally empty offer facts."
+          description="Three readable responders, aligned topics, and answer audiences."
         />
         <PageBody gutter="none">
           <RoundComparisonGrid
@@ -170,7 +176,7 @@ export const ResponderPreOpen = {
       <Page className="h-screen">
         <PageHeader
           title={`Compare ${String(responderPreOpenRound.name)}`}
-          description="Responder pre-open fixture: the viewer's own proposal is the only readable column; every other proposal is absent."
+          description="Before disclosure, the server returns this responder's column alone."
         />
         <PageBody gutter="none">
           <RoundComparisonGrid
@@ -178,6 +184,22 @@ export const ResponderPreOpen = {
             proposals={responderPreOpenProposals}
             answers={responderPreOpenAnswers}
           />
+        </PageBody>
+      </Page>
+    </RuntimeFixture>
+  ),
+};
+
+export const Statements = {
+  render: () => (
+    <RuntimeFixture>
+      <Page className="h-screen">
+        <PageHeader title="Statements" description="A separate card per readable response." />
+        <PageBody>
+          <ProposalStatements proposals={[
+            { ...proposals[0]!, statement: "Six weeks, assuming design access." },
+            { ...proposals[1]!, statement: null },
+          ]} />
         </PageBody>
       </Page>
     </RuntimeFixture>
