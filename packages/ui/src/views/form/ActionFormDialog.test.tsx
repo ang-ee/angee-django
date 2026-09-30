@@ -269,6 +269,13 @@ describe("serializeActionArgValues", () => {
 });
 
 describe("ActionFormDialog", () => {
+  test("uses an authored dialog size for context forms", () => {
+    renderDialog({ id: "review", label: "Review", args: {
+      fields: [{ name: "note", label: "Note" }], size: "lg",
+    }, submit: vi.fn() });
+    expect(screen.getByRole("dialog", { name: "Review" }).className).toContain("w-[44rem]");
+  });
+
   test("resolves controlled dialog arguments on each opening and retains drafts during live refresh", async () => {
     const args = vi.fn(({ record }: ActionFormContext) => [{
       name: "reason", label: "Reason", widget: "text", defaultValue: record?.id,

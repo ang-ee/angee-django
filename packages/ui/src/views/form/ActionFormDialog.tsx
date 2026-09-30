@@ -146,6 +146,7 @@ function ActionArgsDialog({
       open={open}
       onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}
       title={action.label}
+      size={definition?.size}
       footer={footer}
       onSubmit={(event) => void submit(event)}
     >

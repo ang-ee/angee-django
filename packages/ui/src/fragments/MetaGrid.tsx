@@ -34,10 +34,10 @@ export type MetaSectionProps = Omit<
 export const metaGridVariants = tv({
   slots: {
     grid:
-      "grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-13",
+      "grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-13",
     row: "contents",
-    label: "normal-case tracking-normal",
-    value: "m-0 min-w-0 break-words text-fg",
+    label: "max-w-[12rem] normal-case tracking-normal [overflow-wrap:anywhere]",
+    value: "m-0 min-w-0 text-fg [overflow-wrap:anywhere]",
     action: "ml-2 inline-flex align-middle",
     section: "space-y-2",
   },

@@ -20,9 +20,9 @@ export interface RecordReferenceProps {
 export function RecordReference({ model, id, label, onOpen }: RecordReferenceProps): ReactElement {
   const recordHref = useResourceRecordHrefLookup();
   const content = label || <RecordReferenceLabel model={model} id={id} />;
-  if (onOpen) return <Button type="button" size="sm" variant="ghost" onClick={onOpen}>{content}</Button>;
+  if (onOpen) return <Button type="button" size="sm" variant="ghost" className="h-auto min-h-btn-sm max-w-full whitespace-normal py-1 text-left leading-snug [overflow-wrap:anywhere]" onClick={onOpen}>{content}</Button>;
   const href = recordHref(model, id);
-  return href ? <TextLink href={href}>{content}</TextLink> : <>{content}</>;
+  return href ? <TextLink href={href} className="[overflow-wrap:anywhere]">{content}</TextLink> : <span className="[overflow-wrap:anywhere]">{content}</span>;
 }
 
 function RecordReferenceLabel({ model, id }: Pick<RecordReferenceProps, "model" | "id">): ReactElement {

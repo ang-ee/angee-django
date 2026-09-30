@@ -5,6 +5,7 @@ import type { CrudFilter } from "@refinedev/core";
 import type { Resolver } from "react-hook-form";
 
 import type { PromptOptions } from "../../feedback";
+import type { DialogSize } from "../../ui/dialog";
 import type { DescriptorField } from "../form/DescriptorFieldList";
 import type { FormSubmitResult } from "../form/validation-errors";
 import type { FieldDescriptor } from "./Field";
@@ -57,6 +58,8 @@ export interface ActionFormContext {
 /** A descriptor form, including record-specific JSON Schema argument forms. */
 export interface ActionFormDefinition {
   fields: readonly DescriptorField[] | ((values: Record<string, unknown>) => readonly DescriptorField[]);
+  /** Use the shared dialog size tokens for forms with retained context. */
+  size?: DialogSize;
   defaultValues?: Record<string, unknown>;
   resolver?: Resolver<Record<string, unknown>>;
   /** All possible fields, including inactive branches, for server issue binding. */

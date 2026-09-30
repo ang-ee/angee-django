@@ -36,11 +36,11 @@ export function DecisionContext({ context, showFacts = true }: { context: unknow
   const authorityLabels = {
     source: t("context.source"), correction: t("context.correction"), unverified: t("context.unverified"),
   };
-  return <section aria-label={t("context.title")} className="space-y-4">
+  return <section aria-label={t("context.title")} className="min-w-0 space-y-4 [overflow-wrap:anywhere]">
     {showFacts && facts.length ? <section aria-label={t("context.facts")} className="space-y-3">
       <h2 className="font-semibold">{t("context.facts")}</h2>
       <dl className="space-y-4">{facts.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="space-y-2">
-        <dt className="flex items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
+        <dt className="flex min-w-0 flex-wrap items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
         <dd className="space-y-2">
           <FactValue value={fact.value} />
           {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || fact.subject.id} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
@@ -69,8 +69,8 @@ function References({ title, references, openRecord, heading: Heading = "h2" }: 
   if (!references.length) return null;
   return <section aria-label={title} className="space-y-1">
     <Heading className="text-sm font-medium">{title}</Heading>
-    <ul className="flex flex-wrap gap-2">{references.map((reference, index) =>
-      <li key={`${reference.model}:${reference.id}:${index}`}><RecordReference {...reference} label={reference.label || reference.id} onOpen={() => openRecord(reference)} /></li>,
+    <ul className="flex min-w-0 flex-wrap gap-2">{references.map((reference, index) =>
+      <li key={`${reference.model}:${reference.id}:${index}`} className="min-w-0 max-w-full"><RecordReference {...reference} label={reference.label || reference.id} onOpen={() => openRecord(reference)} /></li>,
     )}</ul>
   </section>;
 }

@@ -71,7 +71,7 @@ export function InboxPage(): ReactElement {
           visibleWhen={(record) => record.is_open === true && record.can_act === true}
           args={({ record }) => {
             const definition = jsonSchemaActionArgs(record?.form_schema, widgets, { initialValues: record?.resolution, translate: uiT });
-            return { ...definition,
+            return { ...definition, size: "lg" as const,
               fields: (values) => (typeof definition.fields === "function" ? definition.fields(values) : definition.fields)
                 .map((field) => field.name === "action" ? { ...field, label: t("decision.action") } : field),
               content: typeof record?.id === "string" ? <DecisionDetails recordId={record.id} editing /> : undefined,
@@ -102,7 +102,7 @@ function DecisionDetails({ recordId, editing = false }: Pick<RecordPanelContext,
   if (query.isLoading) return <LoadingPanel />;
   if (!decision) return <ErrorBanner description={t("decision.unavailable")} />;
   return <DecisionContentProvider value={{ decision, basis: decision.basis, context: decision.context }}>
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 [overflow-wrap:anywhere]">
       <DecisionOriginOutlet />
       <DecisionContext context={decision.context} showFacts={content.length === 0} />
       <fieldset disabled={!editing}><DecisionContentOutlet /></fieldset>

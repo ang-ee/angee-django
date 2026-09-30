@@ -47,11 +47,15 @@ afterEach(cleanup);
 describe("DescriptorFieldList", () => {
   test("humanizes schema field names when no field title is declared", async () => {
     const fields = deserializeFormSpec({ properties: {
+      note: { type: "string" },
       source_line: { type: "object", properties: { original_text: { type: "string" } } },
     } }, defaultWidgets);
-    render(<FormHarness fields={fields} defaultValues={{ source_line: { original_text: "" } }} />);
+    render(<FormHarness fields={fields} defaultValues={{ note: "", source_line: { original_text: "" } }} />);
+    const visibleLabel = screen.getByText("Note");
+    expect(screen.getByRole("textbox", { name: visibleLabel.textContent ?? "" })).toBeTruthy();
     expect(screen.getByText("Source Line")).toBeTruthy();
-    expect(await screen.findByText("Source Line Original Text")).toBeTruthy();
+    expect(await screen.findByText("Original Text")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Original Text" })).toBeTruthy();
   });
 
   test("registry widgets receive live sibling values in descriptor forms", () => {

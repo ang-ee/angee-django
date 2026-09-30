@@ -10,6 +10,7 @@ import type { DescriptorField } from "./DescriptorFieldList";
 import { emptyValueForField } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { statusLabel } from "../../lib/labels";
+import { titleCase } from "../../lib/titleCase";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
 
@@ -284,7 +285,7 @@ function deserializeField(
     relation, widget: authoredWidget, addLabel, removeLabel,
     description, placeholder, readOnly, hidden, layout,
   } = field;
-  const label = field.label ?? field.title;
+  const label = field.label ?? field.title ?? titleCase(name);
   const choices = optionsFrom(field);
   const options = choices?.options;
   if (rowTemplate && authoredWidget && authoredWidget !== "rows") {

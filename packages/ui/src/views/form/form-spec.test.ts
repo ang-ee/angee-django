@@ -103,7 +103,7 @@ describe("deserializeFormSpec", () => {
       choice: { anyOf: [
         { type: "string", enum: ["first"] }, { type: "string", enum: ["second"] }, { type: "null" },
       ] },
-    } }, defaultWidgets)).toEqual([{ name: "choice", kind: "string", widget: "text", nullable: true }]);
+    } }, defaultWidgets)).toEqual([{ name: "choice", kind: "string", widget: "text", label: "Choice", nullable: true }]);
   });
 
   test("uses JSON Schema titles for labels while preserving explicit label precedence", () => {
@@ -184,7 +184,7 @@ describe("deserializeFormSpec", () => {
       { name: "reason", kind: "string", widget: "text", label: "Reason", required: true, minLength: 1 },
     ];
 
-    expect(fields[0]).toEqual({ name: "choices", kind: "array", widget: "rows", rowTemplate: columns });
+    expect(fields[0]).toEqual({ name: "choices", kind: "array", widget: "rows", label: "Choices", rowTemplate: columns });
     expect(fields[1]?.itemTemplate?.objectTemplate).toEqual(columns);
     expect(fields[2]?.objectTemplate).toEqual(columns);
     expect(fields[3]).toMatchObject({ label: "Default identity", options: [
@@ -205,7 +205,7 @@ describe("deserializeFormSpec", () => {
     expect(deserializeFormSpec({
       $defs: { "Identity/with~space ": { type: "string" } },
       properties: { identity: { $ref: "#/$defs/Identity~1with~0space%20" } },
-    }, defaultWidgets)).toEqual([{ name: "identity", kind: "string", widget: "text" }]);
+    }, defaultWidgets)).toEqual([{ name: "identity", kind: "string", widget: "text", label: "Identity" }]);
   });
 
   test.each([
@@ -228,8 +228,8 @@ describe("deserializeFormSpec", () => {
         properties: { nodes: { type: "array", items: { $ref: "#/$defs/Node" } } },
       }, defaultWidgets);
       expect(fields[0]?.rowTemplate).toEqual([
-        { name: "name", kind: "string", widget: "text" },
-        { name: "parent", kind: "object", ...presentation },
+        { name: "name", kind: "string", widget: "text", label: "Name" },
+        { name: "parent", kind: "object", label: "Parent", ...presentation },
       ]);
     },
   );
@@ -341,15 +341,16 @@ describe("deserializeFormSpec", () => {
         defaultValue: "Untitled",
         hasDefault: true,
       },
-      { name: "count", kind: "integer", widget: "integer" },
-      { name: "confidence", kind: "number", widget: "float" },
-      { name: "approved", kind: "boolean", widget: "boolean" },
-      { name: "config", kind: "object", widget: "json" },
-      { name: "tags", kind: "array", widget: "json" },
+      { name: "count", kind: "integer", widget: "integer", label: "Count" },
+      { name: "confidence", kind: "number", widget: "float", label: "Confidence" },
+      { name: "approved", kind: "boolean", widget: "boolean", label: "Approved" },
+      { name: "config", kind: "object", widget: "json", label: "Config" },
+      { name: "tags", kind: "array", widget: "json", label: "Tags" },
       {
         name: "mode",
         kind: "any",
         widget: "select",
+        label: "Mode",
         options: [
           { value: "append", label: "Append" },
           { value: "replace", label: "Replace", disabled: true },
@@ -376,6 +377,7 @@ describe("deserializeFormSpec", () => {
         name: "rows",
         kind: "array",
         widget: "rows",
+        label: "Rows",
         required: true,
         rowTemplate: [
           {
@@ -389,6 +391,7 @@ describe("deserializeFormSpec", () => {
             name: "replace",
             kind: "boolean",
             widget: "switch",
+            label: "Replace",
           },
         ],
       },
@@ -409,6 +412,7 @@ describe("deserializeFormSpec", () => {
         name: "mode",
         kind: "any",
         widget: "select",
+        label: "Mode",
         options: [
           { value: "append", label: "Append" },
           { value: "replace", label: "Replace" },
@@ -445,6 +449,7 @@ describe("deserializeFormSpec", () => {
       name: "selector",
       kind: "string",
       widget: "select",
+      label: "Selector",
       options: [{ value: "", label: "Root document" }],
     }]);
     expect(formSpecInitialValues(fields, { selector: "" })).toEqual({ selector: "" });
@@ -456,8 +461,8 @@ describe("deserializeFormSpec", () => {
       source: { type: "string", layout: "context" },
       action: { type: "string", layout: "input" },
     } }, defaultWidgets)).toEqual([
-      { name: "source", kind: "string", widget: "text", layout: "context" },
-      { name: "action", kind: "string", widget: "text", layout: "input" },
+      { name: "source", kind: "string", widget: "text", label: "Source", layout: "context" },
+      { name: "action", kind: "string", widget: "text", label: "Action", layout: "input" },
     ]);
     expect(() => deserializeFormSpec({ properties: {
       source: { type: "string", layout: "summary" },

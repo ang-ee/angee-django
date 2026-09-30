@@ -1506,7 +1506,7 @@ describe("FormView", () => {
     }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
     renderWithProviders(<FormView resource="OAuthClient" fields={descriptors} />);
 
-    const retry = screen.getByText("Config Retry").closest('[data-layout="stack"]') as HTMLElement;
+    const retry = screen.getByText("Retry").closest('[data-layout="stack"]') as HTMLElement;
     expect(within(retry).getByText("Not set")).toBeTruthy();
     fireEvent.click(within(retry).getByRole("button", { name: "Set value" }));
     expect((await screen.findByLabelText("Max attempts") as HTMLInputElement).value).toBe("1");
