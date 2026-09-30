@@ -63,7 +63,7 @@ class RoundStatus(models.TextChoices):
     COLLECTING = "collecting", "Collecting"
     OPENED = "opened", "Opened"
     CLOSED = "closed", "Closed"
-    CANCELLED = "cancelled", "Cancelled"
+    CANCELED = "canceled", "Canceled"
 
 
 class RoundOutcome(models.TextChoices):
@@ -227,8 +227,8 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     status_transitions = StateTransitions(
         status,
         {
-            RoundStatus.COLLECTING: (RoundStatus.OPENED, RoundStatus.CANCELLED),
-            RoundStatus.OPENED: (RoundStatus.CLOSED, RoundStatus.CANCELLED),
+            RoundStatus.COLLECTING: (RoundStatus.OPENED, RoundStatus.CANCELED),
+            RoundStatus.OPENED: (RoundStatus.CLOSED, RoundStatus.CANCELED),
         },
     )
     outcome = StateField(choices_enum=RoundOutcome, null=True, blank=True)
@@ -449,11 +449,11 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             raise ValidationError("A saved round is required.")
         with transaction.atomic():
             locked = type(self).objects.sudo(reason="proposals.round.cancel").lock_if_supported().get(pk=self.pk)
-            if locked.status == RoundStatus.CANCELLED:
+            if locked.status == RoundStatus.CANCELED:
                 if locked.outcome is not None or locked.closed_at is None or locked.closed_by_id is None:
-                    raise ValidationError("Cancelled round receipts do not match the requested postcondition.")
+                    raise ValidationError("Canceled round receipts do not match the requested postcondition.")
             else:
-                locked._mark_cancelled()
+                locked._mark_canceled()
         _adopt(
             self,
             locked,
@@ -475,7 +475,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
                 .filter(round_id=locked.pk)
                 .order_by("pk")
             )
-            if locked.status in {RoundStatus.CLOSED, RoundStatus.CANCELLED}:
+            if locked.status in {RoundStatus.CLOSED, RoundStatus.CANCELED}:
                 raise ValidationError({"facilitator": "Terminal rounds cannot transfer facilitation."})
             old_id = locked.facilitator_id
             if old_id == user.pk:
@@ -519,10 +519,10 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     @transition(
         status,
         source=(RoundStatus.COLLECTING, RoundStatus.OPENED),
-        target=RoundStatus.CANCELLED,
+        target=RoundStatus.CANCELED,
         on_success=save_state,
     )
-    def _mark_cancelled(self) -> None:
+    def _mark_canceled(self) -> None:
         """Record cancellation as terminal closure without an award outcome."""
 
         cast(Any, self).outcome = None
@@ -553,7 +553,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             self.opened_at is None or self.opened_by_id is None
         ):
             raise ValidationError("An opened round requires its opening receipt.")
-        if self.status in {RoundStatus.CLOSED, RoundStatus.CANCELLED} and (
+        if self.status in {RoundStatus.CLOSED, RoundStatus.CANCELED} and (
             self.closed_at is None or self.closed_by_id is None
         ):
             raise ValidationError("A terminal round requires its close receipt.")
@@ -1593,7 +1593,6 @@ class ProjectProposalAccess(models.Model):
     """Grant proposal visibility from one Project without owning its policy."""
 
     extends = "projects.Project"
-    runtime = False
     rebac_grantable = {"proposal_viewer": "share"}
 
     class Meta:
@@ -1606,7 +1605,6 @@ class TaskProposalAccess(models.Model):
     """Grant proposal visibility and keep unpublished proposal work private."""
 
     extends = "projects.Task"
-    runtime = False
     rebac_grantable = {"proposal_viewer": "share"}
 
     class Meta:

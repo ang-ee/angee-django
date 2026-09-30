@@ -1310,6 +1310,58 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resource_adoption_accepts_mti_parent_unique_fields(tmp_path: Path) -> None:
+    """A child can adopt through a natural key constrained on its concrete parent."""
+
+    class ParentDocument(AngeeModel):
+        """Parent owns the natural key."""
+
+        vault = models.CharField(max_length=40)
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = "base"
+            constraints = (models.UniqueConstraint(fields=("vault", "title"), name="uniq_resource_parent_document"),)
+
+    class ChildDocument(ParentDocument):
+        """Child inherits the natural key without restating its constraint."""
+
+        body = models.TextField(blank=True)
+
+        class Meta:
+            app_label = "base"
+
+    class DocumentLedger(Resource):
+        """Ledger for the inherited-key test."""
+
+        class Meta(Resource.Meta):
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.childdocument.csv").write_text(
+        "_xref,vault,title,body\ndocument,home,Welcome,Seeded\n", encoding="utf-8",
+    )
+    owner = addon(tmp_path, manifest={
+        "master": (),
+        "install": ({"path": "resources/010_base.childdocument.csv", "adopt": ["vault", "title"]},),
+        "demo": (),
+    })
+
+    with model_tables((ParentDocument, ChildDocument, DocumentLedger)):
+        with system_context(reason="mti adoption fixture"):
+            existing = ChildDocument.objects.create(vault="home", title="Welcome", body="Existing")
+
+        result = DocumentLedger.objects.load_addons((owner,), tiers=[Resource.Tier.INSTALL])
+
+        assert (result.created, result.updated) == (0, 1)
+        existing.refresh_from_db()
+        assert existing.body == "Seeded"
+        assert DocumentLedger.objects.get(xref="document").target_id == existing.public_id
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: Path) -> None:
     """String adoption selects only the row inside a conditional key's scope."""
 

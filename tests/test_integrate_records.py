@@ -77,8 +77,8 @@ def test_record_link_keys_mti_target_on_canonical_parent(replica: Any) -> None:
 
     child = MtiChild.objects.create(title="Target")
     link = RecordLink.objects.observe(replica, "mti-target", target=child)
-    assert link.target_ct.model_class() is MtiParent
-    assert link.target_id == str(child.pk)
+    assert link.target_content_type.model_class() is MtiParent
+    assert link.target_object_id == str(child.pk)
 
 
 def test_epoch_retains_links_revisions_and_quarantine(replica: Any) -> None:
@@ -269,13 +269,13 @@ def test_explicit_target_withdrawal_differs_from_omitted_target(replica: Any, op
     else:
         RecordLink.objects.promote(link, **evidence)
     link.refresh_from_db()
-    assert link.target_id == str(replica.pk)
+    assert link.target_object_id == str(replica.pk)
     if operation == "observe":
         RecordLink.objects.observe(replica, link.external_key, target=None)
     else:
         RecordLink.objects.promote(link, target=None, **evidence)
     link.refresh_from_db()
-    assert (link.target_ct_id, link.target_id, link.status) == (None, None, LinkStatus.WITHDRAWN)
+    assert (link.target_content_type_id, link.target_object_id, link.status) == (None, None, LinkStatus.WITHDRAWN)
 
 
 def test_child_absence_requires_parent_absence_evidence(replica: Any) -> None:

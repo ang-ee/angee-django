@@ -631,7 +631,6 @@ class ProjectPortfolio(models.Model):
     """
 
     extends = "projects.Project"
-    runtime = False
 
     hasura_readable_fields = (
         "product",
@@ -692,7 +691,6 @@ class TaskPortfolio(models.Model):
     """Same-row release attribution folded into ``projects.Task``."""
 
     extends = "projects.Task"
-    runtime = False
 
     hasura_readable_fields = ("release",)
     hasura_filterable_fields = hasura_readable_fields

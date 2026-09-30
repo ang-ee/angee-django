@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.base.fields import StateField
+from angee.base.fields import ModelLabelField, StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeModel
 from angee.base.tiers import ResourceTier
@@ -35,7 +35,7 @@ class Resource(AngeeModel):
     content_hash = models.CharField(max_length=71)
     """Hash of model field values from the source row."""
 
-    target_model = models.CharField(max_length=120)
+    target_model = ModelLabelField(max_length=120)
     """Django model label for the imported target row."""
 
     target_id = models.CharField(max_length=120, blank=True, default="")

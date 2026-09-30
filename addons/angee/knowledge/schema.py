@@ -104,11 +104,11 @@ class MarkdownPageType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["page_id"])
+    @strawberry_django.field(only=["page_ptr_id"])
     def page(self) -> strawberry.ID:
         """Return the owning page's public id."""
 
-        return require_public_id(Page, cast(Any, self).page_id)
+        return require_public_id(Page, cast(Any, self).page_ptr_id)
 
     @strawberry_django.field(only=["body"])
     def excerpt(self) -> str:

@@ -1404,13 +1404,13 @@ class RecordLinkType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def model_label(self) -> str:
         """Project target identity through the shared record-reference owner."""
 
         return cast(Any, self).record_model_label
 
-    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def record_id(self) -> PublicID:
         """Return the target public id; navigation rechecks the target's read policy."""
 

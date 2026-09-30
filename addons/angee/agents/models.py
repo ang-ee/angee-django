@@ -45,10 +45,10 @@ from angee.agents.backends import InferenceBackend
 from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.fields import StateField
+from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.iam.service_users import deactivate_service_user, sync_service_user
 from angee.integrate.models import IntegrationCreateMode
@@ -372,7 +372,7 @@ class InferenceModelManager(AngeeManager):
         return len(specs)
 
 
-class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
+class InferenceModel(AuditMixin, AngeeDataModel):
     """One model in a provider's catalogue, agents bind to by FK.
 
     ``publisher`` is the model's maker, reusing the ``integrate.Vendor`` catalogue
@@ -594,7 +594,7 @@ class SkillManager(AngeeManager):
         return len(descriptors)
 
 
-class Skill(SqidMixin, AuditMixin, AngeeModel):
+class Skill(AuditMixin, AngeeDataModel):
     """One skill discovered under an ``integrate_vcs.Source`` (``source_kind="skill"``).
 
     The operator mounts the skill's directory into an agent's workspace; Django keeps
@@ -628,7 +628,7 @@ class Skill(SqidMixin, AuditMixin, AngeeModel):
         return self.name or self.path or f"skill:{self.public_id}"
 
 
-class MCPServer(SqidMixin, AuditMixin, AngeeModel):
+class MCPServer(AuditMixin, AngeeDataModel):
     """An MCP server an agent can reach — internal to the platform or external.
 
     An external server authenticates with an ``integrate.Credential``; the operator renders
@@ -786,7 +786,7 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
         return sqid, digest
 
 
-class MCPTool(SqidMixin, AuditMixin, AngeeModel):
+class MCPTool(AuditMixin, AngeeDataModel):
     """One tool an MCP server exposes; agents select the tools they may call."""
 
     runtime = True
@@ -814,7 +814,7 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class Agent(SqidMixin, AuditMixin, AngeeModel):
+class Agent(AuditMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -887,7 +887,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     runtime_status = StateField(choices_enum=RuntimeStatus, default=RuntimeStatus.STOPPED)
     """Observed run state (:class:`RuntimeStatus`) — the colored dot; ``ERROR`` pairs
     with ``last_error``. Set by the render flow; the daemon owns the live truth."""
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
 
     lifecycle_transitions = StateTransitions(
@@ -1404,7 +1404,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         return model.credential
 
 
-class AgentSession(SqidMixin, AuditMixin, AngeeModel):
+class AgentSession(AuditMixin, AngeeDataModel):
     """Runtime-neutral persisted conversation backed by one workflow run."""
 
     runtime = True
@@ -1417,7 +1417,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
     status = StateField(choices_enum=SessionStatus, default=SessionStatus.IDLE)
     replay_state = models.JSONField(default=list, blank=True)
     usage = models.JSONField(default=dict, blank=True)
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
 
     status_transitions = StateTransitions(
         status,
@@ -1513,7 +1513,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         self._transition_fields = {"last_error"}
 
 
-class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
+class AgentTurn(AuditMixin, AngeeDataModel):
     """One prompt-to-response cycle with append-only ACP updates."""
 
     runtime = True
@@ -1526,7 +1526,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
     updates = models.JSONField(default=list, blank=True)
     text = models.TextField(blank=True)
     usage = models.JSONField(default=dict, blank=True)
-    error = models.TextField(blank=True)
+    error: str = DiagnosticTextField(blank=True)
 
     status_transitions = StateTransitions(
         status,

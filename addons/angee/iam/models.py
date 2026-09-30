@@ -29,8 +29,7 @@ from rebac.roles import ROLE_RELATION
 
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.iam.identity import user_label
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
@@ -42,7 +41,7 @@ VISIBLE_PEOPLE_MAX_LIMIT = 100
 IAMKind = role_anchor("iam/kind", name="IAMKind")
 
 
-class Group(SqidMixin, AngeeModel):
+class Group(AngeeDataModel):
     """Named IAM principal set materialized into composed runtimes."""
 
     runtime = True
@@ -287,7 +286,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             return None
 
 
-class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
