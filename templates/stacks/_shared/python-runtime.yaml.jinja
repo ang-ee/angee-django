@@ -9,7 +9,10 @@
     workdir: /app
 {% endif %}    env:
       ANGEE_PROJECT_DIR: {% if runtime_mode == "process" %}"."{% else %}/app{% endif %}
-      DATABASE_URL: "{{ database_url }}"
+      DATABASE_URL: "{{ database_url }}"{% if pool_for_django and effective_serve_mode == "production" %}
+      ANGEE_DB_POOL: "true"
+      ANGEE_DB_POOL_MAX_SIZE: "{{ db_pool_max_size }}"
+      ANGEE_DB_POOL_TIMEOUT: "{{ db_pool_timeout }}"{% endif %}
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
