@@ -2,12 +2,6 @@ import type { Query, QueryClient } from "@tanstack/react-query";
 
 import { recordValue } from "./dialect/wire";
 
-export function authoredQueryMeta(
-  modelLabels: readonly string[],
-): Record<string, unknown> | undefined {
-  return modelLabels.length > 0 ? { angeeModels: [...modelLabels] } : undefined;
-}
-
 /**
  * Exact-match authored query metadata against canonical model labels supplied by
  * the caller; this metadata-free layer deliberately performs no alias mapping.
