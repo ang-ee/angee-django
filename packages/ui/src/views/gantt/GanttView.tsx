@@ -1,9 +1,9 @@
 import { lazy, useMemo, useState, type ReactNode } from "react";
 import { LazyBoundary } from "../../fragments/LazyBoundary";
-import { LoadingPanel } from "../../fragments/LoadingPanel";
 import { Button } from "../../ui/button";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { useUiT } from "../../i18n";
+import { GanttSkeleton } from "./gantt-skeleton";
 import type { GanttEvent, GanttResource, GanttScale, GanttRowLayout } from "./gantt-types";
 
 export type { GanttEvent, GanttResource, GanttScale } from "./gantt-types";
@@ -30,6 +30,8 @@ export interface GanttViewProps extends GanttRowLayout {
   className?: string;
 }
 
+const DEFAULT_SIDEBAR_WIDTH = 224;
+
 /** Read-only date-scaled schedules. The drawing library loads only on mount. */
 export function GanttView(props: GanttViewProps) {
   const t = useUiT();
@@ -38,7 +40,11 @@ export function GanttView(props: GanttViewProps) {
   // component and a reset boundary, while ordinary renders keep their identity.
   const GanttSurface = useMemo(() => lazy(() => import("./gantt-surface")), [attempt]);
   return (
-    <LazyBoundary resetKey={attempt} pending={<LoadingPanel />} fallback={
+    <LazyBoundary resetKey={attempt} pending={
+      <div className="relative h-full min-h-96">
+        <GanttSkeleton label={t("gantt.loading")} treeWidth={props.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH} />
+      </div>
+    } fallback={
       <ErrorBanner description={t("gantt.loadFailed")}
         actions={<Button size="sm" onClick={() => setAttempt((current) => current + 1)}>{t("collection.retry")}</Button>} />
     }>

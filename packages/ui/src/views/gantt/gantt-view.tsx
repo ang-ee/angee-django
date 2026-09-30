@@ -25,6 +25,7 @@ import {
   type GanttColumn,
 } from "./gantt"
 import { GanttBar } from "./gantt-bar"
+import { GanttSkeleton } from "./gantt-skeleton"
 import {
   cancelActiveGanttGestures,
   markGestureEnd,
@@ -2834,14 +2835,19 @@ function GanttView({
             />
           )}
         </div>
-        {loading && (
+        {loading && rows.length === 0 && (
+          <GanttSkeleton
+            label={settings.i18n.labels.loading}
+            treeWidth={clampedTreeWidth}
+          />
+        )}
+        {loading && rows.length > 0 && (
           <div
-            data-slot="gantt-loading"
-            className="bg-sheet/60 absolute inset-0 z-50 flex items-center justify-center"
+            data-slot="gantt-refreshing"
+            role="status"
+            className="bg-sheet/50 pointer-events-none absolute inset-0 z-50"
           >
-            <span className="text-fg-muted animate-pulse text-sm">
-              {settings.i18n.labels.loading}
-            </span>
+            <span className="sr-only">{settings.i18n.labels.loading}</span>
           </div>
         )}
         {(viewConfig.renderDragPreview || viewConfig.renderResizeIndicator) && (
