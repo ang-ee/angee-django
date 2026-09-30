@@ -66,7 +66,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     fields = set(schema._schema.mutation_type.fields)
     assert fields == {
         "cancel_workflow_run", "reprocess_workflow_run", "retry_step", "retry_step_accepting_duplicate",
-        "enable_workflow_trigger", "disable_workflow_trigger",
+        "enable_workflow_trigger", "disable_workflow_trigger", "revoke_workflow_trigger_grant",
         "insert_trigger_one", "update_trigger_by_pk", "delete_trigger_by_pk",
     }
     for name in ("workflow", "workflowversion", "workflowrun", "workflowrunevidence",
