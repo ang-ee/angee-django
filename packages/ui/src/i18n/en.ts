@@ -2,6 +2,9 @@
 // the active translations; these are the defaults used when a key is missing.
 
 export const enUiMessages: Record<string, string> = {
+  "statusbar.position": "{current} of {total}",
+  "statusbar.editDates": "Edit dates for {label}",
+  "statusbar.loading": "Loading status",
   "visibility.label": "Visibility",
   "visibility.change": "Change visibility to {visibility}",
   "form.staleRevision": "This record changed since you started editing. Reload it before saving again.",

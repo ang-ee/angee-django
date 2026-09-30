@@ -1,4 +1,4 @@
-import { FieldDescriptorControl, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TextLink, canonicalOptionValue, optionLabel, useEnumOptions, type FieldDescriptor } from "@angee/ui";
+import { FieldDescriptorControl, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TextLink, optionLabel, useEnumOptions, type FieldDescriptor } from "@angee/ui";
 import * as React from "react";
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
 import { comparisonCellValue, comparisonRows, isEmptyComparisonValue, proposalColumnLabel, type ComparisonFactField, type ComparisonRow } from "./comparison-model";
@@ -99,10 +99,9 @@ function ProposalHeader({
   answers: readonly ComparisonAnswer[];
 }): React.ReactElement {
   const t = useProposalsT();
-  const visibilityOptions = useEnumOptions(ANSWER_MODEL, "visibility", { casing: "upper" });
+  const visibilityOptions = useEnumOptions(ANSWER_MODEL, "visibility");
   const visibility = [...new Set(answers.flatMap((answer) => {
-    const selected = canonicalOptionValue(visibilityOptions, answer.visibility);
-    const label = selected ? optionLabel(visibilityOptions, selected) : answer.visibility;
+    const label = optionLabel(visibilityOptions, answer.visibility);
     return [...(label ? [label] : []), ...(answer.shared_with_responders === true ? [t("comparison.visibility.shared")] : [])];
   }))].map(String).join(" · ");
   const label = proposalColumnLabel(proposal);

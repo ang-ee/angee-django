@@ -402,7 +402,7 @@ class Project(
 
         OPEN = "open", "Open"
         PAUSED = "paused", "Paused"
-        DONE = "done", "Done"
+        DONE = "done", "Completed"
         DROPPED = "dropped", "Dropped"
 
     class ProjectDateResolution(models.TextChoices):
@@ -417,6 +417,7 @@ class Project(
     title = models.CharField(max_length=240)
     body = models.TextField(blank=True, default="")
     status = StateField(choices_enum=ProjectStatus, default=ProjectStatus.OPEN)
+    status_changed_at = models.DateTimeField(null=True, blank=True, editable=False)
     lead = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -483,6 +484,12 @@ class Project(
         """Return the project title."""
 
         return self.title
+
+    @property
+    def on_path(self) -> bool:
+        """Whether this lifecycle state keeps the milestone path active."""
+
+        return self.status == self.ProjectStatus.OPEN
 
     def apply_setup(
         self, *, milestones: list[dict[str, Any]] | None = None, vault_template: Any = None,
@@ -612,7 +619,10 @@ class Project(
             if locked.status != status:
                 previous_status = locked.status
                 locked.status = status
-                locked.sudo(reason="projects.project.set_status").save(update_fields=("status", "updated_at"))
+                locked.status_changed_at = timezone.now()
+                locked.sudo(reason="projects.project.set_status").save(
+                    update_fields=("status", "status_changed_at", "updated_at"),
+                )
                 bind_actor(locked.unsudo(), actor)
                 project_status_changed.send(
                     sender=type(locked),

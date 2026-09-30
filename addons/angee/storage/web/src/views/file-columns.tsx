@@ -13,7 +13,7 @@ export function fileGalleryCard(row: StorageFileRow): ReactElement {
 
 function FileGalleryCard({ row }: { row: StorageFileRow }): ReactElement {
   const Audience = useResolvedWidget("statusBadge")?.read;
-  const audienceOptions = useEnumOptions("storage.File", "visibility", { casing: "upper" });
+  const audienceOptions = useEnumOptions("storage.File", "visibility");
   const mime = row.mime_type?.mime_type ?? "";
   const mimeLabel = row.mime_type?.label || mime || "—";
   const icon = row.mime_type?.icon_key || "file";

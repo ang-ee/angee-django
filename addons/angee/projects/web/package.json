@@ -19,6 +19,7 @@
     "@angee/messaging": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
+    "@refinedev/core": "^5.0.12",
     "lucide-react": "^1.21.0"
   },
   "peerDependencies": {

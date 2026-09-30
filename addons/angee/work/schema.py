@@ -77,6 +77,7 @@ class WorkStageType(AngeeNode):
     category: auto
     rule_owned: auto
     conceals: auto
+    on_path: bool = strawberry_django.field(only=["conceals", "category"])
     created_at: auto
     updated_at: auto
 

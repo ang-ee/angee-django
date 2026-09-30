@@ -24,6 +24,10 @@ export interface WidgetOption {
   value: string;
   label: ReactNode;
   disabled?: boolean;
+  /** A statusbar owner may mark a terminal or side option outside its path. */
+  onPath?: boolean;
+  /** Server-owned status choices declare eligibility; plain form options default to selectable. */
+  selectable?: boolean;
 }
 
 /**
@@ -46,16 +50,15 @@ export function relationIdList(value: unknown): string[] {
 }
 
 /**
- * The label for an option `value`: the matching option's `label`, else the raw
- * value, else "". The one owner of the
- * `options.find(o => o.value === v)?.label ?? v ?? ""` lookup the scalar and
- * relation widgets each re-spelled.
+ * The label for an option value. GraphQL enum member names resolve against
+ * authored input values through the same canonical matching rule as selects.
  */
 export function optionLabel(
   options: readonly WidgetOption[] | undefined,
   value: string | null | undefined,
 ): ReactNode {
-  return options?.find((option) => option.value === value)?.label ?? value ?? "";
+  const canonical = canonicalOptionValue(options, value);
+  return options?.find((option) => option.value === canonical)?.label ?? value ?? "";
 }
 
 /**
@@ -107,6 +110,9 @@ export function optionTextLabel(
 
 /** Presentation facts shared by page descriptors and rendered widget fields. */
 export interface FieldPresentation {
+  /** Statusbar layout; the form slot may supply measured width at render time. */
+  fill?: boolean;
+  containerWidth?: number;
   visibilityAction?: VisibilityAction;
   label?: ReactNode;
   options?: readonly WidgetOption[];

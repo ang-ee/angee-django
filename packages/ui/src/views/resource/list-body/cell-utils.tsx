@@ -14,6 +14,7 @@ import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
 import { Chip } from "../../../ui/chip";
 import { dateFromUnknown } from "../../../widgets/date-format";
+import { canonicalOptionValue } from "../../../widgets/types";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
 import type { GroupMeasure } from "./types";
@@ -28,10 +29,15 @@ export function cellContent<TRow extends Row>(
   const projected = rowValueAtPath(row, queryField?.row?.path ?? column.field);
   const labelPath = queryField?.relation?.labelPath;
   const value = labelPath ? rowValueAtPath(row, labelPath) ?? projected : projected;
+  const field = queryField ?? metadata?.fields[column.field];
+  const enumOptions = field?.kind === "enum"
+    ? field.values?.map((item) => ({ value: item.value, label: enumValueLabel(item) }))
+    : undefined;
+  const enumValue = enumOptions?.find((item) => item.value === canonicalOptionValue(enumOptions, value));
   const tone = columnTone(column, value);
   if (tone) {
     const label = value == null ? "" : String(value);
-    return <Badge tone={tone}>{label ? statusLabel(label) : "-"}</Badge>;
+    return <Badge tone={tone}>{enumValue?.label ?? (label ? statusLabel(label) : "-")}</Badge>;
   }
   if (Array.isArray(value)) {
     return (
@@ -44,9 +50,7 @@ export function cellContent<TRow extends Row>(
       </span>
     );
   }
-  const field = queryField ?? metadata?.fields[column.field];
-  const enumValue = field?.kind === "enum" ? field.values?.find((item) => item.value === value) : undefined;
-  if (enumValue) return enumValueLabel(enumValue);
+  if (enumValue) return enumValue.label;
   const date = isDateField(field, column.field)
     ? dateFromUnknown(value)
     : null;

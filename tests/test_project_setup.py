@@ -89,6 +89,29 @@ class ProjectSetupFixture(WorkCase):
 class ProjectSetupCase(ProjectSetupFixture):
     """Exercise transactional setup and filing on production contributors."""
 
+    def test_lifecycle_date_changes_only_with_status(self):
+        project = self.setup_project()
+        self.assertIsNone(project.status_changed_at)
+        self.assertTrue(project.on_path)
+        with actor_context(self.manager):
+            project.pause()
+            self.assertFalse(project.on_path)
+            paused_at = project.status_changed_at
+            project.resume()
+            self.assertTrue(project.on_path)
+            self.assertGreater(project.status_changed_at, paused_at)
+            project.complete()
+            completed_at = project.status_changed_at
+            self.assertFalse(project.on_path)
+            project.complete()
+            self.assertEqual(project.status_changed_at, completed_at)
+            project.title = "Renamed project"
+            project.save(update_fields=("title", "updated_at"))
+            self.assertEqual(project.status_changed_at, completed_at)
+            project.drop()
+        self.assertIsNotNone(completed_at)
+        self.assertGreater(project.status_changed_at, completed_at)
+
     def test_setup_is_atomic_and_replay_does_not_reset_later_edits(self):
         initial_revision = self.source.revision
         project = self.setup_project(expected_revision=initial_revision)
