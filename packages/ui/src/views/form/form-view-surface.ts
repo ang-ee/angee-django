@@ -80,6 +80,8 @@ export interface RecordFieldFocusOptions {
 export interface OverviewTabOptions {
   label?: React.ReactNode;
   position?: "first" | "last";
+  /** No Overview tab: the first record tab is the default. With no record tabs the overview still renders. */
+  hidden?: boolean;
 }
 
 export interface RecordPanelContext {
@@ -145,6 +147,8 @@ export interface UseFormViewSurfaceProps {
   /** Called when the selected saved-record tab changes. */
   onRecordTabChange?: (tab: string) => void;
   defaultRecordTab?: string;
+  /** Without an Overview tab an unavailable tab id falls back to the first record tab. */
+  overviewHidden?: boolean;
   deleteAction?: RecordDeleteAction;
   deleteVisibleWhen?: (record: Row) => boolean;
 }
@@ -205,6 +209,7 @@ export function useFormViewSurface({
   recordTab,
   onRecordTabChange,
   defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
+  overviewHidden = false,
   deleteAction,
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
@@ -627,7 +632,7 @@ export function useFormViewSurface({
   );
   const activeRecordTab = recordTabList.some((tab) => tab.id === requestedRecordTab)
     ? requestedRecordTab
-    : FORM_VIEW_OVERVIEW_TAB_ID;
+    : overviewHidden && recordTabList[0] ? recordTabList[0].id : FORM_VIEW_OVERVIEW_TAB_ID;
   const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);

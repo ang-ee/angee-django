@@ -172,6 +172,8 @@ export interface ActionProps extends ActionBinding {
   danger?: boolean;
   /** Promote a frequent record verb out of the default Actions menu. */
   placement?: "menu" | "toolbar";
+  /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
+  primary?: boolean;
   /** Static confirmation copy, or copy derived from the loaded record. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);
   /**

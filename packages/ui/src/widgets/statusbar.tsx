@@ -6,6 +6,7 @@ import { useUiT } from "../i18n";
 import { statusLabel } from "../lib/labels";
 import { Badge } from "../ui/badge";
 import { DropdownMenu } from "../ui/dropdown-menu";
+import { PopoverContent, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTrigger } from "../ui/popover";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { formatDate, formatDateRange, type DateFormatValue } from "./date-format";
 import { canonicalOptionValue, optionLabel, optionTextLabel, type WidgetDefinition, type WidgetOption, type WidgetRenderProps } from "./types";
@@ -27,7 +28,10 @@ export interface StatusbarStepsProps {
   steps: readonly StatusbarStep[];
   value: string | null | undefined;
   onChange?: (value: string) => void;
+  /** The collapsed menu's date verb; the expanded steps open `dateEditor` in a popover on the step. */
   onEditDates?: (value: string) => void;
+  /** The date editor for one step, shown in a popover anchored on the step's pencil. */
+  dateEditor?: (step: StatusbarStep) => React.ReactNode;
   /** Blocks phase selection; date editing follows each step's own permission. */
   readOnly?: boolean;
   fill?: boolean;
@@ -59,7 +63,7 @@ export function StatusbarSkeleton({ count = 4, fill = false, twoLine = false, la
 }
 
 /** The shared chevron statusbar. Owners supply path and selectability facts. */
-export function StatusbarSteps({ steps, value, onChange, onEditDates, readOnly, fill = false, containerWidth,
+export function StatusbarSteps({ steps, value, onChange, onEditDates, dateEditor, readOnly, fill = false, containerWidth,
   offPath, "aria-label": ariaLabel }: StatusbarStepsProps): React.ReactElement {
   const t = useUiT();
   const path = steps.filter((step) => step.onPath !== false);
@@ -117,7 +121,15 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, readOnly, 
               {detail.length > 0 ? <span className="block truncate text-[11px] font-normal opacity-80">{detail.map((part, partIndex) =>
                 <React.Fragment key={partIndex}>{partIndex > 0 ? " · " : ""}{part}</React.Fragment>)}</span> : null}
             </button>
-            {step.editableDates && onEditDates ? <button type="button"
+            {step.editableDates && dateEditor ? <PopoverRoot>
+              <PopoverTrigger aria-label={t("statusbar.editDates", { label: optionTextLabel(step.label, step.value) })}
+                className="ml-auto shrink-0 rounded-4 p-0.5 outline-none focus-visible:focus-ring">
+                <Pencil aria-hidden="true" className="size-3" />
+              </PopoverTrigger>
+              <PopoverPortal><PopoverPositioner sideOffset={6} align="end">
+                <PopoverContent surface="sheet" className="w-72 p-3 text-xs text-fg">{dateEditor(step)}</PopoverContent>
+              </PopoverPositioner></PopoverPortal>
+            </PopoverRoot> : step.editableDates && onEditDates ? <button type="button"
               aria-label={t("statusbar.editDates", { label: optionTextLabel(step.label, step.value) })}
               onClick={() => onEditDates(step.value)} className="ml-auto shrink-0 rounded-4 p-0.5 outline-none focus-visible:focus-ring">
               <Pencil aria-hidden="true" className="size-3" />

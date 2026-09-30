@@ -214,6 +214,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     recordTab,
     onRecordTabChange,
     defaultRecordTab,
+    overviewHidden: overviewTab?.hidden,
     deleteAction,
     deleteVisibleWhen,
   });
@@ -286,9 +287,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     />
   );
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
-  const orderedTabs = overviewTab?.position === "last"
-    ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
-    : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
+  const orderedTabs = overviewTab?.hidden && recordTabList.length > 0 ? recordTabList
+    : overviewTab?.position === "last"
+      ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
+      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
   const recordExtrasPanel =
     !awaitingRecord && recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>

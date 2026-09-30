@@ -313,7 +313,7 @@ export function FormViewRecordHeader({
         {/* A declared context line is the record's one compact subtitle; the
             generic id/created/updated line is the fallback for forms without one. */}
         {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
-        {contextLine ? <p className="mt-1 break-words text-xs text-fg-muted">{contextLine}</p> : null}
+        {contextLine ? <div className="mt-1 break-words text-xs text-fg-muted">{contextLine}</div> : null}
       </div>
       {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
     </header>

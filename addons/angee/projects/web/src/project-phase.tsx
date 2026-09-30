@@ -78,7 +78,7 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
   });
   const statusOptions = useEnumOptions(PROJECT_MODEL, "status");
   const [editingDates, setEditingDates] = React.useState<string | null>(null);
-  const [openDate, setOpenDate] = React.useState<"start_date" | "target_date" | null>(null);
+  const [openDate, setOpenDate] = React.useState<string | null>(null);
   if (!recordId) return null;
   if (list.fetching && options.length === 0) return <StatusbarSkeleton fill twoLine count={4} />;
 
@@ -99,19 +99,29 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
     };
   });
   const dateRow = editingDates ? byId.get(editingDates) : undefined;
-  const changeDate = (name: "start_date" | "target_date", date: Date | null) => {
-    if (!editingDates || !dateRow || !canEditDates || !holdsPermission(dateRow, "write")) return;
+  const changeDate = (milestone: MilestoneRow, name: "start_date" | "target_date", date: Date | null) => {
+    if (!milestone.id || !canEditDates || !holdsPermission(milestone, "write")) return;
     void update.mutateAsync({
-      id: editingDates,
+      id: milestone.id,
       values: { [name]: formatDateStorage(date) },
       meta: { fields: refineFieldsFromPaths(["id", "start_date", "target_date", "revision", "permissions"]),
-        gqlVariables: { expected_revision: dateRow.revision } },
+        gqlVariables: { expected_revision: milestone.revision } },
     }).then(() => {
       list.refetch();
       setOpenDate(null);
       setEditingDates(null);
     }).catch(() => undefined);
   };
+  // One milestone's two dates, edited where they are shown: in a popover on the step (or, in the
+  // collapsed menu's case, in the panel beneath).
+  const dateFields = (milestone: MilestoneRow) => (["start_date", "target_date"] as const).map((name) => <div key={name} className="min-w-28 flex-1">
+    <span className="mb-1 block text-fg-muted">{t(name === "start_date" ? "project.phase.starts" : "project.phase.ends")}</span>
+    <DatePopover selected={dateFromValue(milestone[name] ?? null)}
+      label={formatDate(milestone[name]) || t("project.phase.noneDate")}
+      ariaLabel={t(name === "start_date" ? "project.phase.starts" : "project.phase.ends")}
+      open={openDate === `${milestone.id}:${name}`} onOpenChange={(open) => setOpenDate(open ? `${milestone.id}:${name}` : null)}
+      onSelectDate={(date) => changeDate(milestone, name, date)} />
+  </div>);
   return <>
     <StatusbarSteps
       aria-label={t("project.phase.select")}
@@ -125,6 +135,13 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
         date: row?.status_changed_at,
       } : undefined}
       onEditDates={setEditingDates}
+      dateEditor={(step) => {
+        const milestone = byId.get(step.value);
+        return milestone ? <div className="space-y-2">
+          <span className="block font-medium">{milestone.name}</span>
+          <div className="flex gap-2">{dateFields(milestone)}</div>
+        </div> : null;
+      }}
       onChange={async (id) => {
         if (!canWrite || !selectable.has(id)) return;
         const selected = options.find((option) => option.value === id);
@@ -144,14 +161,7 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
     {dateRow && editingDates && canEditDates && holdsPermission(dateRow, "write") ? <div
       className="mt-2 flex flex-wrap items-end gap-2 rounded-6 border border-border-subtle bg-sheet p-2 text-xs">
       <span className="w-full font-medium">{dateRow.name}</span>
-      {(["start_date", "target_date"] as const).map((name) => <div key={name} className="min-w-36">
-        <span className="mb-1 block text-fg-muted">{t(name === "start_date" ? "project.phase.starts" : "project.phase.ends")}</span>
-        <DatePopover selected={dateFromValue(dateRow[name] ?? null)}
-          label={formatDate(dateRow[name]) || t("project.phase.noneDate")}
-          ariaLabel={t(name === "start_date" ? "project.phase.starts" : "project.phase.ends")}
-          open={openDate === name} onOpenChange={(open) => setOpenDate(open ? name : null)}
-          onSelectDate={(date) => changeDate(name, date)} />
-      </div>)}
+      {dateFields(dateRow)}
       <Button type="button" variant="ghost" size="sm" onClick={() => { setOpenDate(null); setEditingDates(null); }}>
         {t("project.phase.closeDates")}
       </Button>

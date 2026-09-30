@@ -182,8 +182,9 @@ export function RecordActionBar({
           {action.label}
         </RecordActionTrigger>
       )) : <>
-      {toolbarActions.map((action) => (
-        <Button key={action.id} type="button" size="sm" variant={action.danger ? "danger" : "secondary"}
+      {toolbarActions.map((action, index) => (
+        <Button key={action.id} type="button" size="sm"
+          variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
           disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
           {action.icon ? <Glyph name={action.icon} /> : null}
           {action.label}
