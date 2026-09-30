@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-SETTINGS: dict[str, int | str] = {
+SETTINGS: dict[str, object] = {
+    "ANGEE_HOOKS:append": ["ANGEE_TASK_LOCK_BACKEND"],
     # Beat keeps its schedule in the database (django-celery-beat) while code owns
     # it: addons declare CELERY_BEAT_SCHEDULE, beat writes those entries into
     # PeriodicTask rows at startup and prunes rows no longer declared. Rows hold

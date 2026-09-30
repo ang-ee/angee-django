@@ -12,7 +12,13 @@ from django.utils.module_loading import import_string
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
 
-from angee.base.impl import check_impl_registry, declared_impl_registries
+from angee.base.impl import (
+    _hook_paths,
+    _resolve_hook_path,
+    check_impl_registry,
+    declared_hooks,
+    declared_impl_registries,
+)
 from angee.base.mixins import HierarchyQuerySet
 
 
@@ -48,6 +54,32 @@ def check_impl_registries(
             )
             continue
         errors.extend(check_impl_registry(base))
+    return errors
+
+
+def check_hooks(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Validate every callable hook declared by installed addons."""
+
+    del app_configs, kwargs
+    try:
+        names = declared_hooks()
+    except ImproperlyConfigured as error:
+        return [checks.Error(str(error), id="angee.E026")]
+    errors: list[checks.CheckMessage] = []
+    for name in names:
+        try:
+            paths = _hook_paths(name)
+        except ImproperlyConfigured as error:
+            errors.append(checks.Error(str(error), id="angee.E026"))
+            continue
+        for path in paths:
+            try:
+                _resolve_hook_path(name, path)
+            except ImproperlyConfigured as error:
+                errors.append(checks.Error(str(error), id="angee.E026"))
     return errors
 
 

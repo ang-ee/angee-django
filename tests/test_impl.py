@@ -26,6 +26,8 @@ from angee.base.impl import (
     materialize_form_schema,
     model_config_form_spec,
     resolve_all_impl_classes,
+    resolve_hook,
+    resolve_hooks,
     resolve_impl_class,
 )
 from angee.base.jsonschema import validation_issues
@@ -176,10 +178,33 @@ def test_impl_owner_public_import_contract() -> None:
     assert ImplDefaultsMixin.__name__ == "ImplDefaultsMixin"
     assert callable(impl_registry)
     assert callable(resolve_all_impl_classes)
+    assert callable(resolve_hook)
+    assert callable(resolve_hooks)
     assert callable(resolve_impl_class)
     legacy_modules = ("impl_types", "registry")
     for legacy_module in legacy_modules:
         assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
+
+
+def test_hooks_resolve_optional_single_and_declared_list_order() -> None:
+    """Hook paths share callable validation without imposing registry keys."""
+
+    with override_settings(ANGEE_TEST_HOOK=""):
+        assert resolve_hook("ANGEE_TEST_HOOK") is None
+    with override_settings(ANGEE_TEST_HOOK="builtins.len"):
+        assert resolve_hook("ANGEE_TEST_HOOK") is len
+    with override_settings(ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len", "builtins.sorted"]):
+        assert resolve_hooks("ANGEE_TEST_HOOKS") == (sorted, len, sorted)
+        assert resolve_hooks("ANGEE_TEST_HOOKS", sorted_unique=True) == (len, sorted)
+
+
+@pytest.mark.parametrize("path", ["builtins.MissingHook", "builtins.Ellipsis"])
+def test_hooks_reject_unimportable_and_noncallable_paths(path: str) -> None:
+    with (
+        override_settings(ANGEE_TEST_HOOK=path),
+        pytest.raises(ImproperlyConfigured, match="settings.ANGEE_TEST_HOOK hook"),
+    ):
+        resolve_hook("ANGEE_TEST_HOOK")
 
 
 @override_settings(

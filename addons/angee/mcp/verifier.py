@@ -15,10 +15,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from asgiref.sync import sync_to_async
-from django.conf import settings
-from django.utils.module_loading import import_string
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from rebac import SubjectRef
+
+from angee.base.impl import resolve_hook
 
 MCPActorVerifier = Callable[[str], SubjectRef | None]
 """A ``verify(bearer) -> SubjectRef | None`` callable named by ``ANGEE_MCP_ACTOR_VERIFIER``."""
@@ -55,5 +55,4 @@ def _verifier() -> MCPActorVerifier | None:
     verifier of its own); every bearer then declines and REBAC denies the request.
     """
 
-    dotted = getattr(settings, "ANGEE_MCP_ACTOR_VERIFIER", "")
-    return import_string(dotted) if dotted else None
+    return resolve_hook("ANGEE_MCP_ACTOR_VERIFIER")

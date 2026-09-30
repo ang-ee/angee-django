@@ -369,6 +369,12 @@ Use these owners instead of maintaining another contract in an addon:
   keep any selected-key policy with its addon. GraphQL adapters
   live in [`angee.graphql.impl`](../../addons/angee/graphql/impl.py); callers
   retain authorization policy.
+- **Hooks are declared callable settings, separate from keyed registries.**
+  The owning addon appends each hook setting name to `ANGEE_HOOKS`, and
+  [`angee.base.impl`](../../angee/base/impl.py) resolves its optional callable
+  or ordered callable list with `resolve_hook` or `resolve_hooks`. The base check
+  imports and validates every declared hook; the caller owns invocation order
+  when it needs to sort contributors.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
 - GraphQL authoring is native Strawberry. Addons expose a `schemas` mapping in
