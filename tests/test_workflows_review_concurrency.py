@@ -19,6 +19,7 @@ from angee.decisions.forms import Action
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
 from angee.workflows.reviews import ReviewStep
+from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.conftest import create_user
@@ -170,7 +171,7 @@ def test_review_decide_races_cancel_in_both_orders_without_lock_inversion(waitin
     assert retained.closed_reason == ("resolved" if winner == "decide" else "canceled")
     assert retained.resolution == ({"action": "accept", "note": "Retained"} if winner == "decide" else {})
     assert system_queryset(DecisionGroup).get(pk=decision.group_id).settled_at is not None
-    assert StepRun.objects.wake_decisions() == 0
+    assert runner.wake_decisions() == 0
 
 
 @pytest.mark.parametrize("winner", ["decide", "expiry"])
@@ -209,7 +210,7 @@ def test_review_decide_races_expiry_and_worker_consumes_the_final_group(waiting_
     assert run.outcome == ("accepted" if winner == "decide" else "expired")
     assert applied == ([(step.pk, reviewer.pk)] if winner == "decide" else [])
     assert system_queryset(StepAttempt).filter(step_run=step, result="succeeded").count() == 2
-    assert Decision.objects.expire_due() == 0 and StepRun.objects.wake_decisions() == 0
+    assert Decision.objects.expire_due() == 0 and runner.wake_decisions() == 0
 
 
 def test_apply_holds_run_before_group_and_cancel_observes_its_terminal_commit(waiting_review):
@@ -219,7 +220,7 @@ def test_apply_holds_run_before_group_and_cancel_observes_its_terminal_commit(wa
     answer(decision, reviewer)
     with ThreadPoolExecutor(max_workers=2) as pool:
         with DecisionGroup.objects.hold(decision.group_id):
-            worker, worker_pid = submit(pool, lambda: StepRun.objects.execute(step.pk))
+            worker, worker_pid = submit(pool, lambda: runner.execute(step.pk))
             wait_for_lock(worker_pid, worker)
             cancel, cancel_pid = submit(pool, lambda: WorkflowRun.objects.cancel(run, actor=actor))
             wait_for_lock(cancel_pid, cancel)
@@ -251,7 +252,7 @@ def test_concurrent_all_answers_settle_wake_and_apply_once(waiting_review, settl
         assert right.result(timeout=10).closed_reason == "resolved"
     assert settlements == [first.group_id]
     assert [payload["kwargs"]["step_run_id"] for name, payload in sent if name == "workflows.execute"] == [step.pk]
-    assert StepRun.objects.wake_decisions() == 0
+    assert runner.wake_decisions() == 0
     run_until(run)
     assert run.status == "succeeded" and applied == [(step.pk, reviewer.pk)]
     assert system_queryset(StepAttempt).filter(step_run=step, result="succeeded").count() == 2
@@ -291,8 +292,8 @@ def test_settlement_signal_skips_busy_run_and_tick_recovers(waiting_review, sett
             assert settlements == [decision.group_id]
             assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
             assert not sent and not applied
-    assert StepRun.objects.tick()["decisions"] == 1
+    assert runner.tick()["decisions"] == 1
     assert [payload["kwargs"]["step_run_id"] for name, payload in sent if name == "workflows.execute"] == [step.pk]
-    assert StepRun.objects.tick()["decisions"] == 0
+    assert runner.tick()["decisions"] == 0
     run_until(run)
     assert run.status == "succeeded" and applied == [(step.pk, reviewer.pk)]

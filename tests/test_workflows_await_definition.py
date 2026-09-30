@@ -11,6 +11,7 @@ from angee.base.jsonschema import schemas_match, validator
 from angee.base.scoping import system_queryset
 from angee.workflows.awaits import AwaitedRun, AwaitRun, AwaitRunConfig, AwaitRunInput
 from angee.workflows.definition import Definition
+from angee.workflows.runner import runner
 from angee.workflows.steps import Done, EmptyOutput, Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowVersion
@@ -300,10 +301,10 @@ def test_observing_already_failed_owned_child_preserves_its_open_rows(execution,
         "finish": {"step": Branch.key},
     }}, key="await_failed_parent", actor=actor)
     parent = start_run(parent_workflow, actor=actor)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=parent, node_key="start").pk)
+    runner.execute(system_queryset(StepRun).get(run=parent, node_key="start").pk)
     child = admitted[0]
     for key in ("branch", "park", "fail"):
-        StepRun.objects.execute(system_queryset(StepRun).get(run=child, node_key=key).pk)
+        runner.execute(system_queryset(StepRun).get(run=child, node_key=key).pk)
     child.refresh_from_db()
     assert child.status == "failed"
     parked = system_queryset(StepRun).get(run=child, node_key="park")

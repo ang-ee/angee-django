@@ -16,6 +16,7 @@ from rebac import system_context
 
 from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
+from angee.workflows.runner import runner
 from angee.workflows.states import StepRunStatus
 from angee.workflows.steps import Step
 from angee.workflows.triggers import RecordChanged
@@ -141,7 +142,7 @@ def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any
         if not ready or any(step_run.node_key == node for step_run in ready):
             return run
         for step_run in ready:
-            run.step_runs.execute(step_run.pk)
+            runner.execute(step_run.pk)
     raise AssertionError(f"Workflow did not settle after {max_steps} iterations.")
 
 
@@ -166,7 +167,7 @@ class RunFactory:
         with system_context(reason="workflows.testing inspect target"):
             step_run = run.step_runs.get(node_key=node)
         if step_run.status != status and step_run.status == StepRunStatus.READY:
-            run.step_runs.execute(step_run.pk)
+            runner.execute(step_run.pk)
             with system_context(reason="workflows.testing inspect settlement"):
                 step_run.refresh_from_db()
                 run.refresh_from_db()

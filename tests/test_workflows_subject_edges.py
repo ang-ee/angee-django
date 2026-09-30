@@ -12,6 +12,7 @@ from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run, trigger_source
 from angee.workflows.testing.models import StepRun, Trigger, TriggerEvent, WorkflowRun
 from angee.workflows.triggers import RecordChanged
@@ -95,7 +96,7 @@ def test_awaited_child_run_keeps_its_canonical_subject(child_graph):
     assert waiter.waiting_kind == "run" and waiter.awaited_run_id == child.pk
     assert WorkflowRun.objects.with_actor(actor).for_subject(subject).get().pk == child.pk
     run_until(child)
-    assert StepRun.objects.wake_runs(child.pk) == 1
+    assert runner.wake_runs(child.pk) == 1
     run_until(parent)
     assert child.status == parent.status == "succeeded"
     assert WorkflowRun.objects.with_actor(actor).for_subject(subject).get().pk == child.pk

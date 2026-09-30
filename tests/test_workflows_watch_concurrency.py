@@ -10,6 +10,7 @@ from rebac import actor_context
 
 from angee.base.scoping import system_queryset
 from angee.workflows import tasks
+from angee.workflows.runner import runner
 from angee.workflows.steps import Wait
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, WorkflowRun
@@ -53,7 +54,7 @@ def test_two_native_saves_during_watch_planning_wake_once(watched_source, regist
             current.save(update_fields=("name",))
 
     with ThreadPoolExecutor(max_workers=3) as pool:
-        planner, _ = submit(pool, lambda: StepRun.objects.execute(step.pk))
+        planner, _ = submit(pool, lambda: runner.execute(step.pk))
         try:
             assert planned.wait(10)
             first, first_pid = submit(pool, save)
@@ -84,7 +85,7 @@ def test_two_native_saves_during_watch_planning_wake_once(watched_source, regist
     assert step.status == "ready"
     assert sum(name == "workflows.execute" for name, _ in sent) == 1
     assert system_queryset(StepAttempt).filter(step_run=step).count() == 1
-    assert StepRun.objects.wake_records() == 0
+    assert runner.wake_records() == 0
     run_until(run)
     assert run.status == "succeeded" and run.output == {"value": 7}
     assert system_queryset(StepAttempt).filter(step_run=step).count() == 2
@@ -128,7 +129,7 @@ def test_native_save_racing_cancellation_cannot_resurrect_the_waiter(watched_sou
     assert not system_queryset(StepWatch).exists()
     deliveries = record_deliveries(sent)
     assert len(deliveries) == 1
-    assert tasks.wake_records(**deliveries[0]) == StepRun.objects.wake_records() == 0
+    assert tasks.wake_records(**deliveries[0]) == runner.wake_records() == 0
     assert not any(name == "workflows.execute" for name, _ in sent)
     run.refresh_from_db()
     assert (run.status, run.outcome, run.output, run.finished_at) == terminal
@@ -169,7 +170,7 @@ def test_registration_rechecks_read_after_waiting_for_an_ownership_transfer(watc
         writer, _ = submit(pool, transfer)
         try:
             assert transferred.wait(10)
-            planner, pid = submit(pool, lambda: StepRun.objects.execute(step.pk))
+            planner, pid = submit(pool, lambda: runner.execute(step.pk))
             assert observed.wait(10)
             wait_for_lock(pid, planner)
         finally:

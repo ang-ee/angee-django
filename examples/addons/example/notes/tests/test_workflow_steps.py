@@ -10,6 +10,7 @@ from django.test import TransactionTestCase
 from rebac import system_context
 from rebac.roles import grant as grant_role
 
+from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.testing.drivers import capture_tasks, load_workflow, register_steps, run_until, start_run
 from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePublication, ValidateNotePublication
@@ -83,7 +84,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
 
         note.title = "Ready for another look"
         note.with_actor(self.owner).save()
-        self.assertEqual(StepRun.objects.wake_records(), 1)
+        self.assertEqual(runner.wake_records(), 1)
         run_until(run)
         self.assertEqual(run.status, RunStatus.WAITING)
         with system_context(reason="note re-armed watch assertions"):
@@ -91,7 +92,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
 
         note.status = Note.Status.IN_REVIEW
         note.with_actor(self.owner).save()
-        self.assertEqual(StepRun.objects.wake_records(), 1)
+        self.assertEqual(runner.wake_records(), 1)
         run_until(run)
         self.assertEqual(run.status, RunStatus.SUCCEEDED)
         self.assertEqual(run.output, {"id": note.sqid, "title": note.title, "status": "in_review"})
@@ -192,7 +193,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual(StepRun.objects.get(run=parent, node_key="start").output, {"run_id": child.sqid})
         self.answer_review(child)
         run_until(child)
-        StepRun.objects.tick()
+        runner.tick()
         run_until(parent)
         with system_context(reason="note parent publication result assertions"):
             note.refresh_from_db()
@@ -212,7 +213,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         parent, child = self.start_parent(note)
         self.answer_review(child, action="reject", values={"reason": "Needs another revision"})
         run_until(child)
-        StepRun.objects.tick()
+        runner.tick()
         run_until(parent)
         with system_context(reason="note parent rejection assertions"):
             note.refresh_from_db()
@@ -249,7 +250,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
 
         parent, child = self.start_parent(self.note())
         WorkflowRun.objects.cancel(child, actor=self.owner)
-        StepRun.objects.tick()
+        runner.tick()
         run_until(parent)
         with system_context(reason="note parent canceled-child assertions"):
             self.assertEqual(parent.status, RunStatus.SUCCEEDED)
@@ -407,7 +408,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="note publication stale delivery fixture"):
             step_run = StepRun.objects.get(run=run, node_key="publish")
             history_count = note.history.count()
-        self.assertFalse(StepRun.objects.execute(step_run.pk))
+        self.assertFalse(runner.execute(step_run.pk))
         with system_context(reason="note publication stale delivery assertion"):
             self.assertEqual(note.history.count(), history_count)
 
@@ -429,8 +430,8 @@ class NoteWorkflowStepTests(TransactionTestCase):
                 actor=self.admin,
             )
             self.assertIsNotNone(workflow.published_id)
-            self.assertEqual(workflow.subject_model, "notes.Note")
-            self.assertEqual(workflow.published.definition.step("validate").subject, "notes.Note")
+            self.assertEqual(workflow.subject_model, Note._meta.label)
+            self.assertEqual(workflow.published.definition.step("validate").subject, Note._meta.label)
 
     def test_permission_removed_after_launch_prevents_publication(self) -> None:
         """An actor who loses access cannot read or modify the note in a later step."""
@@ -479,7 +480,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             installed = Resource.objects.get(source_addon="example.notes", xref="note_publish").target_instance()
             self.assertEqual(installed.pk, self.workflow.pk)
             self.assertEqual(installed.published_id, self.workflow.published_id)
-            self.assertEqual(installed.subject_model, "notes.Note")
+            self.assertEqual(installed.subject_model, Note._meta.label)
             self.assertEqual(set(installed.published.definition.nodes), {"validate", "review", "publish"})
 
     def test_steps_declare_their_typed_contract(self) -> None:

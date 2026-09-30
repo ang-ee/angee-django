@@ -17,7 +17,8 @@ from angee.decisions.states import Verdict
 from angee.workflows import schema as workflow_schema
 from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import EmptyOutput, Retryable, RetryPolicy, Step
+from angee.workflows.runner import runner
+from angee.workflows.steps import EmptyOutput, Retryable, RetryPolicy, Step, StepMode
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
@@ -126,7 +127,7 @@ def test_map_orders_results_and_bounds_planning(execution, map_steps, settings):
     assert list(body_rows(run).values_list("map_index", flat=True)) == [0, 1]
     second = body_rows(run).get(map_index=1)
     assert second.is_mapped and second.rank == mapped.rank
-    assert StepRun.objects.execute(second.pk)
+    assert runner.execute(second.pk)
     assert list(body_rows(run).values_list("map_index", flat=True)) == [0, 1, 2]
     mapped.refresh_from_db()
     assert (mapped.map_total, mapped.map_settled) == (5, 1)
@@ -182,10 +183,10 @@ def test_unrouted_body_failure_preserves_siblings_and_retries_only_that_item(
     register_step(FailOnce)
     run, mapped = start_map(actor, [{"value": index} for index in range(3)], body=FailOnce.key)
     first, failed, sibling = list(body_rows(run))
-    assert StepRun.objects.execute(first.pk) and StepRun.objects.execute(failed.pk)
+    assert runner.execute(first.pk) and runner.execute(failed.pk)
     run.refresh_from_db()
     assert run.status == "failed"
-    assert not StepRun.objects.execute(sibling.pk)
+    assert not runner.execute(sibling.pk)
     assert list(body_rows(run).values_list("status", flat=True)) == ["succeeded", "failed", "ready"]
     StepRun.objects.retry_step(failed, actor=actor)
     run_until(run)
@@ -218,13 +219,13 @@ def test_waiting_body_consumes_a_slot_and_retry_keeps_its_index(execution, map_s
         assert body_rows(run).count() == index + 1
         current = body_rows(run).get(map_index=index)
         assert current.status == "waiting" and current.waiting_kind == "time"
-        assert StepRun.objects.wake() == 1
+        assert runner.wake() == 1
         run_until(run)
         current.refresh_from_db()
         assert current.attempt == 2 and current.status == "waiting"
         assert body_rows(run).count() == index + 1
-        assert StepRun.objects.wake() == 1
-        assert StepRun.objects.execute(current.pk)
+        assert runner.wake() == 1
+        assert runner.execute(current.pk)
     run_until(run)
     assert run.status == "succeeded"
     assert list(body_rows(run).values_list("attempt", flat=True)) == [3, 3]
@@ -238,7 +239,7 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
 
     class MarkedItem(MapEcho):
         key = "map_marked_item"
-        mode = "IO"
+        mode = StepMode.IO
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
@@ -377,7 +378,7 @@ def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps,
     actor, _sent = execution
     settings.ANGEE_WORKFLOW_MAP_CONCURRENCY = 2
     run, mapped = start_map(actor, [{"value": index} for index in range(3)])
-    assert StepRun.objects.execute(body_rows(run).get(map_index=0).pk)
+    assert runner.execute(body_rows(run).get(map_index=0).pk)
     schema = addon_schema(workflow_schema.schemas, "console")
     result = result_data(execute_schema(schema, """query($run: String!) {
       steprun(where: {run: {_eq: $run}}, order_by: [{rank: asc}, {map_index: asc}]) {

@@ -9,8 +9,9 @@ from pydantic import BaseModel
 from angee.base.scoping import system_queryset
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.managers import WorkflowRunQuerySet
+from angee.workflows.runner import runner
 from angee.workflows.states import RunOrigin
-from angee.workflows.steps import Step
+from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.conftest import create_user
@@ -91,8 +92,8 @@ def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     assert [(name, payload["kwargs"]) for name, payload in sent if name == "workflows.wake_run"] == [
         ("workflows.wake_run", {"run_id": child.pk}),
     ]
-    assert StepRun.objects.wake_runs(child.pk) == 1
-    assert StepRun.objects.wake_runs(child.pk) == 0
+    assert runner.wake_runs(child.pk) == 1
+    assert runner.wake_runs(child.pk) == 0
     run_until(parent)
     waiter.refresh_from_db()
     assert parent.status == "succeeded" and waiter.output == {"value": 7} and waiter.outcome == "done"
@@ -145,7 +146,7 @@ def test_child_reexecution_replays_pinned_request_after_republish(child_graph, r
     register_step(ChangedContract)
     replacement = load_workflow(document("new_entry", step=ChangedContract.key), key=workflow.key, actor=actor)
     assert replacement.published_id != first.version_id
-    assert StepRun.objects.tick()["woken"] == 1
+    assert runner.tick()["woken"] == 1
     run_until(parent)
     assert len(admitted) == 2 and admitted[1].pk == first.pk
     assert admitted[1].version_id == first.version_id
@@ -208,7 +209,7 @@ def test_await_forwards_empty_failure_and_cancellation_outcomes(child_graph, chi
         WorkflowRun.objects.cancel(child, actor=actor)
     else:
         run_until(child)
-    assert StepRun.objects.tick()["runs"] == 1
+    assert runner.tick()["runs"] == 1
     run_until(parent)
     waiter = system_queryset(StepRun).get(run=parent, node_key="await")
     assert parent.status == "succeeded" and waiter.outcome == outcome and waiter.output == {}
@@ -228,7 +229,7 @@ def test_expired_io_attempt_cannot_admit_a_child_before_reaping(execution, regis
 
     class LateChild(Step[None, None, None]):
         key = "late_child"
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             system_queryset(StepRun).filter(pk=ctx.step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
@@ -239,9 +240,9 @@ def test_expired_io_attempt_cannot_admit_a_child_before_reaping(execution, regis
     workflow = load_workflow({"nodes": {"entry": {"step": LateChild.key}}}, actor=actor)
     parent = WorkflowRun.objects.start(workflow, actor=actor)
     row = system_queryset(StepRun).get(run=parent)
-    assert StepRun.objects.execute(row.pk) is False
+    assert runner.execute(row.pk) is False
     assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
-    assert StepRun.objects.tick()["reaped"] == 1
+    assert runner.tick()["reaped"] == 1
 
 
 def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
@@ -283,7 +284,7 @@ def test_child_delivery_failures_cannot_suppress_parent_publication(child_graph,
         published.clear()
         run_until(admitted[0])
         assert [payload.id for payload in published] == [str(admitted[0].sqid)]
-        assert StepRun.objects.wake_runs(admitted[0].pk) == 1
+        assert runner.wake_runs(admitted[0].pk) == 1
         run_until(parent)
         assert parent.status == "succeeded"
         assert sum(payload.id == str(parent.sqid) for payload in published) == 3

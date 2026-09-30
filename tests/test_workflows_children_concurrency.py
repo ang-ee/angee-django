@@ -8,6 +8,7 @@ from django.db import connection
 
 from angee.base.scoping import system_queryset
 from angee.workflows.awaits import AwaitRun
+from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.test_workflows_children import age_runs
@@ -40,19 +41,19 @@ def test_child_finishes_between_await_read_and_wait_commit(child_graph, monkeypa
 
     monkeypatch.setattr(AwaitRun, "run", pause_after_read)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        worker, _ = submit(pool, lambda: StepRun.objects.execute(waiter.pk))
+        worker, _ = submit(pool, lambda: runner.execute(waiter.pk))
         try:
             assert observed.wait(10)
             run_until(child)
             assert child.status == "succeeded"
             # The terminal task cannot yet see a committed waiter.
-            assert StepRun.objects.wake_runs(child.pk) == 0
+            assert runner.wake_runs(child.pk) == 0
         finally:
             release.set()
         assert worker.result(timeout=10)
     sent.clear()
-    assert StepRun.objects.tick()["runs"] == 1
-    assert StepRun.objects.tick()["runs"] == 0
+    assert runner.tick()["runs"] == 1
+    assert runner.tick()["runs"] == 0
     assert [payload["kwargs"]["step_run_id"] for name, payload in sent if name == "workflows.execute"] == [waiter.pk]
     run_until(parent)
     assert parent.status == "succeeded"
@@ -76,7 +77,7 @@ def test_parent_cancel_waits_for_child_final_settlement_without_overwriting_it(c
 
     monkeypatch.setattr(Echo, "run", pause_before_return)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        worker, _ = submit(pool, lambda: StepRun.objects.execute(child_step.pk))
+        worker, _ = submit(pool, lambda: runner.execute(child_step.pk))
         try:
             assert entered.wait(10)
             cancel, pid = submit(pool, lambda: WorkflowRun.objects.cancel(parent, actor=actor))
@@ -91,7 +92,7 @@ def test_parent_cancel_waits_for_child_final_settlement_without_overwriting_it(c
     assert child.output == {"value": 7} and result.canceled and result.children == 0
     assert system_queryset(StepRun).get(run=parent, node_key="await").status == "canceled"
     assert system_queryset(StepAttempt).get(step_run=child_step).result == "succeeded"
-    assert StepRun.objects.wake_runs(child.pk) == 0
+    assert runner.wake_runs(child.pk) == 0
 
 
 def test_prune_skips_locked_terminal_continuation_then_retries_without_deleting_it(child_graph):

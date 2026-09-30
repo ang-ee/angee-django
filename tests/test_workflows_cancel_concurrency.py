@@ -8,6 +8,7 @@ from django.db import connection
 
 from angee.base.scoping import system_queryset
 from angee.workflows import tasks
+from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.test_workflows_cancel import cancellations
@@ -57,10 +58,10 @@ def test_cross_run_cancellation_releases_the_caller_before_locking_the_target(ex
     sent.clear()
 
     with ThreadPoolExecutor(max_workers=3) as pool:
-        target_worker, _ = submit(pool, lambda: StepRun.objects.execute(target_step.pk))
+        target_worker, _ = submit(pool, lambda: runner.execute(target_step.pk))
         try:
             assert target_entered.wait(10)
-            caller_worker, _ = submit(pool, lambda: StepRun.objects.execute(caller_step.pk))
+            caller_worker, _ = submit(pool, lambda: runner.execute(caller_step.pk))
             assert requested.wait(10), "Requesting cancellation must not lock the unrelated target."
             assert cancellations(sent) == []
             release_caller.set()

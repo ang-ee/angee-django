@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
+from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
@@ -68,12 +69,12 @@ def test_map_progress_and_item_identity_follow_retained_execution(schema, map_wo
     run_until(foreign)
     run_until(run, node="items")
     parent = system_queryset(StepRun).get(run=run, node_key="items")
-    StepRun.objects.execute(parent.pk)
+    runner.execute(parent.pk)
     parent.refresh_from_db()
     assert (parent.map_total, parent.map_settled) == (2, 0)
     first = system_queryset(StepRun).get(run=run, node_key="items.body", map_index=0)
     assert (first.rank, first.is_mapped, first.map_total, first.map_settled) == (parent.rank, True, 0, 0)
-    StepRun.objects.execute(first.pk)
+    runner.execute(first.pk)
     parent.refresh_from_db()
     assert (parent.map_total, parent.map_settled) == (2, 1)
     query = """query($id: String!) {

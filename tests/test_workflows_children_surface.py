@@ -5,6 +5,7 @@ import pytest
 from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows.awaits import AwaitRunInput
+from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, WorkflowRun
@@ -151,7 +152,7 @@ def test_await_executes_with_run_read_without_access_to_its_workflow(schema, exe
     waiter = system_queryset(StepRun).get(run=parent, node_key="await")
     assert (waiter.status, waiter.awaited_run_id) == ("waiting", child.pk)
     run_until(child)
-    assert StepRun.objects.wake_runs(child.pk) == 1
+    assert runner.wake_runs(child.pk) == 1
     run_until(parent)
     waiter.refresh_from_db()
     assert parent.status == "succeeded"

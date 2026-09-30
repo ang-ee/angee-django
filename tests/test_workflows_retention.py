@@ -9,6 +9,7 @@ from django.db.models.functions import Now
 
 from angee.base.scoping import system_queryset
 from angee.workflows.managers import PRUNE_BATCH_LIMIT
+from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
@@ -74,7 +75,7 @@ def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_gr
     run_until(child)
     grandchild = system_queryset(WorkflowRun).get(pk=grandchildren[0].pk)
     assert grandchild.status == "canceled" and child.status == "succeeded"
-    StepRun.objects.wake_runs(child.pk)
+    runner.wake_runs(child.pk)
     run_until(parent)
     assert parent.status == "succeeded"
     age_runs(parent)
@@ -131,7 +132,7 @@ def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_
     run_until(parent)
     child = admitted[0]
     run_until(child)
-    StepRun.objects.wake_runs(child.pk)
+    runner.wake_runs(child.pk)
     run_until(parent)
     waiter = system_queryset(StepRun).get(run=parent, node_key="await")
     assert waiter.awaited_run_id == child.pk

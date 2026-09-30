@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from angee.base.impl import resolve_impl_class
 from angee.workflows.maps import MapItem
-from angee.workflows.steps import Done, RetryPolicy, Step
+from angee.workflows.steps import Done, RetryPolicy, Step, StepMode
 from angee.workflows_extraction.contracts import (
     ExtractionPartKind,
     PipelineError,
@@ -77,7 +77,7 @@ class PreparePagesConfig(ProviderConfig, ProfileConfig):
 class _IOStep(Step[None, None, None]):
     """Shared execution bounds for storage and inference IO."""
 
-    mode = "IO"
+    mode = StepMode.IO
     retry = RetryPolicy(max_attempts=3)
 
 

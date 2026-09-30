@@ -21,10 +21,7 @@ EXPECTED_MODELS = {
 
 EXPECTED_VERBS = {
     "workflows.StepAttempt.queryset": "close",
-    "workflows.StepRun.manager": (
-        "artifact begin_effect execute heartbeat raise_if_canceled reap record_await redispatch resolution "
-        "retry_step tick wake wake_decisions wake_records wake_runs"
-    ),
+    "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
         "cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
         "extend_deadline fenced for_map settle settled_decisions terminal_runs to_ready to_running "
@@ -36,7 +33,7 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.manager": "record_change",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "install_definition publish save_draft save_identity",
-    "workflows.WorkflowRun.manager": "advance cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
+    "workflows.WorkflowRun.manager": "cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
     "workflows.WorkflowRun.queryset": "for_subject hold hold_owned retention_candidates",
     "decisions.Decision.manager": "admit_group cancel_group decide expire_due reask resolution resolutions",
     "decisions.Decision.queryset": (
@@ -51,10 +48,15 @@ EXPECTED_TYPES = {
     "context": "StepContext",
     "maps": "Map MapInput MapItem MapWait",
     "reviews": "Ask Review ReviewConfig ReviewSeat ReviewStep",
-    "steps": "Done EmptyOutput Fail NextPage RetryPolicy Retryable Settlement Step Superseded Wait",
+    "steps": "Done EmptyOutput Fail NextPage RetryPolicy Retryable Settlement Step StepMode Superseded Wait",
 }
 
-EXPECTED_RUNNER = ()
+EXPECTED_RUNNER = tuple(
+    f"Runner.{name}" for name in (
+        "advance", "artifact", "begin_effect", "execute", "heartbeat", "raise_if_canceled", "reap",
+        "redispatch", "tick", "wake", "wake_decisions", "wake_records", "wake_runs",
+    )
+)
 
 EXPECTED_SETTINGS = {
     "decisions": (

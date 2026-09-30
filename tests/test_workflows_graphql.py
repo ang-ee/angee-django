@@ -14,8 +14,9 @@ from angee.base.scoping import system_queryset
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
+from angee.workflows.runner import runner
 from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
-from angee.workflows.steps import Step
+from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
@@ -231,7 +232,7 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
         """Time out after an external-effect marker on the initial attempt."""
 
         key = "graphql_uncertain"
-        mode = "IO"
+        mode = StepMode.IO
         effect_idempotent = False
 
         def run(self, ctx):
@@ -420,7 +421,7 @@ def test_viewer_facts_share_state_and_permission_owners(schema, callers, step_ke
     run.with_actor(owner).grant_record_access("reader", reader)
     row = system_queryset(StepRun).get(run=run)
     if settle:
-        StepRun.objects.execute(row.pk)
+        runner.execute(row.pk)
     query = """{
       workflowrun { can_cancel can_reprocess step_runs { can_retry requires_duplicate_acknowledgement } }
     }"""
@@ -440,7 +441,7 @@ def test_error_routed_failure_does_not_offer_retry(schema, callers):
     }}, actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", owner)
     run = start_run(workflow, actor=owner)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
+    runner.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
     data = result_data(execute_schema(schema, """{
       steprun(where: {node_key: {_eq: "entry"}}) { status can_retry }
     }""", user=owner))
@@ -460,8 +461,8 @@ def test_step_rows_follow_graph_order_even_when_database_order_differs(schema, c
     }, "results": [{"from": "finish"}]}, actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", owner)
     run = start_run(workflow, actor=owner)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="start").pk)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="branch_b").pk)
+    runner.execute(system_queryset(StepRun).get(run=run, node_key="start").pk)
+    runner.execute(system_queryset(StepRun).get(run=run, node_key="branch_b").pk)
     run_until(run)
     assert run.status == "succeeded"
     run.with_actor(owner).grant_record_access("operator", operator)

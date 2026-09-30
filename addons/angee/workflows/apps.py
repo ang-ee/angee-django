@@ -9,7 +9,9 @@ from angee.decisions.signals import decision_group_settled
 
 def wake_review(sender: Any, *, group: Any, **kwargs: Any) -> None:
     """Let the workflow lock owner enqueue settled decision waiters after commit."""
-    apps.get_model("workflows", "StepRun").objects.wake_decisions(group.pk)
+    from angee.workflows.runner import runner
+
+    runner.wake_decisions(group.pk)
 
 
 class WorkflowsConfig(AppConfig):

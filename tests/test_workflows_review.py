@@ -6,9 +6,10 @@ from datetime import timedelta
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Now
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from pydantic import BaseModel, Field, field_validator
 from rebac import actor_context, system_context
@@ -23,6 +24,7 @@ from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
 from angee.workflows.definition import Definition
 from angee.workflows.reviews import Review, ReviewStep
+from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
@@ -263,10 +265,10 @@ def test_sweep_recovers_a_missed_settlement_signal(review, monkeypatch):
     run, step = start_review(review)
     with monkeypatch.context() as patch:
         patch.setattr("angee.workflows.apps.wake_review", lambda *args, **kwargs: None)
-        patch.setattr(type(StepRun.objects), "wake_decisions", lambda *args, **kwargs: 0)
+        patch.setattr(type(runner), "wake_decisions", lambda *args, **kwargs: 0)
         answer(seats(step)[0], people[0])
     assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
-    assert StepRun.objects.wake_decisions() == 1
+    assert runner.wake_decisions() == 1
     run_until(run)
     assert run.status == "succeeded"
 
@@ -281,7 +283,7 @@ def test_apply_wait_and_operator_retry_keep_the_settled_group(review):
     assert retained.state == {"review_round": 1, "waited": True}
     with system_context(reason="advance review reconciliation time"):
         StepRun.objects.filter(pk=step.pk).update(wake_at=Now() - timedelta(seconds=1))
-    StepRun.objects.wake()
+    runner.wake()
     run_until(run)
     assert run.status == "succeeded" and system_queryset(DecisionGroup).count() == 1
 
@@ -425,7 +427,7 @@ def test_cancel_closes_pending_review_seats_and_reports_only_changed_work(review
     assert result.message == f"Run canceled; 1 open step canceled{suffix}."
     assert [seat.closed_reason for seat in seats(step)] == ["resolved"] * answered + ["canceled"] * (2 - answered)
     assert system_queryset(StepRun).get(pk=step.pk).status == "canceled"
-    assert StepRun.objects.wake_decisions() == 0
+    assert runner.wake_decisions() == 0
     repeated = WorkflowRun.objects.cancel(run, actor=actor)
     assert (repeated.steps, repeated.reviews, repeated.message) == (0, 0, "Nothing to cancel.")
 
@@ -517,7 +519,7 @@ def test_admission_conflict_uses_the_default_review_retry_policy(review, monkeyp
     assert step.waiting_kind == "time" and step.retries == 1 and step.decision_group_id is None
     with system_context(reason="advance admission retry deadline"):
         StepRun.objects.filter(pk=step.pk).update(wake_at=Now() - timedelta(seconds=1))
-    assert StepRun.objects.wake() == 1
+    assert runner.wake() == 1
     run_until(run)
     retained = system_queryset(StepRun).get(pk=step.pk)
     assert retained.waiting_kind == "decision" and retained.decision_group_id is not None
@@ -571,7 +573,9 @@ def test_reask_chain_protects_history_and_retains_operator_resolution(review, wo
     run.with_actor(actor).grant_record_access("operator", operator)
     assert DecisionGroup.objects.with_actor(operator).filter(pk__in=[group.pk for group in rounds]).count() == 3
     assert Decision.objects.with_actor(operator).filter(pk=original.pk).exists()
-    retained = StepRun.objects.resolution(public_id_of(original), run=run, actor=operator)
+    with CaptureQueriesContext(connection) as queries:
+        retained = ReviewStep.resolution(public_id_of(original), run=run, actor=operator)
+    assert sum("WITH RECURSIVE rounds" in query["sql"] for query in queries) == 1
     assert retained.resolver.pk == people[0].pk and isinstance(retained.action, Approve)
     assert isinstance(retained.basis, question.basis_model)
 

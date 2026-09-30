@@ -9,6 +9,7 @@ from angee.base.scoping import system_queryset
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks
 from angee.workflows.managers import WorkflowRunManager
+from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import StepRun, WorkflowRun
 from tests.conftest import create_user
@@ -65,7 +66,7 @@ def test_context_cancellation_follows_the_body_transaction(target, execution, re
     register_step(CancelOther)
     workflow = load_workflow(document("entry", step=CancelOther.key), key="caller", actor=actor)
     caller = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(system_queryset(StepRun).get(run=caller).pk)
+    assert runner.execute(system_queryset(StepRun).get(run=caller).pk)
     caller.refresh_from_db()
     assert caller.status == ("failed" if body_rollback else "succeeded")
     assert len(cancellations(sent)) == (0 if body_rollback else 1)

@@ -16,11 +16,12 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.scoping import system_queryset
-from angee.workflows import managers
+from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
+from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
-from angee.workflows.steps import Done, Fail, RetryPolicy, Step, Superseded, Wait
+from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Superseded, Wait
 from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
 from tests.conftest import create_user
@@ -144,7 +145,7 @@ def test_settlement_validation_rolls_back_body(execution, register_step, helper,
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = system_queryset(StepRun).get(run=run)
 
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
 
     assert len(returned) == 1
     assert system_queryset(Workflow).get(pk=workflow.pk).name == original_name
@@ -182,7 +183,7 @@ def test_claim_retains_run_identity_and_parses_definition_once(execution, regist
 
     monkeypatch.setattr(Definition, "model_validate", classmethod(count_parse))
 
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
     assert seen == [(True, True)]
     assert len(parsed) == 1
 
@@ -225,7 +226,7 @@ def test_success_output_is_validated_once_before_serialization(execution, regist
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = system_queryset(StepRun).get(run=run)
 
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
 
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.status == RunStatus.SUCCEEDED
@@ -256,7 +257,7 @@ def test_claim_followup_database_error_keeps_attempt(execution, monkeypatch, pha
     else:
         monkeypatch.setattr(Definition, "step" if phase == "resolution" else "input_for", invalid_statement)
 
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
 
     attempt = system_queryset(StepAttempt).get(step_run=row)
     assert attempt.number == 1 and attempt.result == "failed"
@@ -321,7 +322,7 @@ def test_request_key_and_cancel(execution):
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.CANCELED
     row = system_queryset(StepRun).get(run=run)
     assert row.status == StepRunStatus.CANCELED
-    assert not StepRun.objects.execute(row.pk)
+    assert not runner.execute(row.pk)
 
 
 def test_cancel_preserves_failed_run_terminal_fields(execution, monkeypatch):
@@ -335,10 +336,10 @@ def test_cancel_preserves_failed_run_terminal_fields(execution, monkeypatch):
         raise ValueError("Result assembly failed.")
 
     monkeypatch.setattr(Definition, "result_for", result_failure)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     failed = system_queryset(WorkflowRun).get(pk=run.pk)
     original = (failed.status, failed.outcome, failed.output, failed.error, failed.finished_at)
-    assert original[:4] == (RunStatus.FAILED, "error", {}, "ValueError: Result assembly failed.")
+    assert original[:4] == (RunStatus.FAILED, "error", {}, "Result assembly failed.")
     assert original[4] is not None
 
     WorkflowRun.objects.cancel(run, actor=actor)
@@ -364,10 +365,10 @@ def test_wait_and_retry_in_place(execution, step_key):
     workflow = load_workflow(document("entry", step=step_key), key=step_key, actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = system_queryset(StepRun).get(run=run)
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
     assert system_queryset(StepRun).get(pk=row.pk).status == StepRunStatus.WAITING
-    assert StepRun.objects.wake() == 1
-    assert StepRun.objects.execute(row.pk)
+    assert runner.wake() == 1
+    assert runner.execute(row.pk)
     row = system_queryset(StepRun).get(pk=row.pk)
     assert row.status == StepRunStatus.SUCCEEDED and row.attempt == 2 and row.retries == 0
     assert system_queryset(StepAttempt).filter(step_run=row).count() == 2
@@ -409,8 +410,8 @@ def test_unrouted_failure_preserves_pending_branches(execution):
         actor=actor,
     )
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="bad").pk)
+    runner.execute(system_queryset(StepRun).get(run=run).pk)
+    runner.execute(system_queryset(StepRun).get(run=run, node_key="bad").pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.FAILED
     assert system_queryset(StepRun).get(run=run, node_key="other").status == StepRunStatus.READY
     assert system_queryset(WorkflowRun).get(pk=run.pk).error == ""
@@ -427,7 +428,7 @@ def test_dispatch_counter_and_exhaustion(execution, settings):
     for expected in (1, 2):
         with system_context(reason="test.missing_delivery"):
             StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
-        assert StepRun.objects.redispatch() == 1
+        assert runner.redispatch() == 1
         assert system_queryset(StepRun).get(pk=row.pk).dispatches == expected
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.status == RunStatus.WAITING and retained.error == ""
@@ -448,7 +449,7 @@ def test_body_rollback_for_returned_failure(execution, register_step):
             return ctx.fail("Roll it back.")
 
     register_step(RolledBackBody)
-    StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
+    runner.execute(system_queryset(StepRun).get(run=run).pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name != "Uncommitted"
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.FAILED
 
@@ -539,7 +540,7 @@ def test_constraints_and_actor_admission(execution):
     with pytest.raises(IntegrityError), transaction.atomic(), system_context(reason="test.invalid_state"):
         StepRun.objects.filter(pk=row.pk).update(status="running")
     with system_context(reason="test.invalid_body_context"):
-        assert StepRun.objects.execute(row.pk)
+        assert runner.execute(row.pk)
     attempt = system_queryset(StepAttempt).get(step_run=row)
     assert attempt.result == "failed" and "outside system_context" in attempt.error
     with actor_context(actor):
@@ -559,14 +560,28 @@ def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, set
         )
     with WorkflowRun.objects.hold(run.pk):
         pass
-    assert StepRun.objects.redispatch() == 0
+    assert runner.redispatch() == 0
     retained = system_queryset(StepRun).get(pk=step_run.pk)
     assert retained.status == StepRunStatus.READY and retained.dispatches == 4
     assert retained.dispatched_at > step_run.dispatched_at
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.RUNNING
     assert len(sent) == 2
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+
+
+def test_nested_holds_dispatch_each_ready_row_once(execution):
+    """The outer hold owns one delivery callback for a nested run lock."""
+    actor, sent = execution
+    workflow = load_workflow(document("entry"), key="nested_dispatch", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    sent.clear()
+
+    with WorkflowRun.objects.hold(run.pk):
+        with WorkflowRun.objects.hold(run.pk):
+            assert system_queryset(StepRun).filter(run=run, status=StepRunStatus.READY).count() == 1
+
+    assert [name for name, _ in sent] == ["workflows.execute"]
 
 
 def test_t19_result_binding_error_preserves_successful_body(execution, register_step, monkeypatch, caplog):
@@ -581,17 +596,17 @@ def test_t19_result_binding_error_preserves_successful_body(execution, register_
 
     register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", projection_error)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert (retained.status, retained.outcome, retained.output) == (RunStatus.FAILED, "error", {})
     assert "Injected result binding failure" in retained.error
-    assert retained.error.startswith("ValidationError:")
+    assert retained.error == "Injected result binding failure."
     assert "Workflow run" in caplog.text and "Injected result binding failure" in caplog.text
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
     assert system_queryset(StepAttempt).get(step_run=step_run).result == "succeeded"
     assert system_queryset(StepAttempt).get(step_run=step_run).error == ""
-    assert not StepRun.objects.execute(step_run.pk)
+    assert not runner.execute(step_run.pk)
 
 
 def test_settlement_error_is_recorded_on_attempt_once(execution, monkeypatch):
@@ -610,7 +625,7 @@ def test_settlement_error_is_recorded_on_attempt_once(execution, monkeypatch):
         return original(self, step_run, settlement)
 
     monkeypatch.setattr(StepRunQuerySet, "settle", fail_once)
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).error == ""
     assert system_queryset(StepAttempt).get(step_run=row).error == "DataError: invalid result"
 
@@ -660,7 +675,7 @@ def test_reprocess_rejects_nonterminal_runs(execution, step):
     workflow = load_workflow(document("entry", step=step), key="active_reprocess", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     if step == "pause":
-        assert StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
+        assert runner.execute(system_queryset(StepRun).get(run=run).pk)
     run.status = RunStatus.FAILED
     with pytest.raises(DjangoValidationError, match="terminal"):
         WorkflowRun.objects.reprocess(run, actor=actor)
@@ -695,7 +710,7 @@ def test_failed_attempt_retains_bound_input_and_database_start_time(execution, r
     actor, _ = execution
     workflow = load_workflow(document("entry", "last"), key="retained_input", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 23})
-    assert StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
+    assert runner.execute(system_queryset(StepRun).get(run=run).pk)
     last = system_queryset(StepRun).get(run=run, node_key="last")
 
     class FailedLastStep(Echo):
@@ -705,7 +720,7 @@ def test_failed_attempt_retains_bound_input_and_database_start_time(execution, r
             return ctx.fail("Keep my input.")
 
     register_step(FailedLastStep)
-    assert StepRun.objects.execute(last.pk)
+    assert runner.execute(last.pk)
     retained = system_queryset(StepRun).get(pk=last.pk)
     assert retained.input == {"value": 23} and retained.status == StepRunStatus.FAILED
     assert system_queryset(StepAttempt).get(step_run=last).error == "Keep my input."
@@ -718,7 +733,7 @@ def test_publish_precedes_failing_commit_send(execution, caplog):
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
     with observe(WorkflowRun) as published, capture_tasks(error=RuntimeError("Broker unavailable.")):
-        assert StepRun.objects.execute(step_run.pk)
+        assert runner.execute(step_run.pk)
     assert len(published) == 1
     assert "Broker unavailable" in caplog.text
     assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
@@ -743,7 +758,7 @@ def test_retryable_database_failure_records_attempt_and_schedules_retry(executio
 
     register_step(RetryingDatabaseFailure)
     step_run = system_queryset(StepRun).get(run=run)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
     assert retained.status == StepRunStatus.WAITING and retained.retries == 1
     assert retained.input == {"value": 5}
@@ -765,7 +780,7 @@ def test_soft_time_limit_records_timed_out_and_keeps_input(execution, register_s
 
     register_step(TimedOutBody)
     step_run = system_queryset(StepRun).get(run=run)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
     assert retained.input == {"value": 14} and retained.status == StepRunStatus.FAILED
     assert system_queryset(StepAttempt).get(step_run=step_run).result == "timed_out"
@@ -879,7 +894,7 @@ def test_tick_bad_candidate_does_not_abort_later_candidates(execution, monkeypat
     runs = [WorkflowRun.objects.start(workflow, actor=actor) for _ in range(2)]
     step_runs = [system_queryset(StepRun).get(run=run) for run in runs]
     for step_run in step_runs:
-        assert StepRun.objects.execute(step_run.pk)
+        assert runner.execute(step_run.pk)
     original = StepRunQuerySet.to_ready
 
     def wake(self):
@@ -888,7 +903,7 @@ def test_tick_bad_candidate_does_not_abort_later_candidates(execution, monkeypat
         return original(self)
 
     monkeypatch.setattr(StepRunQuerySet, "to_ready", wake)
-    assert StepRun.objects.wake() == 1
+    assert runner.wake() == 1
     assert "Injected candidate failure" in caplog.text
     assert system_queryset(StepRun).get(pk=step_runs[0].pk).status == StepRunStatus.WAITING
     assert system_queryset(StepRun).get(pk=step_runs[1].pk).status == StepRunStatus.READY
@@ -900,7 +915,7 @@ def test_tick_superseded_candidate_does_not_abort_later_candidates(execution, mo
     runs = [WorkflowRun.objects.start(workflow, actor=actor) for _ in range(2)]
     rows = [system_queryset(StepRun).get(run=run) for run in runs]
     for row in rows:
-        assert StepRun.objects.execute(row.pk)
+        assert runner.execute(row.pk)
     original = StepRunQuerySet.to_ready
 
     def wake(self, **kwargs):
@@ -909,7 +924,7 @@ def test_tick_superseded_candidate_does_not_abort_later_candidates(execution, mo
         return original(self, **kwargs)
 
     monkeypatch.setattr(StepRunQuerySet, "to_ready", wake)
-    assert StepRun.objects.wake() == 1
+    assert runner.wake() == 1
     assert system_queryset(StepRun).get(pk=rows[1].pk).status == StepRunStatus.READY
 
 
@@ -922,7 +937,7 @@ def test_operator_retry_resets_delivery_allowance(execution, settings):
     for _ in range(2):
         with system_context(reason="test exhausted delivery"):
             StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
-        assert StepRun.objects.redispatch() == 1
+        assert runner.redispatch() == 1
     assert system_queryset(StepRun).get(pk=row.pk).waiting_kind == "operator"
     ready = StepRun.objects.retry_step(row, actor=actor)
     assert ready.dispatches == 0
@@ -937,12 +952,12 @@ def test_t18_five_minute_backlog_does_not_exhaust_dispatches(execution):
     for _ in range(5):
         with system_context(reason="test.minute_of_worker_backlog"):
             StepRun.objects.filter(pk=step_run.pk).update(dispatched_at=Now() - timedelta(seconds=61))
-        assert StepRun.objects.redispatch() == 1
+        assert runner.redispatch() == 1
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.status == RunStatus.RUNNING, (
         "Five minutes of worker backlog must fit within the default redelivery allowance."
     )
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
@@ -964,7 +979,7 @@ def test_default_redelivery_exhaustion_waits_without_domain_error_routing(execut
     for count in range(1, 21):
         with system_context(reason="test.undelivered_message"):
             StepRun.objects.filter(pk=step_run.pk).update(dispatched_at=Now() - timedelta(seconds=61))
-        assert StepRun.objects.redispatch() == 1
+        assert runner.redispatch() == 1
         assert system_queryset(StepRun).get(pk=step_run.pk).dispatches == count
         if count < 20:
             assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.RUNNING
@@ -1023,9 +1038,9 @@ def test_nullable_whole_successor_input_fails_its_attempt_durably(execution, reg
         key="nullable_binding", actor=actor,
     )
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
+    assert runner.execute(system_queryset(StepRun).get(run=run).pk)
     consumer = system_queryset(StepRun).get(run=run, node_key="consumer")
-    assert StepRun.objects.execute(consumer.pk)
+    assert runner.execute(consumer.pk)
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert (retained.status, retained.outcome, retained.output) == (RunStatus.FAILED, "error", {})
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Retained producer write"
@@ -1050,7 +1065,7 @@ def test_t22_removed_step_class_fails_first_attempt(execution):
         run = WorkflowRun.objects.start(workflow, actor=actor)
         step_run = system_queryset(StepRun).get(run=run)
 
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
     assert retained.status == StepRunStatus.FAILED and retained.attempt == 1 and retained.dispatches == 0
     attempt = system_queryset(StepAttempt).get(step_run=step_run)
@@ -1059,7 +1074,7 @@ def test_t22_removed_step_class_fails_first_attempt(execution):
     assert "ImproperlyConfigured" in attempt.stacktrace
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained_run.status == RunStatus.FAILED and retained_run.error == ""
-    assert not StepRun.objects.execute(step_run.pk)
+    assert not runner.execute(step_run.pk)
 
 
 @pytest.mark.parametrize("phase", ["input", "result"])
@@ -1074,7 +1089,7 @@ def test_soft_time_limit_outside_body_records_its_owner(execution, monkeypatch, 
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(Definition, "input_for" if phase == "input" else "result_for", timeout)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
     assert retained.status == (StepRunStatus.FAILED if phase == "input" else StepRunStatus.SUCCEEDED)
     assert retained.attempt == 1
@@ -1086,7 +1101,7 @@ def test_soft_time_limit_outside_body_records_its_owner(execution, monkeypatch, 
     if phase == "input":
         assert "SoftTimeLimitExceeded" in attempt.error and retained_run.error == ""
     else:
-        assert attempt.error == "" and "SoftTimeLimitExceeded" in retained_run.error
+        assert attempt.error == "" and retained_run.error == "SoftTimeLimitExceeded()"
 
 
 @pytest.mark.parametrize("phase", ["body", "result"])
@@ -1108,7 +1123,7 @@ def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_s
         register_step(InvalidTextBody)
     else:
         monkeypatch.setattr(Definition, "result_for", fail)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
     attempt = system_queryset(StepAttempt).get(step_run=step_run)
     assert retained_run.status == RunStatus.FAILED
@@ -1121,7 +1136,7 @@ def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_s
         assert retained_run.error == ""
     else:
         assert attempt.result == "succeeded" and attempt.error == ""
-        assert retained_run.error == ("ValueError: " + expected)[:WorkflowRun._meta.get_field("error").max_length]
+        assert retained_run.error == expected[:WorkflowRun._meta.get_field("error").max_length]
 
 
 @pytest.mark.parametrize("failure_write", ["state", "publication"])
@@ -1145,8 +1160,8 @@ def test_failure_recording_database_errors_preserve_successful_body(
     if failure_write == "state":
         monkeypatch.setattr(WorkflowRunManager, "_write_state", invalid_write)
     else:
-        monkeypatch.setattr("angee.workflows.managers.publish_change", invalid_write)
-    assert StepRun.objects.execute(step_run.pk)
+        monkeypatch.setattr(runner_module, "publish_change", invalid_write)
+    assert runner.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
     attempt = system_queryset(StepAttempt).get(step_run=step_run)
@@ -1154,7 +1169,7 @@ def test_failure_recording_database_errors_preserve_successful_body(
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
     if failure_write == "publication":
         retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
-        assert retained_run.status == RunStatus.FAILED and retained_run.error == "ValueError: Injected result failure."
+        assert retained_run.status == RunStatus.FAILED and retained_run.error == "Injected result failure."
 
 
 def test_failure_attempt_close_database_error_preserves_successful_body(execution, register_step, monkeypatch, caplog):
@@ -1173,10 +1188,10 @@ def test_failure_attempt_close_database_error_preserves_successful_body(executio
     register_step(RetainedBody)
     monkeypatch.setattr(StepRunQuerySet, "settle", settlement_error)
     monkeypatch.setattr(StepAttemptQuerySet, "close", attempt_close)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
-    assert retained_run.status == RunStatus.FAILED and retained_run.error == "ValueError: Injected settlement failure."
+    assert retained_run.status == RunStatus.FAILED and retained_run.error == "Injected settlement failure."
     assert system_queryset(StepAttempt).get(step_run=step_run).finished_at is None
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
 
@@ -1193,7 +1208,7 @@ def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, re
 
     register_step(RetainedBody)
     monkeypatch.setattr(StepRunQuerySet, "settle", timeout)
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     attempt = system_queryset(StepAttempt).get(step_run=step_run)
     assert attempt.result == "timed_out" and attempt.finished_at is not None
@@ -1213,8 +1228,8 @@ def test_publication_database_error_keeps_successful_outcome(execution, register
         Workflow.objects.filter(pk=workflow.pk).update(key=None)
 
     register_step(RetainedBody)
-    monkeypatch.setattr("angee.workflows.managers.publish_change", invalid_write)
-    assert StepRun.objects.execute(step_run.pk)
+    monkeypatch.setattr(runner_module, "publish_change", invalid_write)
+    assert runner.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained_run.status == RunStatus.SUCCEEDED and retained_run.error == ""
@@ -1233,8 +1248,8 @@ def test_terminal_siblings_do_not_starve_later_tick_candidates(execution):
         **{key: {"step": "echo"} for key in siblings},
     }}, key="terminal_batch", actor=actor)
     failed = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(system_queryset(StepRun).get(run=failed, node_key="entry").pk)
-    assert StepRun.objects.execute(system_queryset(StepRun).get(run=failed, node_key="failure").pk)
+    assert runner.execute(system_queryset(StepRun).get(run=failed, node_key="entry").pk)
+    assert runner.execute(system_queryset(StepRun).get(run=failed, node_key="failure").pk)
     assert system_queryset(WorkflowRun).get(pk=failed.pk).status == RunStatus.FAILED
     retained = system_queryset(StepRun).filter(run=failed, status=StepRunStatus.READY)
     assert retained.count() == 101
@@ -1246,14 +1261,14 @@ def test_terminal_siblings_do_not_starve_later_tick_candidates(execution):
         StepRun.objects.filter(status=StepRunStatus.READY).update(dispatched_at=Now() - timedelta(seconds=61))
     sent.clear()
 
-    assert StepRun.objects.redispatch() == 1
+    assert runner.redispatch() == 1
 
     assert system_queryset(StepRun).get(pk=live_step.pk).dispatches == 1
     assert list(retained.values_list("dispatches", flat=True)) == [0] * 101
     assert [payload["kwargs"]["step_run_id"] for _name, payload in sent] == [live_step.pk]
 
 
-@pytest.mark.parametrize("mode", ["DATABASE", "IO"])
+@pytest.mark.parametrize("mode", [StepMode.DATABASE, StepMode.IO])
 def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(execution, register_step, monkeypatch, mode):
     """Failure recovery cannot turn an expired claim into a terminal run with a running row."""
     actor, _ = execution
@@ -1266,7 +1281,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
-    original_settle, original_record_failure = StepRunQuerySet.settle, managers._record_failure
+    original_settle, original_record_failure = StepRunQuerySet.settle, runner_module._record_failure
     settlements = []
 
     def reject_result(self, row, settlement):
@@ -1283,16 +1298,16 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
             yield
 
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
-    monkeypatch.setattr(managers, "_record_failure", expire_before_failure_recovery)
+    monkeypatch.setattr(runner_module, "_record_failure", expire_before_failure_recovery)
 
-    assert StepRun.objects.execute(step_run.pk) is False
+    assert runner.execute(step_run.pk) is False
     assert settlements == ["done", "fail"]
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
     retained_step = system_queryset(StepRun).get(pk=step_run.pk)
     assert retained_run.status == RunStatus.RUNNING
     assert retained_run.finished_at is None and retained_run.error == ""
     attempts = system_queryset(StepAttempt).filter(step_run=step_run)
-    if mode == "DATABASE":
+    if mode == StepMode.DATABASE:
         assert retained_step.status == StepRunStatus.READY and retained_step.attempt == 0
         assert not attempts.exists()
         assert system_queryset(Workflow).get(pk=workflow.pk).name != "Successful body retained"
@@ -1302,6 +1317,6 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
         assert attempt.finished_at is None and attempt.result is None
         with system_context(reason="test elapsed deadline after IO failure recovery rollback"):
             StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
-        assert StepRun.objects.reap() == 1
+        assert runner.reap() == 1
         assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.FAILED
         assert attempts.get().result == "timed_out"

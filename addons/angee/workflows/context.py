@@ -14,9 +14,10 @@ from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.managers import ResolvedDecision
-from angee.workflows.reviews import Ask
+from angee.workflows.reviews import Ask, ReviewStep
+from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, RunRelation
-from angee.workflows.steps import Done, Fail, NextPage, Step, Wait
+from angee.workflows.steps import Done, Fail, NextPage, Step, StepMode, Wait
 
 
 @dataclass
@@ -70,7 +71,7 @@ class StepContext:
 
     def subject_for_update(self) -> models.Model:
         """Lock the actor-readable subject after the already-held workflow rows."""
-        self._require_mode("DATABASE")
+        self._require_mode(StepMode.DATABASE)
         subject = self._subject(lock=True)
         if subject is None:
             raise ValidationError("This run has no subject.")
@@ -92,7 +93,7 @@ class StepContext:
     ) -> M:
         """Load a public id through native identity and permission scoping."""
         if lock:
-            self._require_mode("DATABASE")
+            self._require_mode(StepMode.DATABASE)
         queryset = read_scoped_queryset(model, self.actor, action=permission)
         if queryset is None:
             raise PermissionDenied(f"{model._meta.label} has no actor-scoped read contract.")
@@ -113,7 +114,7 @@ class StepContext:
 
     def watch(self, *records: models.Model) -> None:
         """Observe later saves transactionally; lock records before testing a wait predicate."""
-        self._require_mode("DATABASE")
+        self._require_mode(StepMode.DATABASE)
         apps.get_model("workflows", "StepWatch").objects.register(self.step_run, records, actor=self.actor)
 
     def next_page(self, state: Any = None) -> NextPage:
@@ -126,28 +127,28 @@ class StepContext:
 
     def ask(self, *requests: DecisionRequest, policy: str = "first") -> Ask:
         """Construct review requests; the body boundary owns validation and admission."""
-        self._require_mode("DATABASE")
+        self._require_mode(StepMode.DATABASE)
         return Ask(requests=requests, policy=policy)
 
     def resolution(self, decision_ref: str) -> ResolvedDecision:
         """Lock and revalidate a prior review's public decision reference."""
-        self._require_mode("DATABASE")
-        return type(self.step_run).objects.resolution(decision_ref, run=self.run, actor=self.actor)
+        self._require_mode(StepMode.DATABASE)
+        return ReviewStep.resolution(decision_ref, run=self.run, actor=self.actor)
 
     def begin_effect(self) -> None:
         """Record possible external effects only while this IO attempt owns its fence."""
-        self._require_mode("IO")
-        type(self.step_run).objects.begin_effect(self.step_run)
+        self._require_mode(StepMode.IO)
+        runner.begin_effect(self.step_run)
 
     def heartbeat(self) -> None:
         """Extend this IO attempt's deadline through the fenced transition owner."""
-        self._require_mode("IO")
-        type(self.step_run).objects.heartbeat(self.step_run)
+        self._require_mode(StepMode.IO)
+        runner.heartbeat(self.step_run)
 
     def raise_if_canceled(self) -> None:
         """Stop cooperative IO work when cancellation or a newer attempt won."""
-        self._require_mode("IO")
-        type(self.step_run).objects.raise_if_canceled(self.step_run)
+        self._require_mode(StepMode.IO)
+        runner.raise_if_canceled(self.step_run)
 
     def artifact(self, record: models.Model, label: str = "") -> Any:
         """Stage actor-readable evidence for this attempt's successful settlement.
@@ -155,7 +156,7 @@ class StepContext:
         The returned artifact is unsaved until settlement commits. Failed or
         superseded attempts discard their staged evidence.
         """
-        artifact = type(self.step_run).objects.artifact(self.step_run, record, label=label, actor=self.actor)
+        artifact = runner.artifact(self.step_run, record, label=label, actor=self.actor)
         self.pending_artifacts.append(artifact)
         return artifact
 
@@ -171,7 +172,7 @@ class StepContext:
         """Request cancellation as this run's actor after the body commits."""
         type(self.run).objects.cancel_on_commit(run, self.actor)
 
-    def _require_mode(self, mode: str) -> None:
+    def _require_mode(self, mode: StepMode) -> None:
         """Reject operations outside their declared transaction boundary."""
         if self.step.mode != mode:
             raise ValidationError(f"This operation requires {mode} mode.")

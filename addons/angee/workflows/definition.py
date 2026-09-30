@@ -44,6 +44,13 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import EmptyOutput, Step, resolve_step
 
+MAP_BODY_SUFFIX = ".body"
+
+
+def map_body_key(key: str) -> str:
+    """Name the execution row for a map node's declared body."""
+    return key + MAP_BODY_SUFFIX
+
 
 class Issue(BaseModel):
     """One document issue located in the authored document."""
@@ -161,11 +168,11 @@ class Definition(BaseModel):
 
     def node(self, key: str) -> Body:
         """Return the declaration for one stable node key."""
-        parent, separator, suffix = key.partition(".")
+        parent, separator, _ = key.partition(".")
         node = self.nodes[parent]
         if not separator:
             return node
-        if suffix != "body" or node.body is None:
+        if key != map_body_key(parent) or node.body is None:
             raise KeyError(key)
         return node.body
 
@@ -174,7 +181,7 @@ class Definition(BaseModel):
         for key, node in self.nodes.items():
             yield key, node, ["nodes", key]
             if node.body is not None:
-                yield f"{key}.body", node.body, ["nodes", key, "body"]
+                yield map_body_key(key), node.body, ["nodes", key, "body"]
 
     def step(self, key: str) -> type[Step[Any, Any, Any]]:
         """Resolve one node's class once, without resolving unrelated draft nodes."""
@@ -183,7 +190,7 @@ class Definition(BaseModel):
     def output_schema(self, key: str, outcomes: set[str] | None = None) -> dict[str, Any]:
         """Resolve node output, including the map body's typed item contract."""
         step = self.step(key)
-        return Map.output_schema_for(self.step(f"{key}.body")) if step is Map else step.output_schema(
+        return Map.output_schema_for(self.step(map_body_key(key))) if step is Map else step.output_schema(
             config=self.node(key).parsed_config, outcomes=outcomes,
         )
 
@@ -198,8 +205,8 @@ class Definition(BaseModel):
     def map_items_schema(self, key: str) -> dict[str, Any]:
         """Use the producer's array contract or infer external items from the body."""
         node = self.nodes[key]
-        body = self.node(f"{key}.body")
-        if self.step(f"{key}.body") is Map:
+        body = self.node(map_body_key(key))
+        if self.step(map_body_key(key)) is Map:
             return {}
         binding = node.input if isinstance(node.input, SourceBinding) else (node.input or {}).get("items")
         if isinstance(binding, SourceBinding):
@@ -210,7 +217,7 @@ class Definition(BaseModel):
         if node.input is None and self.predecessors[key]:
             source = next(iter(self.predecessors[key]))
             return schema_at(self.output_schema(source), ["items"]) or {}
-        target = self.step(f"{key}.body").input_schema()
+        target = self.step(map_body_key(key)).input_schema()
         item = target if body.input is None else compose_schema({}, (
             (value.path, expected, field is None or field in target.get("required", []), value.project)
             for field, value in self._bindings(body.input).items()
@@ -655,7 +662,7 @@ class Definition(BaseModel):
                 parent = existing[key]
                 if (self.nodes[key].body is not None and parent.status == StepRunStatus.WAITING
                         and parent.waiting_kind == WaitingKind.MAP):
-                    bodies = {row.map_index: row for row in rows if row.node_key == f"{key}.body"}
+                    bodies = {row.map_index: row for row in rows if row.node_key == map_body_key(key)}
                     total = len(parent.input["items"])
                     open_count = sum(row.status not in StepRunStatus.terminal_values() for row in bodies.values())
                     if len(bodies) == total and not open_count:
@@ -666,7 +673,7 @@ class Definition(BaseModel):
                             if not slots:
                                 break
                             if index not in bodies:
-                                planned.append(PlannedNode(f"{key}.body", "ready", rank, map_index=index))
+                                planned.append(PlannedNode(map_body_key(key), "ready", rank, map_index=index))
                                 slots -= 1
                 continue
             sources = incoming[key]

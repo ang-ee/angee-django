@@ -12,6 +12,8 @@ from rebac import actor_context
 from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
+from angee.workflows.runner import runner
+from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run, trigger_source
 from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, WorkflowRun
 from tests.conftest import Vault, addon_schema, create_user, execute_schema, result_data, vault_for
@@ -76,7 +78,7 @@ def test_saved_record_wakes_once_rearms_and_then_settles(watched_source, registe
     with actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
-    assert StepRun.objects.wake_records() == 1
+    assert runner.wake_records() == 1
     run_until(run)
     run.refresh_from_db()
     assert run.status == "succeeded" and run.output == {"value": 7}
@@ -97,8 +99,8 @@ def test_rolled_back_save_does_not_wake_and_tick_recovers_lost_delivery(watched_
     with actor_context(actor):
         record.save()
     sent.clear()  # Simulate a lost broker message; the native pending fact remains.
-    assert StepRun.objects.tick()["records"] == 1
-    assert StepRun.objects.tick()["records"] == 0
+    assert runner.tick()["records"] == 1
+    assert runner.tick()["records"] == 0
     assert sum(name == "workflows.execute" for name, _ in sent) == 1
 
 
@@ -147,7 +149,7 @@ def test_retention_cascades_watches_from_a_failed_runs_open_branch(watched_sourc
     run = start_run(workflow, actor=actor, subject=record, input={"value": 7})
     run_until(run, node="watch")
     waiter = system_queryset(StepRun).get(run=run, node_key="watch")
-    assert StepRun.objects.execute(waiter.pk)
+    assert runner.execute(waiter.pk)
     run_until(run)
     assert run.status == "failed"
     assert system_queryset(StepWatch).filter(step_run=waiter).exists()
@@ -162,7 +164,7 @@ def test_record_wait_admission_and_deadline_recovery(watched_source, register_st
 
     class Observe(Echo):
         key = "watch_contract"
-        mode = "IO" if case == "io" else "DATABASE"
+        mode = StepMode.IO if case == "io" else StepMode.DATABASE
 
         def run(self, ctx):
             if case != "empty":
@@ -174,13 +176,13 @@ def test_record_wait_admission_and_deadline_recovery(watched_source, register_st
     register_step(Observe)
     _run, step = start_watcher(Observe, record, actor)
     with patch.object(Vault, "workflow_trigger", False) if case == "not_opted" else nullcontext():
-        assert StepRun.objects.execute(step.pk)
+        assert runner.execute(step.pk)
     step.refresh_from_db()
     if case in {"empty", "io", "not_opted"}:
         assert step.status == "failed" and not system_queryset(StepWatch).exists()
     else:
         assert step.status == "waiting" and step.waiting_kind == "record"
-        assert (StepRun.objects.wake() if case == "timeout" else StepRun.objects.wake_records()) == 1
+        assert (runner.wake() if case == "timeout" else runner.wake_records()) == 1
         assert not system_queryset(StepWatch).exists()
 
 
@@ -210,8 +212,8 @@ def test_registration_requires_the_run_actors_read_permission(watched_source, re
         with actor_context(starter):
             subject.save()
             target.save()
-        assert StepRun.objects.wake_records() == 1
-        assert StepRun.objects.wake_records() == 0
+        assert runner.wake_records() == 1
+        assert runner.wake_records() == 0
     else:
         assert run.status == "failed" and not system_queryset(StepWatch).exists()
         assert "Read access" in system_queryset(StepAttempt).get(step_run__run=run).error

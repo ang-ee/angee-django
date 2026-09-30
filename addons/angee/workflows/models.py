@@ -22,7 +22,7 @@ from angee.base.refs import RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.mixins import ResourceLoadMixin
-from angee.workflows.definition import Definition
+from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
 from angee.workflows.fields import RunOriginField
 from angee.workflows.managers import (
     StepAttemptQuerySet,
@@ -256,7 +256,7 @@ class StepRun(AngeeDataModel):
 
     run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="step_runs")
     node_key = models.CharField(
-        max_length=NAME_MAX_LENGTH + len(".body"),
+        max_length=NAME_MAX_LENGTH + len(MAP_BODY_SUFFIX),
         help_text="A declared node key, with room for a map item's .body suffix.",
     )
     rank = models.PositiveIntegerField(editable=False, help_text="Execution order assigned once by the graph planner.")
@@ -290,7 +290,7 @@ class StepRun(AngeeDataModel):
     @property
     def is_mapped(self) -> bool:
         """Identify a map body row by its node identity, including item index zero."""
-        return self.node_key.endswith(".body")
+        return self.node_key.endswith(MAP_BODY_SUFFIX)
 
     @property
     def is_map(self) -> bool:

@@ -1,4 +1,4 @@
-"""Identifier-only task entrypoints for workflow manager verbs."""
+"""Identifier-only task entrypoints for workflow owners."""
 
 from celery import shared_task
 from django.apps import apps
@@ -6,18 +6,19 @@ from rebac import SubjectRef
 
 from angee.base.scoping import system_queryset
 from angee.jobs.locks import LockKey, task_lock
+from angee.workflows.runner import runner
 
 
 @shared_task(name="workflows.execute")
 def execute(step_run_id: int) -> bool:
     """Execute one ready step through its declared transaction mode."""
-    return apps.get_model("workflows", "StepRun").objects.execute(step_run_id)
+    return runner.execute(step_run_id)
 
 
 @shared_task(name="workflows.wake_run")
 def wake_run(run_id: int) -> int:
     """Wake target waiters after terminal settlement releases the child's lock."""
-    return apps.get_model("workflows", "StepRun").objects.wake_runs(run_id)
+    return runner.wake_runs(run_id)
 
 
 @shared_task(name="workflows.cancel")
@@ -32,7 +33,7 @@ def cancel(run_id: int, actor: str) -> None:
 @shared_task(name="workflows.wake_records")
 def wake_records(content_type_id: int, object_id: int) -> int:
     """Wake changed-record waiters after the source transaction releases its locks."""
-    return apps.get_model("workflows", "StepRun").objects.wake_records(
+    return runner.wake_records(
         content_type_id=content_type_id, object_id=object_id,
     )
 
@@ -41,4 +42,4 @@ def wake_records(content_type_id: int, object_id: int) -> int:
 def tick() -> dict[str, int]:
     """Recover due rows on the shared worker, using the database clock."""
     with task_lock(LockKey("workflows", ("tick",))) as acquired:
-        return apps.get_model("workflows", "StepRun").objects.tick() if acquired else {}
+        return runner.tick() if acquired else {}

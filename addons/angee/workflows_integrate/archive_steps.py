@@ -19,7 +19,7 @@ from angee.decisions.states import Verdict
 from angee.workflows.context import StepContext
 from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import Settlement, Step
+from angee.workflows.steps import Settlement, Step, StepMode
 
 
 class ArchiveProposal(BaseModel):
@@ -167,7 +167,7 @@ class ArchiveProbe(Step[None, ArchiveProbeOutput, None]):
 
     key = "archive_probe"
     label = "Probe archive"
-    mode = "IO"
+    mode = StepMode.IO
     outcomes = {"recognized": "Recognized", "unrecognized": "Unrecognized"}
 
     def run(self, ctx: Any) -> Settlement:
@@ -243,7 +243,7 @@ class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
 
     key = "archive_execute"
     label = "Import archive unit"
-    mode = "IO"
+    mode = StepMode.IO
     effect_idempotent = True
     outcomes = {"completed": "Completed"}
 

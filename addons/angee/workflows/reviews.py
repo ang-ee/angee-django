@@ -7,17 +7,19 @@ from datetime import timedelta
 from typing import Any, ClassVar, Literal, cast
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import transaction
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.db import connection, transaction
 from pydantic import BaseModel, ConfigDict, Field
+from rebac import system_context
 
-from angee.base.identity import public_id_of
+from angee.base.identity import instance_from_public_id, public_id_of
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionContext, DecisionRequest
 from angee.decisions.exceptions import ResolverAuthorityError
 from angee.decisions.forms import Action, resolve_action
 from angee.decisions.managers import ResolvedDecision
 from angee.workflows.states import Outcome, WaitingKind
-from angee.workflows.steps import Done, NextPage, RetryPolicy, Settlement, Step, Wait
+from angee.workflows.steps import Done, NextPage, RetryPolicy, Settlement, Step, StepMode, Wait
 
 
 @dataclass(frozen=True)
@@ -63,9 +65,49 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
     max_rounds: ClassVar[int] = 3
     retry = RetryPolicy(max_attempts=3, backoff=timedelta(seconds=1))
 
+    @classmethod
+    def resolution(cls, decision_ref: str, *, run: Any, actor: Any) -> ResolvedDecision:
+        """Decode a retained review once, then let decisions revalidate its answer."""
+        model = apps.get_model("decisions", "Decision")
+        decision = instance_from_public_id(model, decision_ref, queryset=read_scoped_queryset(model, actor))
+        if decision is None:
+            raise PermissionDenied("The decision is absent or inaccessible.")
+        step_model = apps.get_model("workflows", "StepRun")
+        group_model = apps.get_model("decisions", "DecisionGroup")
+        quote = connection.ops.quote_name
+        step_table, group_table = quote(step_model._meta.db_table), quote(group_model._meta.db_table)
+        step_pk, group_pk = quote(step_model._meta.pk.column), quote(group_model._meta.pk.column)
+        run_fk = quote(step_model._meta.get_field("run").column)
+        group_fk = quote(step_model._meta.get_field("decision_group").column)
+        previous_fk = quote(group_model._meta.get_field("reasked_from").column)
+        with system_context(reason="workflows.review_lookup"), connection.cursor() as cursor:
+            cursor.execute(f"""
+                WITH RECURSIVE rounds(group_id, previous_id, step_id) AS (
+                    SELECT groups.{group_pk}, groups.{previous_fk}, steps.{step_pk}
+                    FROM {step_table} AS steps
+                    JOIN {group_table} AS groups ON groups.{group_pk} = steps.{group_fk}
+                    WHERE steps.{run_fk} = %s
+                    UNION ALL
+                    SELECT groups.{group_pk}, groups.{previous_fk}, rounds.step_id
+                    FROM {group_table} AS groups
+                    JOIN rounds ON groups.{group_pk} = rounds.previous_id
+                )
+                SELECT step_id FROM rounds WHERE group_id = %s LIMIT 1
+            """, [run.pk, decision.group_id])
+            row = cursor.fetchone()
+        source = (system_queryset(step_model).select_related("run__version").filter(pk=row[0]).first()
+                  if row is not None else None)
+        if source is None or not issubclass(source.step, cls):
+            raise ValidationError("The decision has no retained review in this run.")
+        step = source.step
+        config = step.parse_config(source.run.version.definition.node(source.node_key).config)
+        return model.objects.resolution(
+            decision.pk, actor=actor, actions=step.actions_for(config), basis_model=step.basis_model,
+        )
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if cls.mode != "DATABASE":
+        if cls.mode != StepMode.DATABASE:
             raise ImproperlyConfigured("Review steps require DATABASE mode.")
         if cls.max_rounds < 1:
             raise ImproperlyConfigured("Review max_rounds must be positive.")

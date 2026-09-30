@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
+from enum import StrEnum
 from functools import cache
 from types import get_original_bases
 from typing import Annotated, Any, ClassVar, Literal, TypeVar, get_args, get_origin
@@ -35,6 +36,13 @@ class Retryable(Exception):
 
 class Superseded(Exception):
     """An attempt lost its fence; its settlement and further effects are forbidden."""
+
+
+class StepMode(StrEnum):
+    """Transaction boundary for a workflow step body."""
+
+    DATABASE = "DATABASE"
+    IO = "IO"
 
 
 @dataclass(frozen=True)
@@ -145,7 +153,7 @@ class Step[I, O, C](ImplBase):
     empty_outcomes: ClassVar[frozenset[str]] = frozenset({ERROR_OUTCOME})
     """Outcomes whose persisted output is the empty object, independent of O."""
     subject: ClassVar[str | None] = None
-    mode: ClassVar[str] = "DATABASE"
+    mode: ClassVar[StepMode] = StepMode.DATABASE
     timeout: ClassVar[timedelta] = timedelta(seconds=30)
     """Per-statement DATABASE limit or whole-attempt IO deadline.
 
@@ -160,8 +168,10 @@ class Step[I, O, C](ImplBase):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        if not isinstance(cls.mode, StepMode):
+            raise ImproperlyConfigured("A step mode must be DATABASE or IO.")
         if "timeout" not in cls.__dict__ and cls.mode != getattr(super(cls, cls), "mode"):
-            cls.timeout = timedelta(minutes=5) if cls.mode == "IO" else Step.timeout
+            cls.timeout = timedelta(minutes=5) if cls.mode == StepMode.IO else Step.timeout
         cls.outcomes = cls.parse_value(cls.outcomes, dict[Outcome, str], "outcomes")
         for base in get_original_bases(cls):
             origin = get_origin(base)
@@ -269,8 +279,6 @@ class Step[I, O, C](ImplBase):
 def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
     """Resolve one trusted registry key without maintaining a second registry."""
     step = resolve_impl_class(Step, key)
-    if step.mode not in {"DATABASE", "IO"}:
-        raise ImproperlyConfigured("A step mode must be DATABASE or IO.")
     if step.subject is not None:
         try:
             step.subject = apps.get_model(step.subject)._meta.label
@@ -278,7 +286,7 @@ def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
             raise ImproperlyConfigured(f"Unknown step subject model {step.subject!r}.") from error
     if not timedelta(milliseconds=1) <= step.timeout <= timedelta(seconds=900):
         raise ImproperlyConfigured("A step timeout must be at least 1 millisecond and at most 900 seconds.")
-    if step.mode == "IO" and step.timeout >= io_timeout_budget():
+    if step.mode == StepMode.IO and step.timeout >= io_timeout_budget():
         raise ImproperlyConfigured(
             "An IO timeout must leave more than 30 seconds below the worker's soft and hard time limits."
         )

@@ -12,10 +12,11 @@ from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.scoping import system_queryset
-from angee.workflows import managers
+from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
+from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
-from angee.workflows.steps import Retryable, RetryPolicy, Superseded
+from angee.workflows.steps import Retryable, RetryPolicy, StepMode, Superseded
 from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
 from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user, vault_for
@@ -36,7 +37,7 @@ def test_io_body_is_outside_transactions_and_scoped_to_its_actor(execution, regi
     own, hidden = vault_for(actor), vault_for(outsider)
 
     class ScopedIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             assert not connection.in_atomic_block and not is_sudo()
@@ -51,7 +52,7 @@ def test_io_body_is_outside_transactions_and_scoped_to_its_actor(execution, regi
     workflow = load_workflow(document("entry"), key="scoped_io", actor=admin)
     workflow.grant_record_access("starter", actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 1}
 
 
@@ -61,7 +62,7 @@ def test_io_refuses_an_enclosing_transaction(execution, register_step):
     called = []
 
     class IndependentIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             called.append(True)
@@ -71,7 +72,7 @@ def test_io_refuses_an_enclosing_transaction(execution, register_step):
     workflow = load_workflow(document("entry"), key="enclosing_io", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     with pytest.raises(RuntimeError, match="enclosing transaction"), transaction.atomic():
-        StepRun.objects.execute(step_row(run).pk)
+        runner.execute(step_row(run).pk)
     assert called == []
     assert step_row(run).status == StepRunStatus.READY
     assert not system_queryset(StepAttempt).filter(step_run__run=run).exists()
@@ -82,7 +83,7 @@ def test_heartbeat_extends_deadline_and_effect_marker_is_written_once(execution,
     actor, _ = execution
 
     class HeartbeatIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             old_deadline = ctx.step_run.deadline_at
@@ -102,7 +103,7 @@ def test_heartbeat_extends_deadline_and_effect_marker_is_written_once(execution,
     register_step(HeartbeatIO)
     workflow = load_workflow(document("entry"), key="heartbeat_io", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
     assert step_row(run).status == StepRunStatus.SUCCEEDED
 
 
@@ -112,7 +113,7 @@ def test_cancel_fences_every_io_context_write(execution, register_step):
     stopped = []
 
     class CanceledIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             WorkflowRun.objects.cancel(ctx.run, actor=ctx.actor)
@@ -125,7 +126,7 @@ def test_cancel_fences_every_io_context_write(execution, register_step):
     register_step(CanceledIO)
     workflow = load_workflow(document("entry"), key="cancel_io", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk) is False
+    assert runner.execute(step_row(run).pk) is False
     assert len(stopped) == 3
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.CANCELED
     assert step_row(run).output == {}
@@ -133,7 +134,7 @@ def test_cancel_fences_every_io_context_write(execution, register_step):
     assert attempt.effect_started_at is None and attempt.result == "superseded"
 
 
-@pytest.mark.parametrize("mode", ["DATABASE", "IO"])
+@pytest.mark.parametrize("mode", [StepMode.DATABASE, StepMode.IO])
 def test_paging_retains_each_pages_random_idempotency_key_across_retries(execution, register_step, mode):
     """The first claim generates a random token; completed pages advance its suffix."""
     actor, _ = execution
@@ -157,11 +158,11 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
     step_run = step_row(run)
     assert step_run.idempotency_token is None and step_run.page_index == 0
     for number in range(1, 5):
-        assert StepRun.objects.execute(step_run.pk)
+        assert runner.execute(step_run.pk)
         retained = step_row(run)
         if number in {1, 3}:
             assert retained.waiting_kind == "time" and retained.retries == 1
-            assert StepRun.objects.wake() == 1
+            assert runner.wake() == 1
         else:
             assert retained.retries == 0
     assert [item[0:2] for item in observed] == [(1, False), (2, True), (3, False), (4, True)]
@@ -178,7 +179,7 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
     assert observed[2][3] == {"page": 2}
     assert retained.status == StepRunStatus.SUCCEEDED
     another = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(another).pk)
+    assert runner.execute(step_row(another).pk)
     assert step_row(another).idempotency_token != retained.idempotency_token
 
 
@@ -188,7 +189,7 @@ def test_time_wait_keeps_the_current_page_retry_allowance(execution, register_st
     observed = []
 
     class WaitingIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
@@ -204,10 +205,10 @@ def test_time_wait_keeps_the_current_page_retry_allowance(execution, register_st
     workflow = load_workflow(document("entry"), key="wait_retry_budget", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     for _ in range(2):
-        assert StepRun.objects.execute(step_row(run).pk)
+        assert runner.execute(step_row(run).pk)
         assert step_row(run).retries == 1
-        assert StepRun.objects.wake() == 1
-    assert StepRun.objects.execute(step_row(run).pk)
+        assert runner.wake() == 1
+    assert runner.execute(step_row(run).pk)
     assert observed == [False, True, True]
     assert step_row(run).retries == 0
 
@@ -217,7 +218,7 @@ def test_io_retry_exhaustion_is_owned_by_the_failed_attempt(execution, register_
     actor, _ = execution
 
     class ExhaustedIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
@@ -226,9 +227,9 @@ def test_io_retry_exhaustion_is_owned_by_the_failed_attempt(execution, register_
     register_step(ExhaustedIO)
     workflow = load_workflow(document("entry"), key="io_retry_exhausted", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk)
-    assert StepRun.objects.wake() == 1
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
+    assert runner.wake() == 1
+    assert runner.execute(step_row(run).pk)
     assert step_row(run).status == StepRunStatus.FAILED
     assert step_row(run).retries == 2
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
@@ -247,7 +248,7 @@ def test_operator_retry_records_duplicate_acceptance_on_only_the_new_attempt(exe
     acknowledgements = []
 
     class EffectIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             acknowledgements.append(ctx.retry_acknowledged)
@@ -261,10 +262,10 @@ def test_operator_retry_records_duplicate_acceptance_on_only_the_new_attempt(exe
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = step_row(run)
     with pytest.raises(WorkerLost):
-        StepRun.objects.execute(step_run.pk)
+        runner.execute(step_run.pk)
     with system_context(reason="test expired unsafe IO attempt"):
         StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
-    assert StepRun.objects.reap() == 1
+    assert runner.reap() == 1
     waiting = step_row(run)
     assert waiting.waiting_kind == "operator" and waiting.wait_reason
     with pytest.raises(ValidationError, match="duplicate"):
@@ -279,7 +280,7 @@ def test_operator_retry_records_duplicate_acceptance_on_only_the_new_attempt(exe
     assert ready.status == StepRunStatus.READY and ready.wait_reason == ""
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.status == RunStatus.RUNNING and retained.finished_at is None and retained.error == ""
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
     first, second = list(system_queryset(StepAttempt).filter(step_run=step_run).order_by("number"))
     assert first.acknowledged_by_id is None and second.acknowledged_by_id == actor.pk
     assert acknowledgements == [False, True]
@@ -292,7 +293,7 @@ def test_operator_retry_keeps_successful_predecessors(execution, register_step):
     calls = []
 
     class FailOnce(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             calls.append(ctx.step_run.node_key)
@@ -306,7 +307,7 @@ def test_operator_retry_keeps_successful_predecessors(execution, register_step):
     run_until(run)
     failed = system_queryset(StepRun).get(run=run, node_key="last")
     StepRun.objects.retry_step(failed, actor=actor)
-    assert StepRun.objects.execute(failed.pk)
+    assert runner.execute(failed.pk)
     assert calls == ["first", "last", "last"]
     assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 7}
 
@@ -320,7 +321,7 @@ def test_operator_cannot_retry_a_routed_failure(execution, register_step):
     }}, key="routed_retry", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     failed = step_row(run)
-    assert StepRun.objects.execute(failed.pk)
+    assert runner.execute(failed.pk)
     with pytest.raises(ValidationError, match="cannot be retried"):
         StepRun.objects.retry_step(failed, actor=actor)
 
@@ -337,13 +338,13 @@ def test_operator_wait_can_retry_even_when_the_node_declares_an_error_edge(execu
     row = step_row(run)
     with system_context(reason="test operator wait after lost delivery"):
         StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
-    assert StepRun.objects.redispatch() == 1
+    assert runner.redispatch() == 1
     assert step_row(run).waiting_kind == "operator"
 
     ready = StepRun.objects.retry_step(row, actor=actor)
 
     assert ready.status == StepRunStatus.READY and ready.wait_reason == ""
-    assert StepRun.objects.execute(row.pk)
+    assert runner.execute(row.pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
     assert not system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="recover").exists()
 
@@ -356,7 +357,7 @@ def test_artifact_requires_record_read_access_and_retains_shared_reference(execu
     record = vault_for(actor if readable else outsider)
 
     class ArtifactIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             ctx.artifact(record, "Evidence")
@@ -366,7 +367,7 @@ def test_artifact_requires_record_read_access_and_retains_shared_reference(execu
     workflow = load_workflow(document("entry"), key="io_artifact", actor=admin)
     workflow.grant_record_access("starter", actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
     artifacts = StepArtifact.objects.with_actor(actor).filter(step_run__run=run)
     if readable:
         artifact = artifacts.get()
@@ -402,7 +403,7 @@ def test_io_settlement_retries_database_failure_without_repeating_body(execution
     original = StepRunQuerySet.settle
 
     class DurableResult(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             bodies.append(ctx.attempt.number)
@@ -415,11 +416,11 @@ def test_io_settlement_retries_database_failure_without_repeating_body(execution
         return original(self, step_run, settlement)
 
     register_step(DurableResult)
-    monkeypatch.setattr(managers.time, "sleep", delays.append)
+    monkeypatch.setattr(runner_module.time, "sleep", delays.append)
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
     workflow = load_workflow(document("entry"), key="settlement_retry", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
     assert bodies == [1] and settlements == [1, 1]
     assert len(delays) == 1 and delays[0] > 0
     assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 42}
@@ -431,7 +432,7 @@ def test_io_soft_limit_records_a_timed_out_attempt(execution, register_step):
     actor, _ = execution
 
     class LimitedIO(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             raise SoftTimeLimitExceeded()
@@ -439,7 +440,7 @@ def test_io_soft_limit_records_a_timed_out_attempt(execution, register_step):
     register_step(LimitedIO)
     workflow = load_workflow(document("entry"), key="io_soft_limit", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
     attempt = system_queryset(StepAttempt).get(step_run__run=run)
     assert attempt.result == "timed_out" and "SoftTimeLimitExceeded" in attempt.stacktrace
     assert system_queryset(WorkflowRun).get(pk=run.pk).error == ""
@@ -451,7 +452,7 @@ def test_reaper_retains_missing_implementation_cause_and_requests_operator_help(
 
     class RemovedIO(Echo):
         key = "removed_io_step"
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             raise WorkerLost()
@@ -461,11 +462,11 @@ def test_reaper_retains_missing_implementation_cause_and_requests_operator_help(
         run = WorkflowRun.objects.start(workflow, actor=actor)
         step_run = step_row(run)
         with pytest.raises(WorkerLost):
-            StepRun.objects.execute(step_run.pk)
+            runner.execute(step_run.pk)
     with system_context(reason="test expired removed implementation"):
         StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
 
-    assert StepRun.objects.reap() == 1
+    assert runner.reap() == 1
 
     waiting = step_row(run)
     assert waiting.status == StepRunStatus.WAITING and waiting.waiting_kind == "operator"
@@ -481,11 +482,11 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
     """The soft limit is handled while waiting for the result lock as well as inside the body."""
     actor, _ = execution
     original = StepRunQuerySet.settle
-    original_fenced = managers.StepRunManager._fenced
+    original_fenced = runner_module.Runner._fenced
     bodies, settlements, waits = [], [], []
 
     class InterruptedSettlement(Echo):
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             bodies.append(ctx.attempt.number)
@@ -507,11 +508,11 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
 
     register_step(InterruptedSettlement)
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
-    monkeypatch.setattr(managers.StepRunManager, "_fenced", interrupted_fence)
+    monkeypatch.setattr(runner_module.Runner, "_fenced", interrupted_fence)
     workflow = load_workflow(document("entry"), key="settlement_soft_limit", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
 
-    assert StepRun.objects.execute(step_row(run).pk)
+    assert runner.execute(step_row(run).pk)
 
     assert bodies == [1] and len(settlements) == 2
     attempt = system_queryset(StepAttempt).get(step_run__run=run)
@@ -570,20 +571,20 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     failed = system_queryset(StepRun).get(run=run, node_key="failed")
     sibling = system_queryset(StepRun).get(run=run, node_key="sibling")
     if sibling_status == StepRunStatus.WAITING:
-        assert StepRun.objects.execute(sibling.pk)
+        assert runner.execute(sibling.pk)
     sibling.refresh_from_db()
     preserved = (sibling.status, sibling.state, sibling.wake_at, sibling.attempt, sibling.retries)
     deliveries_before_failure = len(sent)
 
-    assert StepRun.objects.execute(failed.pk)
+    assert runner.execute(failed.pk)
 
     terminal = system_queryset(WorkflowRun).get(pk=run.pk)
     assert terminal.status == RunStatus.FAILED
     assert sent[deliveries_before_failure:] == [
         ("workflows.wake_run", {"kwargs": {"run_id": run.pk}, "queue": None, "expires": None}),
     ]
-    assert StepRun.objects.execute(sibling.pk) is False
-    assert StepRun.objects.tick() == {
+    assert runner.execute(sibling.pk) is False
+    assert runner.tick() == {
         "woken": 0, "reaped": 0, "redispatched": 0, "decisions": 0, "runs": 0, "records": 0,
         "pruned": 0, "drained": 0,
     }
@@ -597,7 +598,7 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     assert resumed.status == RunStatus.RUNNING
     assert resumed.finished_at is None and resumed.outcome == "" and resumed.error == ""
     if sibling_status == StepRunStatus.WAITING:
-        assert StepRun.objects.wake() == 1
+        assert runner.wake() == 1
     run_until(run)
     completed = system_queryset(WorkflowRun).get(pk=run.pk)
     assert completed.status == RunStatus.SUCCEEDED and completed.output == {"value": 17}
@@ -615,19 +616,19 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
 
     actor, sent = execution
     observed = {}
-    original_publish = managers.publish_change
+    original_publish = runner_module.publish_change
 
     def failed_publication(*args, **kwargs):
         raise RuntimeError("Result publication unavailable")
 
     class FinishingSibling(Echo):
         key = "finishing_sibling"
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             assert not connection.in_atomic_block
             failed = system_queryset(StepRun).get(run=ctx.run, node_key="failed")
-            assert StepRun.objects.execute(failed.pk)
+            assert runner.execute(failed.pk)
             observed["terminal"] = system_queryset(WorkflowRun).filter(pk=ctx.run.pk).values(
                 "status", "finished_at", "outcome", "output", "error",
             ).get()
@@ -637,7 +638,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
             ctx.heartbeat()
             ctx.begin_effect()
             if publication_failure:
-                monkeypatch.setattr(managers, "publish_change", failed_publication)
+                monkeypatch.setattr(runner_module, "publish_change", failed_publication)
             return ctx.done({"value": 41})
 
     register_step(RecoverableBranch)
@@ -646,7 +647,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     run = run_factory(workflow, actor=actor).at("sibling")
     sibling = system_queryset(StepRun).get(run=run, node_key="sibling")
 
-    assert StepRun.objects.execute(sibling.pk)
+    assert runner.execute(sibling.pk)
 
     sibling.refresh_from_db()
     assert sibling.status == StepRunStatus.SUCCEEDED and sibling.output == {"value": 41}
@@ -657,7 +658,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     assert len(sent) == observed["deliveries"]
     assert not system_queryset(StepRun).filter(run=run, node_key="join").exists()
 
-    monkeypatch.setattr(managers, "publish_change", original_publish)
+    monkeypatch.setattr(runner_module, "publish_change", original_publish)
     failed = system_queryset(StepRun).get(run=run, node_key="failed")
     StepRun.objects.retry_step(failed, actor=actor)
     run_until(run)
@@ -677,11 +678,11 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
 
     class RejectedResult(Echo):
         key = "rejected_result"
-        mode = "IO"
+        mode = StepMode.IO
 
         def run(self, ctx):
             failed = system_queryset(StepRun).get(run=ctx.run, node_key="failed")
-            assert StepRun.objects.execute(failed.pk)
+            assert runner.execute(failed.pk)
             observed.update(system_queryset(WorkflowRun).filter(pk=ctx.run.pk).values(
                 "status", "finished_at", "outcome", "output", "error",
             ).get())
@@ -701,7 +702,7 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
     sibling = system_queryset(StepRun).get(run=run, node_key="sibling")
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result_once)
 
-    assert StepRun.objects.execute(sibling.pk)
+    assert runner.execute(sibling.pk)
 
     sibling.refresh_from_db()
     assert settlements == ["done", "fail"]

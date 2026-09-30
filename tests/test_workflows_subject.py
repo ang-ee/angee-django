@@ -14,6 +14,7 @@ from rebac import (
 )
 
 from angee.base.scoping import system_queryset
+from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
@@ -56,7 +57,7 @@ def test_context_preserves_concrete_mti_subject(execution, register_step):
     assert WorkflowRun.objects.with_actor(actor).for_subject(subject).get().pk == run.pk
     step_run = system_queryset(StepRun).get(run=run)
 
-    assert StepRun.objects.execute(step_run.pk)
+    assert runner.execute(step_run.pk)
 
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.status == RunStatus.SUCCEEDED

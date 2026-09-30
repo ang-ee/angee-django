@@ -9,7 +9,7 @@ from pydantic import BaseModel, field_serializer
 
 from angee.workflows.context import StepContext
 from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import NextPage, RetryPolicy, Step, resolve_step
+from angee.workflows.steps import NextPage, RetryPolicy, Step, StepMode, resolve_step
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 
 
@@ -17,7 +17,7 @@ class IOContractStep(Step):
     """An IO declaration with the default whole-attempt deadline."""
 
     key = "io_contract"
-    mode = "IO"
+    mode = StepMode.IO
     retry = RetryPolicy(max_attempts=3)
 
 
@@ -37,10 +37,10 @@ def test_mode_defaults_preserve_custom_inherited_timeouts(register_step):
         timeout = timedelta(seconds=90)
 
     class InheritedIO(CustomIO):
-        mode = "IO"
+        mode = StepMode.IO
 
     class DatabaseAgain(InheritedIO):
-        mode = "DATABASE"
+        mode = StepMode.DATABASE
 
     assert Step.timeout == timedelta(seconds=30)
     assert IOContractStep.timeout == timedelta(minutes=5)
@@ -51,16 +51,14 @@ def test_mode_defaults_preserve_custom_inherited_timeouts(register_step):
     assert resolve_step("io_contract") is IOContractStep
 
 
-def test_unknown_execution_mode_is_rejected_at_resolution(register_step):
-    """Publication cannot accept a step with an undefined transaction boundary."""
+@pytest.mark.parametrize("candidate", ["IO", "UNSUPPORTED"])
+def test_step_mode_requires_enum_member_at_class_declaration(candidate):
+    """A step's transaction boundary is validated before app resolution."""
 
-    class Unsupported(Step):
-        key = "unsupported_contract"
-        mode = "UNSUPPORTED"
-
-    register_step(Unsupported)
     with pytest.raises(ImproperlyConfigured, match="DATABASE or IO"):
-        resolve_step(Unsupported.key)
+        class Unsupported(Step):
+            key = "unsupported_contract"
+            mode = candidate
 
 
 @pytest.mark.parametrize("soft, hard", [(840, 900), (120, 90)])

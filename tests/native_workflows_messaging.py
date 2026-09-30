@@ -19,6 +19,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.messaging.events import message_ingested
+from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
 
@@ -255,15 +256,15 @@ class MessageTriggerTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, "rollback"), transaction.atomic():
             message_ingested.send(sender=Message, instance=message)
             raise ValueError("rollback")
-        self.assertEqual(StepRun.objects.wake_records(), 0)
+        self.assertEqual(runner.wake_records(), 0)
         self.assertEqual(system_queryset(TriggerEvent).get().changed_at, changed)
 
         with transaction.atomic():
             message_ingested.send(sender=Message, instance=message)
         self.assertEqual(system_queryset(TriggerEvent).count(), 1)
         self.assertGreater(system_queryset(TriggerEvent).get().changed_at, changed)
-        self.assertEqual(StepRun.objects.wake_records(), 1)
-        self.assertEqual(StepRun.objects.wake_records(), 0)
+        self.assertEqual(runner.wake_records(), 1)
+        self.assertEqual(runner.wake_records(), 0)
         run_until(run)
         self.assertEqual(run.status, "succeeded")
         self.assertFalse(system_queryset(StepWatch).filter(step_run=step).exists())
