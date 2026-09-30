@@ -8,7 +8,7 @@ import { RouterContextProvider, createMemoryHistory, createRootRoute, createRout
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, Field, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
-import { OrganizationForm } from "./OrganizationsPage";
+import { OrganizationForm } from "./OrganizationForm";
 import { PersonForm } from "./PersonForm";
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 

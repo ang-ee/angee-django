@@ -273,7 +273,10 @@ shared UI copy through an addon bundle.
   inside its layout's `<Outlet/>`, so the chrome stays mounted. Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
   around a route's `<Outlet/>`. Lighter manifest content (slot/section content,
-  forms, glyphs) stays eager. A heavy optional surface may use `React.lazy` inside
+  forms, glyphs) stays eager. Keep a registered form and its descriptor in an
+  eager form module when its routed page is lazy; the manifest must not import or
+  re-export the page module. A page may import its form, and form callers import
+  the form module directly. A heavy optional surface may use `React.lazy` inside
   the shared `LazyBoundary` when its dependency tree otherwise enters the boot
   bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
   and its transport slots defer assistant-ui, streamdown and its code renderer
