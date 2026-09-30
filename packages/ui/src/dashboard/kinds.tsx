@@ -30,7 +30,6 @@ function DataState({ data, children, skeleton }: DashboardWidgetRenderProps & { 
 }
 
 function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
-  const t = useDashboardT();
   const suffix = typeof props.spec.options.suffix === "string" ? props.spec.options.suffix : "";
   const value = props.data.value == null
     ? "—"
@@ -40,7 +39,7 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
       <MetricTile
         className="h-full border-0 bg-transparent p-0 shadow-none"
         density="compact"
-        label={t("widget.value")}
+        label={<span className="sr-only">{props.spec.title}</span>}
         value={value}
         valueClassName="text-xl font-semibold leading-6 tabular-nums"
       />

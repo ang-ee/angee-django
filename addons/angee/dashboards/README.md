@@ -17,6 +17,8 @@ Direct and related keys both require declaration in the resource's
 `hasura_container_scope_fields`; a unique scalar alone does not admit a
 visibility policy. Dotted input keys are rejected at validation; use the
 declared Django path with `__` separators.
+The resource is the one declaring the container scope (`projects.Task` here),
+not the related `work.Queue`; `{resource: "work.Queue", key: "slug"}` is rejected.
 
 An installed definition's `revision` owns its baseline: when it differs from
 the saved declaration revision, the current declaration is displayed. The
@@ -30,13 +32,17 @@ embedded scope and reduced chrome settings. The preset owns the immutable
 filter and editable view defaults in both places; the list's server total is
 the widget heading count. `options.fullViewRoute` opens the full view, while
 `options.hint` and `options.audience` supply the rest of the heading.
-Value measures supply a heading count only for `count`; a statistic keeps its
-metric in the body without repeating it in the heading.
+The heading composes title, loaded row total or statistic value, hint, and
+audience through `SectionHeading`. Reading mode has no statistic caption or
+status footer; the widget's options menu contains Refresh. Layout Edit and
+Reset follow the server's `can_edit` answer.
 Duplicating a dashboard copies the layout currently displayed, including a
 newer declared baseline, into an independent personal snapshot.
 
-The standard refresh footer belongs to built-in query bindings. Authored
-(`shape: none`) panels provide their own refresh controls when needed.
+Authored (`shape: none`) panels provide their own refresh controls when needed.
+Hosted list views retain their declared row actions, filter chrome, and row
+links. Hosted Gantt views retain the declaration's lane label content, including
+secondary text and people avatars.
 
 Installed baselines have no actor owner. Their [permission policy](permissions.zed)
 derives shared reads through a filtered constant over that column, so bulk owner

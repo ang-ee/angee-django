@@ -42,8 +42,10 @@ MAX_FILTER_CLAUSES = 100
 def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any) -> list[bool]:
     """Batch declared listing scopes, never infer authority from result counts.
 
-    ``resource`` declares the container-scope ``key`` (for example Task and
-    queue__slug). Listing admission reads that container, never a source row. The source
+    ``resource`` declares the container-scope ``key`` (for example
+    ``{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}``).
+    Use the Task resource that declares the key, not the related Queue resource.
+    Listing admission reads that container, never a source row. The source
     query still enforces its own row permissions. Unknown/invalid policies fail
     validation; an inaccessible or missing scope yields false.
     """

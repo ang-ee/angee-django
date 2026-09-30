@@ -106,6 +106,9 @@ export function widgetColumns(spec: { options: JsonObject }) {
 }
 
 /** A readable scope row authorizes listing, independently of the widget's results. */
+/** Who sees a widget: a container the reader must read, named through the resource that declares
+ *  the scope — e.g. `{ resource: "projects.Task", key: "queue__slug", value: "<slug>" }`, never the
+ *  container's own model. */
 export const WidgetVisibilitySchema = v.strictObject({
   resource: v.pipe(v.string(), v.minLength(1)),
   key: v.pipe(v.string(), v.minLength(1)),
