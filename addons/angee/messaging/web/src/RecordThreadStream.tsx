@@ -72,9 +72,10 @@ export function RecordThreadStream({ heading, source, submitKey }: RecordThreadS
   const create = source.kind === "children" ? source.createAction : undefined;
   const canCreate = Boolean(create && (!create.permission || holdsPermission(create.record, create.permission)));
   const composer = source.kind === "children" ? source.createComposer : undefined;
-  const inlineCreate = Boolean(create && composer && create.args?.length === 1 &&
-    create.args[0]?.name === composer.bodyArg &&
-    (create.args[0].argKind === undefined || create.args[0].argKind === "scalar"));
+  const createArgs = Array.isArray(create?.args) ? create.args : undefined;
+  const inlineCreate = Boolean(create && composer && createArgs?.length === 1 &&
+    createArgs[0]?.name === composer.bodyArg &&
+    (createArgs[0].argKind === undefined || createArgs[0].argKind === "scalar"));
 
   return <section className="space-y-4">
     <SectionHeading label={heading.label} count={heading.counts} summary={heading.summary}
