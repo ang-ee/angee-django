@@ -46,14 +46,7 @@ from tests.conftest import (
     make_integration,
 )
 from tests.integrate_models import Integration
-from tests.messaging_models import Channel
-from tests.test_messaging import (
-    Handle,
-    Message,
-    MessageEdge,
-    Reaction,
-    Thread,
-)
+from tests.messaging_models import Channel, Handle, Message, MessageEdge, Reaction, Thread
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 

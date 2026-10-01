@@ -16,15 +16,19 @@ from tests.messaging_models import (
     Channel,
     Handle,
     Message,
+    MessageEdge,
+    MessageStar,
     Part,
+    Participant,
     Party,
+    Reaction,
     Thread,
+    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
     TrackingValue,
 )
-from tests.test_messaging import MessageEdge, MessageStar, Participant, Reaction, ThreadActivity
 from tests.test_messaging_access import messaging_access_schema as messaging_access_schema
 from tests.test_spaces import spaces_tables as spaces_tables
 

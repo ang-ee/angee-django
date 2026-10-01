@@ -16,9 +16,8 @@ from angee.spaces.runtime_migrations import drop_stored_roster as conversion
 from angee.spaces.runtime_migrations import owner_column
 from tests.conftest import create_user
 from tests.iam_models import Group as IAMGroup
-from tests.messaging_models import Thread
+from tests.messaging_models import Person, Thread
 from tests.spaces_models import Group, Membership
-from tests.test_messaging import Person
 from tests.test_spaces import _person_for
 from tests.test_spaces import spaces_tables as spaces_tables
 

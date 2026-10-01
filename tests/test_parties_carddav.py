@@ -23,8 +23,7 @@ from angee.parties_integrate_carddav.backend import (
 )
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import Credential, Integration, Vendor, execute_schema
-from tests.messaging_models import Directory
-from tests.test_messaging import Handle, Party, PartyHandle, Person
+from tests.messaging_models import Directory, Handle, Party, PartyHandle, Person
 
 _CONNECT_CARDDAV_MUTATION = """
 mutation ConnectCardDav(

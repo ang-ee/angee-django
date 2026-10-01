@@ -1,7 +1,8 @@
 """Tests for the messaging ingest write path (the channel-sync map).
 
-The concrete messaging/parties models are composed here the way the composer folds
-each abstract source model onto one runtime table, so the manager write path runs
+The concrete messaging/parties models (``tests.messaging_models``, registered from
+conftest) fold each abstract source model onto one runtime table the way the
+composer does, so the manager write path runs
 against real tables. The cases pin the ingest invariants the module docstring
 promises: channel-scoped idempotency on ``(channel, external_id)``, null-byte
 stripping, RFC-5322 thread resolution (with fragment-backed titles), the
@@ -54,20 +55,10 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.managers import derived_part_name, normalize_subject
-from angee.messaging.models import MessageEdge as AbstractMessageEdge
-from angee.messaging.models import MessageStar as AbstractMessageStar
-from angee.messaging.models import Participant as AbstractParticipant
-from angee.messaging.models import Reaction as AbstractReaction
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.managers import HandleAssociationStatus
 from angee.parties.mixins import LinkSource
-from angee.parties.models import Address as AbstractAddress
-from angee.parties.models import Circle as AbstractCircle
-from angee.parties.models import CircleMember as AbstractCircleMember
-from angee.parties.models import MergeVeto as AbstractMergeVeto
-from angee.parties.models import Organization as AbstractOrganization
-from angee.parties.models import Relationship as AbstractRelationship
-from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from tests.agents_models import Agent
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -78,11 +69,16 @@ from tests.messaging_models import (
     Fragment,
     Handle,
     Message,
+    MessageEdge,
+    MessageStar,
     MessageSubtype,
+    Organization,
     Part,
+    Participant,
     Party,
     PartyHandle,
     Person,
+    Reaction,
     Thread,
     ThreadActivity,
     ThreadAttachment,
@@ -91,142 +87,6 @@ from tests.messaging_models import (
     TrackingValue,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.test_agents_graphql import Agent
-
-_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_AddressMeta = getattr(AbstractAddress, "Meta", object)
-
-
-class Organization(AbstractOrganization, Party):
-    """Concrete organization matching the composer inheritance shape."""
-
-    class Meta(_OrganizationMeta):
-        """Django model options for the canonical test organization."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_organization"
-        rebac_resource_type = "parties/organization"
-
-
-class MergeVeto(AbstractMergeVeto):
-    """Concrete keep-separate pair used by parties-schema imports across the suite."""
-
-    class Meta(AbstractMergeVeto.Meta):
-        """Django model options for the canonical test merge veto."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_merge_veto"
-        rebac_resource_type = "parties/merge_veto"
-
-
-class Address(AbstractAddress):
-    """Concrete party address used by contact-ingest tests."""
-
-    class Meta(_AddressMeta):
-        """Django model options for the canonical test address."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_address"
-        rebac_resource_type = "parties/address"
-
-
-class Circle(AbstractCircle):
-    """Concrete circle used by parties-schema imports across the suite."""
-
-    class Meta(AbstractCircle.Meta):
-        """Django model options for the canonical test circle."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_circle"
-        rebac_resource_type = "parties/circle"
-
-
-class CircleMember(AbstractCircleMember):
-    """Concrete circle membership used by parties-schema imports across the suite."""
-
-    class Meta(AbstractCircleMember.Meta):
-        """Django model options for the canonical test circle membership."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_circle_member"
-        rebac_resource_type = "parties/circle_member"
-
-
-class RelationshipKind(AbstractRelationshipKind):
-    """Concrete relationship kind used by parties-schema imports across the suite."""
-
-    class Meta(AbstractRelationshipKind.Meta):
-        """Django model options for the canonical test relationship kind."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_relationship_kind"
-        rebac_resource_type = "parties/relationship_kind"
-
-
-class Relationship(AbstractRelationship):
-    """Concrete relationship edge used by parties-schema imports across the suite."""
-
-    class Meta(AbstractRelationship.Meta):
-        """Django model options for the canonical test relationship."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_relationship"
-        rebac_resource_type = "parties/relationship"
-
-
-class Reaction(AbstractReaction):
-    """Concrete message reaction used by messaging tests."""
-
-    class Meta(AbstractReaction.Meta):
-        """Django model options for the canonical test reaction."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_reaction"
-        rebac_resource_type = "messaging/reaction"
-
-
-class MessageStar(AbstractMessageStar):
-    """Concrete message star used by messaging tests."""
-
-    class Meta(AbstractMessageStar.Meta):
-        """Django model options for the canonical test message star."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_message_star"
-        rebac_resource_type = "messaging/message_star"
-
-
-class MessageEdge(AbstractMessageEdge):
-    """Concrete cross-message edge used by messaging tests."""
-
-    class Meta(AbstractMessageEdge.Meta):
-        """Django model options for the canonical test message edge."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_message_edge"
-        rebac_resource_type = "messaging/message_edge"
-
-
-class Participant(AbstractParticipant):
-    """Concrete participant used by messaging tests."""
-
-    class Meta(AbstractParticipant.Meta):
-        """Django model options for the canonical test participant."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_participant"
-        rebac_resource_type = "messaging/participant"
 
 
 class ThreadedTicket(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):

@@ -46,7 +46,7 @@ from tests.conftest import (
     ExternalAccount,
     OAuthClient,
 )
-from tests.test_messaging import Handle as PartiesHandle
+from tests.messaging_models import Handle as PartiesHandle
 from tests.test_parties_graphql import Person as PartiesPerson
 
 # OIDC first login uses the same concrete Person and handle models as parties tests.

@@ -65,7 +65,8 @@ class ProjectFollowTests(WorkCase):
             self.stages["Canceled"].delete()
         self.as_user(project).drop()
         self.assert_stage(task, "Active")
-        self.Task._base_manager.filter(pk=task.pk).update(queue=None, stage=None)
+        with system_context(reason="tests.work.no_queue"):
+            self.Task._base_manager.filter(pk=task.pk).update(queue=None, stage=None)
         self.as_user(project).resume()
         task.refresh_from_db()
         self.assertIsNone(task.stage_id)

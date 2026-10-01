@@ -5,18 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
-from tests import (
-    test_integrate_vcs,  # noqa: F401 -- register the concrete relation graph
-    test_messaging,  # noqa: F401 -- register the concrete relation graph
-    test_parties_graphql,  # noqa: F401 -- register the concrete relation graph
-    test_spaces,  # noqa: F401 -- register the concrete relation graph
-)
-from tests.test_agents_graphql import Agent, User
+from tests.agents_models import Agent
+
+User = get_user_model()
 
 
 def test_agent_principal_subject_is_its_service_user(composed_tables: None) -> None:

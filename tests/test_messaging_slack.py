@@ -33,8 +33,8 @@ from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from angee.messaging_integrate_slack.backend import SlackChannelBackend, SlackRateLimitError
 from angee.messaging_integrate_slack.identity import parsed_message
 from tests.conftest import Credential, Vendor, make_integration
+from tests.messaging_models import Message, Part, Thread
 from tests.stream_adapters import AdapterPages
-from tests.test_messaging import Message, Part, Thread
 from tests.test_messaging_graphql import Channel, _platform_admin
 
 

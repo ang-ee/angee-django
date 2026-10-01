@@ -20,6 +20,9 @@ from typing import Any
 
 import environ
 
+COMPOSED_TEST_TIMEOUT = 600
+"""Bound native test groups including per-test permission-index rebuilds."""
+
 
 def run_composed_tests(
     tmp_path: Path, test_label: str, *, app: str | tuple[str, ...], test_postgresql: bool = False,
@@ -50,7 +53,7 @@ def run_composed_tests(
         env=env,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
     assert result.returncode == 0, f"composed tests failed:\n{result.stdout}\n{result.stderr}"

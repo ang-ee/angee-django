@@ -577,7 +577,17 @@ class ExtcontribRole(Role):
 
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
-from tests import projects_models, proposals_models  # noqa: E402, F401
+# Every installed backing needs its concrete model before native database setup.
+from tests import (  # noqa: E402, F401
+    nexus_models,
+    operator_models,
+    portfolio_models,
+    projects_models,
+    proposals_models,
+    sequence_models,
+    tags_models,
+    uom_models,
+)
 
 
 class Need(AbstractNeed):

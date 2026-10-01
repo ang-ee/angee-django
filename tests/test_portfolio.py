@@ -10,28 +10,9 @@ from rebac import SubjectRef, actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeDataModel
-from angee.portfolio.models import InitiativeProject, PortfolioRole, Product
+from angee.portfolio.models import InitiativeProject
 from tests.hierdemo.models import HierNode
-from tests.projects_models import Project  # noqa: F401 -- register the product origin target
-
-
-class ProductRow(Product):
-    """Concrete adoption of the real portfolio product declaration."""
-
-    class Meta(Product.Meta):
-        abstract = False
-        app_label = "portfolio"
-        rebac_resource_type = "portfolio/product"
-
-
-class PortfolioRoleRow(PortfolioRole):
-    """Native role anchor needed by actor-scoped portfolio reads."""
-
-    class Meta(PortfolioRole.Meta):
-        abstract = False
-        managed = False
-        app_label = "portfolio"
-        rebac_resource_type = "portfolio/role"
+from tests.portfolio_models import ProductRow
 
 
 class InitiativePlacementRow(AngeeDataModel):

@@ -99,7 +99,9 @@ def test_e023_requires_exact_scoped_partial_uniqueness(monkeypatch, constraint):
         "unconditional": [models.UniqueConstraint(fields=("created_by", "client_creation_key"), name="wrong")],
     }
     monkeypatch.setattr(CreationRow._meta, "constraints", constraints[constraint])
-    errors = check_creation_key_constraints([apps.get_app_config("scopedemo")])
+    config = apps.get_app_config("scopedemo")
+    monkeypatch.setattr(config, "get_models", lambda *args, **kwargs: iter([CreationRow]))
+    errors = check_creation_key_constraints([config])
     if constraint in ("valid", "renamed"):
         assert errors == []
     else:

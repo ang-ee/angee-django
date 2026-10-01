@@ -10,8 +10,12 @@ from angee.messaging.models import ActivityType as AbstractActivityType
 from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
+from angee.messaging.models import MessageEdge as AbstractMessageEdge
+from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
 from angee.messaging.models import Part as AbstractPart
+from angee.messaging.models import Participant as AbstractParticipant
+from angee.messaging.models import Reaction as AbstractReaction
 from angee.messaging.models import Thread as AbstractThread
 from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
@@ -19,12 +23,19 @@ from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
 from angee.messaging.models import TrackingValue as AbstractTrackingValue
 from angee.messaging_integrate_imap.models import ImapChannelSampling
+from angee.parties.models import Address as AbstractAddress
+from angee.parties.models import Circle as AbstractCircle
+from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
+from angee.parties.models import MergeVeto as AbstractMergeVeto
+from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
 from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
+from angee.parties.models import Relationship as AbstractRelationship
+from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
 from angee.spaces.models import ChannelSpace, ThreadSpace
@@ -256,3 +267,149 @@ class ThreadActivity(AbstractThreadActivity):
         app_label = "messaging"
         db_table = "test_messaging_thread_activity"
         rebac_resource_type = "messaging/thread_activity"
+
+
+_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
+_AddressMeta = getattr(AbstractAddress, "Meta", object)
+
+
+class Organization(AbstractOrganization, Party):
+    """Concrete organization matching the composer inheritance shape."""
+
+    class Meta(_OrganizationMeta):
+        """Django model options for the canonical test organization."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_organization"
+        rebac_resource_type = "parties/organization"
+
+
+
+class MergeVeto(AbstractMergeVeto):
+    """Concrete keep-separate pair used by parties-schema imports across the suite."""
+
+    class Meta(AbstractMergeVeto.Meta):
+        """Django model options for the canonical test merge veto."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_merge_veto"
+        rebac_resource_type = "parties/merge_veto"
+
+
+
+class Address(AbstractAddress):
+    """Concrete party address used by contact-ingest tests."""
+
+    class Meta(_AddressMeta):
+        """Django model options for the canonical test address."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_address"
+        rebac_resource_type = "parties/address"
+
+
+
+class Circle(AbstractCircle):
+    """Concrete circle used by parties-schema imports across the suite."""
+
+    class Meta(AbstractCircle.Meta):
+        """Django model options for the canonical test circle."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_circle"
+        rebac_resource_type = "parties/circle"
+
+
+
+class CircleMember(AbstractCircleMember):
+    """Concrete circle membership used by parties-schema imports across the suite."""
+
+    class Meta(AbstractCircleMember.Meta):
+        """Django model options for the canonical test circle membership."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_circle_member"
+        rebac_resource_type = "parties/circle_member"
+
+
+
+class RelationshipKind(AbstractRelationshipKind):
+    """Concrete relationship kind used by parties-schema imports across the suite."""
+
+    class Meta(AbstractRelationshipKind.Meta):
+        """Django model options for the canonical test relationship kind."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_relationship_kind"
+        rebac_resource_type = "parties/relationship_kind"
+
+
+
+class Relationship(AbstractRelationship):
+    """Concrete relationship edge used by parties-schema imports across the suite."""
+
+    class Meta(AbstractRelationship.Meta):
+        """Django model options for the canonical test relationship."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_relationship"
+        rebac_resource_type = "parties/relationship"
+
+
+
+class Reaction(AbstractReaction):
+    """Concrete message reaction used by messaging tests."""
+
+    class Meta(AbstractReaction.Meta):
+        """Django model options for the canonical test reaction."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_reaction"
+        rebac_resource_type = "messaging/reaction"
+
+
+
+class MessageStar(AbstractMessageStar):
+    """Concrete message star used by messaging tests."""
+
+    class Meta(AbstractMessageStar.Meta):
+        """Django model options for the canonical test message star."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_message_star"
+        rebac_resource_type = "messaging/message_star"
+
+
+
+class MessageEdge(AbstractMessageEdge):
+    """Concrete cross-message edge used by messaging tests."""
+
+    class Meta(AbstractMessageEdge.Meta):
+        """Django model options for the canonical test message edge."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_message_edge"
+        rebac_resource_type = "messaging/message_edge"
+
+
+
+class Participant(AbstractParticipant):
+    """Concrete participant used by messaging tests."""
+
+    class Meta(AbstractParticipant.Meta):
+        """Django model options for the canonical test participant."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_participant"
+        rebac_resource_type = "messaging/participant"

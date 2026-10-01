@@ -10,7 +10,7 @@ class ProjectsConfig(AppConfig):
     name = "angee.projects"
 
     def ready(self) -> None:
-        """Register native deletion dispatch without querying models or data."""
+        """Register model-specific deletion receivers without querying data."""
 
         from angee.projects import signals
 

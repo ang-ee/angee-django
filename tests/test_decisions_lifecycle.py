@@ -925,6 +925,12 @@ def test_graphql_form_errors_preserve_authored_snake_case_field_names(people):
 
 def test_inbox_filters_assignees_separately_from_requesters(people):
     issuer, reviewer, _outsider, _subject = people
+    write_relationships([
+        RelationshipTuple(
+            resource=to_object_ref(reviewer), relation="directory_reader", subject=to_subject_ref(issuer),
+        ),
+    ])
+    assert reviewer.with_actor(issuer).has_access("read")
     assigned = Decision.objects.admit_group([request_for(people)], actor=issuer)
     requested = Decision.objects.admit_group([
         request_for(people, assignees=(issuer,), requester=reviewer),
