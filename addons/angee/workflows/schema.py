@@ -12,6 +12,7 @@ from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.models import record_display_label
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionGroupType
 from angee.graphql.actions import (
@@ -279,6 +280,7 @@ class TriggerGrantType:
     resource_type: str
     resource_id: str
     relation: str
+    relation_label: str
     target_kind: str
     target_label: str | None
 
@@ -316,6 +318,10 @@ class TriggerType(AngeeNode):
         """List live direct tuples; reveal a target label only through readable rows."""
         actor = request_from_info(info).user
         rows = cast(Any, self).granted_relationships(actor=actor)
+        targets = [TriggerGrantTarget.from_stored({
+            "resource_type": str(row.resource_type), "resource_id": str(row.resource_id),
+            "relation": str(row.relation),
+        }) for row in rows]
         labels: dict[tuple[str, str], str] = {}
         for resource_type in sorted({str(row.resource_type) for row in rows}):
             model = model_for_resource_type(resource_type)
@@ -326,18 +332,15 @@ class TriggerType(AngeeNode):
                 continue
             ids = [str(row.resource_id) for row in rows if row.resource_type == resource_type]
             for target in visible.filter(pk__in=ids):
-                labels[(resource_type, str(target.pk))] = str(target)
+                labels[(resource_type, str(target.pk))] = record_display_label(target)
         return [
             TriggerGrantType(
-                resource_type=str(row.resource_type), resource_id=str(row.resource_id),
-                relation=str(row.relation),
-                target_kind=TriggerGrantTarget.from_stored({
-                    "resource_type": str(row.resource_type), "resource_id": str(row.resource_id),
-                    "relation": str(row.relation),
-                }).target_kind(),
-                target_label=labels.get((str(row.resource_type), str(row.resource_id))),
+                resource_type=target.resource.resource_type, resource_id=str(target.resource.resource_id),
+                relation=target.relation, relation_label=target.relation_label(),
+                target_kind=target.target_kind(),
+                target_label=labels.get((target.resource.resource_type, str(target.resource.resource_id))),
             )
-            for row in rows
+            for target in targets
         ]
 
     @strawberry_django.field

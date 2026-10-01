@@ -8,6 +8,7 @@ import strawberry
 from django.db import models
 
 from angee.base.identity import public_id_of
+from angee.base.models import record_display_label
 from angee.graphql.ids import PublicID
 
 NODE_DISPLAY_NAME_DESCRIPTION = "Human-readable label for this object."
@@ -25,7 +26,7 @@ class AngeeNode:
 
     @strawberry.field(description=NODE_DISPLAY_NAME_DESCRIPTION)
     def display_name(self) -> str:
-        """Return the record's human label — the uniform alias of ``str(self)``.
+        """Return the record's human label from its model-owned representation.
 
         Every node carries a label without each type re-declaring one. A model
         that stores an editable, searchable label declares its own
@@ -35,4 +36,4 @@ class AngeeNode:
         only=[...])`` hints, so narrow selections do not defer label fields.
         """
 
-        return str(cast(models.Model, self))
+        return record_display_label(cast(models.Model, self))

@@ -12,7 +12,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, models, transaction
+from django.db import DatabaseError, transaction
 from django.db.models import F, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
@@ -34,7 +34,8 @@ from angee.base.exceptions import exception_text
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label
+from angee.base.permissions import rebac_relation_label
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.iam.identity import user_label
@@ -73,14 +74,28 @@ class TriggerGrantTarget:
             return str(model._meta.verbose_name)
         return self.resource.resource_type.replace("/", " ").replace("_", " ")
 
-    def target_label(self) -> str:
-        """Describe a grant target without exposing a raw authorization ID."""
+    def relation_label(self) -> str:
+        """Use the relation owner's display name for this grant."""
+
+        return rebac_relation_label(self.resource.resource_type, self.relation)
+
+    def readable_target_label(self, actor: Any) -> str | None:
+        """Return the record label only when the actor can read that row."""
+
         model = model_for_resource_type(self.resource.resource_type)
         if model is not None and model._meta.managed:
-            target = system_queryset(model).filter(pk=self.resource.resource_id).first()
-            if target is not None:
-                return (str(target) if type(target).__str__ is not models.Model.__str__
-                        else str(target._meta.verbose_name))
+            visible = read_scoped_queryset(model, actor)
+            if visible is not None:
+                target = visible.filter(pk=self.resource.resource_id).first()
+                if target is not None:
+                    return record_display_label(target)
+        return None
+
+    def target_label(self, *, actor: Any | None = None) -> str:
+        """Describe an accessible target without exposing a raw authorization ID."""
+
+        if actor is not None and (label := self.readable_target_label(actor)) is not None:
+            return label
         kind = self.target_kind()
         if self.resource.resource_type.endswith("/role"):
             return f"{str(self.resource.resource_id).replace('_', ' ')} ({kind})"
@@ -108,7 +123,7 @@ class TriggerGrantTarget:
                   if not self.grant_permission else "the publisher cannot delegate it")
         raise PublisherAuthorityDenied(
             f"{version} published by {user_label(publisher)} cannot run as the workflow principal: "
-            f"{self.relation} on {self.target_label()} is unavailable because {detail}."
+            f"{self.relation} on {self.target_label(actor=publisher)} is unavailable because {detail}."
         )
 
     def stored(self) -> dict[str, str]:
@@ -410,7 +425,9 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             readers.extend(f"{label}: {user_label(row) if subject_type == 'auth/user' else row}"
                            for row in resolved.values())
         return TriggerEnablePreview(
-            grants=tuple(sorted(f"{target.relation} on {target.target_label()}" for target in targets)),
+            grants=tuple(sorted(
+                f"{target.relation_label()} on {target.target_label(actor=actor)}" for target in targets
+            )),
             run_readers=tuple(sorted(set(readers))),
         )
 

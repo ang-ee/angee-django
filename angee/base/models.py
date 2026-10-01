@@ -317,6 +317,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         abstract = True
 
+    @property
+    def record_display_label(self) -> str:
+        """Return the record label used by generic GraphQL and record references."""
+
+        return str(self)
+
     @classmethod
     def system_queryset(
         cls,
@@ -738,6 +744,12 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
+
+
+def record_display_label(record: models.Model) -> str:
+    """Ask an Angee record for its label, preserving Django's string fallback."""
+
+    return record.record_display_label if isinstance(record, AngeeModel) else str(record)
 
 
 def role_anchor(

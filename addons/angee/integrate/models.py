@@ -1735,6 +1735,12 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
         return f"{label} ({self.lifecycle})"
 
+    @property
+    def record_display_label(self) -> str:
+        """Use the same operator label as the Integration GraphQL record."""
+
+        return self.display_label
+
     @transition(
         lifecycle,
         source=[IntegrationLifecycle.DISCONNECTED, IntegrationLifecycle.PAUSED],
