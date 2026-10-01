@@ -1401,6 +1401,11 @@ def integration_status_axes(status: object) -> tuple[str, str]:
 class IntegrationQuerySet(AngeeQuerySet[Any]):
     """Chainable collection scopes for integration and bridge rows."""
 
+    def of_concrete_type(self) -> Any:
+        """Keep rows whose declared final MTI kind is this queryset's model."""
+
+        return self.filter(concrete_type=ContentType.objects.get_for_model(self.model))
+
     def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Any:
         """Return bridge rows due for a new queue attempt or stale recovery."""
 
@@ -1436,26 +1441,33 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
         )
 
     def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Any:
-        """Prefetch installed and actor-readable concrete children in fixed queries."""
+        """Prefetch installed and actor-readable MTI descendants in fixed queries."""
 
         prefetches: list[Prefetch] = []
-        for child_model in concrete_child_models(self.model):
-            accessor = concrete_child_accessor(self.model, child_model)
-            prefetches.append(
-                Prefetch(
-                    accessor,
-                    queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
-                    to_attr=self.model.concrete_child_cache_attr(child_model, authorized=False),
-                )
-            )
-            if child_model._meta.label in exposed_model_labels:
+
+        def add_children(parent_model: type[models.Model], prefix: str = "") -> None:
+            for child_model in concrete_child_models(parent_model):
+                accessor = concrete_child_accessor(parent_model, child_model)
+                path = f"{prefix}__{accessor}" if prefix else accessor
+                integrity_attr = self.model.concrete_child_cache_attr(child_model, authorized=False)
                 prefetches.append(
                     Prefetch(
-                        accessor,
-                        queryset=child_model.objects.with_actor(actor),
-                        to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
+                        path,
+                        queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
+                        to_attr=integrity_attr,
                     )
                 )
+                if child_model._meta.label in exposed_model_labels:
+                    prefetches.append(
+                        Prefetch(
+                            path,
+                            queryset=child_model.objects.with_actor(actor),
+                            to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
+                        )
+                    )
+                add_children(child_model, f"{prefix}__{integrity_attr}" if prefix else integrity_attr)
+
+        add_children(self.model)
         return self.prefetch_related(*prefetches)
 
 
@@ -1488,20 +1500,28 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     concrete_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, null=True, editable=False)
     """Concrete MTI model identity used for server-side grouping."""
 
+    def declared_concrete_model(self) -> type[Integration] | None:
+        """Resolve the saved final MTI kind through Django's ContentType cache."""
+
+        if self.concrete_type_id is None:
+            return None
+        return cast(type[Integration] | None, ContentType.objects.get_for_id(self.concrete_type_id).model_class())
+
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
-        """Reject concrete descendants whose native parent path cannot be routed."""
+        """Require one unambiguous primary-key path for each capability child."""
 
         errors = super().check(**kwargs)
-        for child_model in (
-            model for model in cls._meta.apps.get_models() if model is not cls and issubclass(model, cls)
+        for child in (
+            model for model in cls._meta.apps.get_models()
+            if model is not cls and issubclass(model, cls)
         ):
-            if child_model._meta.parents.get(cls) is None:
+            if len(child._meta.parents) > 1:
                 errors.append(
                     checks.Error(
-                        f"{child_model._meta.label} is an indirect Integration descendant.",
-                        hint="Declare routed integration capabilities as direct Integration MTI children.",
-                        obj=child_model,
+                        f"{child._meta.label} has more than one Integration parent path.",
+                        hint="Declare one primary-key MTI parent for a routed capability.",
+                        obj=child,
                         id="integrate.E004",
                     )
                 )
@@ -1509,7 +1529,7 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
     @classmethod
     def concrete_child_models(cls) -> tuple[type[Integration], ...]:
-        """Return installed concrete descendants in stable model-label order."""
+        """Return installed direct children in stable model-label order."""
 
         return cast(tuple[type[Integration], ...], concrete_child_models(cls))
 
@@ -1528,6 +1548,20 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             if authorized
             else model.objects.sudo(reason="integrate.integration.child_integrity")
         )
+        if type(self) not in model._meta.parents:
+            parent_model = next(iter(model._meta.parents))
+            parent = self._concrete_child(cast(type[Integration], parent_model), actor=actor, authorized=False)
+            if parent is None:
+                return None
+            return cast(
+                Integration | None,
+                concrete_child(
+                    parent,
+                    model,
+                    queryset=queryset,
+                    cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
+                ),
+            )
         return cast(
             Integration | None,
             concrete_child(
@@ -1545,7 +1579,10 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
         integrity: list[Integration] = []
         authorized: list[Integration] = []
+        declared = self.declared_concrete_model()
         for child_model in type(self).concrete_child_models():
+            if declared is not None and declared is not child_model and issubclass(declared, child_model):
+                child_model = cast(type[Integration], declared)
             child = self._concrete_child(child_model, actor=actor, authorized=False)
             if child is None:
                 continue
@@ -1597,6 +1634,10 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         """
 
         actor, unscoped = self.effective_actor(strict=True)
+        declared = self.declared_concrete_model()
+        if declared is not None and declared is not type(self) and issubclass(declared, type(self)):
+            child = self._concrete_child(cast(type[Integration], declared), actor=actor, authorized=not unscoped)
+            return child if child is not None else self
         for child_model in type(self).concrete_child_models():
             child = self._concrete_child(child_model, actor=actor, authorized=not unscoped)
             if child is not None:

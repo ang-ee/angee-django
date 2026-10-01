@@ -100,7 +100,7 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
                     live_keys.append(key)
             if not live_keys:
                 continue
-            bridges = model._default_manager.filter(
+            bridges = model._default_manager.of_concrete_type().filter(
                 **{f"{field.name}__in": live_keys},
                 lifecycle=str(model.Lifecycle.CONNECTED),
                 runtime_status=str(IntegrationRuntimeStatus.OK),

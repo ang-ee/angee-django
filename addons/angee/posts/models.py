@@ -4,10 +4,9 @@ Posts is the public-post surface layered on ``messaging``. It reuses the one
 idempotent ``Message.objects.ingest`` write path (a public post *is* a
 ``messaging.Message`` in a ``messaging.Thread``) and adds the posts overlay:
 
-- :class:`Feed` — an ``integrate.Integration`` child + ``Bridge`` (exactly like
-  ``messaging.Channel``) that polls an external platform for public posts; its
-  ``FeedBackend`` does the transport+parse, and ``sync()`` maps each post onto the
-  messaging ingest, then overlays engagement.
+- :class:`Feed` — a ``messaging.Channel`` child that polls an external platform
+  for public posts. Its ``FeedBackend`` does transport and parsing, and ``sync()``
+  maps each post onto messaging ingest before overlaying engagement.
 - :class:`FeedFollow` — the following / timeline subscription edge.
 - :class:`PostMetrics` — rolled-up public engagement counts for a message.
 - per-actor post reactions (like / repost / emoji) reuse the single
@@ -27,11 +26,11 @@ from __future__ import annotations
 from typing import cast
 
 from django.db import models
+from rebac.mixins import RebacModelBase
 
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
-from angee.integrate.models import Bridge
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
 from angee.posts.managers import (
@@ -41,15 +40,13 @@ from angee.posts.managers import (
 )
 
 
-class Feed(Bridge):
+class Feed(models.Model, metaclass=RebacModelBase):
     """A connected public-content source that polls an external platform for posts.
 
-    An ``integrate.Integration`` child (identity / credential / status / owner from
-    the connection substrate) and a ``Bridge`` (the scheduler + ``run_sync`` drive it
-    through ``sync``; ``integrate.scheduler.enqueue_due_bridges`` auto-discovers any
-    concrete ``Bridge`` subclass, so no registration is needed). ``backend_class``
-    selects the platform — ``youtube`` / ``facebook`` are contributed by downstream
-    ``posts_integrate_*`` addons; ``manual`` is the neutral null-object.
+    A ``messaging.Channel`` child (identity, bridge state and message access from
+    its parents). The scheduler drives its inherited ``Bridge`` through ``sync``.
+    ``feed_backend_class`` selects the platform. Downstream ``posts_integrate_*``
+    addons contribute ``youtube`` / ``facebook``; ``manual`` is the neutral null-object.
 
     A *paused* feed carries a NULL ``next_sync_at`` (not scheduled); activating it
     schedules the first poll. ``handle`` is the ``parties.Handle`` the feed monitors
@@ -57,9 +54,11 @@ class Feed(Bridge):
     """
 
     runtime = True
-    extends = "integrate.Integration"
+    extends = "messaging.Channel"
+    integration_create_mode = None
+    live_impl_field = None
 
-    backend_class = ImplClassField(
+    feed_backend_class = ImplClassField(
         FeedBackend,
         default="manual",
         create_only=True,
@@ -87,8 +86,19 @@ class Feed(Bridge):
     def backend(self) -> FeedBackend:
         """Return this feed's selected backend, bound to this row."""
 
-        backend_class = cast("type[FeedBackend]", self.resolve_impl("backend_class"))
+        backend_class = cast("type[FeedBackend]", self.resolve_impl("feed_backend_class"))
         return backend_class(self)
+
+    @property
+    def capability_impl(self) -> FeedBackend:
+        """Use the feed selector when Integration dispatches a capability."""
+
+        return self.backend
+
+    def test_connection(self) -> str:
+        """Use the inherited credential probe for a periodic feed."""
+
+        return self.probe_credential()
 
     def sync(self) -> int:
         """Fetch new posts, ingest their message core, and overlay engagement.

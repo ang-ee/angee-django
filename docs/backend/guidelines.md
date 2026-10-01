@@ -1259,6 +1259,13 @@ validated at the driver boundary.
 
 ### Integrations and workers
 
+- **Bridge scheduling follows the final MTI kind.** A child capability may
+  extend another bridge (a public Feed extends Channel). The
+  [`Integration.concrete_type`](../../addons/angee/integrate/models.py) identity
+  selects the one bridge row to schedule and route; querying every ancestor
+  would queue the same connection twice. Keep parent-scoped message access on
+  the declared Channel relation, with child access inherited through its REBAC
+  parent arrow.
 - **An integration failure reaches the operator only as an `IntegrationError`.**
   `Bridge.record_sync_error` and the console action results project every other
   exception to the generic "Integration operation failed." — a vendor SDK's
