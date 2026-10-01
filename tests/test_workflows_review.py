@@ -558,7 +558,7 @@ def test_review_closure_edges_and_results_expose_empty_output(review, register_s
     assert any(issue.code == "binding" for issue in Definition.check(graph)[1])
 
 
-def test_reask_chain_protects_history_and_retains_operator_resolution(review, workflow_permissions):
+def test_reask_chain_protects_history_and_retains_operator_resolution(review, composed_permissions):
     actor, people, _sent, question = review
     run, step = start_review(review, input={"reject_rounds": 2})
     original = seats(step)[0]

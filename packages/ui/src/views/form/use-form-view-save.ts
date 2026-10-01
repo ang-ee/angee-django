@@ -1,13 +1,14 @@
 import * as React from "react";
 import {
   fieldUpdatable,
+  holdsPermission,
   refineResourceName,
   type DataResourceLinesMetadata,
   type DataResourceMetadata,
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { useAngeeResourceSave } from "@angee/refine";
+import { publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -26,6 +27,7 @@ import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-q
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
+import { createClientKey } from "../../lib/client-key";
 import { slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
@@ -52,6 +54,8 @@ import { applyFormErrors, formSubmitError, savedFormSubmitResult, serverErrorsFr
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
 import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 type RowRecord = BaseRecord & Row;
 
@@ -62,6 +66,8 @@ export interface FormSubmitContext {
   record: Row | null;
   /** Saved record at the start of this local edit, held while the form is dirty. */
   baselineRecord: Row | null;
+  /** One create attempt, retained across failures and renewed after acceptance/conflict. */
+  clientCreationKey: string | null;
   lines: LineDiff | null;
   /** Exact RHF snapshot submitted by the user, including externally supplied fields. */
   values: FormValues;
@@ -186,8 +192,19 @@ export function useFormViewSave({
   onDiscarded,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const previewBlockedRef = useLatestRef(previewBlocked);
   const toast = useToast();
   const refineResource = refineResourceName(dataResource);
+  const updateRevision = Boolean(dataResource?.updateArguments?.some(({ name }) => name === "expected_revision"));
+  const saveRevision = Boolean(dataResource?.saveArguments?.some(({ name }) => name === "expected_revision"));
+  const selectRevision = (updateRevision || saveRevision)
+    && Boolean(dataResource?.fields?.some(({ name }) => name === "revision"));
+  const mutationFields = React.useMemo(() => selectRevision && !refineFields.includes("revision")
+    ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
+  const creationKey = React.useRef<string | null>(null);
+  React.useEffect(() => { creationKey.current = null; }, [resource, id, isCreate]);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -197,6 +214,8 @@ export function useFormViewSave({
     [defaultValues],
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
+  const prefillSeedsRef = React.useRef<Map<string, unknown>>(new Map());
+  const userEditedFieldsRef = React.useRef<Set<string>>(new Set());
   const localAcknowledgementRef = React.useRef<{
     previous: FormValues | null;
     accepted: FormValues;
@@ -230,15 +249,16 @@ export function useFormViewSave({
   const { identifier } = useResourceParams({ resource: refineResource });
   const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
     .resource(identifier ?? "").action("one").id(id ?? "")
-    .params({ fields: refineFields }).get(), [dataResource?.schemaName, id, identifier, keys, refineFields]);
+    .params({ fields: mutationFields }).get(), [dataResource?.schemaName, id, identifier, keys, mutationFields]);
+  const nativeReadEnabled = acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail);
   const read = useOne<RowRecord, HttpError>({
     resource: refineResource,
     id: id ?? undefined,
     dataProviderName: dataResource?.schemaName,
-    meta: { fields: refineFields },
+    meta: { fields: mutationFields },
     queryOptions: {
       queryKey: detailKey,
-      enabled: acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail),
+      enabled: nativeReadEnabled,
     },
   });
   const record = acknowledgedSource !== undefined
@@ -246,7 +266,7 @@ export function useFormViewSave({
     : read.result ?? null;
   const displayRecord = record;
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
-  const loading = acknowledgedSource?.loading ?? read.query.isFetching;
+  const loading = acknowledgedSource?.loading ?? (nativeReadEnabled && (read.query.isPending || read.query.isFetching));
   const loadError = acknowledgedSource === undefined ? read.query.error : null;
   const reload = React.useCallback(async (): Promise<Row | null> => {
     if (acknowledgedSource !== undefined) {
@@ -258,7 +278,7 @@ export function useFormViewSave({
   const create = useCreate<RowRecord, HttpError, FormValues>({
     resource: refineResource,
     dataProviderName: dataResource?.schemaName,
-    meta: { fields: refineFields },
+    meta: { fields: mutationFields },
     invalidates: ["list", "many"],
     successNotification: false,
     errorNotification: false,
@@ -266,7 +286,7 @@ export function useFormViewSave({
   const update = useUpdate<RowRecord, HttpError, FormValues>({
     resource: refineResource,
     dataProviderName: dataResource?.schemaName,
-    meta: { fields: refineFields },
+    meta: { fields: mutationFields },
     invalidates: ["list", "many", "detail"],
     successNotification: false,
     errorNotification: false,
@@ -336,11 +356,13 @@ export function useFormViewSave({
     () =>
       readOnly ||
       recordUnavailable ||
+      (!isCreate && (Array.isArray(record?.permissions) || Boolean(modelMetadata?.fields.permissions))
+        && !holdsPermission(record, "write")) ||
       (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
       (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
+    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
   );
   const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<FormValues>({
@@ -355,7 +377,7 @@ export function useFormViewSave({
         : { values: formValues, errors: {} };
     },
   });
-  const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setValue } = form;
+  const { reset, resetDefaultValues, clearErrors, getFieldState, setValue } = form;
   const history = useFormHistory(form, { readOnly: formReadOnly });
   const { reset: resetHistory, start: startHistory, commit: commitHistory } = history;
   const activeFieldInteractions = React.useRef(new Set<string>());
@@ -388,7 +410,9 @@ export function useFormViewSave({
   }, [form, linesActive, linesField, reset, resetDefaultValues, resetHistory, setValue]);
   const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
-  React.useEffect(() => { syncRecordValues(values); }, [lineDraftDirty, syncRecordValues, values]);
+  React.useEffect(() => {
+    syncRecordValues(values);
+  }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveError = form.formState.errors.root?.server?.message ?? null;
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
@@ -399,6 +423,7 @@ export function useFormViewSave({
       return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
         baselineRecord: editBasisRecordRef.current, lines,
+        clientCreationKey: creationKey.current,
         values: submitted, baselineValues: baseline,
       });
     },
@@ -421,32 +446,67 @@ export function useFormViewSave({
 
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
-      if (submitOwner) return customSubmit.mutateAsync({
-        data,
-        lines,
-        submitted,
-        baseline: (form.formState.defaultValues ?? {}) as FormValues,
-      });
-      if (!isCreate && lines && lines.hasChanges && id != null && saveOperation.target !== null) {
-        const saved = await resourceSave.save({
-          pk: id,
-          patch: data,
-          lines: lines.payload,
-        });
-        if (saved) await invalidateResource();
-        return savedFormSubmitResult(saved, t("form.genericSaveError"));
+      try {
+        if (isCreate && (submitOwner || dataResource?.createArguments?.some(({ name }) => name === "client_creation_key"))) {
+          creationKey.current ??= createClientKey("create");
+        }
+        let result: FormSubmitResult<Row | FormSubmitAcknowledgement>;
+        if (submitOwner) {
+          result = await customSubmit.mutateAsync({
+            data,
+            lines,
+            submitted,
+            baseline: (form.formState.defaultValues ?? {}) as FormValues,
+          });
+        } else {
+          const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
+          const rootArguments: MutationRootArguments = {};
+          if (!isCreate && (useSave ? saveRevision : updateRevision)) {
+            const revision = editBasisRecordRef.current?.revision;
+            if (typeof revision !== "number" || !Number.isInteger(revision)) {
+              throw new Error(t("form.revisionUnavailable"));
+            }
+            rootArguments.expected_revision = revision;
+          }
+          if (isCreate && creationKey.current) {
+            rootArguments.client_creation_key = creationKey.current;
+          }
+          let saved: Row | null;
+          if (useSave) {
+            saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
+            if (saved) await invalidateResource();
+          } else {
+            const mutationMeta = Object.keys(rootArguments).length
+              ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
+            const response = isCreate
+              ? await create.mutateAsync({
+                  ...mutationMeta,
+                  values: lines?.hasChanges && linesField
+                    ? { ...data, [linesField]: { data: lines.payload } }
+                    : data,
+                })
+              : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
+            saved = response?.data ?? null;
+          }
+          result = savedFormSubmitResult(saved, t("form.genericSaveError"));
+        }
+        if (isCreate && result.status === "ok") creationKey.current = null;
+        return result;
+      } catch (error) {
+        if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
+          creationKey.current = null;
+        }
+        throw error;
       }
-      const response = isCreate
-        ? await create.mutateAsync({
-            values: lines?.hasChanges && linesField
-              ? { ...data, [linesField]: { data: lines.payload } }
-              : data,
-          })
-        : await update.mutateAsync({ id: id as BaseKey, values: data });
-      return savedFormSubmitResult(response?.data, t("form.genericSaveError"));
     },
     [
       customSubmit.mutateAsync,
+      dataResource,
+      mutationFields,
+      updateRevision,
+      saveRevision,
+      form.formState.defaultValues,
+      t,
       create.mutateAsync,
       update.mutateAsync,
       id,
@@ -457,7 +517,6 @@ export function useFormViewSave({
       resourceSave,
       saveOperation.target,
       submitOwner,
-      t,
     ],
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
@@ -568,7 +627,7 @@ export function useFormViewSave({
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
-      if (submittingRef.current) return;
+      if (submittingRef.current || previewBlockedRef.current) return;
       clearErrors();
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
@@ -636,6 +695,7 @@ export function useFormViewSave({
       formFields,
       formReadOnly,
       isCreate,
+      previewBlockedRef,
       commitSavedRecord,
       createSeedNames,
       linesActive,
@@ -659,6 +719,7 @@ export function useFormViewSave({
   const submitForm = form.handleSubmit(submitValues);
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {
+      if (previewBlockedRef.current) return null;
       if (id == null) throw new Error("No open record to update.");
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
@@ -685,6 +746,7 @@ export function useFormViewSave({
   const afterFieldChange = React.useCallback(
     (field: FieldDescriptor, value: unknown, scope = ""): void => {
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
+      userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
       if (isCreate || !field.createOnly) {
         const seeds = field.prefill?.(value);
@@ -695,10 +757,14 @@ export function useFormViewSave({
             if (
               field.prefillPreserveDirty &&
               !replacements.has(name) &&
-              getFieldState(target).isDirty
+              (userEditedFieldsRef.current.has(target) || (
+                getFieldState(target).isDirty &&
+                replaceEqualDeep(prefillSeedsRef.current.get(target), form.getValues(target)) !== prefillSeedsRef.current.get(target)
+              ))
             ) continue;
             if (field.prefillPreserveDirty && !replacements.has(name)) {
-              resetField(target, { defaultValue: seed });
+              setValue(target, seed, { shouldDirty: false, shouldTouch: true });
+              prefillSeedsRef.current.set(target, seed);
               continue;
             }
             setValue(target, seed, {
@@ -723,15 +789,17 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, resetField, setValue],
+    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
-      formReadOnly || Boolean(field.readOnly),
-    [formReadOnly],
+      formReadOnly || previewBlocked || Boolean(field.readOnly),
+    [formReadOnly, previewBlocked],
   );
   const discardChanges = React.useCallback(() => {
     if (isCreate) localAcknowledgementRef.current = null;
+    prefillSeedsRef.current.clear();
+    userEditedFieldsRef.current.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
     activeFieldInteractions.current.clear();

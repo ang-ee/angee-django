@@ -30,6 +30,8 @@ export interface RecordChromeContext {
   record: Row | null;
   /** Whether the owning form is read-only. */
   formReadOnly: boolean;
+  /** Dirty or pending saved form; independent record verbs must wait. */
+  actionsBlocked?: boolean;
 }
 
 const binding = makeContext<RecordChromeContext>("RecordChromeContext");

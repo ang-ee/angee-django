@@ -305,6 +305,11 @@ test("normalized action outcomes retain their transport-owned validation map", (
   expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit({ fieldErrors: outcome.validationErrors, formErrors: ["Review"] }));
 });
 
+test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT"])("decodes %s as the shared form conflict", (code) => {
+  const error = { graphQLErrors: [{ message: "Record changed", extensions: { code } }] };
+  expect(formSubmitError(error)).toEqual({ status: "conflict", message: "Record changed" });
+});
+
 test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
   const { result } = renderHook(() => useForm<Record<string, unknown>>());
   expect(() => {

@@ -1,10 +1,12 @@
 import {
   ActiveGraphQLSchemaProvider,
   ModelMetadataProvider,
+  schemaFieldMetadataWithVocabulary,
   type SchemaFieldMetadata,
 } from "@angee/metadata";
 import { ActiveDataProviderNameProvider } from "@angee/refine";
 import { Button, ErrorBanner } from "@angee/ui";
+import { useAppRuntime } from "@angee/ui/runtime";
 import { useUiT } from "@angee/ui/i18n";
 import type { AuthProvider as RefineAuthProvider } from "@refinedev/core";
 import type { QueryClient } from "@tanstack/react-query";
@@ -15,7 +17,7 @@ import {
   redirect,
   useRouter,
 } from "@tanstack/react-router";
-import { createElement, type ReactNode } from "react";
+import { createElement, useMemo, type ReactNode } from "react";
 
 import type {
   BaseAddonRoute,
@@ -89,10 +91,12 @@ export function createAddonRouteNodes({
   routes,
   routesByName,
   layoutRoutes,
+  consoleConfinement,
 }: {
   routes: readonly BaseAddonRoute[];
   routesByName: ReadonlyMap<string, BaseAddonRoute>;
   layoutRoutes: ReadonlyMap<string, AnyRoute>;
+  consoleConfinement?: { allows: (route: BaseAddonRoute, pathname: string) => boolean; home: string };
 }): void {
   const routeNodes = new Map<string, AnyRoute>();
   const childrenByParent = new Map<AnyRoute, Array<NamedRouteNode>>();
@@ -111,10 +115,18 @@ export function createAddonRouteNodes({
     const parentNode = parentManifestRoute
       ? buildRoute(parentManifestRoute)
       : layoutRouteFor(route, layoutRoutes);
+    let ancestor = route;
+    while (ancestor.parent) {
+      const parent = routesByName.get(ancestor.parent);
+      if (!parent) break;
+      ancestor = parent;
+    }
+    const confined = consoleConfinement && (ancestor.layout ?? "console") === "console";
     const node = createAddonRouteNode(
       route,
       parentNode,
       parentManifestRoute,
+      confined ? consoleConfinement : undefined,
     );
     routeNodes.set(route.name, node);
     if (route.indexComponent) {
@@ -174,6 +186,10 @@ function RefineLayoutRoute({
   const Chrome = layout?.chrome ?? PassthroughChrome;
   const schemaName = layout?.schema ?? defaultSchema;
   const schema = schemas[schemaName];
+  const { vocabulary } = useAppRuntime();
+  const metadata = useMemo(() => schema
+    ? schemaFieldMetadataWithVocabulary(schema.fieldMetadata, vocabulary.resources)
+    : undefined, [schema, vocabulary]);
   if (!schema) {
     const known = Object.keys(schemas).join(", ") || "none";
     throw new Error(
@@ -189,7 +205,7 @@ function RefineLayoutRoute({
   return (
     <ActiveGraphQLSchemaProvider schema={schemaName}>
       <ActiveDataProviderNameProvider name={schemaName}>
-        <ModelMetadataProvider metadata={schema.fieldMetadata}>
+        <ModelMetadataProvider metadata={metadata}>
           {providers.reduceRight<ReactNode>(
             (children, provider) => createElement(provider.component, { key: provider.id, children }),
             body,
@@ -282,10 +298,16 @@ function createAddonRouteNode(
   route: BaseAddonRoute,
   parentNode: AnyRoute,
   parentManifestRoute: BaseAddonRoute | undefined,
+  confinement?: { allows: (route: BaseAddonRoute, pathname: string) => boolean; home: string },
 ): AnyRoute {
   return createRoute({
     getParentRoute: () => parentNode,
     path: routePathUnderParent(route, parentManifestRoute),
+    ...(confinement ? { beforeLoad: ({ location }) => {
+      if (!confinement.allows(route, location.pathname)) {
+        throw redirect({ to: confinement.home, replace: true });
+      }
+    } } : {}),
     ...(route.component ? { component: route.component } : {}),
   });
 }

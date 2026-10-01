@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useFieldArray, type Control } from "react-hook-form";
 import type { ComponentProps } from "react";
-import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
@@ -54,6 +54,8 @@ const { Provider, clearClients } = createUiTestProviders({
 afterEach(() => { cleanup(); clearClients(); });
 
 async function fixture(options: {
+  resourceMetadata?: DataResourceMetadata;
+  revision?: number;
   submit?: FormSubmit;
   lines?: readonly Row[];
   isCreate?: boolean;
@@ -63,8 +65,8 @@ async function fixture(options: {
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
 } = {}) {
   const seedLines = options.lines ?? initialLines;
-  const activeResource = options.publicView ? renderedResource : resource;
-  let record: Row = { id: "doc-1", title: "Original", lines: seedLines };
+  const activeResource = options.resourceMetadata ?? (options.publicView ? renderedResource : resource);
+  let record: Row = { id: "doc-1", title: "Original", lines: seedLines, revision: options.revision };
   const getOne = vi.fn(async () => ({ data: record }));
   const submit = vi.fn<FormSubmit>(options.submit ?? (async () => formSubmitError("No record returned.")));
   const update = vi.fn(async ({ variables }: { variables: Row }) => {
@@ -166,8 +168,8 @@ test("new documents render Add line and create their draft lines in one native n
   expect(f.provider.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
   expect(f.getOne).not.toHaveBeenCalled();
-  await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
-  expect(f.surface().form.getValues("lines")).toEqual(saved.lines);
+  await waitFor(() => expect(f.surface().form.getValues("lines")).toEqual(saved.lines));
+  expect(f.surface().formIsDirty).toBe(false);
 });
 
 test("seeds rendered document lines without a reseed loop", async () => {
@@ -196,6 +198,29 @@ test("routes a dirty-lines save through the resource save mutation", async () =>
   }));
   expect(f.update).not.toHaveBeenCalled();
   await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
+});
+
+test.each([true, false])("line saves use only their own revision advertisement (save: %s)", async (saveRevision) => {
+  const argumentsList = [{ name: "expected_revision", type: "Int" }];
+  const f = await fixture({
+    publicView: true,
+    revision: saveRevision ? 3 : undefined,
+    resourceMetadata: {
+      ...renderedResource,
+      fields: [...(renderedResource.fields ?? []), {
+        ...lineField("revision", "Int"), creatable: false, updatable: false,
+      }],
+      updateArguments: saveRevision ? [] : argumentsList,
+      saveArguments: saveRevision ? argumentsList : [],
+    },
+  });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  const payload = f.custom.mock.calls[0]?.[0].payload;
+  if (saveRevision) expect(payload).toHaveProperty("expected_revision", 3);
+  else expect(payload).not.toHaveProperty("expected_revision");
+  expect(f.update).not.toHaveBeenCalled();
 });
 
 test("a rendered new line with untouched numeric cells saves without those keys", async () => {

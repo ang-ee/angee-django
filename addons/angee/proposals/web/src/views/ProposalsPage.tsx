@@ -10,13 +10,16 @@ import {
   SettingsSection,
   SettingsShell,
   useRuntimeAuth,
+  useEnumOptions,
   type RecordPanelContext,
   type RecordTabDescriptor,
 } from "@angee/ui";
 import * as React from "react";
 
 import { useProposalsT } from "../i18n";
-import { useProposalFormDeclaration } from "../proposal-form";
+import { ANSWER_VISIBILITY } from "../documents";
+import { useAnswerActions } from "../answer-actions";
+import { useProposalFormDeclaration, writeEnumOptions } from "../proposal-form";
 import {
   ANSWER_MODEL,
   PROPOSAL_MODEL,
@@ -68,6 +71,9 @@ export function ProposalsPage(): React.ReactElement {
 
 function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useProposalsT();
+  const actions = useAnswerActions();
+  const visibilityOptions = writeEnumOptions(useEnumOptions(ANSWER_MODEL, "visibility"));
+  const actionVisibilityOptions = useEnumOptions(ANSWER_MODEL, "visibility", { casing: "upper" });
   return (
     <DrawerResourceList
       resource={ANSWER_MODEL}
@@ -79,9 +85,16 @@ function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElem
         <Column field="body" widget="markdown.preview" />
         <Column field="updated_at" header={t("common.updatedAt")} />
       </List>
-      <Form resource={ANSWER_MODEL}>
+      <Form resource={ANSWER_MODEL} actions={actions}>
+        <Field name="permissions" hidden readOnly />
+        <Field name="revision" hidden readOnly />
         <Field name="proposal" readOnly />
-        <Field name="topic" createOnly />
+        <Field name="topic" title createOnly />
+        <Field name="allowed_visibility" hidden readOnly />
+        <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
+          visibilityAction={{ document: ANSWER_VISIBILITY, resultField: "set_proposal_answer_visibility",
+            idArgument: "answer", revisionArgument: "revision", options: actionVisibilityOptions }} />
+        <Field name="shared_with_responders" readOnly />
         <Field name="body" widget="markdown.editor" body />
       </Form>
     </DrawerResourceList>

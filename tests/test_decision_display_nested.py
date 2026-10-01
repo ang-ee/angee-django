@@ -17,7 +17,7 @@ from tests.test_workflows_review_graphql import schema as schema
 
 
 @pytest.fixture
-def nested_reviews(execution, register_step, workflow_permissions):
+def nested_reviews(execution, register_step, composed_permissions):
     """Reach evidence and supersession only through real review admission."""
     admin, _sent = execution
     owner, operator, assignee = (create_user(name) for name in (

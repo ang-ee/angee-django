@@ -5,6 +5,7 @@ export type ComparisonRow =
   | { id: string; kind: "fact"; field: ComparisonFactField };
 
 export type ComparisonFactField =
+  | "statement"
   | "cost"
   | "staffing"
   | "timeframe_start"
@@ -12,7 +13,8 @@ export type ComparisonFactField =
   | "confidence"
   | "valid_until";
 
-const FACT_ROWS: readonly ComparisonRow[] = [
+const FACT_ROWS: readonly Extract<ComparisonRow, { kind: "fact" }>[] = [
+  { id: "fact:statement", kind: "fact", field: "statement" },
   { id: "fact:cost", kind: "fact", field: "cost" },
   { id: "fact:staffing", kind: "fact", field: "staffing" },
   { id: "fact:timeframe_start", kind: "fact", field: "timeframe_start" },
@@ -24,6 +26,7 @@ const FACT_ROWS: readonly ComparisonRow[] = [
 /** Topic-first comparison rows, with deterministic sort-order/key tie breaking. */
 export function comparisonRows(
   topics: readonly ComparisonTopic[],
+  facts?: readonly ComparisonFactField[],
 ): readonly ComparisonRow[] {
   const ordered = [...topics].sort(
     (left, right) =>
@@ -39,7 +42,7 @@ export function comparisonRows(
         topic,
       }),
     ),
-    ...FACT_ROWS,
+    ...FACT_ROWS.filter((row) => facts?.includes(row.field)),
   ];
 }
 
@@ -61,15 +64,18 @@ export function isEmptyComparisonValue(value: unknown): boolean {
   return value == null || (typeof value === "string" && value.trim() === "");
 }
 
-export function proposalColumnLabel(proposal: ComparisonProposal): string {
-  const party = String(proposal.party?.display_name ?? "").trim();
-  if (party) return party;
+export function proposalColumnLabel(proposal: ComparisonProposal, fallback = ""): string {
   const responder = responderLabel(proposal.responder);
-  return responder || proposal.id;
+  if (responder) return responder;
+  const party = String(proposal.party?.display_name ?? "").trim();
+  return party || fallback;
+}
+
+export function proposalIsOwn(proposal: ComparisonProposal, viewerId: string | undefined): boolean {
+  return Boolean(viewerId && typeof proposal.responder === "object" && proposal.responder?.id === viewerId);
 }
 
 function responderLabel(value: unknown): string {
-  if (typeof value === "string") return value.trim();
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   return String((value as { display_name?: unknown }).display_name ?? "").trim();
 }

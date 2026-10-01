@@ -96,6 +96,17 @@ interface DynamicI18nKeyFamily {
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("layoutGraph", "@angee/ui", "src/views/graph-layout.ts"),
   frameworkCriticalExport("FilterClauseEditor", "@angee/ui", "src/toolbars/FilterClauseEditor.tsx"),
+  frameworkCriticalExport("schemaFieldMetadataWithVocabulary", "@angee/metadata", "src/artifact.ts"),
+  frameworkCriticalExport("validateResourceViewPreset", "@angee/ui", "src/views/resource/model/favorites.ts"),
+  frameworkCriticalExport("RecordActionBar", "@angee/ui", "src/views/form/RecordActionBar.tsx"),
+  frameworkCriticalExport("VisibilityControl", "@angee/ui", "src/widgets/visibility.tsx"),
+  frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),
+  frameworkCriticalExport("DocumentTitle", "@angee/ui", "src/chrome/DocumentTitle.tsx"),
+  frameworkCriticalExport("GanttView", "@angee/ui", "src/views/gantt/GanttView.tsx"),
+  frameworkCriticalExport("useRuntimeViewAs", "@angee/ui", "src/runtime/runtime.ts"),
+  frameworkCriticalExport("ViewAsPicker", "@angee/ui", "src/chrome/ViewAs.tsx"),
+  frameworkCriticalExport("ViewAsBanner", "@angee/ui", "src/chrome/ViewAs.tsx"),
+  frameworkCriticalExport("viewAsAuth", "@angee/refine", "src/transport-auth.ts"),
   frameworkCriticalExport("StatusToneMap", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("statusTone", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("useStatusTone", "@angee/ui", "src/widgets/use-status-tone.ts"),
@@ -322,6 +333,37 @@ describe("React architecture guardrails", () => {
       expect(findCycles(edges)).toEqual([]);
     },
   );
+
+  test(
+    "addon manifests keep lazy route modules out of the eager import graph",
+    () => {
+      const manifests = addonPackageRoots().flatMap((pkg) =>
+        ["index.ts", "index.tsx"]
+          .map((name) => join(pkg.root, "src", name))
+          .filter((file) => existsSync(file)),
+      );
+      expect(manifests.flatMap((file) => lazyRouteImportViolations(
+        file,
+        readFileSync(file, "utf8"),
+      ))).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
+
+  test("lazy route import guard detects runtime imports but ignores type imports", () => {
+    const file = join(MONOREPO_ROOT, "addons", "example", "web", "src", "index.tsx");
+    expect(lazyRouteImportViolations(file, `
+      import type { PageProps } from "./views/Page";
+      import { form } from "./views/../views/Page";
+      import { extra } from "./views/Page.tsx";
+      export { usePage } from "./views/Page";
+      const route = lazyRouteComponent(() => import("./views/Page"), "Page");
+    `)).toEqual([
+      "addons/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
+      "addons/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
+      "addons/example/web/src/index.tsx imports ./views/Page and loads it lazily",
+    ]);
+  });
 
   test("addon cycle detection reports a seeded violation", () => {
     expect(findCycles(new Map([
@@ -824,6 +866,56 @@ function consumedIdentifiers(source: ts.SourceFile): Set<string> {
   };
   visit(source);
   return consumed;
+}
+
+function lazyRouteImportViolations(file: string, text: string): string[] {
+  const source = ts.createSourceFile(
+    file,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const eager: { specifier: string; target: string }[] = [];
+  const lazy = new Set<string>();
+  const target = (specifier: string): string =>
+    ts.resolveModuleName(
+      specifier,
+      file,
+      { moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true },
+      ts.sys,
+    ).resolvedModule?.resolvedFileName
+    ?? resolve(dirname(file), specifier).replace(/\.(?:tsx?|jsx?)$/, "");
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const named = clause?.namedBindings;
+      const typesOnly = clause?.isTypeOnly || (
+        !clause?.name && named && ts.isNamedImports(named)
+        && named.elements.length > 0 && named.elements.every((entry) => entry.isTypeOnly)
+      );
+      if (!typesOnly && node.moduleSpecifier.text.startsWith(".")) {
+        eager.push({ specifier: node.moduleSpecifier.text, target: target(node.moduleSpecifier.text) });
+      }
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const typesOnly = node.isTypeOnly || (
+        node.exportClause && ts.isNamedExports(node.exportClause)
+        && node.exportClause.elements.length > 0
+        && node.exportClause.elements.every((entry) => entry.isTypeOnly)
+      );
+      if (!typesOnly && node.moduleSpecifier.text.startsWith(".")) {
+        eager.push({ specifier: node.moduleSpecifier.text, target: target(node.moduleSpecifier.text) });
+      }
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const specifier = node.arguments[0];
+      if (specifier && ts.isStringLiteralLike(specifier)) lazy.add(target(specifier.text));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return eager
+    .filter(({ target: imported }) => lazy.has(imported))
+    .map(({ specifier }) => `${workspaceRelative(file)} imports ${specifier} and loads it lazily`);
 }
 
 function relativeImportEscapes(packageRootPath: string, file: string, specifier: string): boolean {

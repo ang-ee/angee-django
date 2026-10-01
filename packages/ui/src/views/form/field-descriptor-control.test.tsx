@@ -9,6 +9,16 @@ import { defaultWidgets, type WidgetFocusTarget, type WidgetRenderProps } from "
 import { FieldDescriptorControl } from "./field-descriptor-control";
 
 describe("FieldDescriptorControl", () => {
+  test("passes the record container width and fill request to the status widget", () => {
+    const renderStatus = vi.fn((props: WidgetRenderProps) =>
+      <output>{String(props.field?.containerWidth)}:{String(props.field?.fill)}</output>);
+    render(<AppRuntimeProvider runtime={{ widgets: { "test.phase": { read: renderStatus } } }}>
+      <FieldDescriptorControl field={{ name: "stage", widget: "test.phase", fill: true, containerWidth: 640 }} value="current"
+        readOnly />
+    </AppRuntimeProvider>);
+    expect(screen.getByText("640:true")).toBeTruthy();
+  });
+
   test("keeps the fallback text control mounted while its value changes", () => {
     function Harness() {
       const [value, setValue] = useState("");

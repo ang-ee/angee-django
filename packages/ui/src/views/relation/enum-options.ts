@@ -19,9 +19,9 @@ const EMPTY_IMPL_PREFILL_RESET: Readonly<Record<string, unknown>> = {};
  * An enum reads as the UPPERCASE member name but its create/patch input is a
  * lowercase `String` value, so a bare metadata-driven select submits the member
  * name and the input rejects it. Lowercase is the default; authored actions that
- * accept a GraphQL enum select `casing: "upper"`. Pair CRUD options with a `createOnly` field so
- * the read casing never round-trips through the select (see the enum read/write
- * pitfall in docs/guidelines.md). The label is the SDL description where
+ * accept a GraphQL enum select `casing: "upper"`. Read-side labels reconcile
+ * through `canonicalOptionValue`; CRUD submissions retain lowercase values.
+ * The label is the SDL description where
  * authored, otherwise the humanized member name (`enumValueLabel`).
  */
 export function useEnumOptions(
@@ -38,14 +38,6 @@ export function useEnumOptions(
       })),
     [metadata, field, casing],
   );
-}
-
-/** Display a read-side enum value through its resource metadata. */
-export function useEnumValueLabel(resource: string): (field: string, value: string | null | undefined) => string {
-  const metadata = useModelMetadata(resource);
-  return React.useCallback((field, value) => value
-    ? enumValueLabel(metadata?.fields[field]?.values?.find((entry) => entry.value === value) ?? { value })
-    : "", [metadata]);
 }
 
 export function useImplChoices(

@@ -75,16 +75,20 @@ function NumberRead({
   );
 }
 
+function NumberCell({ value }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
+  return <span className="tabular-nums">{formatNumber(value) || "—"}</span>;
+}
+
 export const integerWidget = {
   edit: IntegerEdit,
   read: NumberRead,
-  cell: NumberRead,
+  cell: NumberCell,
 } satisfies WidgetDefinition<NumericWidgetValue>;
 
 export const floatWidget = {
   edit: FloatEdit,
   read: NumberRead,
-  cell: NumberRead,
+  cell: NumberCell,
 } satisfies WidgetDefinition<NumericWidgetValue>;
 
 function normaliseNumber(value: NumericWidgetValue | undefined): number | null {

@@ -29,8 +29,8 @@ def upload(request: HttpRequest) -> JsonResponse:
     ``Authorization: Bearer``) binds the PUT to a single draft row and is
     unforgeable + single-use — the CSRF property this endpoint relies on in
     place of the cookie token. Identity is still the request actor:
-    :meth:`File.receive_bytes` requires an authenticated uploader (the row's
-    ``created_by``) or a drive writer, so the request must carry the session
+    :meth:`File.receive_bytes` requires an authenticated file writer,
+    so the request must carry the session
     cookie (or a credential the actor middleware resolves).
     """
 
@@ -53,9 +53,10 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
 
     The mirror of :func:`upload`: the token (``?token=``, the
     ``X-Angee-Download-Token`` header, or ``Authorization: Bearer``) is the
-    capability — minted on the file's ``url`` field for a reader, unforgeable,
-    and TTL-bound — so no session is needed. The ``filename`` in the path is the
-    save-as name only; the authoritative name and content type come from the row.
+    bearer capability. The manager checks its signature, expiry and the issuing
+    actor's current read permission before serving bytes or answering 304; no
+    request credentials are needed. The ``filename`` in the path is the save-as
+    name only; the authoritative name and content type come from the row.
     """
 
     del filename  # cosmetic save-as name; the token identifies the file

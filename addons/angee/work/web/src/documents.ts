@@ -1,5 +1,26 @@
 import { graphql } from "@angee/gql/console";
 
+export const ProjectManagerRosterDocument = graphql(`
+  query WorkProjectManagers($project: ID!) {
+    project_manager_roster(project: $project) {
+      offered
+      people { subject label seat_id removable }
+    }
+  }
+`);
+
+export const AdmitProjectManagerDocument = graphql(`
+  mutation WorkAdmitProjectManager($project: ID!, $user: ID!) {
+    admit_project_manager(project: $project, user: $user) { ok message id code validation_errors }
+  }
+`);
+
+export const RemoveProjectManagerDocument = graphql(`
+  mutation WorkRemoveProjectManager($project: ID!, $seat: ID!) {
+    remove_project_manager(project: $project, seat: $seat) { ok message id code validation_errors }
+  }
+`);
+
 export const WorkQueueContextDocument = graphql(`
   query WorkQueueContext($id: String!) {
     work_queues_by_pk(id: $id) {
@@ -15,6 +36,19 @@ export const WorkQueueContextDocument = graphql(`
       limit: 1
     ) {
       id
+    }
+  }
+`);
+
+export const WorkTaskContextDocument = graphql(`
+  query WorkTaskContext($id: String!) {
+    project_tasks_by_pk(id: $id) {
+      id
+      stage {
+        id
+        category
+        rule_owned
+      }
     }
   }
 `);
@@ -41,6 +75,15 @@ export const AcceptTaskDocument = graphql(`
       message
       id
       validation_errors
+    }
+  }
+`);
+
+/** Required decline reason keeps this verb authored rather than generated. */
+export const DeclineTaskDocument = graphql(`
+  mutation WorkDeclineTask($task: ID!, $reason: TaskDroppedReason!, $expected_revision: Int) {
+    decline_task(task: $task, reason: $reason, expected_revision: $expected_revision) {
+      ok message id validation_errors
     }
   }
 `);

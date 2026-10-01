@@ -34,7 +34,9 @@ import {
   type RuntimeUserPreferences,
   type RuntimeUserPreferencesPatch,
   type RuntimeUserPreferencesState,
+  type RuntimeViewAs,
 } from "@angee/ui/runtime";
+import { AngeeViewAsIdentityDocument } from "./documents.console";
 import {
   AngeeCurrentUserDocument,
   AngeeLoginDocument,
@@ -67,6 +69,13 @@ export interface AuthState {
   user: AuthUser | null;
   status: "resolving" | "anonymous" | "authenticated";
   hasRole: (role: string) => boolean;
+  viewAs?: RuntimeViewAs;
+}
+
+/** The native Refine identity entry also carries IAM's preview projection. */
+export interface AuthIdentity extends AuthUser {
+  realUser?: AuthUser | null;
+  viewablePeople?: RuntimeViewAs["viewablePeople"];
 }
 
 export type CurrentUserPayload = Omit<
@@ -92,10 +101,13 @@ export interface AngeeAuthProviderOptions extends AngeeHasuraClientOptions {
   loginPath?: string;
   onAuthChange?: () => void;
   queryClient?: QueryClient;
+  /** Console IAM owns real_user and viewable_people; public IAM owns login. */
+  identityClient?: AngeeHasuraClientOptions;
 }
 
 export interface UseRuntimeAuthStateResult {
   auth: AuthState;
+  identity: AuthIdentity | null;
   fetching: boolean;
   error: Error | null;
 }
@@ -142,22 +154,32 @@ export function createAngeeAuthProvider(
 ): RefineAuthProvider {
   const client = createAngeeGraphQLClient(options);
   const request = client.request.bind(client) as GraphQLRequest;
-  return createAngeeAuthProviderFromRequest(request, options);
+  const identityClient = options.identityClient ? createAngeeGraphQLClient(options.identityClient) : null;
+  return createAngeeAuthProviderFromRequest(request, {
+    ...options,
+    identityRequest: identityClient?.request.bind(identityClient) as GraphQLRequest | undefined,
+  });
 }
 
 export function createAngeeAuthProviderFromRequest(
   request: GraphQLRequest,
-  options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange" | "queryClient"> = {},
+  options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange" | "queryClient"> & {
+    identityRequest?: GraphQLRequest;
+  } = {},
 ): RefineAuthProvider {
   const loginPath = options.loginPath ?? DEFAULT_LOGIN_PATH;
   const currentUser = async (): Promise<CurrentUserPayload | null> => {
     const data = await request(AngeeCurrentUserDocument);
     return currentUserPayload(data.current_user);
   };
+  const sharedIdentity = async (): Promise<AuthIdentity | null> => {
+    const query = identityQueryOptions(provider);
+    return options.queryClient ? options.queryClient.fetchQuery(query) : query.queryFn();
+  };
   const provider: RefineAuthProvider = {
     async check() {
       try {
-        const user = await currentUser();
+        const user = await sharedIdentity();
         return user
           ? { authenticated: true }
           : { authenticated: false, redirectTo: loginPath };
@@ -177,11 +199,20 @@ export function createAngeeAuthProviderFromRequest(
     },
     async getIdentity() {
       const payload = await currentUser();
-      return currentUserToAuthState(payload).user;
+      if (!payload || !options.identityRequest) return currentUserToAuthState(payload).user;
+      // viewable_people requires a session: never send the console read for an
+      // anonymous login page. Both reads live in Refine's one identity query.
+      const identity = await options.identityRequest(AngeeViewAsIdentityDocument);
+      const user = currentUserToAuthState(currentUserPayload(identity.current_user)).user;
+      return user ? {
+        ...user,
+        realUser: currentUserToAuthState(currentUserPayload(identity.real_user)).user,
+        viewablePeople: identity.viewable_people,
+      } satisfies AuthIdentity : null;
     },
     async getPermissions() {
-      const payload = await currentUser();
-      return payload?.roleRefs ?? [];
+      const identity = await sharedIdentity();
+      return identity?.roles ?? [];
     },
     async login(params) {
       try {
@@ -242,8 +273,10 @@ export function createAngeeAuthProviderFromRequest(
  * react-query entry keyed `keys().auth().action("identity")`; the route gate
  * (`@angee/app` `beforeLoad`) reaches that SAME entry through
  * `queryClient.ensureQueryData(identityQueryOptions(authProvider))`, so the gate
- * and `useRuntimeAuthState` below share ONE `current_user` fetch instead of
- * each issuing their own. `staleTime: Infinity` keeps warm navigations from
+ * `useRuntimeAuthState`, `check`, and `getPermissions` share one
+ * session/preview identity query.
+ * Its public session read gates the console-only preview projection.
+ * `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout) refreshes
  * the entry, and a mid-session server expiry still surfaces at the data layer as
  * an unauthorized data response asks the authoritative Django `current_user`
@@ -260,14 +293,14 @@ const IDENTITY_QUERY_SETTINGS = {
 export function identityQueryOptions(authProvider: RefineAuthProvider) {
   return {
     queryKey: keys().auth().action("identity").get(),
-    queryFn: async (): Promise<AuthUser | null> =>
-      ((await authProvider.getIdentity?.()) ?? null) as AuthUser | null,
+    queryFn: async (): Promise<AuthIdentity | null> =>
+      ((await authProvider.getIdentity?.()) ?? null) as AuthIdentity | null,
     ...IDENTITY_QUERY_SETTINGS,
   };
 }
 
 export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
-  const identity = useGetIdentity<AuthUser | null>({
+  const identity = useGetIdentity<AuthIdentity | null>({
     queryOptions: IDENTITY_QUERY_SETTINGS,
   });
   const auth = useMemo(() => identity.data === undefined && identity.isFetching
@@ -275,6 +308,7 @@ export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
     : authStateFromUser(identity.data ?? null), [identity.data, identity.isFetching]);
   return {
     auth,
+    identity: identity.data ?? null,
     fetching: identity.isFetching,
     error: errorFromUnknownOrNull(identity.error),
   };
@@ -366,7 +400,10 @@ export function UserPreferencesProvider({
   children: ReactNode;
   dataProviderName?: string;
 }): ReactNode {
-  const { user } = useAuth();
+  const { user, viewAs } = useAuth();
+  const previewBlocked = Boolean(viewAs?.viewAs || viewAs?.pending);
+  const previewBlockedRef = useRef(previewBlocked);
+  previewBlockedRef.current = previewBlocked;
   const { updatePreferences } = useUpdatePreferences({ dataProviderName });
   const userId = user?.id ?? null;
   const serverPreferences = user?.preferences ?? EMPTY_PREFERENCES;
@@ -380,6 +417,7 @@ export function UserPreferencesProvider({
   const queue = useMemo<UserPreferencesPatchQueue>(
     () => createUserPreferencesPatchQueue({
       persist: async (next) => {
+        if (previewBlockedRef.current) return next;
         const saved = await updatePreferencesRef.current(next);
         return saved?.preferences ?? next;
       },
@@ -409,7 +447,7 @@ export function UserPreferencesProvider({
 
   const patchPreferences = useCallback(
     async (apply: RuntimeUserPreferencesPatch): Promise<void> => {
-      if (!userId) return;
+      if (!userId || previewBlockedRef.current) return;
       await queue.patch(apply);
     },
     [queue, userId],
@@ -427,7 +465,7 @@ export function UserPreferencesProvider({
   );
   return (
     <UserPreferencesContext.Provider value={value}>
-      {userId ? (
+      {userId && !previewBlocked ? (
         <UserPreferencesSubscription
           key={userId}
           userId={userId}

@@ -339,10 +339,11 @@ function ActivityItem({
             <h3 className="truncate text-13 font-medium text-fg">{activity.summary}</h3>
           </div>
           <p className={cn(textRoleVariants({ role: "caption" }), "pl-6")}>
-            {userDisplayName(activity.user, "")}
-            {activity.due_date ? ` · ${formatDate(activity.due_date)}` : ""}
-            {" · "}
-            {activityStateLabel(activity, t)}
+            {[
+              activity.user ? userDisplayName(activity.user, "") : "",
+              activity.due_date ? formatDate(activity.due_date) : "",
+              activityStateLabel(activity, t),
+            ].filter(Boolean).join(" · ")}
           </p>
         </div>
         {!closed ? (

@@ -1,8 +1,11 @@
 import { AUTH_LOGIN_METHOD_SLOT } from "@angee/app/auth";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { FORM_VIEW_RECORD_CHROME_SLOT, RESOURCE_VIEW_UTILITIES_SLOT, formViewSectionsSlot, type BaseMenuItem } from "@angee/ui";
+import { FORM_VIEW_RECORD_CHROME_SLOT, RESOURCE_VIEW_UTILITIES_SLOT, formViewSectionsSlot, formViewRecordActionsSlot, type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { createElement } from "react";
+
+import { IssuePasswordRecordAction } from "./password-actions";
+
 
 import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 import { enIamMessages } from "./i18n";
@@ -11,13 +14,15 @@ import { LOGIN_CALLBACK_PATH } from "./redirects";
 import { assignmentSubjectsWidget } from "./assignment-subject-widget";
 import { oidcLoginSection } from "./views/oidc-section";
 
+export { useIssuePasswordAction } from "./password-actions";
 export {
   IamLoginPage,
   IAM_LOGIN_BACKGROUND_IMAGE_URLS,
   type IamLoginPageProps,
 } from "./IamLoginPage";
 export { userDisplayName, type UserDisplayNameInput } from "./identity-labels";
-export { ShareAccessDialog, type ShareAccessDialogProps } from "./ShareAccess";
+export { ShareAccessCompact, ShareAccessDialog, ShareAccessRailGroup, useAccessRole, useAccessVisibility,
+  type AccessRoleOwnerProps, type AccessRoleState, type ShareAccessDialogProps } from "./ShareAccess";
 export {
   assignmentSubjectOptions,
   useAssignmentSubjects,
@@ -86,6 +91,8 @@ const iam = defineBaseAddon({
   menus: identityMenu,
   i18n: { iam: enIamMessages },
   slots: [
+    { slot: "access.direct", id: "iam.direct", content: null },
+    { ...formViewRecordActionsSlot("iam.User"), id: "iam.issue-password", recordActionPlacement: "menu", requiredFields: ["can_issue_password"], content: createElement(IssuePasswordRecordAction) },
     { slot: FORM_VIEW_RECORD_CHROME_SLOT, id: "iam.share-record", sequence: 20, content: createElement(ShareRecordChrome) },
     { slot: RESOURCE_VIEW_UTILITIES_SLOT, id: "iam.share-list", sequence: 20, content: createElement(ShareListChrome) },
     {

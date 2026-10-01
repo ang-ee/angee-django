@@ -270,7 +270,7 @@ test("an authored source groups through the complete custom catalog without pres
     filter: { title: { iContains: "document" } },
   }));
 
-  fireEvent.click(screen.getByLabelText("Filter and group"));
+  fireEvent.click(screen.getByLabelText("Group by"));
   expect(screen.queryByRole("button", { name: "Account" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
   const field = screen.getByLabelText("Group field");
@@ -297,7 +297,7 @@ test("an authored source groups through the complete custom catalog without pres
 test("an authored source keeps its complete filter catalog when shortcut inference is disabled", async () => {
   fixture(false);
   await screen.findByText("Activity all page 1");
-  fireEvent.click(screen.getByLabelText("Filter and group"));
+  fireEvent.click(screen.getByLabelText("Filter"));
   fireEvent.click(screen.getByRole("button", { name: "Add custom filter" }));
   const field = screen.getByLabelText("Filter field");
   fireEvent.click(field);

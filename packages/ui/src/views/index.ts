@@ -17,6 +17,8 @@ export { List, type ListComponent, type ListProps } from "./resource/List";
 export {
   ListView,
   type ListViewProps,
+  type BoardCardSpec,
+  type ListChrome,
   type CardActionContext,
   type ListEmptyAction,
   type ListEmptyContent,
@@ -52,6 +54,7 @@ export {
 } from "./resource/collection-source";
 export {
   defineRowAction,
+  useDescriptorRowActions,
   rowIdVariables,
   type AuthoredRowActionDeclaration,
   type PageRowActionDeclaration,
@@ -103,6 +106,7 @@ export {
   ActionFormDialog,
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
+export { RecordActionBar } from "./form/RecordActionBar";
 export { useWatch, type ResolverResult } from "react-hook-form";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
@@ -145,7 +149,6 @@ export {
 } from "./form/field-descriptor-control";
 export {
   useEnumOptions,
-  useEnumValueLabel,
   useImplCategory,
   useImplConfigFields,
   useImplChoices,
@@ -245,13 +248,20 @@ export {
 } from "./form/registered-form";
 export {
   FormView,
+  SectionHeading,
+  RecordRailGroup,
   acknowledgeFormSubmit,
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  FORM_VIEW_RAIL_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  formViewRailSlot,
   formViewRecordActionsSlot,
   formViewSectionsSlot,
   type FormViewProps,
+  type SectionHeadingProps,
+  type RecordRailField,
+  type RecordRailGroupProps,
   type FormSubmit,
   type FormSubmitAcknowledgement,
   type FormSubmitContext,
@@ -264,10 +274,12 @@ export {
   type RecordToolbarContext,
   type RecordTabDescriptor,
 } from "./form/FormView";
+export { type RecordActionDescriptor } from "./form/RecordActionBar";
 export {
   RecordChrome,
   RecordChromeProvider,
   useRecordChromeContext,
+  useRecordChromeContextMaybe,
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
 export {
@@ -302,6 +314,7 @@ export {
   DrawerResourceList,
   REFINE_CREATE_ID,
   type ResourceListProps,
+  type ListCreateAction,
   type ResourceRecordRenderContext,
   type ResourceListSplitLayout,
   type ResourceListCalendarSpec,
@@ -339,7 +352,6 @@ export {
   type UseDeleteWithPreviewResult,
 } from "./resource/resource-operations";
 export {
-  recordActionId,
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,
@@ -434,5 +446,12 @@ export type {
   TabProps,
 } from "./page";
 
-export { ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry } from "./access/ManageAccessDialog";
+export {
+  ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry,
+  type AccessPerson, type AccessRole, type AccessVisibility,
+} from "./access/ManageAccessDialog";
 export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
+
+export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";
+export { GanttLane, type GanttLaneDetails, type GanttLanePerson } from "./gantt/gantt-lane";
+export type { GanttViewSpec } from "./resource/resource-view-types";

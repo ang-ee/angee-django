@@ -53,6 +53,8 @@ export interface LinesSeed {
 export interface FormSectionModel {
   key: string;
   label?: ReactNode;
+  hint?: ReactNode;
+  audience?: ReactNode;
   icon?: ReactNode;
   badge?: ReactNode;
   columns?: number;
@@ -60,12 +62,15 @@ export interface FormSectionModel {
   defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
+  /** Projected record permission required to show this section. */
+  permission?: string;
   sequence?: number;
   order?: number;
 }
 
 export interface FormViewFieldLayout {
   titleField: FieldDescriptor | undefined;
+  titlePlacementField: FieldDescriptor | undefined;
   statusField: FieldDescriptor | undefined;
   bodyField: FieldDescriptor | undefined;
   gridFields: readonly FieldDescriptor[];
@@ -76,20 +81,26 @@ export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
   sequences: readonly (number | undefined)[] = [],
+  isCreate = false,
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
   const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
-    if (group.fields.length === 0) return [];
+    if (isCreate && group.savedOnly) return [];
+    if (group.fields.length === 0 && group.content === undefined) return [];
     for (const field of group.fields) groupedNames.add(field.name);
     return [
       {
         key: `group:${index}:${String(group.label ?? "")}`,
         label: group.label,
+        ...(group.hint !== undefined ? { hint: group.hint } : {}),
+        ...(group.audience !== undefined ? { audience: group.audience } : {}),
         columns: group.columns,
         collapsible: group.collapsible,
         defaultOpen: group.defaultOpen,
         fields: group.fields,
+        ...(group.content !== undefined ? { render: () => group.content } : {}),
+        ...(group.permission !== undefined ? { permission: group.permission } : {}),
         sequence: sequences[index],
         order: index,
       },
@@ -106,19 +117,22 @@ export function formViewFieldLayout(
   resolvedFields: readonly FieldDescriptor[],
   resolvedGroups: readonly GroupDescriptor[],
   metadata: ModelMetadata | null,
+  isCreate = false,
 ): FormViewFieldLayout {
   const titleField = titleFieldFor(formFields, metadata);
+  const titlePlacementField = isCreate ? undefined : formFields.find((field) => field.placement === "title");
   const statusField = formFields.find(
-    (field) => fieldWidgetId(field) === "statusbar" && !field.showWhen,
+    (field) => field.status && !field.showWhen,
   );
   const bodyField = bodyFieldFor(formFields, titleField, statusField);
   const excluded = new Set(
-    [titleField?.name, statusField?.name, bodyField?.name].filter(
+    [titleField?.name, titlePlacementField?.name, statusField?.name, bodyField?.name].filter(
       (name): name is string => name !== undefined,
     ),
   );
   return {
     titleField,
+    titlePlacementField,
     statusField,
     bodyField,
     gridFields: resolvedFields.filter((field) => !excluded.has(field.name)),

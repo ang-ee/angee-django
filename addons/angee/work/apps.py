@@ -12,7 +12,7 @@ class WorkConfig(AppConfig):
     name = "angee.work"
 
     def ready(self) -> None:
-        """Wire work's response to the upstream chatter activity seam."""
+        """Wire work's responses to upstream chatter and project lifecycle events."""
 
         super().ready()
         # App population imports AppConfig before models; defer signal wiring.

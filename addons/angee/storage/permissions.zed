@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 9
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -35,11 +35,11 @@ definition storage/backend {
     permission delete = admin->member + manager->effective_member
 }
 
-// `owner` is the creating user (field-backed by created_by). `editor` and
+// `owner` is transferable, separate from attribution. `editor` and
 // `viewer` are the per-drive grant surface; the wildcard subject lets one
 // stored tuple (e.g. editor@auth/user:*) open a drive to every user.
 definition storage/drive {
-    relation owner:   auth/user // rebac:field=created_by
+    relation owner:   auth/user // rebac:field=owner
     relation editor:  auth/user | auth/group#member | auth/user:*
     relation viewer:  auth/user | auth/group#member | auth/user:*
     relation admin:   angee/role // rebac:const=admin
@@ -55,6 +55,10 @@ definition storage/drive {
     permission create = admin->member + manager->effective_member
     permission read   = owner + editor + viewer + admin->member + manager->effective_member
     permission write  = owner + editor + admin->member + manager->effective_member
+    permission share  = owner + editor + admin->member + manager->effective_member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
+    permission write__owns_items = share
     permission delete = owner + admin->member + manager->effective_member
 }
 
@@ -73,7 +77,7 @@ definition storage/folder {
     permission delete = drive->write + owner + admin->member
 }
 
-// `owner` is the uploader (field-backed by created_by). `viewer` grants read
+// `owner` is independent of upload attribution. `viewer` grants read
 // reach for content-addressed dedup hits where another owner reuses the bytes.
 // No `create`
 // permission: rows enter through File.objects.draft, which gates on drive
@@ -81,18 +85,23 @@ definition storage/folder {
 definition storage/file {
     relation drive:  storage/drive // rebac:field=drive
     relation folder: storage/folder // rebac:field=folder
-    relation owner:  auth/user // rebac:field=created_by
+    relation inherited_drive: storage/drive // rebac:field={"path":"drive","filters":{"visibility":"inherited"}}
+    relation inherited_folder: storage/folder // rebac:field={"path":"folder","filters":{"visibility":"inherited"}}
+    relation owner:  auth/user // rebac:field=owner
     relation viewer: auth/user | auth/group#member | auth/user:*
     relation admin:  angee/role // rebac:const=admin
 
-    permission read   = drive->read + folder->read + owner + viewer + admin->member
-    permission write  = drive->write + folder->write + owner + admin->member
-    permission delete = owner + drive->write + admin->member
+    permission read   = inherited_drive->read + inherited_folder->read + owner + viewer + admin->member
+    permission write  = inherited_drive->write + inherited_folder->write + owner + admin->member
+    permission share  = inherited_drive->share + owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
+    permission delete = owner + inherited_drive->write + admin->member
 }
 
 // The attachment target is polymorphic (GenericForeignKey to any row), so no
-// single zed type can cover it; access rides entirely on the file parent.
-// Consumers needing target-side gating wrap their own attach call sites.
+// single zed type can cover it; existing-edge access rides on the file parent.
+// FileAttachmentManager.attach gates creation on target write and file read.
 definition storage/file_attachment {
     relation file:  storage/file // rebac:field=file
     relation admin: angee/role // rebac:const=admin

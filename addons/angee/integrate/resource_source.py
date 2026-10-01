@@ -22,7 +22,7 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from angee.base.exceptions import exception_text
+from angee.base.errors import exception_text
 from angee.integrate.http import HttpClient
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError

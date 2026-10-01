@@ -22,7 +22,7 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.actors import is_sudo
 
-from angee.base.exceptions import exception_text
+from angee.base.errors import exception_text
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.exceptions import RetryableDecisionError

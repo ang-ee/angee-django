@@ -30,6 +30,7 @@ from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
+from angee.base.actors import instance_actor
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
@@ -101,16 +102,26 @@ class AngeeQuerySet(
         """
 
         actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self.none()
+        readable = self.with_actor(actor).scoped() if actor is not None else self
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
         scalar = models.Subquery(readable.values(field)[:1])
+        if actor is None:
+            return models.Value(default, output_field=output_field or scalar.output_field)
         if default is None:
             return scalar
         return Coalesce(
             scalar,
             models.Value(default),
             output_field=output_field or scalar.output_field,
+        )
+
+    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression:
+        """Count a correlated actor-scoped row set, returning zero when empty."""
+
+        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
+        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
+            "_count", actor=actor, default=0, output_field=models.IntegerField(),
         )
 
     def keyset_page(
@@ -413,6 +424,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         permission = declaration_owner.record_access_permission(relation)
         self.require_access(permission)
+        self.validate_record_access_subject(relation, subject)
         write_relationships(
             [
                 RelationshipTuple(
@@ -496,16 +508,26 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return None
 
+    def validate_record_access_subject(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Validate the record's invariant before a grant, assignment, or admission.
+
+        Overrides call ``super()`` first and raise
+        :class:`angee.base.errors.RecordAccessSubjectRefused` to refuse a holder.
+        The default accepts every subject. This hook decides no visibility and
+        is never asked when revoking access or clearing ownership.
+        """
+
+        return None
+
     def require_access(self, permission: str, actor: Any = None) -> Any:
-        """Authorize and return the explicit, ambient, or pinned actor, in that order.
+        """Authorize and return the explicit, pinned, or ambient actor, in that order.
 
         The resolved requester is retained as the instance binding. Missing actors
         are denied in every strict mode unless an explicit sudo scope is active.
         A concrete requester always clears instance sudo and scopes the check.
         """
 
-        actor = actor if actor is not None else current_actor()
-        actor = actor if actor is not None else self.actor()
+        actor = actor or instance_actor(self)
         if actor is None:
             if self.is_sudo() or is_sudo():
                 return None
@@ -525,9 +547,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
         this does not authorize reading or writing model records.
         """
         return False
-
-    # Remove after downstream callers have migrated to the public owner.
-    _require_record_access = require_access
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:

@@ -32,6 +32,7 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
+from tests.conftest import installed_field_owners
 
 User = get_user_model()
 
@@ -280,7 +281,7 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
 
     # The composer/Runtime seam, driven directly (bare test settings skip the composer):
     # emit the merged zed, then repoint the owning app at it.
-    source_map = extension_source_map(app_configs)
+    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
     assert merged_schema_relpath("tests.scopedemo") in source_map
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)

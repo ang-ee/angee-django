@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -23,9 +23,11 @@ from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
+from angee.compose.model_composition import ModelComposition
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
+from angee.intake.models import Need as AbstractNeed
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
 from angee.integrate.models import ExternalAccount as AbstractExternalAccount
@@ -51,7 +53,9 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
-from angee.projects.models import DriveProjects, FolderProjects
+from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
+from angee.proposals.models import DriveProposalAccess, FileProposalAccess
+from angee.spaces.models import VaultSpace
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -68,11 +72,28 @@ from tests import (  # noqa: F401 -- register shared FK targets before native da
     extraction_models,
     messaging_models,
 )
+from tests.extcontrib.models import Role
 from tests.integrate_models import Integration
 from tests.messaging_models import Channel
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
+
+
+@pytest.fixture
+def activity_catalog(composed_tables: None) -> None:
+    """Declare the activity keys used by existing scheduling scenarios."""
+
+    del composed_tables
+    with system_context(reason="tests.messaging.activity_catalog"):
+        messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
+        messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
+
+
+def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
+    """Use the source composition's field ownership in installed-schema callers."""
+
+    return ModelComposition.discover(app_configs).field_gate_owners()
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
@@ -140,8 +161,10 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(RecordChangedOptIn, AbstractVault):
-    """Concrete knowledge vault used by source-addon tests."""
+class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
+    """Concrete knowledge vault carrying workflow, projects and spaces donors."""
+
+    rebac_grantable = AbstractVault.rebac_grantable
 
     @classmethod
     def record_changed_grant_targets(cls, trigger):
@@ -294,7 +317,7 @@ def make_integration(
         material = {"access_token": "token"} if kind == CredentialKind.OAUTH else {"api_key": "x"}
     user_model = get_user_model()
     with system_context(reason="test integrate integration setup"):
-        user = user_model.objects.create_user(username=f"{slug}-owner", email=f"{slug}@example.com")
+        user = user_model.objects.create_user(username=f"{slug}-owner", email=f"{slug}-owner@example.com")
         oauth_client = OAuthClient.objects.create(
             slug=slug,
             display_name=slug.title(),
@@ -458,8 +481,10 @@ class Backend(AbstractStorageBackend):
         rebac_resource_type = "storage/backend"
 
 
-class Drive(DriveProjects, AbstractDrive):
+class Drive(DriveProjects, DriveProposalAccess, AbstractDrive):
     """Concrete storage drive used by source-addon tests."""
+
+    rebac_grantable = AbstractDrive.rebac_grantable
 
     class Meta(AbstractDrive.Meta):
         """Django model options for the canonical test drive."""
@@ -493,8 +518,10 @@ class MimeType(AbstractMimeType):
         db_table = "test_storage_mimetype"
 
 
-class File(AbstractFile):
+class File(FileProposalAccess, AbstractFile):
     """Concrete storage file used by source-addon tests."""
+
+    rebac_grantable = AbstractFile.rebac_grantable
 
     class Meta(AbstractFile.Meta):
         """Django model options for the canonical test file."""
@@ -536,9 +563,31 @@ class StorageRole(AbstractStorageRole):
         rebac_resource_type = "storage/role"
 
 
+class ExtcontribRole(Role):
+    """Concrete tableless anchor for the source harness's extension example."""
+
+    class Meta(Role.Meta):
+        """Retain the example's REBAC namespace without creating a table."""
+
+        abstract = False
+        managed = False
+        app_label = "extcontrib"
+        rebac_resource_type = "extcontrib/role"
+
+
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 from tests import projects_models, proposals_models  # noqa: E402, F401
+
+
+class Need(AbstractNeed):
+    """Canonical intake edges required by the merged party/task permission graph."""
+
+    class Meta(AbstractNeed.Meta):
+        abstract = False
+        app_label = "intake"
+        db_table = "test_intake_need"
+        rebac_resource_type = "intake/need"
 
 
 def make_mount(

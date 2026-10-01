@@ -557,6 +557,9 @@
       "defaultMeasures": [],
       "createFields": [],
       "updateFields": [],
+      "createArguments": [],
+      "updateArguments": [],
+      "saveArguments": [],
       "requiredCreateFields": [],
       "revisionFields": [],
       "linesResource": null
@@ -1080,6 +1083,9 @@
       "defaultMeasures": [],
       "createFields": [],
       "updateFields": [],
+      "createArguments": [],
+      "updateArguments": [],
+      "saveArguments": [],
       "requiredCreateFields": [],
       "revisionFields": [],
       "linesResource": null

@@ -48,14 +48,13 @@ from angee.agents.models import (
     normalize_inference_usage,
 )
 from angee.agents.models import Agent as AbstractAgent
-from angee.agents.models import Skill as AbstractSkill
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
-from tests.agents_models import InferenceModel, InferenceProvider
+from tests.agents_models import InferenceModel, InferenceProvider, Skill
 from tests.conftest import make_integration
 from tests.test_integrate_vcs import (
     REPOS,
@@ -63,18 +62,6 @@ from tests.test_integrate_vcs import (
     Source,
     _vcs_bridge,
 )
-
-
-class Skill(AbstractSkill):
-    """Concrete skill used by the agents discovery tests."""
-
-    class Meta(AbstractSkill.Meta):
-        """Django model options for the canonical test skill."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_skill"
-        rebac_resource_type = "agents/skill"
 
 
 def _provider(

@@ -30,7 +30,7 @@ from rebac.backends import backend
 from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
 
-from angee.base.exceptions import exception_text
+from angee.base.errors import exception_text
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase

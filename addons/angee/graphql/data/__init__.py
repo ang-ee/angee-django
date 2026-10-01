@@ -6,6 +6,7 @@ from angee.graphql.data.hasura import (
     aggregate_queryset,
     attach_hasura_resource_metadata,
     declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "SortAlias",
     "aggregate_queryset",
     "declared_hasura_resource_fields",
+    "declared_hasura_write_relation_fields",
     "hasura_model_resource",
     "hasura_pydantic_resource",
     "public_pk_decoder",

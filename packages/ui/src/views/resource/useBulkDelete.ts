@@ -22,6 +22,8 @@ import {
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { useDeletePreviewOperation } from "./resource-operations";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 const BULK_DELETE_PREVIEW_LIMIT = 25;
 
@@ -55,6 +57,7 @@ export function useBulkDelete(
   selectedIds: ReadonlySet<string>,
   clearSelectedIds: () => void,
 ): UseBulkDeleteResult {
+  const viewAs = useLatestRef(useRuntimeViewAs());
   const t = useUiT();
   const toast = useToast();
   const rootFields = useModelRootFields(resource);
@@ -76,6 +79,7 @@ export function useBulkDelete(
   const invalidate = useInvalidate();
   const mutate = React.useCallback(
     async ({ id, confirm }: { id: string; confirm?: boolean }) => {
+      if (viewAs.current.viewAs || viewAs.current.pending) return null;
       if (!canDelete) {
         throw new Error(`Delete mutation for "${resource}" is disabled.`);
       }
@@ -98,6 +102,7 @@ export function useBulkDelete(
       dataResource,
       deletePreview.mutate,
       invalidate,
+      viewAs,
       resource,
     ],
   );
@@ -118,6 +123,7 @@ export function useBulkDelete(
   }, []);
 
   const deleteInitiate = React.useCallback(() => {
+    if (viewAs.current.viewAs || viewAs.current.pending) return;
     if (!canDelete || selectedIdList.length === 0) return;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
@@ -167,7 +173,7 @@ export function useBulkDelete(
       .finally(() => {
         if (requestIdRef.current === requestId) setPreviewPending(false);
       });
-  }, [canDelete, mutate, selectedIdList, toast, t]);
+  }, [canDelete, mutate, viewAs, selectedIdList, toast, t]);
 
   const onCancel = React.useCallback(() => {
     if (deletePending) return;
@@ -178,7 +184,7 @@ export function useBulkDelete(
 
   const onConfirm = React.useCallback(() => {
     const state = previewState;
-    if (!canDelete || !state || deletePending) return;
+    if (!canDelete || !state || deletePending || viewAs.current.viewAs || viewAs.current.pending) return;
     const blocked = new Set(state.blockedIds);
     const idsToDelete = state.selectedIds.filter((id) => !blocked.has(id));
     if (idsToDelete.length === 0) return;
@@ -216,7 +222,7 @@ export function useBulkDelete(
       .finally(() => {
         if (requestIdRef.current === requestId) setDeletePending(false);
       });
-  }, [canDelete, clearSelectedIds, deletePending, mutate, previewState, toast, t]);
+  }, [canDelete, clearSelectedIds, deletePending, mutate, viewAs, previewState, toast, t]);
 
   return {
     previewState: previewState?.preview ?? null,

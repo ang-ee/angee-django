@@ -22,7 +22,9 @@ export function RecordSourceThreadsPane({ context }: RecordSourceThreadsPaneProp
     { modelLabel: modelLabel ?? "", recordId: recordId ?? "" },
     { enabled, models: READ_MODELS },
   );
-  const rows = query.data?.record_source_threads ?? [];
+  const rows = (query.data?.record_source_threads ?? []).flatMap((row) =>
+    row.thread ? [{ ...row, thread: row.thread }] : [],
+  );
   const [selected, setSelected] = React.useState<string | null>(null);
   const selectedId = rows.some((row) => row.thread.id === selected) ? selected : rows[0]?.thread.id;
 

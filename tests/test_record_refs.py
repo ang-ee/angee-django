@@ -318,8 +318,8 @@ def test_record_ref_mixin_rejects_a_missing_generic_foreign_key() -> None:
             app_label = "auth"
 
     errors = MissingReference.check()
-    assert [(error.id, error.msg) for error in errors if error.id == "angee.E022"] == [
-        ("angee.E022", "auth.MissingReference must declare exactly one GenericForeignKey for RecordRefMixin; found 0.")
+    assert [(error.id, error.msg) for error in errors if error.id == "angee.E029"] == [
+        ("angee.E029", "auth.MissingReference must declare exactly one GenericForeignKey for RecordRefMixin; found 0.")
     ]
 
 
@@ -341,9 +341,9 @@ def test_record_ref_mixin_rejects_ambiguous_generic_foreign_keys() -> None:
             app_label = "auth"
 
     errors = AmbiguousReference.check()
-    assert [(error.id, error.msg) for error in errors if error.id == "angee.E022"] == [
+    assert [(error.id, error.msg) for error in errors if error.id == "angee.E029"] == [
         (
-            "angee.E022",
+            "angee.E029",
             "auth.AmbiguousReference must declare exactly one GenericForeignKey for RecordRefMixin; found 2.",
         )
     ]
@@ -365,7 +365,7 @@ def test_record_ref_mixin_rejects_obsolete_prefix_declarations() -> None:
             app_label = "auth"
 
     errors = StaleReference.check()
-    assert [error.id for error in errors if error.id.startswith("angee.")] == ["angee.E023"]
+    assert [error.id for error in errors if error.id.startswith("angee.")] == ["angee.E030"]
 
 
 def test_record_ref_mixin_accepts_its_declared_generic_pointer() -> None:

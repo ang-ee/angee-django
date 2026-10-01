@@ -19,12 +19,12 @@ import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.test import override_settings
-from rebac import system_context, to_object_ref
+from rebac import actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.money.rounding import RoundingMode
-from tests.conftest import SchemaAddon
+from tests.conftest import SchemaAddon, create_user
 from tests.money_models import Currency, CurrencyRate
 
 
@@ -69,8 +69,8 @@ def _make_contextual_rate(
     )
 
 
-def _shared_reader_exists(row: Any) -> bool:
-    """Return whether a rate carries the authenticated-user wildcard reader."""
+def _retired_shared_tuple_exists(row: Any) -> bool:
+    """Return whether a rate still carries a retired user-wildcard tuple."""
 
     return active_relationship_model().objects.filter(
         resource_type=row._meta.rebac_resource_type,
@@ -244,8 +244,8 @@ def test_contextual_rates_never_fall_back_to_global_history(composed_tables: Non
             context=context,
             reference_currency=usd,
         )
-        assert _shared_reader_exists(global_rate)
-        assert not _shared_reader_exists(contextual)
+        assert not _retired_shared_tuple_exists(global_rate)
+        assert not _retired_shared_tuple_exists(contextual)
         assert CurrencyRate.objects.rate_for(
             eur,
             date(2026, 1, 1),
@@ -261,6 +261,10 @@ def test_contextual_rates_never_fall_back_to_global_history(composed_tables: Non
                 context=context,
                 reference_currency=usd,
             )
+
+    with actor_context(create_user("money-global-reader")):
+        assert CurrencyRate.objects.filter(pk=global_rate.pk).exists()
+        assert not CurrencyRate.objects.filter(pk=contextual.pk).exists()
 
 
 def test_contextual_rate_priority_precedes_date(composed_tables: None) -> None:

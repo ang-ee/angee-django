@@ -20,6 +20,13 @@ export const enIamMessages: Record<string, string> = {
   // Users page — form-section labels and actions.
   "users.group.profile": "Profile",
   "users.group.access": "Access",
+  "users.giveAccess": "Give access",
+  "users.giveAccess.confirmTitle": "Give access?",
+  "users.giveAccess.confirmBody": "This sets a password for this user. The password will be shown only once; copy it before closing.",
+  "users.giveAccess.title": "User password",
+  "users.giveAccess.body": "Copy this password before closing. It will not be shown again.",
+  "users.giveAccess.fieldLabel": "Password",
+  "users.giveAccess.noPassword": "The password could not be returned.",
   "users.resetPassword": "Reset password",
   "users.resetPassword.title": "Reset password",
   "users.resetPassword.body": "Set a new password for this user.",

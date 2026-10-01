@@ -30,6 +30,7 @@ import { canonicalModelLabelOrNull } from "./canonical-model-label.js";
  * may supply the required identity pair and any relevant parsed properties.
  */
 export type ModelFieldMetadata =
+  & { /** App/route-scoped presentation facts, supplied at the metadata boundary. */ label?: string; tones?: Readonly<Record<string, string>> }
   & Pick<DataResourceFieldMetadata, "name" | "kind">
   & Partial<Pick<
     DataResourceFieldMetadata,
@@ -55,6 +56,46 @@ export type ModelFieldMetadata =
 export interface ModelMetadata {
   resource: DataResourceMetadata;
   fields: Readonly<Record<string, ModelFieldMetadata>>;
+  label?: string;
+  pluralLabel?: string;
+}
+
+/** Presentation overrides; schema identity, fields and query capabilities stay canonical. */
+export interface ResourceVocabulary {
+  label?: string;
+  pluralLabel?: string;
+  fields?: Readonly<Record<string, string | { label?: string; tones?: Readonly<Record<string, string>> }>>;
+  relations?: Readonly<Record<string, string>>;
+}
+
+/** Project validated vocabulary onto this schema's existing presentation index. */
+export function schemaFieldMetadataWithVocabulary(
+  metadata: SchemaFieldMetadata,
+  vocabulary: Readonly<Record<string, ResourceVocabulary>>,
+): SchemaFieldMetadata {
+  const labels = Object.fromEntries(Object.entries(metadata.labels).map(([name, model]) => {
+    const words = vocabulary[name];
+    return [name, words ? {
+      ...model,
+      label: words.label,
+      pluralLabel: words.pluralLabel,
+      ...(words.relations ? { resource: { ...model.resource, grantable: model.resource.grantable?.map((relation) => ({
+        ...relation, label: words.relations?.[relation.relation] ?? relation.label,
+      })) } } : {}),
+      fields: Object.fromEntries(Object.entries(model.fields).map(([field, facts]) => {
+        const word = words.fields?.[field];
+        return [field, word === undefined ? facts : {
+          ...facts,
+          ...(typeof word === "string" ? { label: word } : word),
+        }];
+      })),
+    } : model];
+  }));
+  return {
+    ...metadata,
+    labels,
+    types: Object.fromEntries(Object.entries(metadata.types).map(([name, model]) => [name, labels[model.resource.modelLabel]!])),
+  };
 }
 
 export interface SchemaFieldMetadata {

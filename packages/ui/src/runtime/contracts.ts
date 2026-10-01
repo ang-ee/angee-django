@@ -5,20 +5,46 @@
 // build manifests against them.
 
 import type { ReactElement, ReactNode } from "react";
+import type { I18nResources } from "@angee/refine";
+import type { ResourceVocabulary } from "@angee/metadata";
 
 import type { RouteHrefParams } from "./route-href";
 
 export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
 export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
+export const FORM_VIEW_RAIL_SLOT = "form-view.rail";
 
 const MODEL_SCOPED_SLOTS: ReadonlySet<string> = new Set([
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  FORM_VIEW_RAIL_SLOT,
 ]);
 
 /** Whether every contribution to this slot must carry a canonical model. */
 export function isModelScopedSlot(slot: string): boolean {
   return MODEL_SCOPED_SLOTS.has(slot);
+}
+
+/** Product identity declared once by an addon; mark names a registered glyph. */
+export interface RuntimeBrand {
+  name: string;
+  mark: string;
+}
+
+/** Scoped presentation only; unknown message, resource, field and menu keys fail at boot. */
+export interface AppVocabulary {
+  /** Menu root owning this vocabulary. */
+  app: string;
+  /** Optional collection/page route; record children inherit it. */
+  route?: string;
+  messages?: I18nResources;
+  resources?: Readonly<Record<string, ResourceVocabulary>>;
+  menus?: Readonly<Record<string, string>>;
+}
+
+export interface RuntimeVocabulary {
+  resources: Readonly<Record<string, ResourceVocabulary>>;
+  menus: Readonly<Record<string, string>>;
 }
 
 /** A navigation entry; many menu items may target one route. */
@@ -35,6 +61,8 @@ export interface MenuItem {
   route?: string;
   /** Route parameters for a parameterized `route`. */
   params?: RouteHrefParams;
+  /** Named shipped view selected when following this menu entry. */
+  defaultResourceView?: string;
   /** External URL. Internal app destinations use `route` and optional `params`. */
   to?: string;
   icon?: string;
@@ -124,9 +152,13 @@ export interface SlotContribution {
   model?: string;
   impl?: string;
   id: string;
+  /** Projected record permission required to render this contribution. */
+  permission?: string;
   sequence?: number;
   /** Toolbar placement for content in the form-view record-actions slot. */
   recordActionPlacement?: "primary" | "menu";
+  /** Readable fields a saved-record contribution consumes from RecordChromeContext.record. */
+  requiredFields?: readonly string[];
   content?: unknown;
 }
 

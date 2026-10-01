@@ -24,8 +24,7 @@ from django.utils.module_loading import import_string
 from django.utils.text import capfirst
 from django_choices_field import TextChoicesField
 from jsonschema import Draft202012Validator, FormatChecker
-from pydantic import BaseModel, TypeAdapter
-from pydantic import ValidationError as PydanticValidationError
+from pydantic import BaseModel
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
@@ -36,6 +35,7 @@ from angee.base.jsonschema import (
     validation_issues,
     validator,
 )
+from angee.base.validation import validate_value
 
 __all__ = [
     "FORM_SCHEMA_ANNOTATIONS",
@@ -559,26 +559,11 @@ class ImplBase:
         validated = cls.parse_config(value)
         return validated.model_dump(mode="json", by_alias=True) if validated is not None else {}
 
-    @staticmethod
-    @cache
-    def _adapter(type_: Any) -> TypeAdapter[Any]:
-        """Reuse native parsing, schema and serialization for each declared type."""
-
-        return TypeAdapter(Any if type_ is None else type_)
-
     @classmethod
     def parse_value(cls, value: Any, type_: Any, path: str) -> Any:
         """Validate through the cached native adapter, translating Django field paths."""
 
-        try:
-            return cls._adapter(type_).validate_python(value)
-        except PydanticValidationError as error:
-            messages: dict[str, list[str]] = {}
-            for issue in error.errors(include_url=False, include_context=False, include_input=False):
-                location = ".".join(str(part) for part in issue["loc"])
-                field_path = f"{path}.{location}" if location else path
-                messages.setdefault(field_path, []).append(str(issue["msg"]))
-            raise ValidationError(messages) from None
+        return validate_value(type_, value, field=path)
 
     @classmethod
     def declared_config_keys(cls) -> frozenset[str] | None:
@@ -917,7 +902,7 @@ class ImplClassField(TextChoicesField):
                 checks.Error(
                     f"{self.base_class.__name__} is not declared in settings.ANGEE_IMPL_REGISTRIES.",
                     obj=self,
-                    id="angee.E025",
+                    id="angee.E032",
                 )
             )
         return errors

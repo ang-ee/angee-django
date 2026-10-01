@@ -28,6 +28,8 @@ export interface RelationOptionsConfig {
   labelField?: string;
   /** Additional scalar fields a composing surface needs from each option row. */
   fields?: readonly string[];
+  /** One-based server page, shared by pickers and row catalogues. */
+  page?: number;
   pageSize?: number;
   enabled?: boolean;
   sort?: boolean;
@@ -43,6 +45,7 @@ export interface RelationOptionsConfig {
 }
 
 export interface RelationOptionsList {
+  total?: number;
   error?: string;
   fetching: boolean;
   refetch: () => void;
@@ -154,6 +157,7 @@ export function useRelationOptions(
     fields: extraFields,
     filters,
     labelField: optionLabelField,
+    page = 1,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
     sorters,
@@ -185,17 +189,18 @@ export function useRelationOptions(
       : [];
   const stableFilters = useValueStable([...(filters ?? []), ...searchFilters]);
   const stableSorters = useValueStable(sorters);
+  const stableFields = useValueStable(extraFields);
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
-    () => refineFieldsFromPaths(["id", labelField, ...(extraFields ?? [])]),
-    [extraFields, labelField],
+    () => refineFieldsFromPaths(["id", labelField, ...(stableFields ?? [])]),
+    [stableFields, labelField],
   );
   const run = useList<RowRecord, HttpError>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     pagination: {
       mode: "server",
-      currentPage: 1,
+      currentPage: page,
       pageSize: pageSize ?? DEFAULT_PAGE_SIZE,
     },
     ...(stableFilters ? { filters: [...stableFilters] } : {}),
@@ -209,15 +214,18 @@ export function useRelationOptions(
     () => (run.result.data ?? []) as readonly Row[],
     [run.result.data],
   );
+  const queryRefetch = run.query.refetch;
+  const refetch = React.useCallback(() => {
+    void queryRefetch();
+  }, [queryRefetch]);
   const list = React.useMemo<RelationOptionsList>(
     () => ({
+      total: run.result.total,
       fetching: run.query.isFetching,
       error: run.query.error?.message,
-      refetch: () => {
-        void run.query.refetch();
-      },
+      refetch,
     }),
-    [run.query],
+    [run.query.isFetching, run.query.error?.message, refetch, run.result.total],
   );
   const options = React.useMemo(
     () => relationOptionsFromRows(rows, labelField, { sort }),

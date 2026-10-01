@@ -11,10 +11,8 @@ type Translate = ReturnType<typeof useKnowledgeT>;
 
 export interface PageEditorProps {
   detail: KnowledgePageDetail;
-  /** The title changed — refetch the navigator because it displays page titles. */
-  onTitleSaved: () => void;
   /** Delete this page (the page confirms first). */
-  onDelete: () => void;
+  onDelete?: () => void;
   onDone: () => void;
 }
 
@@ -25,7 +23,6 @@ export interface PageEditorProps {
  */
 export function PageEditor({
   detail,
-  onTitleSaved,
   onDelete,
   onDone,
 }: PageEditorProps): ReactElement {
@@ -37,7 +34,6 @@ export function PageEditor({
       body: detail.markdown?.body ?? "",
       bodyHash: detail.markdown?.body_hash ?? "",
     },
-    onTitleSaved,
   );
   const markdown = useResolvedWidget("markdown.editor");
   const Body = markdown?.edit;
@@ -57,6 +53,7 @@ export function PageEditor({
             className="shrink-0 text-fg-muted"
           />
           <input
+            autoFocus
             value={editor.title}
             placeholder={t("editor.titlePlaceholder")}
             aria-label={t("editor.titleLabel")}
@@ -73,15 +70,17 @@ export function PageEditor({
             <Glyph name="check" />
             {t("editor.done")}
           </Button>
-          <Button
-            type="button"
-            size="iconMd"
-            variant="ghost"
-            aria-label={t("editor.deleteLabel")}
-            onClick={onDelete}
-          >
-            <Glyph name="trash" />
-          </Button>
+          {onDelete ? (
+            <Button
+              type="button"
+              size="iconMd"
+              variant="ghost"
+              aria-label={t("editor.deleteLabel")}
+              onClick={onDelete}
+            >
+              <Glyph name="trash" />
+            </Button>
+          ) : null}
         </div>
         <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 pl-6 font-mono")}>
           <span>{metaLine(detail, t)}</span>

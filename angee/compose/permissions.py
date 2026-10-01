@@ -28,7 +28,11 @@ package name):
   hard collision (fail fast).
 - Contributed **permission arms** are unioned (``+``) into the base permission
   of the same name, contributors in sorted order. A fragment permission whose
-  name the base does not declare is a hard error (there is no arm to extend).
+  name the base does not declare is a hard error, except a field gate on a
+  concrete column contributed by that same package's donor. New gates accept
+  only canonical Django field names, never attnames or many-to-many fields.
+  A second package cannot extend a contributed gate; base-declared gates keep
+  the ordinary union-arm behavior. Missing field ownership fails closed.
 - Extending a definition no installed package declares is a hard error.
 
 The merged definition's identity changes whenever any contribution changes: the
@@ -41,16 +45,20 @@ contribution is owned, and revisioned, by the contributing addon.
 
 With no extension fragments, merging emits nothing. Phase-2 binding still
 connects manifest-declared permission files to the upstream AppConfig seam.
+The runtime's ``angee.E024`` check reads those effective files and rejects
+caveated relation subjects because framework actor-scoped querysets have no
+request caveat context, even though the local backend supports point checks.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from rebac.schema import Definition, Schema, parse_zed, resolve_schema_path, validate_schema
+from rebac.schema import Definition, Permission, Schema, parse_zed, resolve_schema_path, validate_schema
 from rebac.schema import render_zed as render_schema
 
 from angee.addons import addon_manifest
@@ -179,7 +187,11 @@ def _extension_fragments(app_configs: Iterable[AppConfig]) -> list[tuple[str, Sc
 # ---------- merge ----------
 
 
-def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
+def merged_schemas(
+    app_configs: Iterable[AppConfig],
+    *,
+    field_owners: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, Schema]:
     """Return ``{owning package -> merged full Schema}`` for extended packages.
 
     Only packages whose base definitions receive a contribution appear. The
@@ -220,7 +232,7 @@ def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
         base_schema = bases[owner]
         base_def = base_schema.get_definition(resource_type)
         assert base_def is not None  # owner_of guarantees it
-        merged_def = _merge_definition(base_def, contributed)
+        merged_def = _merge_definition(base_def, contributed, field_owners=field_owners)
 
         owner_schema = merged.get(owner)
         if owner_schema is None:
@@ -243,19 +255,54 @@ def merged_schemas(app_configs: Iterable[AppConfig]) -> dict[str, Schema]:
 def _merge_definition(
     base: Definition,
     contributed: list[tuple[str, Definition]],
+    *,
+    field_owners: Mapping[str, Mapping[str, str]] | None,
 ) -> Definition:
-    """Merge contributed relations and permission arms into ``base``."""
+    """Merge ordinary arms, then add gates belonging to each contributor's columns."""
 
     merged = base
+    base_permissions = {permission.name for permission in base.permissions}
+    owners = (field_owners or {}).get(base.resource_type, {})
+    gates: dict[str, Permission] = {}
     for package, extension in contributed:
+        arms: list[Permission] = []
+        for permission in extension.permissions:
+            verb, separator, field = permission.name.partition("__")
+            if permission.name in base_permissions or not separator or verb not in {"read", "write"}:
+                arms.append(permission)
+                continue
+            owner = owners.get(field)
+            if owner != package:
+                canonical = field.removesuffix("_id")
+                detail = (
+                    "no field ownership map supplied" if field_owners is None
+                    else f"use the canonical field name {canonical!r}, owned by {owners[canonical]!r}"
+                    if field.endswith("_id") and canonical in owners
+                    else f"donor owner is {owner!r}" if owner is not None
+                    else "no concrete donor column is declared (base, many-to-many, or unknown field)"
+                )
+                raise SchemaExtensionError(
+                    f"{package}: {base.resource_type} field gate {permission.name!r} on {field!r} "
+                    f"must belong to this package; {detail}"
+                )
+            if permission.name in gates:
+                raise SchemaExtensionError(
+                    f"{package}: field gate {base.resource_type}#{permission.name} already declared"
+                )
+            gates[permission.name] = permission
         try:
             merged = merged.extend(
                 relations=extension.relations,
-                permission_arms=extension.permissions,
+                permission_arms=arms,
             )
         except ValueError as error:
             raise SchemaExtensionError(f"{package}: {error}") from error
-    return merged
+    collisions = gates.keys() & {relation.name for relation in merged.relations}
+    if collisions:
+        raise SchemaExtensionError(f"{base.resource_type}: field gates collide with relations: {sorted(collisions)}")
+    if not gates:
+        return merged
+    return replace(merged, permissions=(*merged.permissions, *gates.values()))
 
 
 def _clone_schema(schema: Schema) -> Schema:
@@ -312,7 +359,11 @@ def merged_schema_relpath(package: str) -> Path:
     return Path(_MERGED_SUBDIR) / f"{package}.zed"
 
 
-def extension_source_map(app_configs: Iterable[AppConfig]) -> dict[Path, str]:
+def extension_source_map(
+    app_configs: Iterable[AppConfig],
+    *,
+    field_owners: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[Path, str]:
     """Return ``{runtime-relative path -> merged zed text}`` for emission.
 
     Consumed by :meth:`Runtime.render_sources` so the merged files ride the one
@@ -321,7 +372,7 @@ def extension_source_map(app_configs: Iterable[AppConfig]) -> dict[Path, str]:
 
     return {
         merged_schema_relpath(package): render_zed(package, schema)
-        for package, schema in merged_schemas(app_configs).items()
+        for package, schema in merged_schemas(app_configs, field_owners=field_owners).items()
     }
 
 

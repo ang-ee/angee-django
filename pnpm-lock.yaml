@@ -294,6 +294,15 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/decisions':
+        specifier: workspace:*
+        version: link:../../decisions/web
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/projects':
         specifier: workspace:*
         version: link:../../projects/web
@@ -438,6 +447,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
       '@angee/metadata':
         specifier: workspace:*
         version: link:../../../../packages/metadata
@@ -496,6 +508,9 @@ importers:
       '@angee/integrate':
         specifier: workspace:*
         version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/parties':
         specifier: workspace:*
         version: link:../../parties/web
@@ -1093,12 +1108,18 @@ importers:
       '@angee/messaging':
         specifier: workspace:*
         version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       lucide-react:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
@@ -1136,6 +1157,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
       '@angee/metadata':
         specifier: workspace:*
         version: link:../../../../packages/metadata
@@ -1158,6 +1182,49 @@ importers:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
     devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.16
+        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  addons/angee/proposals_work/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
       '@tanstack/react-router':
         specifier: ^1.170.16
         version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1234,6 +1301,9 @@ importers:
       '@angee/messaging':
         specifier: workspace:*
         version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
@@ -1654,6 +1724,12 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/projects':
         specifier: workspace:*
         version: link:../../projects/web
@@ -2069,6 +2145,9 @@ importers:
 
   packages/storybook:
     dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../app
       '@angee/metadata':
         specifier: workspace:*
         version: link:../metadata
@@ -2178,6 +2257,9 @@ importers:
       '@dagrejs/dagre':
         specifier: 3.0.0
         version: 3.0.0
+      '@date-fns/tz':
+        specifier: ^1.5.0
+        version: 1.5.0
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

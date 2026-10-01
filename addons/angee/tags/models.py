@@ -9,17 +9,8 @@ back to it. Consumers attach explicitly through
 :meth:`TagAssignmentManager.attach` (create the edge against the concrete target)
 exactly as storage consumers attach a file.
 
-**Scope.** Base tags are shared vocabulary, readable by every authenticated actor
-through the framework's conditional wildcard-reader contract. Downstream addons
-may extend the row with their own scope field, declare it through
-``shared_reader_policy_fields``, and override ``shared_reader_eligible``.
-
-**Pitfalls.** Shared-tag visibility rides the conditional-reader save seam.
-The shared queryset rejects ``bulk_create`` and policy-field ``update`` writes;
-route eligibility changes through instance saves. Raw fixture loading bypasses
-this seam and requires explicit reader reconciliation afterward. Tuple writes
-validate against the loaded REBAC schema, so ``rebac sync`` must run before
-``resources load``; the standard provisioning sequence guarantees that order.
+**Scope.** Tags are reference vocabulary readable by every non-anonymous actor
+through the native ``authenticated`` permission. No reader tuple is stored.
 
 **Party tags** compose this addon without any ``parties`` change: a party is
 tagged by attaching to its ``Party`` row (the canon's explicit-attach path). The
@@ -48,8 +39,6 @@ from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    ConditionalSharedReaderMixin,
-    ConditionalSharedReaderQuerySet,
 )
 from angee.base.models import (
     AngeeDataModel,
@@ -61,7 +50,6 @@ from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_rec
 
 
 class TagQuerySet(
-    ConditionalSharedReaderQuerySet[Any],
     ArchiveQuerySet[Any],
     AngeeQuerySet[Any],
 ):
@@ -71,8 +59,8 @@ class TagQuerySet(
 TagManager = AngeeManager.from_queryset(TagQuerySet)
 
 
-class Tag(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
-    """One label in a shared vocabulary with a conditional wildcard reader."""
+class Tag(ArchiveMixin, AngeeDataModel):
+    """One label in a vocabulary shared by every non-anonymous actor."""
 
     runtime = True
     sqid_prefix = "tag_"
@@ -88,12 +76,6 @@ class Tag(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "tags/tag"
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Base tags are shared vocabulary for every authenticated actor."""
-
-        return True
 
     def __str__(self) -> str:
         """Return the tag name for Django displays."""

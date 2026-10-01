@@ -1,4 +1,4 @@
-"""Garbage-collect stale DRAFT uploads and expired trashed files."""
+"""Garbage-collect stale DRAFT/FAILED uploads and expired trashed files."""
 
 from __future__ import annotations
 
@@ -16,14 +16,14 @@ DEFAULT_CHUNK_SIZE = 500
 
 
 class Command(BaseCommand):
-    """Purge files whose DRAFT or trash TTL has lapsed.
+    """Purge files whose upload or trash TTL has lapsed.
 
     The row-set predicates live on ``FileQuerySet`` (``stale_drafts`` /
     ``expired_trash``); this command parses arguments and dispatches. Run
     from cron or a worker; consumers own the schedule.
     """
 
-    help = "Purge stale DRAFT uploads and expired trashed files."
+    help = "Purge stale DRAFT/FAILED uploads and expired trashed files."
 
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the dry-run and chunk-size options."""

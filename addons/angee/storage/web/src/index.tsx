@@ -7,7 +7,8 @@ import { Tab, formViewSectionsSlot, useRecordChromeContext, useRecordPeekContext
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
-import { enStorageMessages, useStorageT } from "./i18n";
+import { enStorageMessages } from "./i18n";
+import { RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
 import { FileRecordPreview } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
 import { folderForm } from "./views/folder-form";
@@ -55,9 +56,18 @@ const storage = defineBaseAddon({
     ...formViewSectionsSlot("storage.File"),
     id: "storage.file-preview",
     sequence: 10,
-    content: <Tab id="preview" label={<FilePreviewLabel />}><FilePreviewSection /></Tab>,
+    content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
   }],
   i18n: { storage: enStorageMessages },
+  chatter: [{
+    id: "files",
+    sequence: 35,
+    label: "Files",
+    icon: "file",
+    when: (context) => context.view.kind === "record" && Boolean(context.route?.modelLabel && context.view.sqid),
+    useCount: useRecordFilesCount,
+    render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
+  }],
   icons: {
     drive: HardDrive,
     image: Image,
@@ -70,16 +80,14 @@ const storage = defineBaseAddon({
 });
 
 export { useStorageUpload } from "./data/use-upload";
+export { RecordFilesPane, recordFilesTarget, type RecordFilesTarget } from "./RecordFilesPane";
 export { FileRecordPreview, filePreviewReference } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
 export { StorageUploadTasks } from "./views/StorageUploadTasks";
+export { useStorageT } from "./i18n";
 
 export default storage;
 
-function FilePreviewLabel() {
-  const t = useStorageT();
-  return <>{t("preview.label")}</>;
-}
 
 function FilePreviewSection() {
   const record = useRecordChromeContext();

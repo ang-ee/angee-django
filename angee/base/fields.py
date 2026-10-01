@@ -280,9 +280,20 @@ class StateField(TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Reject blank-string state declarations on active concrete models."""
+        """Reject unreconstructable enum values and non-null optional states."""
 
         errors = super().check(**kwargs)
+        reserved = {"names", "values", "labels", "choices"}
+        collisions = sorted(reserved.intersection(str(value) for value, _ in self.flatchoices))
+        if collisions:
+            errors.append(
+                checks.Error(
+                    f"StateField values collide with Django ChoicesType attributes: {', '.join(collisions)}.",
+                    hint="Choose stored values that can be reconstructed by django-choices-field.",
+                    obj=self,
+                    id="angee.E028",
+                )
+            )
         model = getattr(self, "model", None)
         if self.blank and not self.null and model is not None and not model._meta.abstract:
             errors.append(

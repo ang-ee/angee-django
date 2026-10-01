@@ -9,8 +9,7 @@ vi.mock("@angee/projects", () => ({
 
 vi.mock("@angee/ui", () => ({
   ActionFormDialog: () => null,
-  Button: () => null,
-  Glyph: () => null,
+  RecordActionTrigger: () => null,
   canonicalOptionValue: (
     options: readonly { value: string }[],
     value: unknown,
@@ -20,6 +19,12 @@ vi.mock("@angee/ui", () => ({
   useActionOutcomeMutation: () => [vi.fn()],
   useAuthoredResourceMutation: () => [vi.fn()],
   useRecordChromeContext: () => ({ record: null, recordId: "" }),
+  useRecordChromeActionMutation: () => [vi.fn(), { fetching: false }],
+}));
+
+vi.mock("./context", () => ({
+  useQueueContext: () => ({ data: null }),
+  useTaskContext: () => ({ data: null }),
 }));
 
 vi.mock("./i18n", () => ({
@@ -45,6 +50,8 @@ describe("triage action relation scopes", () => {
         { field: "queue", operator: "eq", value: "que_eng" },
         { field: "category", operator: "ne", value: "triage" },
         { field: "category", operator: "ne", value: "duplicate" },
+        { field: "rule_owned", operator: "eq", value: false },
+        { field: "conceals", operator: "eq", value: false },
       ],
     });
     expect(duplicate?.args?.[0]).toMatchObject({

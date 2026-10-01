@@ -102,13 +102,20 @@ function DatetimeRead({
   const label = formatDateTime(date);
   return (
     <span className="text-13 tabular-nums text-fg" title={valueLabel(value)}>
-      {label}
+      {label || "—"}
     </span>
   );
+}
+
+function DatetimeCell({ value }: WidgetRenderProps<DateWidgetValue>): ReactElement {
+  const date = dateFromValue(value);
+  return <span className="tabular-nums" title={formatDateTime(date)}>
+    {formatDateTime(date, { density: "list" }) || "—"}
+  </span>;
 }
 
 export const datetimeWidget = {
   edit: DatetimeEdit,
   read: DatetimeRead,
-  cell: DatetimeRead,
+  cell: DatetimeCell,
 } satisfies WidgetDefinition<DateWidgetValue>;

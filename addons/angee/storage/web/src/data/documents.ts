@@ -4,6 +4,8 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const STORAGE_CATALOGUE_LIMIT = 500;
+
 export const StorageFileUploadBegin = graphql(`
   mutation StorageFileUploadBegin($input: FileUploadBeginInput!) {
     file_upload_begin(input: $input) {
@@ -115,6 +117,7 @@ export const StorageFileById = graphql(`
       size_bytes
       content_hash
       upload_state
+      visibility
       is_trashed
       updated_at
       created_by_label
@@ -126,6 +129,20 @@ export const StorageFileById = graphql(`
         category
         label
         icon_key
+      }
+    }
+  }
+`);
+
+export const StorageRecordFiles = graphql(`
+  query StorageRecordFiles($modelLabel: String!, $recordId: ID!) {
+    record_files(model_label: $modelLabel, record_id: $recordId) {
+      available
+      can_upload
+      attachments {
+        id
+        label
+        file { id filename title }
       }
     }
   }

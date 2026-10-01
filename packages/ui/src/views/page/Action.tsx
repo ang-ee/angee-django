@@ -8,6 +8,7 @@ import type { PromptOptions } from "../../feedback";
 import type { DialogSize } from "../../ui/dialog";
 import type { DescriptorField } from "../form/DescriptorFieldList";
 import type { FormSubmitResult } from "../form/validation-errors";
+import type { RelationCreateConfig } from "../relation/RelationPicker";
 import type { FieldDescriptor } from "./Field";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
@@ -20,10 +21,7 @@ export interface ActionConfirm {
 /**
  * Context handed to an action's imperative `run` callback.
  *
- * `record` and `values` are a snapshot for the duration of `run`. `refresh` is
- * fire-and-forget — it re-pulls the record into the form but does not update the
- * `record` already captured here; read fresh state from your mutation's own
- * result (or `update`'s) rather than awaiting `refresh`.
+ * `values` are a snapshot for the duration of `run`; `record` remains live.
  */
 export interface ActionContext {
   /** The open record the action targets (`null` while creating). */
@@ -109,6 +107,12 @@ export interface ActionRelationArg extends ActionArgBase {
   resource: string;
   /** Server-side filters narrowing the relation rows offered by the picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * Inline create forwarded to the picker (`RelationPicker.create`): a no-match
+   * typed query offers "Create …", `actionLabel` also exposes the form as a
+   * visible button, and the saved record becomes the selection.
+   */
+  create?: RelationCreateConfig;
 }
 
 /**
@@ -121,6 +125,12 @@ export interface ActionRelationListArg extends ActionArgBase {
   resource: string;
   /** Server-side filters narrowing the rows offered by this multi-picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * Inline create forwarded to the multi-picker (`RelationPicker.create`): a
+   * visible "New …" button (or `actionLabel`) opens the related model's create
+   * form, and the saved record joins the selection.
+   */
+  create?: RelationCreateConfig;
   /**
    * Prefill the selected ids from the invoking context. Defaults to the invoking
    * selection, else the open record's id. A user edit overrides the prefill.
@@ -169,10 +179,14 @@ interface ActionBinding {
 export interface ActionProps extends ActionBinding {
   id: string;
   label: ReactNode;
+  /** Projected permission required to offer this record verb. */
+  permission?: string;
   icon?: string;
   disabled?: boolean;
   danger?: boolean;
-  /** Show a visible primary button on the record bar instead of an overflow item. */
+  /** Promote a frequent record verb out of the default Actions menu. */
+  placement?: "menu" | "toolbar";
+  /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
   primary?: boolean;
   /** Static confirmation copy, or copy derived from the loaded record. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);

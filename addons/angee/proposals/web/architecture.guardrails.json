@@ -19,6 +19,14 @@
     {
       "name": "REVIEW_MODEL",
       "ownerFile": "src/resources.ts"
+    },
+    {
+      "name": "RoundComparisonGrid",
+      "ownerFile": "src/comparison-grid.tsx"
+    },
+    {
+      "name": "useRoundComparisonData",
+      "ownerFile": "src/comparison-data.ts"
     }
   ]
 }

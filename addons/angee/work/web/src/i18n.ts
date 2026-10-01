@@ -1,6 +1,7 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enWorkMessages: Record<string, string> = {
+  "access.manager": "Manager",
   "common.category": "Category",
   "common.completed": "Completed",
   "common.estimate": "Estimate",
@@ -9,6 +10,8 @@ export const enWorkMessages: Record<string, string> = {
   "common.number": "Number",
   "common.order": "Order",
   "common.tone": "Tone",
+  "common.ruleOwned": "Rule owned",
+  "common.conceals": "Conceals tasks",
   "queue.group.identity": "Identity",
   "queue.group.triage": "Triage",
   "queue.group.cadence": "Cycle cadence",
@@ -16,7 +19,7 @@ export const enWorkMessages: Record<string, string> = {
   "queue.stages.tab": "Stages",
   "queue.stages.system.title": "System stages",
   "queue.stages.system.description":
-    "Triage and duplicate stages are provisioned by the queue and remain read-only.",
+    "Triage and duplicate stage names and categories are managed by provisioning or resources.",
   "queue.stages.custom.title": "Workflow stages",
   "queue.stages.custom.description":
     "Rename, reorder, or add the non-system stages used by this queue.",
@@ -40,10 +43,18 @@ export const enWorkMessages: Record<string, string> = {
   "board.description": "Move tasks between stages or rank them within a stage.",
   "board.empty.title": "No queued tasks",
   "board.empty.description": "Create a task in a stage lane to start this queue.",
+  "task.action.start": "Start",
   "task.group.work": "Queue work",
+  "task.stage.label": "Stage",
   "task.card.unnumbered": "Unnumbered",
   "estimate.points_one": "{count} point",
   "estimate.points_other": "{count} points",
+  "estimate.hours_one": "{count} hour",
+  "estimate.hours_other": "{count} hours",
+  "estimate.days_one": "{count} day",
+  "estimate.days_other": "{count} days",
+  "estimate.weeks_one": "{count} week",
+  "estimate.weeks_other": "{count} weeks",
   "estimate.size.xs": "XS",
   "estimate.size.s": "S",
   "estimate.size.m": "M",
@@ -59,6 +70,7 @@ export const enWorkMessages: Record<string, string> = {
   "triage.dwell": "Dwell time",
   "triage.dwell.empty": "Not started",
   "triage.action.accept": "Accept",
+  "triage.action.return": "Return to triage",
   "triage.action.decline": "Decline",
   "triage.action.snooze": "Snooze",
   "triage.action.duplicate": "Mark duplicate",

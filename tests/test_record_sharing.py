@@ -59,20 +59,19 @@ def test_require_access_explicit_actor_clears_sudo_and_retains_binding(
     assert project.actor() == to_subject_ref(owner)
 
 
-def test_require_access_ambient_actor_precedes_pinned_actor(
+def test_require_access_pinned_actor_precedes_ambient_actor(
     record_access_target: tuple[Project, Any, Any],
 ) -> None:
     project, owner, outsider = record_access_target
     project.with_actor(outsider)
 
-    with actor_context(owner):
-        assert project.require_access("write") == to_subject_ref(owner)
-    project.with_actor(outsider)
+    with actor_context(owner), pytest.raises(PermissionDenied, match="'write'"):
+        project.require_access("write")
     with system_context(reason="test.require_access.ambient"), pytest.raises(PermissionDenied, match="'write'"):
         project.require_access("write")
     project.with_actor(owner)
-    with actor_context(outsider), pytest.raises(PermissionDenied, match="'write'"):
-        project.require_access("write")
+    with actor_context(outsider):
+        assert project.require_access("write") == to_subject_ref(owner)
 
 
 @pytest.mark.parametrize("strict_mode", [False, True])
@@ -89,12 +88,6 @@ def test_require_access_fails_closed_without_actor_and_retains_system_scope(
     project.sudo(reason="test.require_access.instance")
     with actor_context(outsider), pytest.raises(PermissionDenied, match="'write'"):
         project.require_access("write")
-
-
-def test_private_record_access_name_is_a_narrow_alias() -> None:
-    """Existing callers use the canonical public implementation during migration."""
-
-    assert base_models.AngeeModel._require_record_access is base_models.AngeeModel.require_access
 
 
 def test_group_access_projects_canonical_subject_identity() -> None:
@@ -118,7 +111,7 @@ def test_share_declarations() -> None:
 
     assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
-    assert Drive.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
+    assert Drive.get_rebac_grantable() == {"editor": "share", "viewer": "share"}
     assert Workflow.get_rebac_grantable() == {
         "editor": "write", "viewer": "write", "starter": "write", "operator": "write",
     }
@@ -135,7 +128,7 @@ def test_subject_picker_resource_matches_the_declared_relation(
     definition = parse_zed(
         "definition storage/drive {\n"
         f"    relation viewer: auth/group#{relation}\n"
-        "    permission write = viewer\n"
+        "    permission share = viewer\n"
         "}\n"
     ).get_definition("storage/drive")
     monkeypatch.setattr(metadata, "effective_rebac_definition", lambda model: definition)
@@ -188,7 +181,7 @@ def test_relation_options_are_authorized_independently(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(sharing, "authorized_permission_target", authorize)
 
-    resolved, allowed = sharing._authorized_record_access(None, ShareModel, "row_1")
+    resolved, allowed = sharing.authorized_record_access(None, ShareModel, "row_1")
 
     assert resolved is target
     assert allowed == ["viewer"]

@@ -2,11 +2,7 @@
 
 The agents console references iam + integrate types, so these build one ``console``
 schema folding the iam, integrate, and agents addon parts (the shape the composer
-assembles) and run over the concrete test tables. `agents.schema` resolves all six
-agents models by app-registry lookup at import, so the concretes are declared (or
-imported) *before* that module is imported: `Skill`/`InferenceProvider`/
-`InferenceModel` come from `tests.test_agents`, the integrate VCS concretes from
-`tests.test_integrate_vcs`, and `Agent`/`MCPServer`/`MCPTool` are declared here.
+assembles) and run over the shared concrete test tables.
 """
 
 from __future__ import annotations
@@ -23,16 +19,11 @@ from django.test import RequestFactory, override_settings
 from rebac import system_context
 
 from angee.agents.context import render_view_context
-from angee.agents.models import Agent as AbstractAgent
-from angee.agents.models import AgentSession as AbstractAgentSession
-from angee.agents.models import AgentTurn as AbstractAgentTurn
 from angee.agents.models import MCPPlacement
-from angee.agents.models import MCPServer as AbstractMCPServer
-from angee.agents.models import MCPTool as AbstractMCPTool
-from angee.agents.models import ToolRole as AbstractToolRole
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.operator.daemon import OperatorDaemonError, OperatorDaemonNotFound
+from tests.agents_models import Agent, InferenceModel, InferenceProvider, MCPServer, Skill
 from tests.conftest import (
     Credential,
     ExternalAccount,
@@ -45,76 +36,10 @@ from tests.conftest import (
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
-from tests.test_agents import InferenceModel, InferenceProvider, Skill, _provider
+from tests.test_agents import _provider
 from tests.test_integrate_vcs import REPOS, Repository, Source, Template, _vcs_bridge
 
 User = get_user_model()
-
-
-class MCPServer(AbstractMCPServer):
-    """Concrete MCP server used by the agents console tests."""
-
-    class Meta(AbstractMCPServer.Meta):
-        """Django model options for the canonical test MCP server."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_mcp_server"
-        rebac_resource_type = "agents/mcp_server"
-
-
-class MCPTool(AbstractMCPTool):
-    """Concrete MCP tool used by the agents console tests."""
-
-    class Meta(AbstractMCPTool.Meta):
-        """Django model options for the canonical test MCP tool."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_mcp_tool"
-        rebac_resource_type = "agents/tool_grant"
-
-
-class ToolRole(AbstractToolRole):
-    """Concrete, table-less runtime anchor emitted by the composer in real projects."""
-
-    class Meta(AbstractToolRole.Meta):
-        abstract = False
-        managed = False
-        app_label = "agents"
-        rebac_resource_type = "agents/toolrole"
-
-
-class Agent(AbstractAgent):
-    """Concrete agent used by the agents console tests."""
-
-    class Meta(AbstractAgent.Meta):
-        """Django model options for the canonical test agent."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_agent"
-        rebac_resource_type = "agents/agent"
-
-
-class AgentSession(AbstractAgentSession):
-    """Concrete persisted agent session used by runtime tests."""
-
-    class Meta(AbstractAgentSession.Meta):
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_session"
-        rebac_resource_type = "agents/session"
-
-
-class AgentTurn(AbstractAgentTurn):
-    """Concrete persisted agent turn used by runtime tests."""
-
-    class Meta(AbstractAgentTurn.Meta):
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_turn"
-        rebac_resource_type = "agents/turn"
 
 
 # Imported only now that every agents concrete is registered.

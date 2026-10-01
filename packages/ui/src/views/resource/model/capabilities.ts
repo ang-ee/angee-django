@@ -1,7 +1,7 @@
 import { FILTER_OPERATORS, type FilterOperator } from "@angee/metadata";
 import { DEFAULT_PAGE_SIZE, normalisePageSize } from "../page-size";
 import type { ResourceViewInitialState } from "./filter";
-export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "dashboard"] as const;
+export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "gantt", "dashboard"] as const;
 
 /** The calendar kind's window modes; `month` is the default period. */
 export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
@@ -43,6 +43,7 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
   // Board grouping may be backed by a declared laneSource; the kind still uses
   // the group control, but lanes can come from the relation owner instead of rows.
   board: { grouping: true, pagination: true, columns: false, filter: true },
+  gantt: { grouping: true, pagination: true, columns: false, filter: true, requiresSources: true },
   // A windowed occurrence fetch takes only window args in v1: no pagination, no
   // group-by, no columns chooser, and no filter/search (a filterable calendar is
   // a named follow-up needing backend query args).
@@ -85,11 +86,12 @@ export function resourceViewKindCapabilities(
  * The switcher's options derive from this — never a hardcoded array.
  */
 export function availableResourceViewKinds(
-  declared: { calendar?: boolean; dashboard?: boolean } = {},
+  declared: { calendar?: boolean; gantt?: boolean; dashboard?: boolean } = {},
 ): readonly ResourceViewKind[] {
   return RESOURCE_VIEW_KINDS.filter((kind) => {
     if (!RESOURCE_VIEW_KIND_CAPABILITIES[kind].requiresSources) return true;
     if (kind === "calendar") return declared.calendar ?? false;
+    if (kind === "gantt") return declared.gantt ?? false;
     if (kind === "dashboard") return declared.dashboard ?? false;
     return false;
   });

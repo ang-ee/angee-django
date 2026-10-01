@@ -21,6 +21,7 @@ import { renderListRow } from "./rows";
 import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
+import { useRuntimeViewAs } from "../../../runtime";
 export function SelectionBar({
   count,
   onClear,
@@ -36,6 +37,8 @@ export function SelectionBar({
   actions?: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const actions = (
     <>
       {extraActions}
@@ -43,7 +46,8 @@ export function SelectionBar({
         <SelectionBarPrimitive.Action
           surface="brand"
           pending={deletePending}
-          onClick={onDelete}
+          disabled={previewBlocked}
+          onClick={() => { if (!previewBlocked) onDelete(); }}
         >
           <Glyph name="trash" />
           {t("selection.delete")}

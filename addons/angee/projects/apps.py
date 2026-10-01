@@ -1,20 +1,17 @@
-"""Django configuration for the projects addon."""
-
-from __future__ import annotations
+"""Django lifecycle wiring for projects."""
 
 from django.apps import AppConfig
 
 
 class ProjectsConfig(AppConfig):
-    """Own the personal-complete project and task domain."""
+    """Wire the milestone's retained-receipt deletion rule."""
 
     default = True
     name = "angee.projects"
 
     def ready(self) -> None:
-        """Wire projects-owned container binding mirrors."""
+        """Register native deletion dispatch without querying models or data."""
 
-        super().ready()
         from angee.projects import signals
 
         signals.connect()

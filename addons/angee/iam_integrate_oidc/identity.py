@@ -17,10 +17,11 @@ from typing import Any, cast
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from rebac import system_context
 
 from angee.iam.auth import can_authenticate_user
+from angee.iam.models import AmbiguousAccountEmail
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_external_account_link
@@ -163,9 +164,8 @@ class OidcLoginCompletion:
 class OidcIdentityResolver:
     """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
 
-    Operates on ``get_user_model()`` (the host's swappable user model) through
-    generic Django manager methods, so it is correct whatever the host's User is.
-    The per-provider login policy is read from the OAuth client row.
+    Operates on ``get_user_model()`` through IAM's account lookup and creation
+    owner. The per-provider login policy is read from the OAuth client row.
     """
 
     def __init__(self, oauth_client: Any) -> None:
@@ -193,16 +193,16 @@ class OidcIdentityResolver:
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 return cast(AbstractBaseUser, owner)
 
-            normalized_email = email or ""
+            normalized_email = get_user_model().objects.normalize_email(email)
             email_verified = claims.get("email_verified") is True
-            if (
-                self.oauth_client.link_on_email_match
-                and normalized_email
-                and email_verified
-                and self.oauth_client.allows_email_domain(normalized_email)
-            ):
+            email_allowed = not normalized_email or (
+                email_verified and self.oauth_client.allows_email_domain(normalized_email)
+            )
+            if normalized_email and email_allowed:
                 user = self._find_by_email(normalized_email)
-                if user is not None and can_authenticate_user(user):
+                if user is not None:
+                    if not self.oauth_client.link_on_email_match or not can_authenticate_user(user):
+                        raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                     manager.link(
                         self.oauth_client,
                         sub,
@@ -213,9 +213,7 @@ class OidcIdentityResolver:
                     )
                     return user
 
-            if self.oauth_client.create_on_login and (
-                not normalized_email or (email_verified and self.oauth_client.allows_email_domain(normalized_email))
-            ):
+            if self.oauth_client.create_on_login and email_allowed:
                 user = self._create_for_identity(normalized_email, sub, claims=claims)
                 manager.link(
                     self.oauth_client,
@@ -245,14 +243,13 @@ class OidcIdentityResolver:
         return cast(AbstractBaseUser, user)
 
     def _find_by_email(self, email: str) -> AbstractBaseUser | None:
-        """Return the unique user matching ``email`` case-insensitively."""
+        """Return the person selected by IAM's canonical email-key lookup."""
 
         manager = cast(Any, get_user_model().objects)
-        queryset = manager.all().people()
-        matches = list(queryset.filter(email__iexact=email).order_by("pk")[:2])
-        if len(matches) > 1:
-            raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-        return cast(AbstractBaseUser | None, matches[0] if matches else None)
+        try:
+            return cast(AbstractBaseUser | None, manager.person_for_email(email))
+        except AmbiguousAccountEmail:
+            raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
 
     def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
         """Create a non-superuser user for one OIDC identity."""
@@ -263,17 +260,24 @@ class OidcIdentityResolver:
             user_fields["first_name"] = str(given_name)
         if family_name := claims.get("family_name"):
             user_fields["last_name"] = str(family_name)
-        return cast(
-            AbstractBaseUser,
-            manager.create_user(
-                username=self._available_username(email or f"oidc-{sub}"),
-                email=email,
-                password=None,
-                is_staff=False,
-                is_superuser=False,
-                **user_fields,
-            ),
-        )
+        try:
+            with transaction.atomic():
+                return cast(
+                    AbstractBaseUser,
+                    manager.create_user(
+                        username=self._available_username(email or f"oidc-{sub}"),
+                        email=email,
+                        password=None,
+                        is_staff=False,
+                        is_superuser=False,
+                        **user_fields,
+                    ),
+                )
+        except IntegrityError:
+            user = self._find_by_email(email)
+            if self.oauth_client.link_on_email_match and user is not None and can_authenticate_user(user):
+                return user
+            raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
 
     def _available_username(self, seed: str) -> str:
         """Return a unique Django username derived from ``seed``."""

@@ -110,7 +110,7 @@ describe("iam addon manifest", () => {
   });
 
   test("contributes the login methods and the OIDC tab on the OAuth client form", () => {
-    expect(iam.slots).toHaveLength(4);
+    expect(iam.slots).toHaveLength(6);
     const login = iam.slots?.find((slot) => slot.id === "iam.oauth-login");
     expect(login?.slot).toBe(AUTH_LOGIN_METHOD_SLOT);
     expect(login?.content).toBeDefined();

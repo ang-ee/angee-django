@@ -22,7 +22,7 @@ export interface FileDetailProps {
 
 /**
  * One file as an editable metadata record: the title input renames it, and a
- * read-only detail group surfaces the stored filename, owner, and stage. The
+ * read-only detail group surfaces the filename, attribution, stage and audience. The
  * file's lifecycle verbs (download, trash/restore) and the record pager live in
  * the page's control band, beside the content they act on; this is just the
  * metadata form the page publishes into the chatter's details tab.
@@ -46,8 +46,9 @@ export function FileDetail({
       <Field name="title" widget="text" title placeholder={filename} />
       <Group label={t("file.details")} columns={compact ? 1 : 2}>
         <Field name="filename" label={t("file.filename")} readOnly />
-        <Field name="created_by_label" label={t("file.owner")} widget="userRef" readOnly />
+        <Field name="created_by_label" label={t("file.author")} widget="userRef" readOnly />
         <Field name="upload_state" label={t("file.stage")} readOnly />
+        <Field name="visibility" label={t("file.visibility")} widget="statusBadge" readOnly />
       </Group>
     </FormView>
   );

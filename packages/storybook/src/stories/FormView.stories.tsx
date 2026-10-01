@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { FormView, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { RuntimeFixture, jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -35,6 +35,7 @@ const statusField = {
   name: "status",
   label: "Status",
   widget: "statusbar",
+  status: true,
   options: statusOptions,
 } satisfies FormField;
 const ownerField = {
@@ -212,6 +213,34 @@ export const TabbedLayout: Story = {
       layout="tabs"
     />
   ),
+};
+
+const railFields = ["title", "owner", "priority"].map((name) => ({
+  name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
+  creatable: true, updatable: true, requiredOnCreate: false,
+}));
+const railSchemas = storySchema(async () => jsonResponse({ data: { note: storyRecord } }));
+railSchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
+  schemaName: "public", fields: railFields,
+})] } };
+
+export const RecordRail: Story = {
+  render: () => <RuntimeFixture schemas={railSchemas} runtime={{ slots: [{
+    id: "record-properties", ...FormView.railSlot("notes.Note"),
+    content: <FormView.RailGroup id="properties" label="Properties" hint="Edit values here"
+      fields={[{ field: { name: "owner" } }, { field: { name: "priority", widget: "select",
+        options: [{ value: "HIGH", label: "High" }, { value: "LOW", label: "Low" }] } }]} />,
+  }] }}>
+    <FormView resource="notes.Note" id={storyRecord.id} fields={[titleField, bodyField]}
+      acknowledgedSource={{ record: { ...storyRecord, permissions: ["read", "write"] }, values: storyRecord }} />
+  </RuntimeFixture>,
+};
+
+export const RecordSectionHeading: Story = {
+  render: () => <div className="max-w-3xl">
+    <FormView.SectionHeading label="Updates" count="3" summary="2 replies"
+      hint="Usually shared with the team" audience="Team members" />
+  </div>,
 };
 
 function FormViewFixture({

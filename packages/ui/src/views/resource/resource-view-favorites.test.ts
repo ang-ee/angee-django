@@ -49,6 +49,13 @@ describe("readResourceViewFavoritesSlice", () => {
     expect(slice.document.models).toEqual({ "notes.Note": [FAVORITE] });
   });
 
+  test("retains a pinned favourite in the existing preference version", () => {
+    const slice = readResourceViewFavoritesSlice({
+      [KEY]: { version: 1, models: { "notes.Note": [{ ...FAVORITE, pinned: true }] } },
+    });
+    expect(slice.document.models["notes.Note"]).toEqual([{ ...FAVORITE, pinned: true }]);
+  });
+
   test("calendar favorites keep the v1 shape without page, mode, or anchor", () => {
     const favorite = favoriteFromResourceView(createResourceViewState({
       page: 3, pageSize: 20, view: "calendar", mode: "week", anchor: "2000-01-01",

@@ -46,7 +46,7 @@ def test_local_documentation_links_and_anchors_resolve(document: Path) -> None:
         if child.type == "link_open"
     ]
     for destination in destinations:
-        assert destination is not None
+        assert isinstance(destination, str)
         link = urlsplit(destination.strip("<>"))
         # Website-root routes belong to the external documentation site.
         if link.scheme or link.netloc or link.path.startswith("/"):
@@ -103,3 +103,10 @@ def test_documented_verification_files_exist() -> None:
     assert paths
     for relative in paths:
         assert (ROOT / relative).is_file(), relative
+
+
+def test_stack_documents_the_local_only_permission_backend() -> None:
+    guide = prose((ROOT / "docs/stack.md").read_text())
+    assert re.search(r"local backend is the only supported REBAC permission backend", guide)
+    assert "[Base autoconfig](../angee/base/autoconfig.py)" in guide
+    assert "[REBAC rules](backend/guidelines.md#rebac)" in guide

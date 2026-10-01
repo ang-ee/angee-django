@@ -20,6 +20,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import post_save
 from django.test import RequestFactory, TestCase
@@ -27,6 +28,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
@@ -185,8 +187,13 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     assert len(visible["rows"]) == 1
     assert visible["total"]["aggregate"]["count"] == visible["group_count"] == 1
     assert visible["groups"] == [{"aggregate": {"count": 1}}]
-    hidden = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider))
-    assert hidden == {"rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0}
+    hidden = _execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider)
+    unknown = _execute(
+        schema, query, {"bridge": public_id_for(Integration, bridge.pk + other.pk + 1_000_000)}, user=outsider
+    )
+    assert _data(hidden) == _data(unknown) == {
+        "rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0,
+    }
 
 
 def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:
@@ -392,6 +399,7 @@ def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
     hidden = make_integration("target-hidden", model=InferenceProvider, backend_class="manual")
     sibling_parent = make_integration("target-sibling", model=InferenceProvider, backend_class="manual")
     VcsBridge(integration_ptr_id=sibling_parent.pk, backend_class="local").save_base(raw=True, force_insert=True)
+    call_command("rebac", "index", "rebuild", verbosity=0)
     rows = _data(
         _execute(
             _schema(),

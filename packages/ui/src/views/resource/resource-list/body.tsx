@@ -1,6 +1,7 @@
 import * as React from "react";
-import { modelLabelSegment, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { holdsPermission, modelLabelSegment, rowPublicId, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
+import { useInvalidate } from "@refinedev/core";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { Workbench } from "../../../layouts/Workbench";
 import { cn } from "../../../lib/cn";
@@ -9,6 +10,9 @@ import { Dialog, DialogBackdrop, DialogPortal, DialogRoot } from "../../../ui/di
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { ListView } from "../ListView";
 import { FormView } from "../../form/FormView";
+import { ActionFormDialog } from "../../form/ActionFormDialog";
+import { useUiT } from "../../../i18n";
+import { createLabelForResource } from "../resource-view-utils";
 import type { ListComponent } from "../List";
 import { useBulkDelete } from "../useBulkDelete";
 import { useResourceView } from "../resource-view-context";
@@ -40,23 +44,28 @@ export function ResourceListBody<TRow extends Row = Row>({
   selectFirstRecord = false,
   splitLayout,
   presentation,
+  chrome,
   baseFilter,
   filterOptions,
+  filterRow,
   facets,
   customFilterFields,
   groupOptions,
   order,
   pageSize,
   defaultView,
+  presetIds,
   defaultGroup,
   defaultGroups,
   calendar,
   laneSource,
+  boardCard,
   fields,
   list: ListRenderer = ListView as ListComponent<TRow>,
   returning,
   recordSmartButtons = [],
   hideCreate = false,
+  createAction,
   createDefaults,
   recordExtras,
   recordTabs,
@@ -69,7 +78,10 @@ export function ResourceListBody<TRow extends Row = Row>({
   draggableRow,
   className,
 }: ResourceListBodyProps<TRow>): React.ReactElement {
-  const metadata = useModelMetadata(resource);
+  const t = useUiT();
+  const modelMetadata = useModelMetadata(resource);
+  const invalidate = useInvalidate();
+  const resourceInvalidates = useResourceInvalidates([resource]);
   const resolvedRecordId = recordController.recordId;
   const resolvedCreating =
     Boolean(recordController.creating) || resolvedRecordId === REFINE_CREATE_ID;
@@ -95,15 +107,18 @@ export function ResourceListBody<TRow extends Row = Row>({
   const resolvedLaneSource = declarations.list?.props.laneSource ?? laneSource;
   const listRenderProps = {
     presentation,
+    chrome,
     fields,
     baseFilter,
     filterOptions,
+    filterRow,
     facets: resolvedFacets,
     customFilterFields,
     groupOptions,
     order,
     pageSize,
     defaultView,
+    presetIds,
     defaultGroup,
     defaultGroups,
     rowHref: resolvedRowHref,
@@ -112,6 +127,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     draggableRow,
     emptyContent,
     laneSource: resolvedLaneSource,
+    boardCard,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),
@@ -127,6 +143,15 @@ export function ResourceListBody<TRow extends Row = Row>({
   // range select and board lane create use the same routed form as "New".
   const [quickCreateDefaults, setQuickCreateDefaults] =
     React.useState<Record<string, unknown> | undefined>(undefined);
+  const [createActionOpen, setCreateActionOpen] = React.useState(false);
+  const createActionVisible = Boolean(createAction && !hideCreate &&
+    (!createAction.permission || holdsPermission(createAction.record, createAction.permission)));
+  const createActionLabel = createAction
+    ? createLabelForResource(resource, t, modelMetadata?.label)
+    : undefined;
+  if (createAction && !createAction.submit) {
+    throw new Error(`ResourceList createAction "${createAction.id}" needs a server submit.`);
+  }
   const resolvedCreateDefaults = React.useMemo(
     () => mergeCreateDefaults(createDefaults, quickCreateDefaults),
     [createDefaults, quickCreateDefaults],
@@ -153,7 +178,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     ...(handleSelectRecord ? { onSelect: handleSelectRecord } : {}),
     onSetPage: resourceView.setPage,
     selectFirstRecord,
-    firstSelectionKey: stableSerialize(baseFilter ?? null),
+    firstSelectionKey: stableSerialize(resourceView.baseFilter),
     onClearSelection: clearSelection,
   });
   React.useEffect(() => {
@@ -194,7 +219,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   );
   // The surface-level calendar spec: sources + reschedule from the page, the
   // range-select seam wired to the routed create (only when a create form exists).
-  const canQuickCreate = hasRecordSurface && !hideCreate && Boolean(handleSelectRecord);
+  const canQuickCreate = hasRecordSurface && !hideCreate && !createAction && Boolean(handleSelectRecord);
   const listCalendar = React.useMemo<CalendarViewSpec | undefined>(
     () =>
       calendar
@@ -234,13 +259,8 @@ export function ResourceListBody<TRow extends Row = Row>({
     : undefined;
   const recordHeaderActions = open ? (
     <RecordHeaderActions
-      view={resourceView.state.view}
       navigation={recordNavigation}
       smartButtons={recordSmartButtons}
-      onViewChange={(view) => {
-        resourceView.setView(view);
-        handleCloseRecord?.();
-      }}
     />
   ) : null;
   const recordDeleteDialog =
@@ -263,10 +283,14 @@ export function ResourceListBody<TRow extends Row = Row>({
       scope="inherit"
       calendar={listCalendar}
       onCreate={
-        hasRecordSurface && !hideCreate && handleSelectRecord
+        createActionVisible
+          ? () => setCreateActionOpen(true)
+          : createAction ? undefined
+          : hasRecordSurface && !hideCreate && handleSelectRecord
           ? handleCreateRecord
           : undefined
       }
+      createLabel={createActionVisible ? createActionLabel : declarations.list?.props.createLabel}
       onCreateInLane={
         canQuickCreate && resolvedLaneSource
           ? handleBoardCreateInLane
@@ -277,6 +301,14 @@ export function ResourceListBody<TRow extends Row = Row>({
     />
   );
   const FormRenderer = form?.Component ?? FormView;
+  const createActionDialog = createActionVisible && createActionOpen && createAction ? (
+    <ActionFormDialog action={{ ...createAction, label: createActionLabel ?? createAction.label }} context={{ record: createAction.record ?? null, selectedIds: [] }}
+      open onOpenChange={setCreateActionOpen}
+      onSucceeded={(outcome) => {
+        for (const target of resourceInvalidates) void invalidate(target);
+        if (outcome.id) handleSelectRecord?.(outcome.id);
+      }} />
+  ) : null;
   const recordForm = open ? (
     <FormRenderer
       resource={resource}
@@ -319,6 +351,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           {recordContent}
         </Workbench>
         {recordDeleteDialog}
+        {createActionDialog}
       </div>
     );
   }
@@ -336,7 +369,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           <DialogPortal>
             <DialogBackdrop />
             <Dialog.Content size="md">
-              <Dialog.Title className="sr-only">{titleCase(modelLabelSegment(metadata?.resource.modelLabel ?? resource))}</Dialog.Title>
+              <Dialog.Title className="sr-only">{modelMetadata?.label ?? titleCase(modelLabelSegment(resource))}</Dialog.Title>
               <Dialog.Header className="flex justify-end px-3 pt-3">
                 <Dialog.Close />
               </Dialog.Header>
@@ -347,6 +380,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           </DialogPortal>
         </DialogRoot>
         {recordDeleteDialog}
+        {createActionDialog}
       </div>
     );
   }
@@ -373,6 +407,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           {recordDeleteDialog}
         </>
       ) : null}
+      {createActionDialog}
     </div>
   );
 }

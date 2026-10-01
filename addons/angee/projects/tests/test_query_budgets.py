@@ -28,6 +28,7 @@ class TaskLabelQueryBudgetTests(TransactionTestCase):
                 [
                     task_model(
                         title=f"Task {index:02}",
+                        owner=owner,
                         created_by=owner,
                         updated_by=owner,
                         sort_order=float(index),
@@ -36,7 +37,7 @@ class TaskLabelQueryBudgetTests(TransactionTestCase):
                     for index in range(25)
                 ]
             )
-            hidden = task_model.objects.create(title="Hidden", created_by=outsider, updated_by=outsider)
+            hidden = task_model.objects.create(title="Hidden", owner=outsider, created_by=outsider, updated_by=outsider)
             self.client.force_login(owner, backend="angee.iam.auth.ModelBackend")
         query = """
             query TaskLabels($limit: Int!) {

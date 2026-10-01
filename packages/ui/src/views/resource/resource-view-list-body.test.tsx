@@ -214,7 +214,8 @@ test("renders query relation labels with the declared identity fallback", () => 
     .toBe("Inbox");
   expect(cellContent({ field: "channel", queryField }, { channel: { public_key: "chan_1", id: "private-id", display_name: null } }, (key) => key))
     .toBe("chan_1");
-  expect(cellContent({ field: "channel", queryField }, { channel: null }, (key) => key)).toBe("");
+  expect(cellContent({ field: "channel", queryField }, { channel: null }, (key) => key)).toBe("—");
+  expect(cellContent({ field: "caption" }, { caption: "" }, (key) => key)).toBe("—");
 });
 
 test("uses query scalar metadata for dates and translated boolean aliases", () => {

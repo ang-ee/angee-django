@@ -5,7 +5,7 @@ import {
 import {
   useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  refineFieldsFromPaths, useAuthoredMutation, } from "@angee/refine";
+  refineFieldsFromPaths, useAuthoredMutation, useInvalidateAuthoredModels, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
 import {
@@ -16,6 +16,8 @@ import {
   useModelMetadata,
 } from "@angee/metadata";
 import { KnowledgeCreatePage } from "./documents";
+
+import { PAGE_MODEL } from "./documents";
 
 export interface PageActions {
   busy: boolean;
@@ -33,14 +35,13 @@ export interface PageActions {
 }
 
 /**
- * The navigator write verbs over the knowledge mutations (create uses the
- * concrete page factory; move rides `updatePage`'s parent patch).
- * `onChanged` fires after each so the caller can refetch the tree.
+ * The navigator write verbs over the knowledge CRUD mutations (create/delete are
+ * the gated factory mutations; move rides `updatePage`'s parent patch).
+ * Successful writes invalidate the shared authored page reads.
  */
-export function usePageActions(
-  options: { onChanged?: () => void } = {},
-): PageActions {
-  const { onChanged } = options;
+export function usePageActions(): PageActions {
+  const invalidateModels = useInvalidateAuthoredModels();
+  const invalidatePages = useCallback(() => invalidateModels([PAGE_MODEL]), [invalidateModels]);
   const metadata = useModelMetadata(PAGE_MODEL);
   const resource = metadata?.resource ?? null;
   const resourceName = refineResourceName(resource);
@@ -53,7 +54,7 @@ export function usePageActions(
     invalidates: ["list", "many", "detail"],
   });
   const deleteWithPreview = useDeleteWithPreview(resource);
-  const { busy, run } = useBusyRun(onChanged);
+  const { busy, run } = useBusyRun(invalidatePages);
 
   // The navigator publishes into the shell primary pane, so its action handlers
   // must stay stable even if Refine refreshes the mutation function identities.
@@ -105,8 +106,6 @@ export function usePageActions(
     [busy, createPage, deletePage, movePage],
   );
 }
-
-const PAGE_MODEL = "knowledge.Page";
 
 type RowRecord = BaseRecord & Row;
 

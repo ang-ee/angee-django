@@ -46,6 +46,23 @@ PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
 ROLE_SUFFIX = "/role"
 
 
+def platform_admin_role() -> ObjectRef | None:
+    """Return the configured platform-admin role object, if any."""
+
+    role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
+    return ObjectRef.parse(role) if role else None
+
+
+def subject_has_role(subject: SubjectRef | None, role: ObjectRef) -> bool:
+    """Return whether the subject is an effective member of the role."""
+
+    return subject is not None and bool(rebac_backend().check_access(
+        subject=subject,
+        action="effective_member",
+        resource=role,
+    ).allowed)
+
+
 class IAMRoleRow(BaseModel):
     """Canonical IAM role row derived from schema names and retained tuples."""
 
@@ -928,9 +945,9 @@ def privileged_role_refs() -> set[str]:
 
     schema = rebac_backend().schema()
     refs: set[str] = set()
-    universal_role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
+    universal_role = platform_admin_role()
     if universal_role:
-        refs.add(str(ObjectRef.parse(universal_role)))
+        refs.add(str(universal_role))
     role_resource_types = schema_role_resource_types()
     for definition in schema.definitions:
         for permission_name in PRIVILEGED_PERMISSION_NAMES:

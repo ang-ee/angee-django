@@ -1,28 +1,37 @@
-"""Portfolio rows compose the shared-reader lifecycle and queryset guards."""
+"""Portfolio rows use authenticated read scopes and retain ancestry invariants."""
 
 from __future__ import annotations
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import SubjectRef, actor_context, system_context
-from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.models import active_relationship_model
-from rebac.schema import parse_zed
 
 from angee.base.models import AngeeDataModel
-from angee.portfolio.models import Initiative, InitiativeProject, Product, Release, Update, WorkspaceVisibleMixin
+from angee.portfolio.models import InitiativeProject, PortfolioRole, Product
 from tests.hierdemo.models import HierNode
+from tests.projects_models import Project  # noqa: F401 -- register the product origin target
 
 
-class WorkspaceRow(WorkspaceVisibleMixin, AngeeDataModel):
-    """Minimal concrete consumer of portfolio's shared workspace posture."""
+class ProductRow(Product):
+    """Concrete adoption of the real portfolio product declaration."""
 
-    name = models.CharField(max_length=100)
-
-    class Meta:
+    class Meta(Product.Meta):
+        abstract = False
         app_label = "portfolio"
-        rebac_resource_type = "tests/workspace_row"
+        rebac_resource_type = "portfolio/product"
+
+
+class PortfolioRoleRow(PortfolioRole):
+    """Native role anchor needed by actor-scoped portfolio reads."""
+
+    class Meta(PortfolioRole.Meta):
+        abstract = False
+        managed = False
+        app_label = "portfolio"
+        rebac_resource_type = "portfolio/role"
 
 
 class InitiativePlacementRow(AngeeDataModel):
@@ -57,47 +66,20 @@ def test_placement_validates_current_ancestry_after_cached_initiative_moves(lock
             InitiativeProject._validate_ancestry(candidate, lock=lock)
 
 
-@pytest.mark.parametrize("model", [Product, Initiative, InitiativeProject, Update, Release])
-def test_portfolio_bulk_creation_cannot_skip_readers(model: type[models.Model]) -> None:
-    """Every portfolio manager preserves the shared reader's create guard."""
+def test_portfolio_authenticated_reads_do_not_grant_write(composed_tables: None) -> None:
+    """Real portfolio products are readable by signed-in actors without tuples."""
 
-    with pytest.raises(ValidationError, match="native owner"):
-        model._meta.default_manager.bulk_create([])
-
-
-@pytest.mark.django_db(transaction=True)
-def test_workspace_reader_is_proposed_and_reconciled_without_granting_write() -> None:
-    """Workspace rows stay readable through ordinary REBAC-scoped queries."""
-
-    reset_backend()
-    active = backend()
-    assert isinstance(active, LocalBackend)
-    active.set_schema(
-        parse_zed(
-            "definition auth/user {}\n"
-            "definition tests/workspace_row {\n"
-            "  relation reader: auth/user:*\n"
-            "  relation writer: auth/user\n"
-            "  permission read = reader\n"
-            "  permission write = writer\n"
-            "}\n"
-        )
-    )
-    try:
-        reader = SubjectRef.of("auth/user", "workspace-reader")
-        with system_context(reason="test.portfolio.workspace"):
-            row = WorkspaceRow.objects.create(name="Shared")
-            assert row.proposed_relationships()["reader"]
-            row.save()
-            assert (
-                active_relationship_model()
-                .objects.filter(resource_type="tests/workspace_row", resource_id=str(row.pk), relation="reader")
-                .count()
-                == 1
-            )
-        with actor_context(reader):
-            readable = WorkspaceRow.objects.get(pk=row.pk)
-            assert readable.name == "Shared"
-            assert not readable.has_access("write")
-    finally:
-        reset_backend()
+    del composed_tables
+    reader = SubjectRef.of("auth/user", "1")
+    with system_context(reason="test.portfolio.product"):
+        row = ProductRow.objects.create(name="Shared")
+        row.save()
+        assert not active_relationship_model().objects.filter(
+            resource_type="portfolio/product", resource_id=str(row.pk), relation="reader",
+        ).exists()
+    with actor_context(reader):
+        readable = ProductRow.objects.get(pk=row.pk)
+        assert readable.name == "Shared"
+        assert not readable.has_access("write")
+    with actor_context(AnonymousUser()):
+        assert not ProductRow.objects.filter(pk=row.pk).exists()

@@ -54,6 +54,8 @@ class FreshnessTask(TaskWork, AbstractTask):
     cycle_id = None
     converted_from_activity = None
     links = None
+    file_attachments = None
+    knowledge_bindings = None
     thread_attachments = None
     thread_create_log = False
     thread_create_autofollow_author = False
@@ -76,7 +78,7 @@ def task_relations(transactional_db: None) -> Iterator[Scope]:
 def test_unsaved_stage_category_edit_cannot_allow_system_stage_entry(task_relations: Scope) -> None:
     with system_context(reason="tests.task_relation_freshness.system_stage"):
         stage = FreshnessStage.objects.create(queue=task_relations, name="Triage", category="triage")
-    task = FreshnessTask(title="Must use capture", queue=task_relations, number=1)
+    task = FreshnessTask(title="Must use triage verb", queue=task_relations, number=1, estimate=1)
     stage.category = "started"
     task.stage = stage
 
@@ -95,6 +97,7 @@ def test_cached_stage_recategorization_projects_current_lifecycle(task_relations
             queue=task_relations,
             stage=stage,
             number=1,
+            estimate=1,
         )
         changed_stage = FreshnessStage._base_manager.get(pk=stage.pk)
         changed_stage.category = "completed"

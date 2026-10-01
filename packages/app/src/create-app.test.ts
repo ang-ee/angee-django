@@ -6,12 +6,15 @@ import { cleanup, waitFor } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { useAuthoredQuery } from "@angee/refine";
 import {
+  useAppRuntime,
   useChatterRoutes,
+  useT,
   useResourceRecordHrefLookup,
   useResourceRoute,
   useRouteHref,
 } from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
+import { useSurfacePresentation } from "@angee/ui/chrome/surface-policy";
 import { resourcePageRoutes } from "./define-base-addon";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -24,6 +27,7 @@ import {
   type RefineLayoutChromeProps,
 } from "./create-app";
 import { MenuTree, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
+import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
 import {
   captureChrome,
   chromeSnapshot,
@@ -36,11 +40,126 @@ import {
   resourceViewStateToSearch,
   mergeResourceViewSearch,
 } from "@angee/ui/views/resource-view-model";
-import type { DataResourceMetadata } from "@angee/metadata";
+import { useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
+
+describe("createApp confinement", () => {
+  const addons: readonly BaseAddon[] = [{
+    id: "requests",
+    routes: [
+      { name: "requests.all", path: "/requests", component: EmptyPage },
+      { name: "requests.record", path: "/requests/$id", parent: "requests.all", component: EmptyPage },
+      { name: "files.all", path: "/files", component: EmptyPage },
+      { name: "files.record", path: "/files/$id", parent: "files.all", component: EmptyPage },
+      { name: "account", path: "/account", component: EmptyPage },
+      { name: "public.page", path: "/public-page", layout: "public", component: EmptyPage },
+    ],
+    menus: [
+      { id: "requests", children: [{ id: "requests.all", route: "requests.all" }] },
+      { id: "files", route: "files.all" },
+    ],
+  }];
+
+  test("rejects an unknown root and a home outside the selected root", () => {
+    const input = testAppInput(addons, {
+      console: { requireAuth: false },
+      public: { requireAuth: false },
+    });
+    expect(() => createApp({ ...input, confineTo: "unknown" })).toThrow(/Unknown menu root/);
+    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(/must belong/);
+    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/must belong/);
+  });
+
+  test("accepts a root and first child sharing the resource route", () => {
+    const shared: BaseAddon = {
+      id: "requests",
+      routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
+      menus: [{
+        id: "requests",
+        route: "requests.all",
+        children: [{ id: "requests.all", route: "requests.all" }],
+      }],
+    };
+    const input = {
+      ...testAppInput([shared], { console: { requireAuth: false } }),
+      schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
+    };
+    expect(() => createApp(input)).not.toThrow();
+    expect(() => createApp({ ...input, confineTo: "requests" })).not.toThrow();
+  });
+
+  test("requires explicit menu ownership only when confined route roots disagree", () => {
+    const shared: BaseAddon = {
+      id: "requests",
+      routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
+      menus: [
+        { id: "requests", route: "requests.all" },
+        { id: "files", route: "requests.all" },
+      ],
+    };
+    const input = {
+      ...testAppInput([shared], { console: { requireAuth: false } }),
+      schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
+    };
+    expect(() => createApp(input)).not.toThrow();
+    expect(() => createApp({ ...input, confineTo: "requests" })).toThrow(/different menu roots/);
+    const explicit = {
+      ...shared,
+      routes: shared.routes?.map((route) => ({ ...route, menu: "requests" })),
+    };
+    expect(() => createApp({ ...input, addons: [explicit], confineTo: "requests" })).not.toThrow();
+  });
+
+  test("projects only the confined root into both navigation sources", async () => {
+    const captured = await captureChrome({
+      addons,
+      path: "/requests/item-1",
+      home: "requests.all",
+      confineTo: "requests",
+    });
+    try {
+      const tree = MenuTree.from(captured.props().menus);
+      expect(tree.railMenuItems().map((item) => item.id)).toEqual(["requests"]);
+      expect(tree.navigableItems().map(({ item }) => item.id)).toEqual(["requests.all"]);
+    } finally {
+      captured.cleanup();
+    }
+  });
+
+  test("redirects other roots while preserving public and unowned chrome routes", async () => {
+    history.replaceState(null, "", "/files");
+    const app = createApp({
+      ...testAppInput(addons, {
+        console: { requireAuth: false },
+        public: { requireAuth: false },
+      }),
+      confineTo: "requests",
+      home: "requests.all",
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    try {
+      const length = history.length;
+      await waitFor(() => expect(window.location.pathname).toBe("/requests"));
+      expect(history.length).toBe(length);
+      await app.router.navigate({ to: "/public-page" });
+      expect(window.location.pathname).toBe("/public-page");
+      await app.router.navigate({ to: "/requests/item-1" });
+      expect(window.location.pathname).toBe("/requests/item-1");
+      await app.router.navigate({ to: "/account" });
+      expect(window.location.pathname).toBe("/account");
+      await app.router.navigate({ to: "/files/item-1" });
+      expect(window.location.pathname).toBe("/requests");
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+});
 
 type AuthoredQueryDocument = Parameters<typeof useAuthoredQuery>[0];
 
@@ -1083,16 +1202,19 @@ describe("createApp resource route index", () => {
 
     function ChatterRouteProbe(): ReactNode {
       const route = useChatterRoutes().find((item) => item.name === "notes.record");
+      const surface = useSurfacePresentation();
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"}`,
+        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${surface.chatter === "hidden" ? "hidden" : surface.chatter?.tabs?.join(",") ?? "all"}`,
       );
     }
 
     const input = testAppInput([
       {
         id: "notes",
+        menus: [{ id: "notes", route: "notes.home" }],
+        surface: [{ app: "notes", route: "notes.home", chatter: { tabs: ["comments"] } }],
         routes: [
           {
             name: "notes.home",
@@ -1118,7 +1240,7 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note parties.Party id");
+        expect(host.textContent).toContain("notes.Note parties.Party id comments");
       });
     } finally {
       root.unmount();
@@ -1142,7 +1264,7 @@ describe("createApp route tree", () => {
     }]));
     const root = app.mount(host);
     try {
-      await waitFor(() => expect(host.querySelector(".bg-accent-soft")?.textContent).toBe("REVIEWED"));
+      await waitFor(() => expect(host.querySelector(".bg-accent-soft")?.textContent).toBe("Reviewed"));
     } finally {
       root.unmount();
       host.remove();
@@ -1490,3 +1612,119 @@ function requestUrl(input: RequestInfo | URL): string {
 function titleCase(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
+
+
+test("unknown and incompatible default views fail at composition", () => {
+  const resources = [testDataResource("notes.Note"), testDataResource("teams.Team")];
+  const preset = { id: "desk.open", label: "Open", resource: "notes.Note" };
+  const input = (resource: string, id: string, menu = false): CreateAppInput => ({
+    ...testAppInput([{
+      id: "desk", resourceViews: [preset],
+      routes: resourcePageRoutes("desk.all", "/desk", EmptyPage, resource,
+        menu ? {} : { defaultResourceView: id }),
+      menus: [{ id: "desk", route: "desk.all", ...(menu ? { defaultResourceView: id } : {}) }],
+    }]),
+    schemas: testSchemasWithConsoleResources(resources),
+  });
+  expect(() => createApp(input("notes.Note", preset.id))).not.toThrow();
+  expect(() => createApp(input("notes.Note", "desk.missing"))).toThrow(/default resource view/);
+  expect(() => createApp(input("teams.Team", preset.id))).toThrow(/incompatible/);
+  expect(() => createApp(input("teams.Team", preset.id, true))).toThrow(/route "desk.all" does not admit/);
+});
+
+test("a menu preset is admitted on its target route beside the route default", async () => {
+  let admitted: readonly string[] | undefined;
+  function Probe(): ReactNode {
+    admitted = useAppRuntime().menuResourceViewIds;
+    return createElement("span", null, "Menu preset probe");
+  }
+  const app = createApp({
+    ...testAppInput([{
+      id: "desk",
+      resourceViews: [
+        { id: "desk.open", label: "Open", resource: "notes.Note" },
+        { id: "desk.archived", label: "Archived", resource: "notes.Note" },
+      ],
+      routes: resourcePageRoutes("desk.all", "/desk", Probe, "notes.Note", { defaultResourceView: "desk.open" }),
+      menus: [{ id: "desk", route: "desk.all", defaultResourceView: "desk.archived" }],
+    }], { console: { requireAuth: false } }),
+    schemas: testSchemasWithConsoleResources([testDataResource("notes.Note")]),
+  });
+  const originalHref = `${location.pathname}${location.search}${location.hash}`;
+  history.replaceState(null, "", "/desk?preset=desk.archived");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await waitFor(() => expect(admitted).toEqual(["desk.archived"]));
+  } finally {
+    root.unmount();
+    host.remove();
+    history.replaceState(null, "", originalHref);
+  }
+});
+
+test("confined app links, vocabulary and Settings follow one projection across navigation", async () => {
+  const record = testDataResource("records.Record", {
+    fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
+      aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+  });
+  let observed: { href: string; lookup?: string; collection?: string; title: string; field?: string; label?: string; preset?: string; menu?: string } | undefined;
+  function Probe(): ReactNode {
+    const lookup = useResourceRecordHrefLookup();
+    const collection = useResourceRoute("records.Record");
+    const t = useT("records");
+    const model = useModelMetadata("records.Record");
+    const runtime = useAppRuntime();
+    const menu = useChromeMenuTree().byId.get("desk.review")?.displayLabel;
+    observed = { href: lookup("records.Record", "r/2") ?? "", lookup: lookup("records.Record", "r/2"), collection,
+      title: t("title"), field: model?.fields.title?.label, label: model?.label, preset: runtime.defaultResourceView, menu };
+    return createElement("span", null, "Projection probe");
+  }
+  const addon: BaseAddon = {
+    id: "desk",
+    i18n: { records: { title: "Records" } },
+    routes: [
+      ...resourcePageRoutes("records.all", "/records", Probe, "records.Record"),
+      ...resourcePageRoutes("teams.all", "/teams", Probe, "teams.Team"),
+      ...resourcePageRoutes("desk.incoming", "/desk/incoming", Probe, "records.Record", { defaultResourceView: "desk.open" }),
+      ...resourcePageRoutes("desk.review", "/desk/review", Probe, undefined, { recordModel: "records.Record" }),
+    ],
+    menus: [
+      { id: "records", route: "records.all" },
+      { id: "teams", route: "teams.all" },
+      { id: "desk", appRoot: true, children: [
+        { id: "desk.incoming", route: "desk.incoming" },
+        { id: "desk.review", route: "desk.review" },
+        { id: "desk.settings", group: "platform", children: [
+          { id: "desk.team", route: "teams.all.record", params: { id: "team-1" } },
+        ] },
+      ] },
+    ],
+    vocabulary: [
+      { app: "desk", messages: { records: { title: "Incoming" } }, resources: { "records.Record": { label: "Request", fields: { title: "Subject" } } }, menus: { "desk.review": "Review queue" } },
+      { app: "desk", route: "desk.review", messages: { records: { title: "Reviews" } }, resources: { "records.Record": { label: "Review", fields: { title: "Question" } } }, menus: { "desk.review": "Questions" } },
+    ],
+    resourceViews: [{ id: "desk.open", label: "Open records", resource: "records.Record", pageSize: 20 }],
+  };
+  history.replaceState(null, "", "/desk/incoming/r1");
+  const app = createApp({
+    ...testAppInput([addon], { console: { requireAuth: false } }),
+    schemas: testSchemasWithConsoleResources([record, testDataResource("teams.Team")]),
+    confineTo: "desk", home: "desk.incoming",
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await waitFor(() => expect(observed).toMatchObject({ href: "/desk/incoming/r%2F2", collection: "/desk/incoming", lookup: "/desk/incoming/r%2F2", title: "Incoming", field: "Subject", label: "Request", preset: "desk.open", menu: "Review queue" }));
+    await app.router.navigate({ to: "/desk/review/r1" });
+    await waitFor(() => expect(observed).toMatchObject({ href: "/desk/review/r%2F2", collection: "/desk/review", title: "Reviews", field: "Question", label: "Review", menu: "Questions" }));
+    await app.router.navigate({ to: "/teams/team-1" });
+    expect(window.location.pathname).toBe("/teams/team-1");
+    await app.router.navigate({ to: "/teams/team-2" });
+    await waitFor(() => expect(window.location.pathname).toBe("/desk/incoming"));
+    await app.router.navigate({ to: "/records/r1" });
+    expect(window.location.pathname).toBe("/desk/incoming");
+  } finally { root.unmount(); host.remove(); }
+});

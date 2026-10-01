@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { renderHook } from "@testing-library/react";
+import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -18,15 +18,18 @@ import {
   useResourceRecordHrefLookup,
   useRouteHref,
   useRuntimeAuth,
+  useRuntimeViewAs,
   useRuntimeUserPreferences,
   useNamespaceT,
   useSlot,
   useT,
   useWidget,
   type AppRuntime,
+  type RuntimeAuthState,
 } from "./runtime";
 import { createRouteHref } from "./route-href";
 import { createAngeeI18nInstance } from "./i18n";
+import { ViewAsBanner, ViewAsPicker } from "../chrome/ViewAs";
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>
@@ -40,6 +43,33 @@ const TEST_METADATA: SchemaFieldMetadata = schemaFieldMetadataFromDataResources(
     testDataResource("messaging.Thread"),
     testDataResource("messaging.Message"),
 ]);
+
+test("preview UI consumes auth identity, focuses entry and restores the picker on exit", async () => {
+  const realUser = { id: "manager-1", name: "Alex" };
+  const currentUser = { id: "responder-1", name: "Morgan" };
+  const exit = vi.fn();
+  const viewAs = { viewAs: { userId: currentUser.id }, realUser, currentUser,
+    viewablePeople: [currentUser], enter: vi.fn(), exit };
+  const auth: RuntimeAuthState = { user: currentUser, status: "authenticated", hasRole: () => false, viewAs };
+  const { result } = renderHook(() => useRuntimeViewAs(), { wrapper: wrapperFor({ auth }) });
+  expect(result.current).toBe(viewAs);
+  const children = <><ViewAsBanner /><ViewAsPicker /></>;
+  const rendered = render(createElement(AppRuntimeProvider, { runtime: { auth }, children }));
+  expect(screen.getByRole("status").textContent).toContain("Previewing as Morgan");
+  expect(screen.getByRole("status").textContent).toContain("Signed in as Alex");
+  expect(screen.getByRole("button", { name: "Preview as a person: Morgan" })).toBeTruthy();
+  const exitButton = screen.getByRole("button", { name: "Exit preview" });
+  expect(document.activeElement).toBe(exitButton);
+  fireEvent.click(exitButton);
+  expect(exit).toHaveBeenCalledOnce();
+  rendered.rerender(createElement(AppRuntimeProvider, {
+    runtime: { auth: { ...auth, user: realUser, viewAs: { ...viewAs, viewAs: null, currentUser: realUser } } },
+    children,
+  }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Preview as a person" })));
+  expect(screen.queryByRole("status")).toBeNull();
+  rendered.unmount();
+});
 
 describe("useWidget", () => {
   test("returns a registered widget by id", () => {
@@ -55,6 +85,27 @@ describe("useWidget", () => {
 });
 
 describe("useResourceRecordHref", () => {
+  test("selects a same-model destination from row facts and falls back to the canonical record", () => {
+    const wrapper = wrapperFor({
+      routesByResource: {
+        "messaging.Thread": {
+          collection: "messaging.threads",
+          record: { name: "messaging.thread", param: "threadId" },
+          recordFallback: { name: "messaging.thread", param: "threadId" },
+          recordDestinations: [{ record: { name: "desk.thread", param: "id" }, match: { field: "queue.id", equals: "queue-a" } }],
+        },
+      },
+      routeHref: createRouteHref([
+        { name: "messaging.thread", path: "/messaging/threads/$threadId" },
+        { name: "desk.thread", path: "/desk/threads/$id" },
+      ]),
+    });
+    const { result } = renderHook(() => ({ href: useResourceRecordHref("messaging.Thread"), lookup: useResourceRecordHrefLookup() }), { wrapper });
+    expect(result.current.href?.("thr 1", { queue: { id: "queue-a" } })).toBe("/desk/threads/thr%201");
+    expect(result.current.lookup("messaging.Thread", "thr 1", { queue: { id: "queue-a" } })).toBe("/desk/threads/thr%201");
+    expect(result.current.href?.("thr 1", { queue: { id: "other" } })).toBe("/messaging/threads/thr%201");
+  });
+
   test("builds an encoded record href from the resource's composed route", () => {
     const wrapper = wrapperFor({
       routesByResource: {
@@ -245,6 +296,17 @@ describe("useModelSlot", () => {
       "base",
       "specialized",
     ]);
+  });
+
+  test("ignores a legacy page id excluded by the route projection", () => {
+    const wrapper = wrapperFor({ slots: [
+      { slot: "form-view.sections", model: "notes.Note", id: "notes.kept" },
+    ] });
+    const { result } = renderHook(() => useModelSlot(
+      { slot: "form-view.sections", model: "notes.Note" },
+      { admit: ["notes.kept", "notes.excluded"] },
+    ), { wrapper });
+    expect(result.current.map((entry) => entry.id)).toEqual(["notes.kept"]);
   });
 });
 
