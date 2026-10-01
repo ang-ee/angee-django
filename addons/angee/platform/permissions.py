@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, router
 from rebac.models import active_relationship_model
 from rebac.schema import resolve_schema_path
 
@@ -48,11 +48,15 @@ def reconcile_permission_schema() -> int:
 
     Idempotent and best-effort: returns the number of stale managed rows pruned,
     and is a no-op on a fresh/unmigrated database (no ``Schema*`` tables yet). Runs
-    under ``system_context`` in one transaction.
+    under ``system_context`` in one transaction and one permission-index owner:
+    each schema-row delete would otherwise rebuild the index of its types by
+    itself. Schema rows go first; with their change pending, the relationship
+    deletes that follow join the same rebuild.
     """
 
     from rebac import system_context
     from rebac.models import PackageManagedRecord
+    from rebac.models.schema_write import schema_index_write
 
     composed = {app_config.name for app_config in apps.get_app_configs()}
     current_external_ids = _current_schema_external_ids_by_package()
@@ -67,13 +71,14 @@ def reconcile_permission_schema() -> int:
     if not stale:
         return 0
 
-    with system_context(reason="angee.platform.reconcile_permission_schema"), transaction.atomic():
-        _delete_stale_relationships(stale)
+    alias = router.db_for_write(active_relationship_model())
+    with system_context(reason="angee.platform.reconcile_permission_schema"), schema_index_write(alias):
         for record in sorted(stale, key=_prune_key):
             target = record.target
             if target is not None:
                 target.delete()
             record.delete()
+        _delete_stale_relationships(stale)
     return len(stale)
 
 
