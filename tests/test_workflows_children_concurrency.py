@@ -95,8 +95,8 @@ def test_parent_cancel_waits_for_child_final_settlement_without_overwriting_it(c
     assert runner.wake_runs(child.pk) == 0
 
 
-def test_prune_skips_locked_terminal_continuation_then_retries_without_deleting_it(child_graph):
-    """A busy surviving child marks its parent instead of blocking the retention tick."""
+def test_prune_skips_locked_terminal_continuation_until_child_is_pruned(child_graph):
+    """A busy continuation defers its cause without blocking the retention tick."""
     _, _, admitted, build = child_graph
     parent, _ = build(relation="continuation", await_child=False)
     run_until(parent)
@@ -126,8 +126,12 @@ def test_prune_skips_locked_terminal_continuation_then_retries_without_deleting_
         holder.result(timeout=10)
 
     system_queryset(WorkflowRun).filter(pk=parent.pk).update(prune_after=None, prune_reason="")
+    assert WorkflowRun.objects.prune() == 0  # The retained continuation still protects its cause.
+    child.refresh_from_db()
+    assert child.parent_step_id is not None and child.output == {"value": 7}
+    age_runs(child)
+    assert WorkflowRun.objects.prune() == 1
+    assert not system_queryset(WorkflowRun).filter(pk=child.pk).exists()
+    system_queryset(WorkflowRun).filter(pk=parent.pk).update(prune_after=None, prune_reason="")
     assert WorkflowRun.objects.prune() == 1
     assert not system_queryset(WorkflowRun).filter(pk=parent.pk).exists()
-    child.refresh_from_db()
-    assert child.parent_step_id is None and child.status == "succeeded"
-    assert child.output == {"value": 7}

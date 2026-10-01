@@ -1,7 +1,6 @@
 """Review waiters under real PostgreSQL decision, cancellation and expiry races."""
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from datetime import timedelta
 from queue import Queue
 from time import monotonic, sleep
@@ -57,9 +56,9 @@ def waiting_review(execution, register_step):
             )
             requests = (request,)
             if ctx.input.get("requesterless"):
-                requests += (replace(request, assignees=(ctx.actor,), requester=None),)
+                requests += (request.model_copy(update={"assignees": (ctx.actor,), "requester": None}),)
             elif ctx.input.get("two"):
-                requests += (replace(request, assignees=(other_reviewer,)),)
+                requests += (request.model_copy(update={"assignees": (other_reviewer,)}),)
             return ctx.ask(*requests, policy=ctx.input.get("policy", "first"))
 
         def apply(self, ctx, settled):

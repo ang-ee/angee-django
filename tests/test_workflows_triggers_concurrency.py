@@ -5,7 +5,7 @@ from threading import Event
 
 import pytest
 from django.db import connection, transaction
-from rebac import actor_context
+from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import active_relationship_model
 
 from angee.base.scoping import system_queryset
@@ -22,6 +22,13 @@ pytestmark = [
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
+
+
+def grant_principal_record_write(record, workflow):
+    """Permit the writing admission hooks to save as the workflow principal."""
+    write_relationships([RelationshipTuple(
+        resource=to_object_ref(record), relation="editor", subject=to_subject_ref(workflow.user),
+    )])
 
 
 def test_two_saves_racing_admission_retain_one_ledger_and_run(trigger_setup, monkeypatch):
@@ -78,6 +85,8 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
         )
     for trigger in (lower, higher):
         Trigger.objects.enable(trigger, actor=actor)
+    grant_principal_record_write(record, workflow)
+    grant_principal_record_write(other, workflow)
     capture(record)
     event = system_queryset(TriggerEvent).get(trigger=higher, record_object_id=record.pk)
     entered, release_hook, captured, release_writer = Event(), Event(), Event(), Event()
@@ -119,8 +128,9 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
 
 def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(trigger_setup, monkeypatch):
     """A source writer waits before its capture, so a hook can update the same row."""
-    actor, _, record, trigger = trigger_setup
+    actor, workflow, record, trigger = trigger_setup
     Trigger.objects.enable(trigger, actor=actor)
+    grant_principal_record_write(record, workflow)
     capture(record)
     event = system_queryset(TriggerEvent).get()
     entered, release = Event(), Event()

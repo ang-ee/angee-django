@@ -19,7 +19,7 @@ from angee.base.jsonschema import validate
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target, record_ref_for
-from angee.base.scoping import read_scoped_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
@@ -135,6 +135,8 @@ class ExtractionManager(EvidenceManager):
                 raise ValidationError("A source requires exactly one file or message part.")
             if not (
                 source.file is not None and target._meta.label == "storage.File" and source.file.pk == target.pk
+                or source.file is not None and target._meta.label == "messaging.Message"
+                and system_queryset(target.parts.model).filter(message_id=target.pk, file_id=source.file.pk).exists()
                 or source.message_part is not None and target._meta.label == "messaging.Message"
                 and source.message_part.message_id == target.pk
             ):

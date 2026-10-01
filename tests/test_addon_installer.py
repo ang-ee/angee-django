@@ -15,12 +15,14 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from pydantic import BaseModel
 
+from angee.base.impl import check_impl_registry
 from angee.platform.installer import (
     AddonInstaller,
+    AddonInstallerBackend,
     LocalInstallerBackend,
     StaleAddonPreviewError,
-    _check_installer_backends,
     addon_installer,
+    check_installer_backend_selection,
 )
 
 _SETTINGS_YAML = """\
@@ -263,7 +265,7 @@ def test_installer_check_reports_every_backend_fault_with_distinct_ids(
         "wrong_base": "builtins.str",
     }
 
-    issues = _check_installer_backends(None)
+    issues = [*check_impl_registry(AddonInstallerBackend), *check_installer_backend_selection(None)]
 
     assert [issue.id for issue in issues] == [
         "angee.E003",
@@ -278,7 +280,8 @@ def test_installer_check_requires_a_nonempty_registry(settings: Any, registry: A
 
     settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = registry
 
-    assert [issue.id for issue in _check_installer_backends(None)] == [expected_id]
+    issues = [*check_impl_registry(AddonInstallerBackend), *check_installer_backend_selection(None)]
+    assert [issue.id for issue in issues] == [expected_id]
 
 
 def test_installer_check_inherits_config_form_validation(settings: Any, monkeypatch: Any) -> None:
@@ -291,7 +294,7 @@ def test_installer_check_inherits_config_form_validation(settings: Any, monkeypa
     settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {"local": "angee.platform.installer.LocalInstallerBackend"}
     monkeypatch.setattr(LocalInstallerBackend, "config_model", UnsupportedConfig)
 
-    issues = _check_installer_backends(None)
+    issues = check_impl_registry(AddonInstallerBackend)
 
     assert [issue.id for issue in issues] == ["angee.E005"]
     assert "config.headers" in issues[0].msg

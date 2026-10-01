@@ -71,6 +71,29 @@ def message_evidence(part_tree, evidence):
         yield retain_message, values, parts
 
 
+def test_message_target_accepts_its_attachment_file_source(message_evidence, evidence):
+    """A message owns files referenced by its parts, subject to source read access."""
+    retain, values, parts = message_evidence
+    _, file_values = evidence
+    file = file_values["target"]
+    content = file_values["sources"][0].content
+    source = DocumentSource(0, file.content_hash, "text/plain", content, file=file)
+    result = replace(
+        values["result"],
+        parts=(DocumentPart(0, 0, "text/plain", ExtractionPartKind.NATIVE_TEXT,
+                            content.decode(), "native", file.content_hash),),
+        value={"documents": [{"title": "Note", "optional": None,
+                               "lines": [{"text": "First line"}, {"text": "Second line"}]}]},
+        claims={"/documents/0/title": [{"part_position": 0, "start": 0, "end": 4}]},
+    )
+    with pytest.raises(ValidationError, match="belongs to the extraction target"):
+        retain(sources=(source,), result=result, request_key="unrelated-file")
+    with system_context(reason="attach extraction source to its target message"), mute_changes():
+        Part.objects.filter(pk=parts["attachment"].pk).update(file=file)
+    retained = retain(sources=(source,), result=result, request_key="attached-file")
+    assert retained.document_sources()[0].file.pk == file.pk
+
+
 def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(message_evidence):
     retain, values, parts = message_evidence
     original = values["sources"][0]
