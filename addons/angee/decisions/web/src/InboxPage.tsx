@@ -152,7 +152,7 @@ function DecisionDetails({ recordId, editing = false }: Pick<RecordPanelContext,
       <DecisionOriginOutlet />
       <DecisionContext context={decision.context} showFacts={content.length === 0} />
       <fieldset disabled={!editing}><DecisionContentOutlet /></fieldset>
-      {!editing ? <DecisionSeats recordId={recordId} groupId={decision.group.id} /> : null}
+      {!editing && decision.group ? <DecisionSeats recordId={recordId} groupId={decision.group.id} /> : null}
     </div>
   </DecisionContentProvider>;
 }

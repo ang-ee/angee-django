@@ -328,7 +328,7 @@ export function RecordThreadConversation({
           modelLabel,
           recordId,
           body: args.body,
-          kind: selectedPostKind === "note" ? "NOTE" : "COMMENT",
+          kind: selectedPostKind === "note" ? ("NOTE" as const) : ("COMMENT" as const),
           parentMessageId: replyToMessage?.id ?? null,
           attachmentIds: [...args.attachmentIds],
           recipientUserIds: selectedPostKind === "comment" ? [...args.recipientUserIds] : [],
@@ -631,7 +631,7 @@ function ChatterComposer({
   function handleKindChange(next: ChatterPostKind): void {
     if (disabled) return;
     onPostKindChange(next);
-    if (next === "NOTE") {
+    if (next === "note") {
       setSelectedRecipientIds([]);
       setAutofollowRecipients(false);
     }
