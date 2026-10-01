@@ -21,6 +21,7 @@ class ClosedReason(models.TextChoices):
     SUPERSEDED = "superseded", "Superseded"
     SIBLING_SETTLED = "sibling_settled", "Sibling settled"
     INVALID_ATTEMPTS = "invalid_attempts", "Invalid attempts"
+    IMPORTED = "imported", "Imported"
 
     @classmethod
     def unanswered_values(cls) -> tuple[str, ...]:

@@ -19,7 +19,7 @@ from tests.test_decisions_inbox import inbox as inbox
 
 FIELDS = """
   id kind_label subject_id subject_model
-  requester { id display_name } expires_at verdict is_open can_act
+  requester { id display_name } expires_at verdict is_open permissions
 """
 LIST = """query Inbox($viewer: String!) {
   decisions(where: {assignees: {_eq: $viewer}, is_open: {_eq: true}},
@@ -76,7 +76,7 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
             if name == "list":
                 rows = result["decisions"]
                 assert len(rows) == size
-                assert all(row["can_act"] and row["is_open"] for row in rows)
+                assert all("act" in row["permissions"] and row["is_open"] for row in rows)
                 assert all(row["requester"] is not None for row in rows)
                 assert {row["subject_id"] for row in rows} == {
                     str(subject.sqid) for subject in subjects[:min(size, 3)]
@@ -85,7 +85,7 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
                 assert sum(row["aggregate"]["count"] for row in result["decisions_groups"]) == size
             else:
                 assert result["decisions_by_pk"]["id"] == str(decision.sqid)
-                assert result["decisions_by_pk"]["can_act"]
+                assert "act" in result["decisions_by_pk"]["permissions"]
             counts[name].append(len(captured))
             sql = [item["sql"] for item in captured]
             (tmp_path / f"{name}-{size}.json").write_text(json.dumps(sql, indent=2))

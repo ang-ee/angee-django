@@ -133,6 +133,39 @@ def test_complete_lifecycle_without_any_run(people):
     assert len(resolved) == 1
 
 
+def test_delegated_system_admission_requires_a_current_actor(people):
+    issuer, _reviewer, _outsider, _subject = people
+    request = request_for(people, assignees=None, requester=None)
+    with pytest.raises(PermissionDenied):
+        Decision.objects.admit_group([request], actor=None)
+    with pytest.raises(ValidationError, match="Delegated assignment"):
+        Decision.objects.admit_group([request], actor=issuer)
+    with system_context(reason="test.delegated_question"):
+        with pytest.raises(ValidationError, match="current actor"):
+            Decision.objects.admit_group([request], actor=None)
+    admin = create_platform_admin("delegated-decision-admin")
+    with system_context(reason="test.delegated_question"):
+        group = Decision.objects.admit_group([request], actor=None)
+        decision = seat(group)
+        assert not decision.assignees.exists()
+    assert group.issuer_id is None and decision.requester_id is None
+    assert decision.revision == 1
+    assert answer(decision, admin).resolved_by_id == admin.pk
+
+
+def test_reask_preserves_a_system_delegated_seat(people):
+    admin = create_platform_admin("delegated-reask-admin")
+    request = request_for(people, assignees=None, requester=None)
+    with system_context(reason="test.delegated_reask"):
+        first = Decision.objects.admit_group([request], actor=None)
+    answer(seat(first), admin, action="decline", values={"reason": "Try again"})
+    with system_context(reason="test.delegated_reask"):
+        second = Decision.objects.reask(first.pk, actor=None, actions=(Complete, Decline), errors={})
+        assert not seat(second).assignees.exists()
+    assert second.issuer_id is None and second.reasked_from_id == first.pk
+    assert seat(first).superseded_by_id is None
+
+
 def test_non_admin_person_without_seat_cannot_read_or_decide(people):
     issuer, reviewer, outsider, _subject = people
     group = Decision.objects.admit_group([request_for(people)], actor=issuer)
@@ -848,6 +881,29 @@ def test_graphql_inbox_hides_foreign_seats_and_dispatches_the_deciding_action(pe
     assert seat(group).resolved_by_id == reviewer.pk
     mutation_fields = schema._schema.mutation_type.fields
     assert not any(name.startswith(("insert_", "update_", "delete_")) for name in mutation_fields)
+
+
+def test_graphql_decide_uses_the_decision_instance_dispatch(people, monkeypatch):
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    decision = seat(group)
+    called = []
+    original = Decision.decide
+
+    def dispatch(self, **kwargs):
+        called.append(self.pk)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(Decision, "decide", dispatch)
+    schema = addon_schema(decision_schema.schemas, "console")
+    mutation = """mutation($id: ID!, $revision: Int!, $values: JSON!) {
+      decide(id: $id, revision: $revision, action: "complete", values: $values) { ok }
+    }"""
+    result = result_data(execute_schema(schema, mutation, {"id": decision.sqid,
+                                                          "revision": decision.revision,
+                                                          "values": {"note": "Read"}}, user=reviewer))
+    assert result == {"decide": {"ok": True}}
+    assert called == [decision.pk]
 
 
 def test_graphql_form_errors_preserve_authored_snake_case_field_names(people):

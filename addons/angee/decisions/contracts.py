@@ -55,7 +55,7 @@ class DecisionRequest(BaseModel):
 
     kind: str = Field(min_length=1, pattern=r"\S")
     subject: Any
-    assignees: tuple[Any, ...] = Field(min_length=1)
+    assignees: tuple[Any, ...] | None = Field(min_length=1)
     actions: tuple[type[Action], ...] = Field(min_length=1)
     requester: Any = DEFAULT_REQUESTER
     basis: Any = Field(default_factory=dict)

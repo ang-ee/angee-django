@@ -16,7 +16,7 @@ from rebac import system_context
 from angee.base.evidence import DerivedFrom
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, retained_set_null
+from angee.base.mixins import AppendOnlyModel, OptimisticLockMixin, retained_set_null
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
@@ -32,7 +32,7 @@ class DecisionGroup(AppendOnlyModel, AngeeDataModel):
     sqid_prefix = "dcg_"
     policy = ImplClassField(DecisionPolicy, default="first",
     )
-    issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
     reasked_from = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reasked_by",
     )
@@ -104,7 +104,7 @@ class DecisionGroup(AppendOnlyModel, AngeeDataModel):
         return True
 
 
-class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
+class Decision(OptimisticLockMixin, AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     """One immutable question and its conditional, final answer."""
 
     runtime = True
@@ -134,7 +134,6 @@ class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     invalid_attempts = models.PositiveIntegerField(default=0)
     max_attempts = models.PositiveIntegerField()
     expires_at = models.DateTimeField(null=True, blank=True)
-    revision = models.PositiveIntegerField(default=0)
     objects = DecisionManager()
 
     class Meta:
@@ -150,11 +149,15 @@ class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
             models.CheckConstraint(condition=(
                 models.Q(verdict=Verdict.PENDING, resolved_at__isnull=True, resolved_by__isnull=True)
                 & (models.Q(closed_reason__isnull=True) | models.Q(closed_reason__in=[
-                    reason for reason in ClosedReason.values if reason != ClosedReason.RESOLVED
+                    reason for reason in ClosedReason.values
+                    if reason not in (ClosedReason.RESOLVED, ClosedReason.IMPORTED)
                 ]))
             ) | models.Q(verdict__in=[v for v in Verdict.values if v != Verdict.PENDING],
                          resolved_at__isnull=False, resolved_by__isnull=False,
-                         closed_reason__isnull=False, closed_reason=ClosedReason.RESOLVED),
+                         closed_reason__isnull=False, closed_reason=ClosedReason.RESOLVED)
+                | models.Q(verdict__in=[v for v in Verdict.values if v != Verdict.PENDING],
+                           resolved_at__isnull=True, resolved_by__isnull=True,
+                           closed_reason__isnull=False, closed_reason=ClosedReason.IMPORTED),
                 name="decisions_resolution_consistent"),
         ]
         indexes = [
@@ -182,6 +185,11 @@ class Decision(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     def kind_label(self) -> str:
         """Present the authored kind without exposing identifier separators."""
         return capfirst(self.kind.replace("_", " ").replace("-", " "))
+
+    def decide(self, *, actor: Any, revision: int, action: str, values: dict[str, Any]) -> Any:
+        """Dispatch through a donor while the manager owns the locked answer transition."""
+        return type(self).objects.decide(self.pk, actor=actor, revision=revision, action=action, values=values)
+
 
 class DecisionEvidence(DerivedFrom):
     """Indexed projection of context references, authored only at admission."""
