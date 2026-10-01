@@ -942,6 +942,17 @@ def _sortable_alias_expression(
     return expression
 
 
+def with_filter_aliases(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Project declared aliases on nested node reads through the guarded alias owner."""
+    projected = {}
+    for name, (expression, paths) in _declared_aliases(queryset.model)[1].items():
+        source = system_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
+        projected[name] = models.Subquery(source.annotate(
+            _angee_scalar=_sortable_alias_expression(expression, paths, None, source),
+        ).values("_angee_scalar")[:1])
+    return queryset.annotate(**projected) if projected else queryset
+
+
 def _public_pk(model: type[models.Model], value: Any) -> Any:
     """Decode identity without an existence check; read roots own row scope."""
 

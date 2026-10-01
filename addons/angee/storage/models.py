@@ -247,7 +247,7 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
         return drive
 
 
-class Drive(AuditMixin, OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
+class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -1217,7 +1217,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             locked.grant_record_access("viewer", user)
 
 
-class File(AuditMixin, OwnerMixin, AngeeDataModel):
+class File(OwnerMixin, AngeeDataModel):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.

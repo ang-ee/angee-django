@@ -13,12 +13,10 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 from rebac.resources import model_for_resource_type
 
-from angee.decisions.testing.models import Decision, DecisionGroup
-from angee.workflows.states import WorkflowStatus
-from angee.workflows.testing.models import Workflow
 from tests import test_messaging as _messaging_models  # noqa: F401 -- register source model
 from tests import test_productivity_deferred_save as _task_relation_models  # noqa: F401 -- register source model
 from tests.conftest import Backend, Drive, Folder, Page, Vault, create_user, make_integration
+from tests.decisions_models import Decision, DecisionGroup
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- register source model
 from tests.messaging_models import Channel, Thread
 from tests.money_models import Currency, CurrencyRate
@@ -55,7 +53,7 @@ def test_large_permission_reads_issue_one_statement(
     assert len(queries) == 1, (resource_type, permission, queries)
 
 
-@pytest.mark.parametrize("resource_type", ("storage/folder", "knowledge/page", "workflows/workflow"))
+@pytest.mark.parametrize("resource_type", ("storage/folder", "knowledge/page"))
 def test_recursive_read_sql_is_constant_across_fifty_levels(composed_tables: None, resource_type: str) -> None:
     """A deeper hierarchy changes indexed data, never the actor-scope SQL shape."""
 
@@ -80,21 +78,6 @@ def test_recursive_read_sql_is_constant_across_fifty_levels(composed_tables: Non
             parent = None
             for level in range(50):
                 parent = Page.objects.create(vault=vault, parent=parent, title=f"level-{level}")
-        else:
-            # Publishing normally points each version at its head. A synthetic
-            # chain stresses the recursive index read without changing policy.
-            start = Workflow._base_manager.order_by("-pk").values_list("pk", flat=True).first() or 0
-            Workflow._base_manager.bulk_create(
-                Workflow(
-                    pk=start + level,
-                    name=f"level-{level}",
-                    status=WorkflowStatus.PUBLISHED,
-                    version=level,
-                    published_from_id=start + level - 1 if level > 1 else None,
-                    created_by=actor,
-                )
-                for level in range(1, 51)
-            )
     call_command("rebac", "index", "rebuild", verbosity=0)
     assert scope_sql() == shallow
 

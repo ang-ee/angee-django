@@ -42,7 +42,7 @@ class NeedAccessAction(models.TextChoices):
 
 
 class ApproveNeedAccess(
-    Action, value=NeedAccessAction.APPROVE, label=NeedAccessAction.APPROVE.label, verdict=Verdict.COMPLETED,
+    Action, key=NeedAccessAction.APPROVE, label=NeedAccessAction.APPROVE.label, verdict=Verdict.COMPLETED,
 ):
     """Approve the request's account, with an optional explanation."""
 
@@ -50,7 +50,7 @@ class ApproveNeedAccess(
 
 
 class DenyNeedAccess(
-    Action, value=NeedAccessAction.DENY, label=NeedAccessAction.DENY.label, verdict=Verdict.REJECTED,
+    Action, key=NeedAccessAction.DENY, label=NeedAccessAction.DENY.label, verdict=Verdict.REJECTED,
 ):
     """Decline access without changing the request's account."""
 
@@ -681,7 +681,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         expected_revision: int | None = None, decision: Any = None, decision_revision: int | None = None,
     ) -> Any:
         """Orchestrate both request and inbox entrypoints under the same request lock."""
-        action_model = next((model for model in self.access_actions if model.value == action), None)
+        action_model = next((model for model in self.access_actions if model.key == action), None)
         if action_model is None:
             raise ValidationError({"action": "Choose approve or deny."})
         actor = instance_actor(self)

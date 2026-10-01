@@ -199,7 +199,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         return vault.with_actor(actor)
 
 
-class Vault(AuditMixin, OwnerMixin, CreationKeyMixin, AngeeDataModel, HistoryMixin):
+class Vault(OwnerMixin, CreationKeyMixin, AngeeDataModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
     Deleting a vault cascade-deletes every page inside it; the crud delete

@@ -25,14 +25,6 @@
       "ownerFile": "src/project-declarations.tsx"
     },
     {
-      "name": "projectTimelineTab",
-      "ownerFile": "src/project-declarations.tsx"
-    },
-    {
-      "name": "projectTimelineSpec",
-      "ownerFile": "src/project-declarations.tsx"
-    },
-    {
       "name": "useTaskListDeclaration",
       "ownerFile": "src/task-declarations.tsx"
     },

@@ -1274,7 +1274,7 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(AuditMixin, OwnerMixin, AngeeDataModel):
+class Thread(OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
