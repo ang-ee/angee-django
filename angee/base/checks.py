@@ -6,11 +6,81 @@ from collections.abc import Sequence
 
 from django.apps import AppConfig, apps
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured
 from django.db import DEFAULT_DB_ALIAS, router
+from django.utils.module_loading import import_string
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
 
+from angee.base.impl import (
+    _hook_paths,
+    _resolve_hook_path,
+    check_impl_registry,
+    declared_hooks,
+    declared_impl_registries,
+)
 from angee.base.mixins import HierarchyQuerySet
+
+
+def check_impl_registries(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Validate every keyed registry declared by installed addons."""
+
+    del app_configs, kwargs
+    try:
+        paths = declared_impl_registries()
+    except ImproperlyConfigured as error:
+        return [checks.Error(str(error), id="angee.E024")]
+    errors: list[checks.CheckMessage] = []
+    for dotted in paths:
+        try:
+            base = import_string(dotted)
+        except ImportError as error:
+            errors.append(
+                checks.Error(
+                    f"ANGEE_IMPL_REGISTRIES entry {dotted!r} cannot be imported: {error}",
+                    id="angee.E024",
+                )
+            )
+            continue
+        if not isinstance(base, type) or not getattr(base, "registry_setting", ""):
+            errors.append(
+                checks.Error(
+                    f"ANGEE_IMPL_REGISTRIES entry {dotted!r} must name a registry base with registry_setting.",
+                    id="angee.E024",
+                )
+            )
+            continue
+        errors.extend(check_impl_registry(base))
+    return errors
+
+
+def check_hooks(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Validate every callable hook declared by installed addons."""
+
+    del app_configs, kwargs
+    try:
+        names = declared_hooks()
+    except ImproperlyConfigured as error:
+        return [checks.Error(str(error), id="angee.E026")]
+    errors: list[checks.CheckMessage] = []
+    for name in names:
+        try:
+            paths = _hook_paths(name)
+        except ImproperlyConfigured as error:
+            errors.append(checks.Error(str(error), id="angee.E026"))
+            continue
+        for path in paths:
+            try:
+                _resolve_hook_path(name, path)
+            except ImproperlyConfigured as error:
+                errors.append(checks.Error(str(error), id="angee.E026"))
+    return errors
 
 
 def check_hierarchy_queryset_order(
@@ -21,9 +91,7 @@ def check_hierarchy_queryset_order(
 
     del kwargs
     models = (
-        apps.get_models()
-        if app_configs is None
-        else (model for config in app_configs for model in config.get_models())
+        apps.get_models() if app_configs is None else (model for config in app_configs for model in config.get_models())
     )
     errors: list[checks.CheckMessage] = []
     for model in models:
@@ -31,7 +99,7 @@ def check_hierarchy_queryset_order(
             queryset_type = type(manager.get_queryset())
             if not issubclass(queryset_type, HierarchyQuerySet):
                 continue
-            preceding = queryset_type.__mro__[:queryset_type.__mro__.index(HierarchyQuerySet)]
+            preceding = queryset_type.__mro__[: queryset_type.__mro__.index(HierarchyQuerySet)]
             if any(not issubclass(owner, HierarchyQuerySet) or "update" in owner.__dict__ for owner in preceding):
                 errors.append(
                     checks.Error(
@@ -53,9 +121,7 @@ def check_rebac_database(
 
     del kwargs
     models = (
-        apps.get_models()
-        if app_configs is None
-        else (model for config in app_configs for model in config.get_models())
+        apps.get_models() if app_configs is None else (model for config in app_configs for model in config.get_models())
     )
     errors: list[checks.CheckMessage] = []
     for model in models:

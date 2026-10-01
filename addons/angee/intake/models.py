@@ -491,7 +491,6 @@ class TaskIntake(models.Model):
     """Same-row task save participant that owns Need.project re-denormalization."""
 
     extends = "projects.Task"
-    runtime = False
 
     class Meta:
         """Abstract donor options folded into the concrete task table."""

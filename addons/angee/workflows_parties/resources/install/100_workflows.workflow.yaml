@@ -1,15 +1,36 @@
-# The dedupe workflow definition (install tier, published on load). Subjectless:
-# it scans the whole directory, so subject_declaration stays empty and the run
-# starts without a subject from the parties Review launcher.
 _meta:
   model: workflows.Workflow
 rows:
-  - xref: dedupe_parties
+  - xref: parties_identity_review
     fields:
-      key: dedupe_parties
-      name: Deduplicate people
-      description: >-
-        Scan for people sharing a normalized handle, review the proposed
-        merges as one editable batch, then apply the approved verbs.
-      subject_declaration: ""
-      budget: {}
+      key: parties_identity_review
+      name: Party identity review
+      description: Review proposed identity values against the retained party facts.
+      publish: true
+      draft:
+        nodes:
+          identity:
+            step: parties_identity_review
+        results:
+          - {from: identity, when: [applied, unchanged, conflict, rejected, escalated, expired, superseded]}
+  - xref: parties_dedupe
+    fields:
+      key: parties_dedupe
+      name: Duplicate party review
+      description: Find shared-handle candidates and review each pair independently.
+      publish: true
+      draft:
+        nodes:
+          scan:
+            step: parties_dedupe_scan
+            next: {done: review_pairs}
+          review_pairs:
+            step: map
+            input: {items: {from: scan}}
+            body:
+              step: parties_dedupe_review
+              input:
+                pair: {from: item}
+                assignee: {from: input, path: [assignee]}
+        results:
+          - {from: review_pairs, when: [done, failed]}

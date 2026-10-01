@@ -561,7 +561,7 @@ def test_reference_entry_validation_error_is_contained_and_counted(
 
     monkeypatch.setattr(LocalFolderMountBackend, "entry_hash", invalid_entry)
     assert _run_sync(mount) == 0
-    assert mount.last_sync_status == "ok"
+    assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert _details(mount)["errors"] == 1
     assert _details(mount)["scanned"] == 1
 
@@ -592,7 +592,7 @@ def test_reference_entry_data_error_is_contained_and_counted(
 
     monkeypatch.setattr(manager_type, "index_external", index_external)
     assert _run_sync(mount) == 1
-    assert mount.last_sync_status == "ok"
+    assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert _details(mount)["errors"] == 1
     assert _details(mount)["scanned"] == 2
     assert set(_file_map(mount.drive)) == {"good.txt"}
@@ -620,7 +620,7 @@ def test_reference_sync_skips_unmirrorable_directory_without_aborting(
     del queued_mounts
 
     assert _run_sync(mount) == 1
-    assert mount.last_sync_status == "ok"
+    assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert mount.runtime_status == IntegrationRuntimeStatus.OK
     assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert _details(mount)["errors"] == 1
@@ -722,7 +722,7 @@ def test_run_sync_records_success_and_missing_root_error_telemetry(
     assert mount.last_sync_started_at == first_now
     assert mount.last_sync_completed_at is not None
     assert mount.last_sync_completed_at >= first_now
-    assert mount.last_sync_status == "ok"
+    assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert mount.last_sync_items == 1
     assert mount.sync_stage == mount.SyncStage.COMPLETED
     assert mount.runtime_status == IntegrationRuntimeStatus.OK
@@ -737,7 +737,7 @@ def test_run_sync_records_success_and_missing_root_error_telemetry(
     assert mount.last_sync_started_at == failure_now
     assert mount.last_sync_completed_at is not None
     assert mount.last_sync_completed_at >= first_now
-    assert mount.last_sync_status == "error"
+    assert mount.sync_stage == mount.SyncStage.FAILED
     assert mount.sync_stage == mount.SyncStage.FAILED
     assert mount.sync_error == "Integration configuration is invalid."
     assert mount.runtime_status == IntegrationRuntimeStatus.ERROR

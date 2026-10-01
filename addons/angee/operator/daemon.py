@@ -82,7 +82,7 @@ class OperatorDaemon:
 
     @classmethod
     def from_settings(cls) -> OperatorDaemon:
-        """Resolve the daemon bridge from Django settings and the environment."""
+        """Resolve the browser proxy endpoint separately from the internal daemon URL."""
 
         endpoint_url = cls._setting("ANGEE_OPERATOR_GRAPHQL_ENDPOINT")
         base_url = cls._setting("ANGEE_OPERATOR_URL")

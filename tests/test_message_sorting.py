@@ -11,7 +11,7 @@ from rebac import actor_context, current_actor, system_context
 
 from angee.messaging.managers import MessageQuerySet
 from tests.conftest import Vendor, execute_schema, make_integration, result_data
-from tests.test_messaging import Fragment, Handle, Message, Part, Party, Thread
+from tests.test_messaging import Channel, Fragment, Handle, Message, Part, Party, Thread
 from tests.test_messaging_graphql import _platform_admin, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -236,8 +236,8 @@ def test_related_sort_values_ignore_denied_labels_and_regate_elevated_parents() 
     with system_context(reason="test.messaging.related_sort.seed"):
         visible = Thread.objects.create(created_by=owner, title=Fragment.objects.upsert(text="Visible thread"))
         hidden = Thread.objects.create(created_by=other, title=Fragment.objects.upsert(text="Alpha secret"))
-        channel = make_integration("related-sort-channel", owner=owner)
-        other_channel = make_integration("related-sort-other-channel", owner=other)
+        channel = make_integration("related-sort-channel", model=Channel, owner=owner)
+        other_channel = make_integration("related-sort-other-channel", model=Channel, owner=other)
         rows = [
             Message.objects.create(created_by=owner, thread=visible, channel=channel),
             Message.objects.create(created_by=owner, thread=hidden, channel=other_channel),
@@ -282,7 +282,7 @@ def test_related_selected_sort_values_have_bounded_sql_and_native_ties() -> None
             title = f"Thread {index % 3}"
             vendor_name = f"Vendor {index % 4}"
             thread = Thread.objects.create(created_by=owner, title=Fragment.objects.upsert(text=title))
-            channel = make_integration(f"related-sort-cost-{index}", owner=owner)
+            channel = make_integration(f"related-sort-cost-{index}", model=Channel, owner=owner)
             Vendor.objects.filter(pk=channel.vendor_id).update(display_name=vendor_name)
             message = Message.objects.create(created_by=owner, thread=thread, channel=channel)
             expected.append((title, vendor_name, message.pk, str(message.sqid)))

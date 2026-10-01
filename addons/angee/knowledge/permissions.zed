@@ -60,12 +60,11 @@ definition knowledge/page {
     permission delete = owner + parent->delete + vault->delete
 }
 
-// The body sidecar has no access surface of its own: everything delegates
-// to the owning page.
+// The concrete markdown child delegates access to its page parent.
 definition knowledge/markdown_page {
-    relation page: knowledge/page // rebac:field=page
+    relation page: knowledge/page // rebac:field=page_ptr
 
-    // Preflighted by MarkdownPageManager.write_body for first-write upserts.
+    // Parent creation is preflighted by PageManager.create_in.
     permission create = page->write
     permission read   = page->read
     permission write  = page->write

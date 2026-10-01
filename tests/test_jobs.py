@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from django.apps import apps
+from django.db import transaction
+
+from angee.jobs.enqueue import enqueue_task
 
 
 def test_jobs_app_exports_celery_app() -> None:
@@ -18,28 +22,24 @@ def test_jobs_app_exports_celery_app() -> None:
     assert app.main == "angee"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     """Callers enqueue by stable task name through the Angee seam."""
 
-    calls: list[tuple[str, dict[str, Any] | None, datetime | None, str | None, float | datetime | None]] = []
+    calls: list[tuple[str, dict[str, Any] | None, str | None, float | datetime | None]] = []
 
     def fake_send_task(
         name: str,
         *,
         kwargs: dict[str, Any] | None = None,
-        eta: datetime | None = None,
         queue: str | None = None,
         expires: float | datetime | None = None,
     ) -> None:
-        calls.append((name, kwargs, eta, queue, expires))
+        calls.append((name, kwargs, queue, expires))
 
     monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", fake_send_task)
 
-    from angee.jobs.enqueue import enqueue_task
-
-    eta = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
-
-    enqueue_task("test.task", kwargs={"run_id": 1}, eta=eta, queue="default")
+    enqueue_task("test.task", kwargs={"run_id": 1}, queue="default")
     enqueue_task(
         "integrate.run_bridge_session",
         kwargs={"model_label": "messaging.channel", "pk": 1},
@@ -48,15 +48,83 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     )
 
     assert calls == [
-        ("test.task", {"run_id": 1}, eta, "default", None),
+        ("test.task", {"run_id": 1}, "default", None),
         (
             "integrate.run_bridge_session",
             {"model_label": "messaging.channel", "pk": 1},
-            None,
             "whatsapp",
             60.0,
         ),
     ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_enqueue_task_waits_for_outer_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The jobs owner copies the payload and waits for the enclosing commit."""
+
+    send = Mock()
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", send)
+    payload = {"run_id": 1}
+    with transaction.atomic():
+        with transaction.atomic():
+            enqueue_task("test.task", kwargs=payload)
+        payload["run_id"] = 2
+        send.assert_not_called()
+
+    send.assert_called_once_with("test.task", kwargs={"run_id": 1}, queue=None, expires=None)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_enqueue_task_discards_rolled_back_savepoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rolling back the producer's savepoint discards its task submission."""
+
+    send = Mock()
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", send)
+    with transaction.atomic():
+        with pytest.raises(ValueError, match="rollback"), transaction.atomic():
+            enqueue_task("test.task", kwargs={})
+            raise ValueError("rollback")
+    send.assert_not_called()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("atomic", [False, True])
+def test_enqueue_task_propagates_send_failure(monkeypatch: pytest.MonkeyPatch, atomic: bool) -> None:
+    """Broker failure is observable at an immediate send or the outer commit."""
+
+    send = Mock(side_effect=RuntimeError("broker unavailable"))
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", send)
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        if atomic:
+            with transaction.atomic():
+                enqueue_task("test.task", kwargs={})
+                send.assert_not_called()
+        else:
+            enqueue_task("test.task", kwargs={})
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("atomic", [False, True])
+def test_robust_enqueue_logs_failure_without_suppressing_later_delivery(monkeypatch, caplog, atomic):
+    """The queue owner owns robustness as well as the single commit boundary."""
+    delivered = []
+
+    def send(name, **kwargs):
+        if name == "unavailable":
+            raise RuntimeError("Transport temporarily unavailable")
+        delivered.append(name)
+
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", send)
+    if atomic:
+        with transaction.atomic():
+            enqueue_task("unavailable", kwargs={}, robust=True)
+            enqueue_task("later", kwargs={})
+            assert delivered == []
+    else:
+        enqueue_task("unavailable", kwargs={}, robust=True)
+        enqueue_task("later", kwargs={})
+    assert delivered == ["later"]
+    assert "Transport temporarily unavailable" in caplog.text
 
 
 def test_job_autoconfig_declares_celery_defaults_only() -> None:
@@ -67,6 +135,7 @@ def test_job_autoconfig_declares_celery_defaults_only() -> None:
     assert "CELERY_BEAT_SCHEDULE" not in SETTINGS
     assert "CELERY_BEAT_SCHEDULE:append" not in SETTINGS
     assert SETTINGS["CELERY_TASK_IGNORE_RESULT"] is True
+    assert SETTINGS["CELERY_WORKER_PREFETCH_MULTIPLIER"] == 1
     # Beat keeps its schedule in the database through the jobs-owned scheduler.
     assert SETTINGS["CELERY_BEAT_SCHEDULER"] == "angee.jobs.scheduler:DatabaseScheduler"
     assert "CELERY_BEAT_SCHEDULE_FILENAME" not in SETTINGS
@@ -132,9 +201,9 @@ def test_addons_own_their_periodic_celery_schedules() -> None:
 
     integrate_schedule = INTEGRATE_SETTINGS["CELERY_BEAT_SCHEDULE:append"]
     workflow_schedule = WORKFLOW_SETTINGS["CELERY_BEAT_SCHEDULE:append"]
+    assert isinstance(integrate_schedule, dict)
+    assert isinstance(workflow_schedule, dict)
 
     assert integrate_schedule["integrate.sync_due_bridges"]["task"] == "integrate.sync_due_bridges"
-    assert workflow_schedule["workflows.decisions"]["task"] == "workflows.decisions"
-    assert workflow_schedule["workflows.sweep"]["task"] == "workflows.sweep"
-    assert workflow_schedule["workflows.reap"]["task"] == "workflows.reap"
-    assert workflow_schedule["workflows.schedule_triggers"]["task"] == "workflows.schedule_triggers"
+    assert set(workflow_schedule) == {"workflows.tick"}
+    assert workflow_schedule["workflows.tick"]["task"] == "workflows.tick"

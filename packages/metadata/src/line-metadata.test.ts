@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   RelationRepresentationError,
   lineReadSelectionPaths,
+  modelFieldForPath,
   relationRepresentationForPath,
   resourceReadSelectionPaths,
   schemaFieldMetadataFromDataResources,
@@ -133,6 +134,18 @@ describe("relationRepresentationForPath", () => {
   ]);
   const model = schema.labels["projects.Initiative"]!;
 
+  test("resolves nested fields to the model that declares their metadata", () => {
+    expect(modelFieldForPath("project.product", model, schema)).toEqual({
+      field: schema.labels["projects.Project"]!.fields.product,
+      model: schema.labels["projects.Project"],
+    });
+    expect(modelFieldForPath("project.product.name", model, schema)).toEqual({
+      field: schema.labels["catalog.Product"]!.fields.name,
+      model: schema.labels["catalog.Product"],
+    });
+    expect(modelFieldForPath("project.product.name.text", model, schema)).toBeNull();
+  });
+
   test("expands a nested relation-terminal path using canonical model labels", () => {
     expect(relationRepresentationForPath("project.product", model, schema)).toEqual({
       selectionPaths: ["project.product.id", "project.product.name"],
@@ -183,6 +196,32 @@ describe("relationRepresentationForPath", () => {
   test("fails when a relation has no finalized selectable representation", () => {
     const broken = schemaFieldMetadataFromDataResources([{ ...initiative, query: testResourceQuery() }]);
     expect(() => relationRepresentationForPath("project", broken.labels["projects.Initiative"]!, broken)).toThrow(/no finalized selectable representation/);
+  });
+
+  test("selects a to-many relation's record identities and labels", () => {
+    const seat = testDataResource("decisions.Seat", {
+      fields: [field("assignees", "list", { scalar: null, relationModelLabel: "iam.User" })],
+    });
+    const user = testDataResource("iam.User", {
+      recordRepresentation: "display_name",
+      fields: [field("display_name", "scalar", { scalar: "String" })],
+    });
+    const resources = schemaFieldMetadataFromDataResources([seat, user]);
+    const model = resources.labels["decisions.Seat"]!;
+    expect(relationRepresentationForPath("assignees", model, resources)).toEqual({
+      selectionPaths: ["assignees.id", "assignees.display_name"],
+      displayPath: "assignees.display_name",
+      relationList: { model: "iam.User", identityPath: "id", labelPath: "display_name" },
+    });
+    expect(resourceReadSelectionPaths(model, resources)).toEqual(["id"]);
+  });
+
+  test("treats an object list without a relation target as a plain value list", () => {
+    const handle = testDataResource("parties.PartyHandle", {
+      fields: [field("evidence_refs", "list", { scalar: null })],
+    });
+    const resources = schemaFieldMetadataFromDataResources([handle]);
+    expect(relationRepresentationForPath("evidence_refs", resources.labels["parties.PartyHandle"]!, resources)).toBeNull();
   });
 
 });

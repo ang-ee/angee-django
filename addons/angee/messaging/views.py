@@ -7,14 +7,14 @@ from typing import Any
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from django.http import Http404, HttpRequest, JsonResponse
-from django.utils.module_loading import import_string
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rebac import system_context
 
+from angee.base.impl import resolve_hook
 from angee.messaging.ingress import (
     AnonymousIngressPolicy,
     AnonymousIngressRateLimit,
@@ -162,16 +162,10 @@ def _webform_policy(slug: str) -> AnonymousIngressPolicy:
 
 
 def _webform_token_hook() -> AnonymousIngressTokenHook | None:
-    dotted = str(getattr(settings, "ANGEE_WEBFORM_TOKEN_HOOK", "") or "").strip()
-    if not dotted:
-        return None
     try:
-        hook = import_string(dotted)
-    except ImportError as error:
+        return resolve_hook("ANGEE_WEBFORM_TOKEN_HOOK")
+    except ImproperlyConfigured as error:
         raise AnonymousIngressUnavailable("The configured webform token hook is unavailable.") from error
-    if not callable(hook):
-        raise AnonymousIngressUnavailable(f"settings.ANGEE_WEBFORM_TOKEN_HOOK = {dotted!r} is not callable.")
-    return hook
 
 
 def _ingress_error(error: AnonymousIngressRejected) -> JsonResponse:

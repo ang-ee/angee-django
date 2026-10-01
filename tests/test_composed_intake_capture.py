@@ -36,4 +36,4 @@ def test_composed_intake_capture(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"composed intake capture failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

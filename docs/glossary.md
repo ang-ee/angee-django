@@ -101,7 +101,7 @@ behavior, tabs, and actions.
 
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
-shape stays the same.
+shape stays the same. Its base class names the implementation registry setting.
 
 **`Meta`** — Django's model options class. Keep Angee facts out of `Meta` unless
 the owning library explicitly supports them, such as `rebac_resource_type`.
@@ -129,8 +129,23 @@ person rows authenticate. Real-world faces link to it one way, one shape:
 **Service account** — a `kind=service` user row: the database-layer principal
 of an agent or automation. Non-login (unusable password, excluded from OIDC
 linking and human-only member pickers). Access pickers include readable service
-users; their lifecycle is owned by the thing each represents
-(the agents manager creates, renames, and deactivates it with its `Agent`).
+users; agents and workflows link one service user each, with their row lifecycle
+calling IAM's shared sync and deactivation helper.
+
+**Workflow principal** — the workflow's linked service user. Trigger source
+grants are direct REBAC tuples for this user. Admission, source and domain checks,
+and triggered runs act as it; the user who enables a trigger only authorizes
+the source grants at enable time. A human-published version may run as this
+principal only while its publisher can delegate every enabled trigger grant;
+the same check governs child runs. System-installed versions are trusted.
+
+**Trigger source grant** — a source-declared, listable and revocable REBAC tuple
+assigned to the workflow principal when its trigger is enabled. A
+`record_changed` model declares its grant scope when it opts in.
+
+**Trigger enable preview** — the prospective source grants and the users and
+groups with workflow monitoring access to runs the trigger will start. Only a
+user eligible to enable the trigger may see it.
 
 **Agent** — an autonomous capability represented by an `agents.Agent` and its
 linked service-account user row. The agent acts as that ordinary `auth/user`
@@ -191,6 +206,72 @@ boundaries instead of importing it, to avoid import cycles.
 `schemas` mapping in an addon's conventional `schema.py`. Each named schema
 contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
+## Workflows
+
+**Workflow version** — an immutable published definition, including the
+normalized contracts of any child workflows it awaits. A run pins one version.
+
+**Run origin and cause** — the origin describes why a run started; exactly one
+protected link identifies its parent step, prior run, or trigger event when one
+caused it. A manual run has no cause. A cited cause stays retained until its
+dependent effects are pruned.
+
+**Node** — a keyed graph declaration naming a step, its bindings and outgoing
+edges in a `Definition` document.
+
+**Step** — the Python class a node runs, with typed input, output and config.
+
+**Step run** — one execution of a node within a workflow run. The persisted
+`StepRun` is named `step_run` in code; the reverse relation is `run.step_runs`.
+
+**Attempt** — one try of a step run, recorded by `StepAttempt` from claim to
+settlement. A retry creates another attempt for the same step run.
+
+**Settlement** — what a step returns: `Done`, `Wait`, `NextPage`, `Ask` or `Fail`. It describes the
+attempt's completion or continuation, and the transition owner persists it.
+Runner-only retry and diagnostic facts belong to the attempt record.
+
+**Result** — what a workflow run reports, selected and projected from its
+declared producer bindings by `Definition`.
+
+**Review step** — one node that freezes a question, waits for a decision group,
+and applies its answers as the run actor. Each answer retains its resolver.
+
+**Run-input evidence** — the subject and every input field declared as a record
+reference in the pinned schema, admitted only when the run actor can read it.
+Shared `DerivedFrom` edges retain the source identities; the run's read
+projection redacts references a current reader cannot access.
+
+**Derived-from evidence** — a frozen fact or source link admitted through
+`angee.base.evidence`'s standing-read check. Decisions, run inputs and
+extraction retain their own edges to this shared source identity.
+
+## Decisions
+
+**Decision** — a retained question put to people, with a frozen form and a final
+answer or closure. Its lifecycle belongs to `angee.decisions`, independently of
+any waiting owner.
+
+**Kind** — the decision's content key, identifying the question's presentation.
+
+**Action** — a named answer offered by a decision, with a Pydantic form and a
+terminal verdict.
+
+**Decision group** — related decisions that settle together under one policy.
+Waiting owners retain a reference to the group and observe its outcome.
+
+**Seat** — one requested decision with its own assignees, requester, actions,
+basis, and context. Any authorized assignee can supply that seat's answer.
+
+**Inbox** — the person's readable decisions, filtered by assignment or requester
+to distinguish questions they can answer from questions they issued.
+
+## Extraction
+
+**Extraction** — an independent evidence domain that retains source-grounded
+documents, facts and revisions against an explicit file or message target.
+`workflows_extraction` is its workflow adapter; it does not own the evidence.
+
 ## Relationship Management
 
 **Party** — the universal supertype for a person, organization, or other actor
@@ -215,8 +296,8 @@ employment as one relationship kind rather than a separate identity model.
 per-user stay-in-touch intent; recomputable interaction evidence and personal
 intent remain separate facts.
 
-**posts** — the public-post and engagement overlay, dual to `messaging`'s
-private-message substrate.
+**posts** — the public-post and engagement overlay on `messaging`. A Feed is a
+Channel child, so posts use the same channel-scoped message identity and access.
 
 ## Frontend
 

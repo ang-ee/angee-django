@@ -151,6 +151,11 @@ describe("record action helpers", () => {
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith("open_round", expect.objectContaining({ idArgument: "round" }));
   });
 
+  test("uses the declared schema outside the resource view context", () => {
+    renderHook(() => useRecordActionMutation("reprocess_workflow_run", { dataProviderName: "console" }));
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith("reprocess_workflow_run", expect.objectContaining({ dataProviderName: "console" }));
+  });
+
   test("passes invalidation targets to the data action owner", async () => {
     const refresh = vi.fn();
     const { result } = renderHook(() =>

@@ -70,7 +70,10 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
             external_id="routed-delivery",
         )
     payloads: list[dict[str, Any]] = []
-    monkeypatch.setattr(delivery, "enqueue_task", lambda _name, *, kwargs: payloads.append(kwargs))
+    monkeypatch.setattr(
+        "angee.jobs.enqueue.celery_app.send_task",
+        lambda _name, *, kwargs, **_options: payloads.append(kwargs),
+    )
     channels = Mock()
     channels.sudo.return_value = channels
     channels.get.return_value = SimpleNamespace(backend=SimpleNamespace(deliver=lambda message: True))

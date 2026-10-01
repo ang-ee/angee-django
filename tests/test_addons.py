@@ -355,7 +355,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         with system_context(reason="test.platform.reconcile-native-facts"):
             addon.objects.create(
                 name="fakeaddon.base",
-                state=addon.State.ENABLED,
+                state=addon.AddonState.ENABLED,
                 forced=True,
                 pending=True,
                 model_count=9,
@@ -365,8 +365,8 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             )
             historical = addon.objects.create(
                 name="example.gone",
-                source=addon.Source.LOCAL,
-                state=addon.State.ENABLED,
+                source=addon.AddonSource.LOCAL,
+                state=addon.AddonState.ENABLED,
                 depends_on=["example.historical_dependency"],
                 forced=True,
                 pending=True,
@@ -374,13 +374,13 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             )
             remote = addon.objects.create(
                 name="example.remote",
-                source=addon.Source.REMOTE,
+                source=addon.AddonSource.REMOTE,
                 depends_on=["example.remote_dependency"],
                 vcs_path="addons/remote",
             )
             materialised = addon.objects.create(
                 name=local_manifest.name,
-                source=addon.Source.REMOTE,
+                source=addon.AddonSource.REMOTE,
                 vcs_path="addons/unavailable",
             )
 
@@ -392,9 +392,9 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             remote.refresh_from_db()
             materialised.refresh_from_db()
         assert (enabled.state, enabled.source, enabled.kind) == (
-            addon.State.ENABLED,
-            addon.Source.LOCAL,
-            addon.Kind.CONSUMER,
+            addon.AddonState.ENABLED,
+            addon.AddonSource.LOCAL,
+            addon.AddonKind.CONSUMER,
         )
         assert enabled.depends_on == ["django.contrib.auth"]
         assert enabled.depended_by == ["fakeaddon.base"]
@@ -404,25 +404,25 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         assert enabled.field_count == len(line._meta.fields) + len(line._meta.many_to_many)
         assert enabled.model_labels == [line._meta.label_lower]
         assert (disabled.state, disabled.source, disabled.label) == (
-            addon.State.DISABLED, addon.Source.INSTALLED, "fakeaddon"
+            addon.AddonState.DISABLED, addon.AddonSource.INSTALLED, "fakeaddon"
         )
         assert disabled.depends_on == [loaded.name]
         assert disabled.depended_by == [local_manifest.name]
         assert (disabled.model_count, disabled.field_count, disabled.resource_count) == (0, 0, 0)
         assert disabled.model_labels == []
         assert (disabled.forced, disabled.pending) == (False, False)
-        assert historical.state == addon.State.REMOVED
+        assert historical.state == addon.AddonState.REMOVED
         assert historical.depends_on == ["example.historical_dependency"]
         assert (historical.forced, historical.pending, historical.model_count) == (False, False, 0)
         assert (remote.source, remote.state, remote.depends_on, remote.vcs_path) == (
-            addon.Source.REMOTE,
-            addon.State.DISABLED,
+            addon.AddonSource.REMOTE,
+            addon.AddonState.DISABLED,
             ["example.remote_dependency"],
             "addons/remote",
         )
         assert (materialised.source, materialised.state, materialised.label) == (
-            addon.Source.LOCAL,
-            addon.State.DISABLED,
+            addon.AddonSource.LOCAL,
+            addon.AddonState.DISABLED,
             "",
         )
         assert materialised.depends_on == ["fakeaddon.base"]
@@ -459,7 +459,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
             row = addon.objects.get(name=manifest.name)
             preview = addon.objects.change_preview(manifest.name, "install")
 
-        assert (row.state, row.label, row.pending) == (addon.State.DISABLED, label, True)
+        assert (row.state, row.label, row.pending) == (addon.AddonState.DISABLED, label, True)
         assert row.depends_on == list(manifest.depends_on)
         assert preview.can_apply is True
         assert preview.roots_after == preview.roots_before == (declaration,)

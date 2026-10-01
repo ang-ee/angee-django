@@ -1,0 +1,207 @@
+"""Pydantic action declarations compiled into durable, tagged decision forms."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any, ClassVar
+
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from pydantic import BaseModel, ConfigDict, GetJsonSchemaHandler
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, JsonSchemaValue
+from pydantic_core import CoreSchema, core_schema
+
+from angee.base.identity import relation_permission_validator
+from angee.base.impl import (
+    FORM_SCHEMA_ANNOTATIONS,
+    freeze_form_schema,
+    materialize_form_schema,
+    resolve_impl_class,
+)
+from angee.base.jsonschema import schema_nodes, validation_issues
+from angee.decisions.states import Verdict
+
+
+@dataclass(frozen=True)
+class Relation:
+    """Native Pydantic metadata for a standing-permission relation picker."""
+
+    resource: str
+    permission: str = "read"
+
+    def __get_pydantic_json_schema__(self, schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        """Attach the base FormSpec relation contract to the native field schema."""
+        return {**handler(schema), "relation": {"resource": self.resource, "permission": self.permission}}
+
+
+@dataclass(frozen=True)
+class RelationCandidate:
+    """Frozen picker identities sharing one model and standing permission."""
+
+    model: str
+    permission: str
+    ids: tuple[str, ...]
+
+
+def relation_candidates(schema: dict[str, Any]) -> tuple[RelationCandidate, ...]:
+    """Group frozen picker candidates by model and required permission for admission.
+
+    Relation filters narrow picker queries; they are advisory on submission.
+    Frozen option enums and the relation permission are enforced on submission.
+    """
+    grouped: dict[tuple[str, str], set[str]] = {}
+    for field in schema_nodes(schema):
+        if relation := field.get("relation"):
+            ids = list(field.get("enum", ()))
+            ids.extend(field[key] for key in ("default", "const") if key in field)
+            grouped.setdefault((relation["resource"], relation.get("permission", "read")), set()).update(
+                value for value in ids if isinstance(value, str)
+            )
+    return tuple(RelationCandidate(model, permission, tuple(sorted(ids)))
+                 for (model, permission), ids in sorted(grouped.items()) if ids)
+
+
+class Action(BaseModel):
+    """One offered action, its terminal verdict, and its typed submitted fields."""
+
+    registry_setting: ClassVar[str] = "ANGEE_DECISION_ACTION_CLASSES"
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    key: ClassVar[str]
+    label: ClassVar[str]
+    verdict: ClassVar[Verdict]
+    outcome: ClassVar[str | None] = None
+
+    def __init_subclass__(
+        cls, *, key: str, label: str, verdict: Verdict, outcome: str | None = None, **kwargs: Any,
+    ) -> None:
+        """Bind action metadata, rejecting class declarations without a terminal verdict."""
+        super().__init_subclass__(**kwargs)
+        if not isinstance(key, str) or not key or not isinstance(label, str) or not label:
+            raise ImproperlyConfigured("Actions require a key, label, and terminal verdict.")
+        try:
+            cls.key, cls.label, cls.verdict = key, label, Verdict(verdict)
+        except (ValueError, TypeError) as error:
+            raise ImproperlyConfigured("An action requires a known terminal verdict.") from error
+        if cls.verdict == Verdict.PENDING:
+            raise ImproperlyConfigured("An action requires a terminal verdict.")
+        cls.outcome = outcome
+
+
+class _FormJsonSchema(GenerateJsonSchema):
+    """Keep Python type identity and docstrings out of field presentation metadata."""
+
+    def field_title_should_be_set(self, schema: Any) -> bool:
+        return False
+
+    @staticmethod
+    def _without_type_metadata(generated: JsonSchemaValue) -> JsonSchemaValue:
+        generated.pop("title", None)
+        generated.pop("description", None)
+        return generated
+
+    def model_schema(self, schema: core_schema.ModelSchema) -> JsonSchemaValue:
+        return self._without_type_metadata(super().model_schema(schema))
+
+    def generate(self, schema: CoreSchema, mode: JsonSchemaMode = "validation") -> JsonSchemaValue:
+        generated = super().generate(schema, mode=mode)
+        # Pydantic's Enum core metadata restores type names after enum_schema runs.
+        for definition in generated.get("$defs", {}).values():
+            if "enum" in definition:
+                self._without_type_metadata(definition)
+        return generated
+
+
+def resolve_action(value: str) -> type[Action]:
+    """Resolve a trusted action registration, whose key is the authored action value."""
+    action = resolve_impl_class(Action, value)
+    return action
+
+
+def compile_form(
+    actions: Sequence[type[Action]], *,
+    initial: Mapping[str, Mapping[str, Any]] | None = None,
+    refine: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Compile a snapshot; initial and refine are keyed by action, then declared field.
+
+    Refinements contain only the closed presentation annotations. Initial values
+    become JSON Schema defaults; readOnly values become required constants.
+    """
+    initial, refine = initial if initial is not None else {}, refine if refine is not None else {}
+    if not all(isinstance(action, type) and issubclass(action, Action) and action is not Action for action in actions):
+        raise ValidationError("Decision forms require declared action classes.")
+    names = [action.key for action in actions]
+    if not names or len(names) != len(set(names)):
+        raise ValidationError("Decision forms require unique actions.")
+    if not isinstance(initial, Mapping) or not isinstance(refine, Mapping) or (
+        initial.keys() | refine.keys()
+    ) - set(names):
+        raise ValidationError("Initial and refine must map known action keys to field mappings.")
+    branches, options = [], []
+    for action in actions:
+        try:
+            original = action.model_json_schema(mode="validation", schema_generator=_FormJsonSchema)
+            branch = materialize_form_schema(original)
+        except (KeyError, ValueError, TypeError, ValidationError) as error:
+            raise ImproperlyConfigured(f"Invalid schema declaration on action {action.key}.") from error
+        fields = branch.get("properties", {})
+        if "action" in fields or "action" in action.model_fields:
+            raise ImproperlyConfigured("The action field is reserved by decision forms.")
+        values, refinements = initial.get(action.key, {}), refine.get(action.key, {})
+        if not isinstance(values, Mapping) or not isinstance(refinements, Mapping) or (
+            values.keys() | refinements.keys()
+        ) - fields.keys():
+            raise ValidationError("Initial values and refinements must map declared action fields.")
+        for name, metadata in refinements.items():
+            if not isinstance(metadata, Mapping) or metadata.keys() - FORM_SCHEMA_ANNOTATIONS:
+                raise ValidationError("Decision form refinements only accept presentation annotations.")
+            original["properties"][name].update(deepcopy(metadata))
+        if refinements:
+            branch = materialize_form_schema(original)
+            fields = branch["properties"]
+        for node in schema_nodes(branch):
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+            if "default" in node and validation_issues(node, node["default"]):
+                raise ImproperlyConfigured(f"Invalid declared default on action {action.key}.")
+        if action.key in initial:
+            freeze_form_schema(branch, dict(values))
+        else:
+            freeze_form_schema(branch)
+        for name, field in fields.items():
+            if "default" in field and validation_issues(field, field["default"]):
+                raise ValidationError(f"Invalid initial/default value for {action.key}.{name}.")
+        fields["action"] = {"type": "string", "const": action.key}
+        branch.update(properties=fields, additionalProperties=False)
+        branch.setdefault("required", []).append("action")
+        branches.append(branch)
+        options.append({"value": action.key, "label": action.label, "verdict": str(action.verdict)})
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object",
+        "properties": {"action": {"type": "string", "enum": names, "options": options}},
+        "required": ["action"], "discriminator": {"propertyName": "action"}, "oneOf": branches,
+    }
+
+
+def validate_form(
+    schema: dict[str, Any], action: str, values: Any, *, actor: Any = None,
+) -> tuple[Verdict, dict[str, Any]]:
+    """Validate strictly against the admitted snapshot, returning its recorded resolution."""
+    choices = schema["properties"]["action"]["options"]
+    selected = next((choice for choice in choices if choice["value"] == action), None)
+    if selected is None:
+        raise ValidationError({"action": "This action is not offered by the decision."})
+    if not isinstance(values, dict):
+        raise ValidationError({"__all__": "Action values must be an object."})
+    if "action" in values:
+        raise ValidationError({"action": "Submit the action separately from its values."})
+    resolution = {"action": action, **deepcopy(values)}
+    branch = next(branch for branch in schema["oneOf"] if branch["properties"]["action"]["const"] == action)
+    if issues := validation_issues(
+        branch, resolution, defaults=True,
+        keywords={"relation": relation_permission_validator(actor)},
+    ):
+        raise ValidationError(issues)
+    return Verdict(selected["verdict"]), resolution

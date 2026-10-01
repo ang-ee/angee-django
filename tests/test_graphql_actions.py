@@ -94,6 +94,22 @@ def test_action_guard_admits_addon_local_errors_and_reraises_others() -> None:
         submit("other")
 
 
+@pytest.mark.parametrize("camel_case_keys", [True, False])
+def test_action_guard_preserves_authored_field_paths_when_requested(camel_case_keys: bool) -> None:
+    """Frozen JSON schemas can retain their field names through the shared guard."""
+
+    @action_guard("Invalid answer.", camel_case_keys=camel_case_keys)
+    def submit() -> ActionResult:
+        raise ValidationError({"review_note": ["Required."], "rows.0.target_id": ["Not accessible."]})
+
+    result = submit()
+    assert result.ok is False
+    assert result.validation_errors == {
+        "reviewNote" if camel_case_keys else "review_note": ["Required."],
+        "rows.0.targetId" if camel_case_keys else "rows.0.target_id": ["Not accessible."],
+    }
+
+
 def test_action_result_carries_in_band_validation_errors() -> None:
     """``ActionResult`` exposes the additive in-band ``validation_errors`` map.
 
@@ -148,15 +164,16 @@ def test_action_result_from_error_keeps_non_field_errors_at_form_level() -> None
     error = ValidationError({NON_FIELD_ERRORS: ["The document is out of balance."]})
     result = ActionResult.from_error(error, "Cannot post.")
 
+    assert result.message == "The document is out of balance."
     assert result.validation_errors == {NON_FIELD_ERRORS: ["The document is out of balance."]}
 
 
 def test_action_result_from_error_falls_back_to_message_only() -> None:
-    """A non-field ``ValidationError`` and any other exception yield a message-only result."""
+    """Non-field validation stays readable; unrelated exception details stay private."""
 
     non_field = ActionResult.from_error(ValidationError("Whole thing is wrong."), "Bad request.")
     assert non_field.ok is False
-    assert non_field.message == "Bad request."
+    assert non_field.message == "Whole thing is wrong."
     assert non_field.validation_errors is None
 
     other = ActionResult.from_error(RuntimeError("boom"), "Sync failed.")

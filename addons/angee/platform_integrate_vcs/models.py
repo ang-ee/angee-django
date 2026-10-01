@@ -87,18 +87,18 @@ class AddonCatalogManager(AngeeManager):
                         "description": str(descriptor.get("description", "")),
                         "keywords": list(descriptor.get("keywords", [])),
                         "category": str(descriptor.get("category", "")),
-                        "kind": addon.Kind.REQUIRED,
-                        "source": addon.Source.REMOTE,
-                        "state": addon.State.DISABLED,
+                        "kind": addon.AddonKind.REQUIRED,
+                        "source": addon.AddonSource.REMOTE,
+                        "state": addon.AddonState.DISABLED,
                         "depends_on": list(descriptor.get("depends_on", [])),
                         **addon.reset_runtime_facts(),
                         **provenance,
                     },
                 )
             (
-                addon.objects.filter(vcs_source=source, source=addon.Source.REMOTE)
+                addon.objects.filter(vcs_source=source, source=addon.AddonSource.REMOTE)
                 .exclude(name__in=seen)
-                .update(state=addon.State.REMOVED, **addon.reset_runtime_facts())
+                .update(state=addon.AddonState.REMOVED, **addon.reset_runtime_facts())
             )
             source.last_synced_at = timezone.now()
             source.save(update_fields=["last_synced_at", "updated_at"])

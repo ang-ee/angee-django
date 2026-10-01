@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
+import json
 from collections.abc import Mapping
 from typing import Any
 
-import environ
-
 SETTINGS = {
+    "ANGEE_HOOKS:append": ["ANGEE_WEBFORM_TOKEN_HOOK"],
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.messaging.backends.ChannelBackend"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
     # registry). Source addons add their own with a yamlconf dotted key, e.g.
@@ -39,7 +39,8 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     contributed: dict[str, Any] = {
         "ANGEE_EMAIL_DELIVERY_CONFIGURED": bool(namespace.get("EMAIL_BACKEND")),
     }
-    if "ANYMAIL" in os.environ:
-        contributed["ANYMAIL"] = environ.Env().json("ANYMAIL")
-    contributed.update({name: value for name, value in sorted(os.environ.items()) if name.startswith("ANYMAIL_")})
+    if "ANYMAIL" in namespace:
+        anymail = namespace["ANYMAIL"]
+        contributed["ANYMAIL"] = json.loads(anymail) if isinstance(anymail, str) else anymail
+    contributed.update({name: value for name, value in sorted(namespace.items()) if name.startswith("ANYMAIL_")})
     return contributed

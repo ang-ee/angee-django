@@ -1,0 +1,18 @@
+_meta:
+  model: parties.Party
+rows:
+  - xref: identity_sample
+    fields:
+      display_name: Directory sample
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: duplicate_left
+    fields:
+      display_name: Directory contact
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: duplicate_right
+    fields:
+      display_name: Directory contact copy
+      created_by: iam.user_admin
+      updated_by: iam.user_admin

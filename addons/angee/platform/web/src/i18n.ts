@@ -90,3 +90,7 @@ export const enPlatformMessages: Record<string, string> = {
 };
 
 export const usePlatformT = createNamespaceT("platform", enPlatformMessages);
+
+export function addonEnumLabel(t: (key: string) => string, axis: "kind" | "source" | "state", value: string): string {
+  return t(`${axis}.${value.toLowerCase()}`);
+}

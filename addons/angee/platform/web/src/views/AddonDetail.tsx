@@ -2,7 +2,7 @@ import { type ReactElement } from "react";
 
 import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
 
-import { usePlatformT } from "../i18n";
+import { addonEnumLabel, usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
 import { LinkedChips, useRouteNavigate } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
@@ -35,8 +35,8 @@ export function AddonDetail(): ReactElement {
           <>
             <Code tone="muted">{addon.id}</Code>
             <Badge tone="neutral">{addon.namespace}</Badge>
-            <Badge tone={addon.kind === "required" ? "info" : "neutral"}>
-              {addon.kind}
+            <Badge tone={addon.kind === "REQUIRED" ? "info" : "neutral"}>
+              {addonEnumLabel(t, "kind", addon.kind)}
             </Badge>
           </>
         ) : null

@@ -66,7 +66,7 @@ export type SectionEyebrowSpacing = NonNullable<
   SectionEyebrowRecipeProps["spacing"]
 >;
 
-export type SectionEyebrowElement = "dt" | "h2" | "h3" | "label" | "p" | "span";
+export type SectionEyebrowElement = "dt" | "h2" | "h3" | "h4" | "h5" | "h6" | "label" | "p" | "span";
 
 export type SectionEyebrowProps = Omit<
   React.HTMLAttributes<HTMLElement>,

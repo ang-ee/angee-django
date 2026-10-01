@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 SETTINGS: dict[str, object] = {
+    "ANGEE_HOOKS:append": ["ANGEE_MCP_ACTOR_VERIFIER"],
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.agents.backends.InferenceBackend", "angee.agents.runtimes.AgentRuntime"],
     # Inference providers select their backend with a provider-owned
     # ``backend_class`` field. ``manual`` lists no models; its catalogue is
     # hand-curated.
@@ -34,8 +36,5 @@ SETTINGS: dict[str, object] = {
     # daemon caps it at 24h). The TTL policy lives here, not as a literal in the
     # resolver; mirrors ``ANGEE_OPERATOR_TOKEN_TTL`` for the GraphQL token.
     "ANGEE_AGENT_CHAT_TOKEN_TTL": "2h",
-    # Agent lifecycle teardown is extended by composition addons through explicit
-    # operation hooks, keeping this catalogue independent of workflow services.
-    "ANGEE_AGENT_TEARDOWN_HOOKS": [],
 }
 """Django settings contributed when the agents addon is installed."""

@@ -41,6 +41,7 @@ import tests.spaces_models  # noqa: F401 -- register related models before nativ
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -52,7 +53,7 @@ from angee.messaging.backends import (
     ParsedRecipient,
     ParsedThread,
 )
-from angee.messaging.managers import derived_part_name, normalize_subject, strip_null_bytes
+from angee.messaging.managers import derived_part_name, normalize_subject
 from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import Participant as AbstractParticipant
@@ -70,13 +71,13 @@ from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.workflows_parties.models import PartyHandle as WorkflowPartyHandleContribution
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
     File as StorageFile,
 )
 from tests.messaging_models import (
+    Channel,
     Fragment,
     Handle,
     Message,
@@ -146,7 +147,7 @@ class Address(AbstractAddress):
         rebac_resource_type = "parties/address"
 
 
-class PartyHandle(WorkflowPartyHandleContribution, AbstractPartyHandle):
+class PartyHandle(AbstractPartyHandle):
     """Concrete identity link used when messaging attributes a user-owned handle."""
 
     class Meta(_PartyHandleMeta):
@@ -334,7 +335,7 @@ def channel(composed_tables: None) -> Any:
     """Provide an Integration row to stand in as the ingest channel."""
 
     del composed_tables
-    return make_integration("msgchan")
+    return make_integration("msgchan", model=Channel)
 
 
 def _parsed(
@@ -522,7 +523,7 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
             )[0]
             assert first.parent_id is None
             # An unrelated record with the same source ID cannot become its parent.
-            other_channel = make_integration("other-source")
+            other_channel = make_integration("other-source", model=Channel)
             Message.objects.ingest(
                 [parent], channel=other_channel, explicit_thread=other, historical=True, quote_edges=False
             )
@@ -1704,7 +1705,7 @@ def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None
     with system_context(reason="test unnamed media ingest setup"):
         user = user_model.objects.create_user(username="wa-media", email="wa-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("wa-media-chan")
+    channel = make_integration("wa-media-chan", model=Channel)
 
     parsed = ParsedMessage(
         external_id="wa-media/1",
@@ -1734,7 +1735,7 @@ def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp
     with system_context(reason="test chat media ingest setup"):
         user = user_model.objects.create_user(username="chat-media", email="chat-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("chat-media-chan")
+    channel = make_integration("chat-media-chan", model=Channel)
 
     parsed = ParsedMessage(
         external_id="4917000001@s.whatsapp.net/3EB0STANZA",
@@ -1767,7 +1768,7 @@ def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: N
     with system_context(reason="test inline media ingest setup"):
         user = user_model.objects.create_user(username="mail-inline", email="mail-inline@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("mail-inline-chan")
+    channel = make_integration("mail-inline-chan", model=Channel)
 
     parsed = ParsedMessage(
         external_id="cafe1234@mail.example.com",
@@ -1801,7 +1802,7 @@ def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_ta
     with system_context(reason="test dedup media ingest setup"):
         user = user_model.objects.create_user(username="dedup-media", email="dedup-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("dedup-media-chan")
+    channel = make_integration("dedup-media-chan", model=Channel)
 
     def _chat_message(external_id: str) -> ParsedMessage:
         return ParsedMessage(
@@ -2333,7 +2334,7 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     # Counters bump only for a newly created message, so a re-sync never inflates them.
     assert thread.message_count == 1
 
-    other_channel = make_integration("msgchan-b")
+    other_channel = make_integration("msgchan-b", model=Channel)
     assert _ingest([parsed], channel=other_channel) == 1
     rows = list(Message._base_manager.filter(external_id="m1").order_by("pk"))
     assert len(rows) == 2
@@ -3213,7 +3214,7 @@ def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: An
 
 @pytest.mark.django_db(transaction=True)
 def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) -> None:
-    other = make_integration("other-chats")
+    other = make_integration("other-chats", model=Channel)
     _ingest(
         [
             replace(_parsed("n-1", subject=""), thread=ParsedThread(external_id="g-1", modality="group")),

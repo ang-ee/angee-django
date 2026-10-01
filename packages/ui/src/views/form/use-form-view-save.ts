@@ -21,7 +21,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { get, set, useForm, type FieldErrors, type UseFormReturn } from "react-hook-form";
+import { set, useForm, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -48,8 +48,10 @@ import {
   type LinesSeed,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
-import { validationErrorsFromError, serverErrorsFromForm } from "./validation-errors";
+import { applyFormErrors, formSubmitError, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
+import { useFormHistory, type FormHistory } from "./use-form-history";
+import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
 
 type RowRecord = BaseRecord & Row;
 
@@ -84,14 +86,14 @@ export function acknowledgeFormSubmit(
   record: Row,
   values: FormValues,
   reconcile?: FormSubmitAcknowledgement["reconcile"],
-): FormSubmitAcknowledgement {
-  return { kind: "form-submit-acknowledgement", record, values, ...(reconcile ? { reconcile } : {}) };
+): FormSubmitResult<FormSubmitAcknowledgement> {
+  return { status: "ok", data: { kind: "form-submit-acknowledgement", record, values, ...(reconcile ? { reconcile } : {}) } };
 }
 
 export type FormSubmit = (
   data: Record<string, unknown>,
   context: FormSubmitContext,
-) => Row | FormSubmitAcknowledgement | null | undefined | Promise<Row | FormSubmitAcknowledgement | null | undefined>;
+) => FormSubmitResult<Row | FormSubmitAcknowledgement> | Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>>;
 
 export interface FormViewAcknowledgedSource {
   /** Record facts used by shared record chrome and addon declarations. */
@@ -99,10 +101,10 @@ export interface FormViewAcknowledgedSource {
   /** Complete acknowledged form baseline. Local dirty values survive later snapshots. */
   values: FormValues | null;
   loading?: boolean;
-  reload?: () => void;
+  reload?: () => void | Row | null | Promise<void | Row | null>;
 }
 
-export type FormViewForm = UseFormReturn<FormValues>;
+export type FormViewForm = FieldValidationForm<FormValues>;
 
 export interface UseFormViewSaveProps {
   resource: string;
@@ -130,12 +132,16 @@ export interface UseFormViewSaveProps {
 
 export interface FormViewSaveSurface {
   form: FormViewForm;
+  history: FormHistory;
   displayRecord: Row | null;
   loading: boolean;
+  /** Native detail-query failure; cached record data remains available during refresh failures. */
+  loadError: HttpError | null;
   formReadOnly: boolean;
   formIsDirty: boolean;
   pending: boolean;
   saveError: string | null;
+  saveConflict: boolean;
   serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
   requiredFieldNames: ReadonlySet<string>;
@@ -146,16 +152,13 @@ export interface FormViewSaveSurface {
   discardChanges: () => void;
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   patchRecord: (patch: Record<string, unknown>) => void;
-  reload: () => void;
+  reload: () => Promise<Row | null>;
   afterFieldChange: (field: FieldDescriptor, value: unknown, scope?: string) => void;
   fieldReadOnly: (field: FieldDescriptor) => boolean;
   startFieldInteraction: (path: string) => void;
   commitFieldInteraction: (path: string) => void;
   /** Register submit-time validation owned by a composed controlled editor. */
-  registerFieldValidation: (
-    name: string,
-    validate: (value: unknown, values: FormValues) => string | undefined,
-  ) => () => void;
+  registerFieldValidation: FieldValidationMethods["registerFieldValidation"];
   /** Request departure through the same owner as routed unsaved-change guards. */
   requestLeave: () => Promise<boolean>;
 }
@@ -244,12 +247,13 @@ export function useFormViewSave({
   const displayRecord = record;
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? read.query.isFetching;
-  const reload = React.useCallback(() => {
+  const loadError = acknowledgedSource === undefined ? read.query.error : null;
+  const reload = React.useCallback(async (): Promise<Row | null> => {
     if (acknowledgedSource !== undefined) {
-      acknowledgedSource.reload?.();
-      return;
+      return await acknowledgedSource.reload?.() ?? null;
     }
-    void read.query.refetch();
+    const result = await read.query.refetch();
+    return result.error ? null : result.data?.data ?? null;
   }, [acknowledgedSource, read.query.refetch]);
   const create = useCreate<RowRecord, HttpError, FormValues>({
     resource: refineResource,
@@ -314,37 +318,47 @@ export function useFormViewSave({
   }, [dataResource, id, invalidate]);
 
   const values = React.useMemo(() => {
-    if (acknowledgedSource !== undefined) {
+    if (acknowledgedSource !== undefined || isCreate) {
+      const sourceValues = acknowledgedSource !== undefined ? acknowledgedSource.values : emptyValues;
       const local = localAcknowledgementRef.current;
-      if (local && replaceEqualDeep(local.previous, acknowledgedSource.values) === local.previous) {
+      if (local && replaceEqualDeep(local.previous, sourceValues) === local.previous) {
         return local.accepted;
       }
       localAcknowledgementRef.current = null;
-      return acknowledgedSource.values ?? emptyValues;
+      return sourceValues ?? emptyValues;
     }
-    return isCreate ? emptyValues : record
+    return record
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
-  const composedValidators = React.useRef(new Map<
-    string,
-    (value: unknown, values: FormValues) => string | undefined
-  >());
+  const recordUnavailable = !isCreate && record == null;
+  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
+  const formReadOnly = React.useMemo(
+    () =>
+      readOnly ||
+      recordUnavailable ||
+      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
+      (!submitOwner &&
+        !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
+      (formFields.length > 0 && formFields.every((field) => field.readOnly)),
+    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
+  );
+  const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<FormValues>({
     defaultValues: emptyValues,
     shouldUnregister: false,
     resolver: (formValues) => {
       const missing = missingRequiredFieldNames(formValues, formFields, requiredFieldNames);
       const errors = requiredErrors(missing, t("form.required"));
-      for (const [name, validate] of composedValidators.current) {
-        const message = validate(get(formValues, name), formValues);
-        if (message) set(errors, name, { type: "composed", message });
-      }
+      validateFields(formValues, (name, error) => set(errors, name, error));
       return Object.keys(errors).length
         ? { values: {}, errors }
         : { values: formValues, errors: {} };
     },
   });
-  const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setError, setValue } = form;
+  const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setValue } = form;
+  const history = useFormHistory(form, { readOnly: formReadOnly });
+  const { reset: resetHistory, start: startHistory, commit: commitHistory } = history;
+  const activeFieldInteractions = React.useRef(new Set<string>());
   const { dirtyFields } = form.formState;
   const syncRecordValues = React.useCallback((next: FormValues, lineBaseline?: unknown) => {
     // RHF merges dirty paths by index. A full-list line mutation is atomic, so
@@ -368,33 +382,27 @@ export function useFormViewSave({
       for (const [path, value] of arrays) setValue(path, value, { shouldDirty: true });
     }
     resetDefaultValues(baseline, { keepIsValid: true });
-  }, [form, linesActive, linesField, reset, resetDefaultValues, setValue]);
+    // Whole-value undo frames cannot restore fields from an older accepted baseline.
+    resetHistory();
+    activeFieldInteractions.current.clear();
+  }, [form, linesActive, linesField, reset, resetDefaultValues, resetHistory, setValue]);
   const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
   React.useEffect(() => { syncRecordValues(values); }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveError = form.formState.errors.root?.server?.message ?? null;
+  const saveConflict = form.formState.errors.root?.server?.type === "conflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
-  const recordUnavailable = !isCreate && record == null;
-  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
   const customSubmit = useMutation({
-    mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) =>
-      (await submitOwner?.(data, {
+    mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) => {
+      if (!submitOwner) throw new Error("No custom form submission is configured.");
+      return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
         baselineRecord: editBasisRecordRef.current, lines,
         values: submitted, baselineValues: baseline,
-      })) ?? null,
+      });
+    },
   });
-  const formReadOnly = React.useMemo(
-    () =>
-      readOnly ||
-      recordUnavailable ||
-      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
-      (!submitOwner &&
-        !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
-      (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
-  );
   const formIsDirty = form.formState.isDirty;
   const pending = create.mutation.isPending || update.mutation.isPending || customSubmit.isPending || resourceSave.fetching || form.formState.isSubmitting;
   const formIsDirtyRef = React.useRef(formIsDirty);
@@ -412,7 +420,7 @@ export function useFormViewSave({
   });
 
   const runSubmit = React.useCallback(
-    async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<Row | FormSubmitAcknowledgement | null> => {
+    async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
       if (submitOwner) return customSubmit.mutateAsync({
         data,
         lines,
@@ -426,7 +434,7 @@ export function useFormViewSave({
           lines: lines.payload,
         });
         if (saved) await invalidateResource();
-        return saved;
+        return savedFormSubmitResult(saved, t("form.genericSaveError"));
       }
       const response = isCreate
         ? await create.mutateAsync({
@@ -435,7 +443,7 @@ export function useFormViewSave({
               : data,
           })
         : await update.mutateAsync({ id: id as BaseKey, values: data });
-      return response?.data ?? null;
+      return savedFormSubmitResult(response?.data, t("form.genericSaveError"));
     },
     [
       customSubmit.mutateAsync,
@@ -449,8 +457,17 @@ export function useFormViewSave({
       resourceSave,
       saveOperation.target,
       submitOwner,
+      t,
     ],
   );
+  const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
+    if (!mounted.current) return null;
+    return applyFormErrors(form, result, {
+      fieldNames: [...fieldByName.keys(), ...(linesField ? [linesField] : [])],
+      fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
+      fallback: t("form.genericSaveError"),
+    }) ? null : result;
+  }, [fieldByName, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -459,6 +476,7 @@ export function useFormViewSave({
       reconcile?: FormSubmitAcknowledgement["reconcile"];
       createdLines?: boolean;
       notify?: boolean;
+      message?: string;
       refetchPartial?: boolean;
     } = {}): void => {
       // A mutation response is a patch over the latest cache, which may have
@@ -477,6 +495,14 @@ export function useFormViewSave({
       if (!mounted.current) return;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
+      if (isCreate || (options.acceptedValues && acknowledgedSource !== undefined)) {
+        // Until the source changes, a descriptor rerender must retain the save
+        // acknowledgement instead of replaying the original create defaults.
+        localAcknowledgementRef.current = {
+          previous: acknowledgedSource !== undefined ? acknowledgedSource.values : emptyValues,
+          accepted: savedValues,
+        };
+      }
       const currentValues = form.getValues();
       const savedLines = linesField ? savedValues[linesField] : undefined;
       const submittedLines = linesField ? options.submitted?.[linesField] : undefined;
@@ -505,9 +531,9 @@ export function useFormViewSave({
           }
         }
       } else {
-        // Advancing only the submitted defaults makes RHF identify edits made
-        // during the request without a second dirty-value comparison engine.
-        resetDefaultValues({ ...form.formState.defaultValues, ...submitted }, { keepIsValid: true });
+        // The full pre-request draft includes values omitted from the wire patch.
+        // RHF then preserves only edits made while this submission was pending.
+        resetDefaultValues(options.submitted ?? form.formState.defaultValues ?? {}, { keepIsValid: true });
         syncRecordValues(savedValues, linesField
           ? reconciledLines ? savedLines
             : options.createdLines ? submitted[linesField] : savedLines
@@ -523,9 +549,13 @@ export function useFormViewSave({
       ]);
       formIsDirtyRef.current = [...observedNames].some((name) => form.getFieldState(name).isDirty)
         || Boolean(linesField && form.getFieldState(linesField).isDirty);
+      resetHistory();
+      activeFieldInteractions.current.clear();
       if (isCreate) manualSlugFieldsRef.current.clear();
+      if (options.message || options.notify) {
+        toast.success({ title: options.message || t(isCreate ? "form.createSuccess" : "form.updateSuccess") });
+      }
       if (options.notify) {
-        toast.success({ title: t(isCreate ? "form.createSuccess" : "form.updateSuccess") });
         onSaved?.(accepted);
       }
       // Fetch canonical server values when the response omitted any selected field.
@@ -534,7 +564,7 @@ export function useFormViewSave({
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues, t, toast],
+    [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -569,23 +599,18 @@ export function useFormViewSave({
         // whose generated IDs cannot be matched to a concurrently edited draft.
         if (baseline.some((row) => row[linesConfig.idField] == null)
           || !sameObservedLines(baseline, rowsFromRecord(latest) ?? [], linesConfig)) {
-          setError(linesField, { type: "conflict", message: t("form.linesChanged") });
-          setError("root.server", { type: "conflict", message: t("form.linesChanged") });
+          applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField });
           return;
         }
       }
       submittingRef.current = true;
       try {
-        const response = await runSubmit(data, linesDiff, value);
-        if (response) {
+        const result = readSubmitResult(await runSubmit(data, linesDiff, value)
+          .catch((cause) => formSubmitError(cause, t("form.genericSaveError"))));
+        if (result) {
+          const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
           const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
-          if (acknowledgement && acknowledgedSource !== undefined) {
-            localAcknowledgementRef.current = {
-              previous: acknowledgedSource.values,
-              accepted: acknowledgement.values,
-            };
-          }
           commitSavedRecord(saved, {
             submitted: value,
             submittedFields: acknowledgement
@@ -595,20 +620,10 @@ export function useFormViewSave({
             ...(acknowledgement?.reconcile ? { reconcile: acknowledgement.reconcile } : {}),
             createdLines: Boolean(linesDiff?.created.length),
             notify: true,
+            message: result.message,
           });
         }
-      } catch (error) {
-        const { fieldErrors, formErrors } = validationErrorsFromError(error);
-        if (!mounted.current) return;
-        for (const [name, messages] of Object.entries(fieldErrors)) {
-          setError(name, { type: "server", message: messages.join(" ") });
-        }
-        setError("root.server", { type: "server", message:
-          formErrors.length > 0 ? formErrors.join(" ")
-            : Object.keys(fieldErrors).length > 0
-              ? fieldValidationSummary(fieldErrors, fieldByName, t)
-              : t("form.genericSaveError"),
-        });
+
       } finally {
         submittingRef.current = false;
 
@@ -616,7 +631,6 @@ export function useFormViewSave({
     },
     [
       clearErrors,
-      setError,
       dataResource,
       fieldByName,
       formFields,
@@ -630,6 +644,7 @@ export function useFormViewSave({
       modelMetadata,
       resource,
       runSubmit,
+      readSubmitResult,
       seedLineRows,
       t,
       writableFieldNames,
@@ -648,18 +663,20 @@ export function useFormViewSave({
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
       }
-      const response = await runSubmit(patch);
+      const result = readSubmitResult(await runSubmit(patch));
       let saved: Row | null = null;
-      if (response) {
+      if (result) {
+        const response = result.data;
         saved = isFormSubmitAcknowledgement(response) ? response.record : response;
-        commitSavedRecord(saved, isFormSubmitAcknowledgement(response) ? {
-          acceptedValues: response.values,
-        } : undefined);
+        commitSavedRecord(saved, {
+          ...(isFormSubmitAcknowledgement(response) ? { acceptedValues: response.values } : {}),
+          message: result.message,
+        });
         clearErrors();
       }
       return saved;
     },
-    [clearErrors, commitSavedRecord, formReadOnly, id, resource, runSubmit],
+    [clearErrors, commitSavedRecord, formReadOnly, id, resource, runSubmit, readSubmitResult],
   );
   const patchRecord = React.useCallback((patch: Record<string, unknown>): void => {
     if (record) { commitSavedRecord(patch, { refetchPartial: false }); clearErrors(); }
@@ -714,47 +731,42 @@ export function useFormViewSave({
     [formReadOnly],
   );
   const discardChanges = React.useCallback(() => {
+    if (isCreate) localAcknowledgementRef.current = null;
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
+    resetHistory();
+    activeFieldInteractions.current.clear();
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, values]);
-  const activeFieldInteractions = React.useRef(new Set<string>());
+  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
+      startHistory(path);
       if (activeFieldInteractions.current.has(path)) return;
       activeFieldInteractions.current.add(path);
       onFieldInteractionStart?.(path);
     },
-    [onFieldInteractionStart],
+    [onFieldInteractionStart, startHistory],
   );
   const commitFieldInteraction = React.useCallback(
     (path: string) => {
       if (!activeFieldInteractions.current.delete(path)) return;
+      commitHistory(path);
       onFieldInteractionCommit?.(path);
     },
-    [onFieldInteractionCommit],
+    [onFieldInteractionCommit, commitHistory],
   );
-  const registerFieldValidation = React.useCallback((
-    name: string,
-    validate: (value: unknown, values: FormValues) => string | undefined,
-  ) => {
-    composedValidators.current.set(name, validate);
-    return () => {
-      if (composedValidators.current.get(name) === validate) {
-        composedValidators.current.delete(name);
-      }
-    };
-  }, []);
-
   return {
-    form,
+    form: { ...form, registerFieldValidation },
+    history,
     displayRecord,
     loading,
+    loadError,
     formReadOnly,
     formIsDirty,
     pending,
     saveError,
+    saveConflict,
     serverFieldErrors,
     clearServerFieldError,
     requiredFieldNames,

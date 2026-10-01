@@ -194,6 +194,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     settings and ``self.bridge.credential`` authenticates — and ``self.http`` is the
     shared SSRF-pinned client. Incremental state lives on each ``SyncStream``.
     """
+    registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
 
     category = "channel"
     label = "Channel"

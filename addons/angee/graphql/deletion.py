@@ -198,6 +198,8 @@ class DeletePreview:
         cls,
         target: models.Model,
         counts: Mapping[type[models.Model], int],
+        *,
+        blockers: Iterable[models.Model] = (),
     ) -> DeletePreview:
         """Return a delete forecast whose non-root rows are known by count, not collected.
 
@@ -224,12 +226,14 @@ class DeletePreview:
 
         Unlike :meth:`from_instance`, ``counts`` is **caller-trusted and unscoped**: the
         purge owner computes it elevated, so the preview reflects the true scope
-        regardless of the actor's REBAC row visibility. The count-based path assumes no
-        blockers — a channel purge has none today — so it takes the ``has_blockers=False``
-        branch; a blocker only surfaces if the confirm delete actually raises, whose owner
-        rebuilds the preview through :meth:`blocked_from_error`.
+        regardless of the actor's REBAC row visibility. A purge owner can supply
+        its retaining ``blockers`` without collecting its large deletion subtree.
+        Blocker names remain actor-scoped; native FK protection still checks the
+        actual delete, whose owner handles races through :meth:`blocked_from_error`.
         """
 
+        if protected := tuple(blockers):
+            return cls.from_blockers(target, protected)
         root_model = type(target)
         merged: dict[type[models.Model], int] = {}
         for model, count in counts.items():
@@ -257,13 +261,8 @@ class DeletePreview:
     ) -> DeletePreview:
         """Return a preview surfacing the rows that blocked a purge's confirm delete.
 
-        The count-based :meth:`from_counts` path assumes no blockers. If a consumer addon
-        ever ``PROTECT``\\s or ``RESTRICT``\\s a reverse FK to ``target``, the confirm
-        delete raises instead of orphaning; the purge owner catches it and calls this so
-        the surface reports the blockers as a blocked preview (mirroring
-        :func:`delete_by_public_id`), never a raw 500. Nothing was deleted — the purge
-        transaction rolled back — so the deleted/updated counts are empty and only
-        ``blocked`` is populated, straight from the offending rows the error carries.
+        Nothing was deleted: the purge transaction rolled back. Reuse the same
+        actor-scoped retaining-row preview as a purge owner's preflight.
         """
 
         protected = (
@@ -271,13 +270,25 @@ class DeletePreview:
             if isinstance(error, ProtectedError)
             else error.restricted_objects
         )
+        return cls.from_blockers(target, protected)
+
+    @classmethod
+    def from_blockers(cls, target: models.Model, blockers: Iterable[models.Model]) -> DeletePreview:
+        """Name readable retaining rows while concealing inaccessible row identities."""
+        rows_by_model: dict[type[models.Model], list[models.Model]] = {}
+        for row in blockers:
+            rows_by_model.setdefault(type(row), []).append(row)
+        groups = {
+            model: _PreviewRows.from_collected(target, model, rows, current_actor())
+            for model, rows in rows_by_model.items()
+        }
         return cls(
             total_deleted_count=0,
             deleted=[],
             updated=[],
-            blocked=_groups(_count_by_model(protected)),
-            has_blockers=True,
-            root=DeletePreviewNode.from_target(target, {}),
+            blocked=_groups({model: rows.total_count for model, rows in groups.items()}),
+            has_blockers=bool(groups),
+            root=DeletePreviewNode.from_target(target, groups),
         )
 
 

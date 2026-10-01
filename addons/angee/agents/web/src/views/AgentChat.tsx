@@ -85,8 +85,8 @@ export function AcpAgentChat(): React.ReactElement {
   return <AgentChatContent {...props} runtimeState={runtimeState} />;
 }
 
-/** Shared chat chrome and transcript for a contributed transport. */
-export function AgentChatContent({
+/** Chat chrome and transcript for the ACP runtime. */
+function AgentChatContent({
   agentId,
   view,
   modelHandle,

@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
+from django.db.models.signals import class_prepared
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -45,19 +46,23 @@ rows and lists expose an archived facet without per-model wiring.
 _EVERY_AUTHENTICATED_USER = SubjectRef.of("auth/user", "*")
 
 
-def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
-    """Null audit attribution even when the referencing rows are append-only.
+def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
+    """Null a retained reference through Django's materialized collector path.
 
     Django's unevaluated SET_NULL path calls QuerySet.update(), which append-only
     querysets reject. Materializing here selects the collector's native
     UpdateQuery.update_batch path without opening a general update escape hatch.
-    This loads all matching audit rows into memory for each FK being nullified;
-    deleting a heavily referenced actor can therefore require substantial memory.
-    AuditMixin uses one policy so its fields also work on append-only consumers.
+    This loads all matching referencing rows into memory for each FK being
+    nullified; deleting a heavily referenced target can require substantial memory.
+    AuditMixin and retained domain references share this collector policy.
     """
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
+
+
+audit_set_null = retained_set_null
+"""Historical import for released migration bodies."""
 
 
 def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
@@ -248,7 +253,7 @@ class AuditMixin(models.Model):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=audit_set_null,
+        on_delete=retained_set_null,
         related_name="+",
     )
     """The user that created the row, when known."""
@@ -257,7 +262,7 @@ class AuditMixin(models.Model):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=audit_set_null,
+        on_delete=retained_set_null,
         related_name="+",
     )
     """The user that most recently updated the row, when known."""
@@ -374,6 +379,77 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
         """Reject direct SQL deletion through the queryset."""
 
         raise self.immutable_error("_raw_delete")
+
+
+class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyQuerySet)):  # type: ignore[misc]
+    """Give Django unscoped relation reads through the guarded domain queryset."""
+
+    def get_queryset(self) -> AppendOnlyQuerySet[Any]:
+        queryset = self.model._default_manager.get_queryset()
+        if not isinstance(queryset, AppendOnlyQuerySet):
+            raise ValueError(f"{self.model._meta.label} needs an append-only default manager.")
+        return queryset.system_context(reason=f"{self.model._meta.label_lower}.base_manager")
+
+
+class AppendOnlyModel(models.Model):
+    """Admit new rows while reserving retained-row changes for owner verbs.
+
+    The model's managers must compose :class:`AppendOnlyQuerySet`. An owner may
+    use ``_owner_insert`` after its own admission or ``_owner_delete`` after its
+    own retention check; ordinary instance and collection writes stay closed.
+    """
+
+    _append_only_base = AppendOnlyBaseManager()
+
+    class Meta:
+        abstract = True
+
+    def validate_append(self) -> None:
+        """Let a domain owner narrow first insertion without replacing the guard."""
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ValidationError(f"{self._meta.label} rows cannot be edited.")
+        self.validate_append()
+        type(self)._default_manager.get_queryset().validate_insert()
+        kwargs["force_insert"] = True
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ValidationError(f"{self._meta.label} rows cannot be deleted.")
+
+    def _owner_insert(self) -> None:
+        """Insert one owner-admitted row, including domains with closed generic admission."""
+        if not self._state.adding:
+            raise ValidationError(f"{self._meta.label} rows cannot be edited.")
+        self.validate_append()
+        super().save(force_insert=True)
+
+    def _owner_delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Delete one row after its domain owner has checked retention and locks."""
+        return super().delete(*args, **kwargs)
+
+
+def _append_only_base_manager(sender: type[models.Model], **kwargs: Any) -> None:
+    """Bind a guarded base manager even when composition drops Meta manager names."""
+    del kwargs
+    if not issubclass(sender, AppendOnlyModel) or sender._meta.abstract:
+        return
+    base = next((manager for manager in sender._meta.managers if isinstance(manager, AppendOnlyBaseManager)), None)
+    manager = next(
+        (manager for manager in sender._meta.managers if not isinstance(manager, AppendOnlyBaseManager)
+         and isinstance(manager.get_queryset(), AppendOnlyQuerySet)),
+        None,
+    )
+    if base is None or manager is None:
+        raise ValueError(f"{sender._meta.label} needs an append-only default manager.")
+    sender._meta.default_manager_name = manager.name
+    sender._meta.__dict__.pop("default_manager", None)
+    sender._meta.base_manager_name = base.name
+    sender._meta.__dict__.pop("base_manager", None)
+
+
+class_prepared.connect(_append_only_base_manager, weak=False, dispatch_uid="angee.base.append_only_base_manager")
 
 
 class ArchiveMixin(models.Model):

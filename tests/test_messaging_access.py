@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,14 +11,22 @@ from django.core.management import call_command
 from django.test import override_settings
 from rebac import system_context
 
-from tests.conftest import Vendor
-from tests.messaging_models import Channel, Message, Thread
+from angee.compose.permissions import merged_schemas, render_zed
+from tests.conftest import File, Vendor
+from tests.messaging_models import Channel, Message, Part, Thread
+from tests.test_messaging import _storage_drive
 
 
 @pytest.fixture(params=("denormalized", "registry"))
-def messaging_access_schema(request: pytest.FixtureRequest) -> Any:
+def messaging_access_schema(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     """Synchronize messaging's field-backed access chain in either local store."""
 
+    storage = apps.get_app_config("storage")
+    messaging = apps.get_app_config("messaging")
+    effective = merged_schemas((storage, messaging))["angee.storage"]
+    schema_path = tmp_path / "storage.zed"
+    schema_path.write_text(render_zed("angee.storage", effective), encoding="utf-8")
+    monkeypatch.setattr(storage, "rebac_schema", str(schema_path), raising=False)
     with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
         call_command("rebac", "sync", verbosity=0)
         yield request.param
@@ -33,6 +42,7 @@ def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str
     service = user_model.objects.create_user(username="message-channel-service", kind="service")
     author = user_model.objects.create_user(username="message-channel-author", kind="person")
     outsider = user_model.objects.create_user(username="message-channel-outsider", kind="person")
+    reader = user_model.objects.create_user(username="message-channel-reader", kind="service")
     with system_context(reason="tests.messaging.channel_access"):
         vendor = Vendor.objects.create(slug="message-channel-access", display_name="Message channel access")
         person_channel = Channel.objects.create(vendor=vendor, owner=person, backend_class="manual")
@@ -82,3 +92,51 @@ def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str
     assert not person_thread.with_actor(outsider).has_access("read")
     assert not thread_message.with_actor(outsider).has_access("read")
     assert not channel_message.with_actor(outsider).has_access("read")
+
+    person_channel.with_actor(person).grant_record_access("reader", reader)
+    assert person_channel.with_actor(reader).has_access("read")
+    assert not person_channel.integration_ptr.with_actor(reader).has_access("read")
+    assert thread_message.with_actor(reader).has_access("read")
+    assert channel_message.with_actor(reader).has_access("read")
+    person_channel.with_actor(person).revoke_record_access("reader", reader)
+    assert not thread_message.with_actor(reader).has_access("read")
+    assert not channel_message.with_actor(reader).has_access("read")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_channel_reader_reads_only_message_attachment_file_content(
+    messaging_access_schema: str, tmp_path: Path,
+) -> None:
+    """A channel reader reaches referenced bytes without any drive grant."""
+
+    del messaging_access_schema
+    user_model = apps.get_model("iam", "User")
+    owner = user_model.objects.create_user(username="attachment-owner", kind="person")
+    reader = user_model.objects.create_user(username="attachment-reader", kind="service")
+    content = b"Message attachment content"
+    with system_context(reason="tests.messaging.attachment_access"):
+        vendor = Vendor.objects.create(slug="attachment-access", display_name="Attachment access")
+        channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+        message = Message.objects.create(channel=channel, created_by=owner, updated_by=owner)
+        drive = _storage_drive(tmp_path, owner=owner)
+        attached = File.objects.ingest_bytes(
+            content, filename="attached.txt", owner_id=owner.pk, drive_id=str(drive.sqid),
+        )
+        unrelated = File.objects.ingest_bytes(
+            b"Private content", filename="private.txt", owner_id=owner.pk, drive_id=str(drive.sqid),
+        )
+        part = Part.objects.create(message=message, file=attached, created_by=owner, updated_by=owner)
+
+    assert not drive.with_actor(reader).has_access("read")
+    assert not attached.with_actor(reader).has_access("read")
+    channel.with_actor(owner).grant_record_access("reader", reader)
+    visible_message = Message.objects.with_actor(reader).get(pk=message.pk)
+    visible_part = Part.objects.with_actor(reader).get(message=visible_message, pk=part.pk)
+    visible_file = File.objects.with_actor(reader).get(pk=visible_part.file_id)
+    assert visible_file.read_verified(max_bytes=len(content)) == content
+    assert not drive.with_actor(reader).has_access("read")
+    assert not attached.with_actor(reader).has_access("write")
+    assert not attached.with_actor(reader).has_access("delete")
+    assert not File.objects.with_actor(reader).filter(pk=unrelated.pk).exists()
+    channel.with_actor(owner).revoke_record_access("reader", reader)
+    assert not File.objects.with_actor(reader).filter(pk=attached.pk).exists()

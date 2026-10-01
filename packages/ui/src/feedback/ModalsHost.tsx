@@ -193,7 +193,7 @@ function ConfirmDialog({
           <AlertDialog.Body className="space-y-3 p-5">
             <AlertDialog.Title>{options.title}</AlertDialog.Title>
             {options.body ? (
-              <AlertDialog.Description>{options.body}</AlertDialog.Description>
+              <AlertDialog.Description render={<div />}>{options.body}</AlertDialog.Description>
             ) : null}
           </AlertDialog.Body>
           <AlertDialog.Footer>

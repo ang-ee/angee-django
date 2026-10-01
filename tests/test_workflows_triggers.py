@@ -1,1495 +1,817 @@
-"""Tests for workflow triggers and map fan-out."""
+"""Level-triggered admission through native source, filter and permission owners."""
 
-from __future__ import annotations
-
-import importlib
-from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Event
-from typing import Any
+from types import SimpleNamespace
 
 import pytest
-import strawberry
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import close_old_connections, connection, connections, models, transaction
-from django.test.utils import CaptureQueriesContext
-from django.utils import timezone
-from rebac import actor_context, system_context, to_subject_ref
-from rebac.errors import MissingActorError
-from rebac.errors import PermissionDenied as RebacPermissionDenied
+import strawberry_django
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.db import IntegrityError, OperationalError, models, transaction
+from django.db.models.functions import Now, Upper
+from django.db.models.signals import post_save
+from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
+from rebac.actors import is_sudo
+from rebac.models import active_relationship_model
+from rebac.relationships import delete_relationship
 
-from angee.base.models import AngeeDataModel
-from angee.graphql.events import ChangePayload
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.graphql.subscriptions import changes
-from angee.integrate.models import Bridge
-from angee.workflows import models as workflow_models
-from angee.workflows.steps import StepResult
-from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal, step_run_for
-from angee.workflows.testing.models import Edge, Step, StepRun, Trigger, Workflow, WorkflowRun
-from tests.conftest import SchemaAddon, execute_schema, make_integration, result_data
-from tests.conftest import create_platform_admin as _platform_admin
-from tests.iam_models import Group
-from tests.integrate_models import Integration
-from tests.tables import model_tables
-from tests.workflows import FixtureStep, start_run
+from angee.base.impl import impl_choices_enum
+from angee.base.scoping import system_queryset
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.deletion import delete_by_public_id
+from angee.graphql.node import AngeeNode
+from angee.graphql.schema import GraphQLSchemas
+from angee.knowledge import schema as knowledge_schema
+from angee.workflows import schema as workflow_schema
+from angee.workflows import triggers
+from angee.workflows.steps import Step
+from angee.workflows.testing.drivers import load_workflow, run_until, trigger_source
+from angee.workflows.testing.models import (
+    StepAttempt,
+    StepWatch,
+    Trigger,
+    TriggerEvent,
+    WorkflowRun,
+    WorkflowRunEvidence,
+)
+from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.mtidemo.models import MtiParent
+from tests.workflow_steps import Value, document
 
-User = get_user_model()
-
-
-@pytest.fixture()
-def executable_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configure the trigger fixture operation's outcome."""
-
-    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
-        del self, now
-        return StepResult.done(outcome=str(step_run.step.config.get("outcome", "done")))
-
-    monkeypatch.setattr(FixtureStep, "run", run)
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
 
 
-class TriggerSubject(models.Model):
-    """Concrete row declared into the change feed for event-trigger tests."""
-
-    name = models.CharField(max_length=100)
-    state = models.CharField(max_length=50, default="draft")
-
-    class Meta:
-        app_label = "tests"
-        db_table = "test_workflows_trigger_subject"
+@pytest.fixture
+def trigger_resource_schema(monkeypatch):
+    """Bare tests install just their real, composed resource owner, restoring it afterward."""
+    owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
+    monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
+    with trigger_source(Vault):
+        yield owner
 
 
-class SecuredTriggerSubject(AngeeDataModel):
-    """REBAC-backed change-feed row used to pin workflow subject re-fetching."""
-
-    sqid_prefix = "sts_"
-    name = models.CharField(max_length=100)
-    state = models.CharField(max_length=50, default="draft")
-
-    class Meta:
-        app_label = "chatterdemo"
-        db_table = "test_workflows_secured_trigger_subject"
-        rebac_resource_type = "chatterdemo/doc"
-
-
-class UnpublishedTriggerSubject(models.Model):
-    """Concrete row intentionally absent from the change feed."""
-
-    name = models.CharField(max_length=100)
-
-    class Meta:
-        app_label = "tests"
-        db_table = "test_workflows_unpublished_trigger_subject"
+@pytest.fixture
+def trigger_setup(execution, trigger_resource_schema):
+    """Use one public workflow and a real actor-owned record for admission."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="record-trigger", actor=actor, subject_model="knowledge.vault")
+    record = vault_for(actor, name="Ready")
+    with actor_context(actor):
+        trigger = Trigger.objects.create(
+            workflow=workflow, source="record_changed", model_label="knowledge.vault",
+            condition={"name": {"_eq": "Ready"}},
+        )
+    return actor, workflow, record, trigger
 
 
-class BackfillBridge(Bridge, Integration):
-    """Concrete bridge whose sync creates a subject row."""
-
-    class Meta(Bridge.Meta):
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_workflows_backfill_bridge"
-        rebac_resource_type = "tests/backfill_bridge"
-
-    def sync(self) -> int:
-        """Materialize one row through the Bridge sync owner."""
-
-        TriggerSubject.objects.create(name="backfill", state="ready")
-        return 1
-
-    def report_status(self, **kwargs: Any) -> None:
-        """Match the Integration child API Bridge.record_sync calls."""
+def capture(record):
+    """Bulk and signal writers share the same durable owner."""
+    triggers.RecordChanged.dispatch(type(record), record)
 
 
-@strawberry.type
-class TriggerSchemaQuery:
-    """Minimal query root for the change-feed-only workflow test schema."""
+def restrict_source_grant_to_record(monkeypatch, record):
+    """Let the record owner, but not an unrelated workflow editor, delegate it."""
+    def targets(cls, trigger):
+        return (triggers.TriggerGrantTarget(
+            triggers.ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(record),
+        ),)
 
-    ready: bool = True
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(targets))
 
 
-@pytest.fixture()
-def workflow_trigger_tables(
-    transactional_db: Any, monkeypatch: pytest.MonkeyPatch, executable_fixture: None
-) -> Iterator[None]:
-    """Sync trigger permissions; only the two uninstalled probe models need tables."""
+def test_record_changed_system_check_requires_grant_targets(monkeypatch):
+    """The mixin alone opts in, and Django checks its required declaration."""
+    missing = type("MissingGrantTargets", (triggers.RecordChangedOptIn,), {
+        "_meta": SimpleNamespace(label="example.MissingGrantTargets"),
+    })
+    monkeypatch.setattr(triggers.apps, "get_models", lambda: [missing])
+    errors = triggers.check_record_changed_models()
+    assert len(errors) == 1 and errors[0].id == "workflows.E001"
+    assert "record_changed_grant_targets" in errors[0].msg
 
-    del transactional_db, executable_fixture
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    schemas = GraphQLSchemas(
-        [
-            SchemaAddon(
-                {
-                    "public": {
-                        "query": (TriggerSchemaQuery,),
-                        "subscription": (
-                            changes(TriggerSubject, field="triggerSubjectChanged"),
-                            changes(SecuredTriggerSubject, field="securedTriggerSubjectChanged"),
-                        ),
-                    }
-                }
-            )
-        ]
+
+def test_record_changed_requires_the_mixin_for_watch_eligibility():
+    with pytest.raises(ValidationError, match="no registered workflow event source"):
+        triggers.RecordChanged.check_watch_model(MtiParent)
+
+
+def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    capture(record)
+    assert not system_queryset(TriggerEvent).exists()
+    Trigger.objects.enable(trigger, actor=actor)
+    with trigger_source(Vault, connect=True):
+        post_save.send(sender=Vault, instance=record, raw=True, created=False)
+        assert not system_queryset(TriggerEvent).exists()
+        with actor_context(actor):
+            record.save()
+        assert system_queryset(TriggerEvent).count() == 1
+
+
+def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
+    _, _, _, trigger = trigger_setup
+    with system_context(reason="test.workflow actorless trigger"), pytest.raises(PermissionDenied, match="acting user"):
+        Trigger.objects.enable(trigger, actor=None)
+    trigger.refresh_from_db()
+    assert not trigger.enabled
+
+
+def test_enable_projects_native_subject_refs_to_the_user_foreign_key(trigger_setup):
+    actor, _, _, trigger = trigger_setup
+    enabled = Trigger.objects.enable(trigger, actor=to_subject_ref(actor))
+    assert enabled.enabled and enabled.workflow.user_id != actor.pk
+
+
+def test_workflow_principal_grants_are_listable_and_repaired_on_reenable(trigger_setup):
+    """The explicit source grant belongs to the workflow user, not the enabler."""
+    actor, workflow, _, trigger = trigger_setup
+    enabled = Trigger.objects.enable(trigger, actor=actor)
+    workflow.refresh_from_db()
+    assert workflow.user.kind == "service"
+    assert workflow.user.username == f"workflow-{workflow.sqid}"
+    assert workflow.user_id != actor.pk
+    grants = enabled.granted_relationships(actor=actor)
+    assert len(grants) == 1
+    grant = grants[0]
+    assert (grant.resource_type, grant.resource_id, grant.relation) == (
+        "knowledge/role", "vault_viewer", "member",
     )
-    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
-    with model_tables((TriggerSubject, UnpublishedTriggerSubject)):
-        call_command("rebac", "sync", verbosity=0)
-        schemas.connect_change_publishers()
-        workflow_triggers.connect_event_trigger_receiver()
-        try:
-            yield
-        finally:
-            for model in schemas.change_publisher_models():
-                importlib.import_module("angee.graphql.publishing").disconnect_publishers(model)
+    assert grant.subject_id == str(workflow.user_id)
+    assert enabled.granted_targets == [{
+        "resource_type": "knowledge/role", "resource_id": "vault_viewer", "relation": "member",
+        "grant_permission": "write", "grant_resource_type": "workflows/workflow",
+        "grant_resource_id": str(workflow.pk),
+    }]
+
+    delete_relationship(RelationshipTuple(
+        resource=triggers.TriggerGrantTarget.from_stored(enabled.granted_targets[0]).resource,
+        relation="member", subject=to_subject_ref(workflow.user),
+    ))
+    assert not enabled.granted_relationships(actor=actor)
+    enabled = Trigger.objects.enable(enabled, actor=actor)
+    assert len(enabled.granted_relationships(actor=actor)) == 1
+    Trigger.objects.disable(enabled, actor=actor)
+    assert not active_relationship_model().objects.filter(
+        resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+        subject_id=str(workflow.user_id),
+    ).exists()
 
 
-@pytest.fixture()
-def item_fixture(monkeypatch: pytest.MonkeyPatch, executable_fixture: None) -> list[dict[str, Any]]:
-    """Run fixture operations synchronously and fail one mapped item by value."""
-
-    del executable_fixture
-    calls: list[dict[str, Any]] = []
-
-    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
-        del self, now
-        calls.append({"key": step_run.step.key, "input": step_run.input})
-        if step_run.step.key == "item" and step_run.input.get("item") == "bad":
-            raise RuntimeError("bad mapped item")
-        return StepResult.done(
-            output={"key": step_run.step.key, "input": step_run.input},
-            outcome=str(step_run.step.config.get("outcome", "done")),
+def test_shared_target_survives_until_last_trigger_disables(trigger_setup):
+    """Two triggers on one workflow contribute one native tuple without stealing it."""
+    actor, workflow, _, first = trigger_setup
+    with actor_context(actor):
+        second = Trigger.objects.create(
+            workflow=workflow, source="record_changed", model_label="knowledge.vault",
         )
-
-    monkeypatch.setattr(FixtureStep, "run", run)
-    return calls
-
-
-def test_event_trigger_condition_starts_matching_saved_subject(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """A real post_save starts a run only when the trigger condition matches."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    _event_trigger(condition={"state": "ready"})
-
-    TriggerSubject.objects.create(name="skip", state="draft")
-    assert _run_count() == 0
-
-    subject = TriggerSubject.objects.create(name="fire", state="ready")
-
-    runs = _runs_for_subject(subject)
-    assert len(runs) == 1
-    assert runs[0].trigger is not None
-
-
-def test_event_trigger_receiver_skips_when_workflow_models_are_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A host save must not fail when concrete workflow models are not registered."""
-
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-
-    def missing_model(name: str) -> object:
-        raise LookupError(name)
-
-    monkeypatch.setattr(workflow_triggers, "_model", missing_model)
-    subject = TriggerSubject(name="standalone", state="ready")
-    subject.pk = 1
-
-    workflow_triggers._on_change_published(
-        sender=TriggerSubject,
-        payload=ChangePayload.from_instance(subject, action="create", update_fields=None),
+    first = Trigger.objects.enable(first, actor=actor)
+    second = Trigger.objects.enable(second, actor=actor)
+    assert len(second.granted_relationships(actor=actor)) == 1
+    first = Trigger.objects.revoke_grant(
+        first, actor=actor, resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
     )
+    assert not first.enabled and "workflow principal" in first.disabled_reason
+    assert len(second.granted_relationships(actor=actor)) == 1
+    Trigger.objects.disable(second, actor=actor)
+    assert not second.granted_relationships(actor=actor)
 
 
-def test_event_trigger_requires_change_published_model(
-    workflow_trigger_tables: None,
-) -> None:
-    """Event triggers fail loudly when their subject model is absent from changes()."""
+def test_revoked_required_grant_disables_admission_with_a_reason(trigger_setup):
+    actor, workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    trigger = Trigger.objects.revoke_grant(
+        trigger, actor=actor, resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+    )
+    assert not trigger.enabled and "workflow principal" in trigger.disabled_reason
+    assert not trigger.granted_relationships(actor=actor)
+    capture(record)
+    assert Trigger.objects.drain() == 0
+    assert not system_queryset(WorkflowRun).exists()
+    assert workflow.user_id is not None
 
-    del workflow_trigger_tables
-    with pytest.raises(ValidationError, match=r"declare changes\(\) for the model to join the change feed"):
-        _event_trigger(
-            condition={},
-            config={"model": UnpublishedTriggerSubject._meta.label_lower},
-        )
+
+def test_deleting_trigger_releases_its_grant(trigger_setup):
+    """Queryset deletion runs the same tuple cleanup as explicit disable."""
+    actor, workflow, _, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    with system_context(reason="test.trigger.delete_grants"):
+        Trigger.objects.filter(pk=trigger.pk).delete()
+    assert not active_relationship_model().objects.filter(
+        resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+        subject_id=str(workflow.user_id),
+    ).exists()
 
 
-def test_event_trigger_check_rejects_persisted_non_published_model(
-    workflow_trigger_tables: None,
-) -> None:
-    """The workflows system check reports persisted event triggers outside the feed."""
+def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    with actor_context(actor):
+        record.name = "Later"
+        record.save()
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert event.evaluated_at and not event.admitted_at and "no longer matches" in event.rejection
+    with actor_context(actor):
+        record.name = "Ready"
+        record.save()
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    event.refresh_from_db()
+    assert event.admitted_at and not event.rejection
+    run = event.started_run
+    assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
+    assert run.trigger_event_id == event.pk
+    assert [row.record_public_id for row in system_queryset(WorkflowRunEvidence).filter(run=run)] == [record.sqid]
+    run_until(run)
+    system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
+    assert WorkflowRun.objects.prune() == 1
+    event.refresh_from_db()
+    assert event.admitted_at and not system_queryset(WorkflowRun).filter(trigger_event=event).exists()
+    with actor_context(actor):
+        assert delete_by_public_id(Trigger, trigger.sqid).has_blockers
+    capture(record)
+    assert Trigger.objects.drain() == 0
+    assert not system_queryset(WorkflowRun).exists()
 
-    del workflow_trigger_tables
-    with system_context(reason="test invalid event trigger check setup"):
-        draft = Workflow.objects.create(name="Invalid Event")
-        Step.objects.create(
-            workflow=draft,
-            key="start",
-            name="Start",
-            step_class="fixture",
-            is_entry=True,
-        )
-        workflow = draft.publish()
-    trigger = Trigger(
-        workflow=workflow,
-        kind=workflow_models.TriggerKind.EVENT,
+
+def test_admitted_event_blocks_trigger_purge_preview(trigger_setup):
+    """The retained ledger and its started run appear as native deletion blockers."""
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    with actor_context(actor):
+        preview = delete_by_public_id(Trigger, trigger.sqid)
+    assert preview.has_blockers
+    assert any(blocked.label == str(TriggerEvent._meta.verbose_name_plural) for blocked in preview.blocked)
+    assert system_queryset(Trigger).filter(pk=trigger.pk).exists()
+    assert event.started_run.trigger_event_id == event.pk
+
+
+def test_enabler_losing_record_read_does_not_change_principal_admission(trigger_setup):
+    admin, workflow, _, trigger = trigger_setup
+    editor = create_user("trigger-actor")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    record = vault_for(editor, name="Ready")
+    Trigger.objects.enable(trigger, actor=editor)
+    capture(record)
+    system_queryset(Vault).filter(pk=record.pk).update(owner=create_user("replacement-owner"))
+    with system_context(reason="test.workflow principal admission"):
+        assert Trigger.objects.drain() == 1
+    event = system_queryset(TriggerEvent).get(record_object_id=record.pk)
+    assert event.admitted_at and not event.rejection
+    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+
+
+def test_condition_cannot_observe_records_hidden_from_the_principal(trigger_setup, monkeypatch):
+    """An elevated drain filters records through the principal's source grant."""
+    admin, workflow, visible, trigger = trigger_setup
+    hidden = vault_for(create_user("hidden-vault-owner"), name="Ready")
+
+    def targets(cls, candidate):
+        return (triggers.TriggerGrantTarget(to_object_ref(visible), "viewer", "write"),)
+
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(targets))
+    Trigger.objects.enable(trigger, actor=admin)
+    capture(hidden)
+    capture(visible)
+    with system_context(reason="test principal scoped condition"):
+        assert Trigger.objects.drain() == 1
+    denied = system_queryset(TriggerEvent).get(record_object_id=hidden.pk)
+    admitted = system_queryset(TriggerEvent).get(record_object_id=visible.pk)
+    assert denied.evaluated_at and denied.admitted_at is None and "inaccessible" in denied.rejection
+    assert admitted.admitted_at and admitted.rejection == ""
+    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+
+
+def test_editor_publication_cannot_use_principal_grants(trigger_setup, monkeypatch):
+    admin, workflow, record, trigger = trigger_setup
+    editor = create_user("trigger-publisher")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    restrict_source_grant_to_record(monkeypatch, record)
+    Trigger.objects.enable(trigger, actor=admin)
+    load_workflow(document("entry", "finish"), key=workflow.key, actor=editor,
+                  subject_model="knowledge.Vault")
+    capture(record)
+
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    assert not trigger.enabled
+    assert "Version 2" in trigger.disabled_reason
+    assert "trigger-publisher" in trigger.disabled_reason
+    assert "member" in trigger.disabled_reason
+    assert "vault_viewer" not in trigger.disabled_reason
+    assert event.rejection == trigger.disabled_reason
+    assert not system_queryset(WorkflowRun).exists()
+
+
+def test_admin_publication_keeps_principal_admission(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=admin)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    assert system_queryset(WorkflowRun).get().version.published_by_id == admin.pk
+
+
+def test_system_installed_publication_keeps_principal_admission(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    with system_context(reason="test.workflow system installation"):
+        installed = load_workflow(document("entry", "finish"), key=workflow.key,
+                                  subject_model="knowledge.Vault")
+    assert installed.published.published_by_id is None
+    Trigger.objects.enable(trigger, actor=admin)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    assert system_queryset(WorkflowRun).get().version_id == installed.published_id
+
+
+def test_publisher_losing_delegation_stops_later_admission(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    editor = create_user("revoked-publisher")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    load_workflow(document("entry", "finish"), key=workflow.key, actor=editor,
+                  subject_model="knowledge.Vault")
+    Trigger.objects.enable(trigger, actor=admin)
+    workflow.with_actor(admin).revoke_record_access("editor", editor)
+    capture(record)
+
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    assert not trigger.enabled and "revoked-publisher" in trigger.disabled_reason
+    assert not system_queryset(WorkflowRun).exists()
+
+
+def test_missing_stored_grant_provenance_requires_reenable(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    trigger = Trigger.objects.enable(trigger, actor=admin)
+    stored = [{key: value for key, value in target.items() if not key.startswith("grant_")}
+              for target in trigger.granted_targets]
+    system_queryset(Trigger).filter(pk=trigger.pk).update(granted_targets=stored)
+    capture(record)
+
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    assert not trigger.enabled
+    assert "grant provenance is missing" in trigger.disabled_reason
+    assert "enable the trigger again" in trigger.disabled_reason
+
+
+def test_child_start_refuses_version_published_without_principal_delegation(trigger_setup, monkeypatch, register_step):
+    admin, workflow, record, trigger = trigger_setup
+    editor = create_user("child-publisher")
+    child = load_workflow(document("entry"), key="untrusted-child", actor=admin)
+    child.with_actor(admin).grant_record_access("editor", editor)
+    load_workflow(document("entry", "finish"), key=child.key, actor=editor)
+
+    class StartChild(Step[Value, Value, None]):
+        key = "start_untrusted_child"
+
+        def run(self, ctx):
+            ctx.start_run(child)
+            return ctx.done(ctx.input)
+
+    register_step(StartChild)
+    load_workflow(document("entry", step=StartChild.key), key=workflow.key, actor=admin,
+                  subject_model="knowledge.Vault")
+    restrict_source_grant_to_record(monkeypatch, record)
+    Trigger.objects.enable(trigger, actor=admin)
+    workflow.refresh_from_db()
+    child.with_actor(admin).grant_record_access("starter", workflow.user)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    parent = system_queryset(WorkflowRun).get(trigger_event__trigger=trigger)
+    run_until(parent)
+    assert parent.status == "failed"
+    attempt = system_queryset(StepAttempt).get(step_run__run=parent)
+    assert "child-publisher" in attempt.error and "member" in attempt.error
+    assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
+
+
+def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    with actor_context(actor):
+        record.delete()
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert event.evaluated_at and event.rejection and event.admitted_at is None
+
+
+def test_drain_bound_counts_candidates_including_rejections(trigger_setup, monkeypatch):
+    actor, _, _, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    monkeypatch.setattr(triggers, "TRIGGER_DRAIN_LIMIT", 3)
+    for index in range(5):
+        capture(vault_for(actor, name=f"Pending {index}"))
+    assert Trigger.objects.drain() == 0
+    assert system_queryset(TriggerEvent).filter(evaluated_at__isnull=False).count() == 3
+    assert Trigger.objects.drain() == 0
+    assert system_queryset(TriggerEvent).filter(evaluated_at__isnull=False).count() == 5
+
+
+@pytest.mark.parametrize("condition", [
+    {"not_a_field": {"_eq": "value"}}, {"name": {"_unknown": "value"}}, {"id": {"_eq": "bad-public-id"}},
+])
+def test_conditions_use_actual_resource_fields_and_operators(trigger_setup, condition):
+    actor, _, _, trigger = trigger_setup
+    trigger.condition = condition
+    with actor_context(actor), pytest.raises(ValidationError):
+        trigger.save()
+
+
+def test_condition_depth_is_bounded_and_stale_configuration_disables(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    trigger.condition = {}
+    for _ in range(13):
+        trigger.condition = {"_not": trigger.condition}
+    with actor_context(actor), pytest.raises(ValidationError, match="nesting depth"):
+        trigger.save()
+    trigger.refresh_from_db()
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"removed_field": {"_eq": "x"}})
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    assert not trigger.enabled and "removed_field" in trigger.disabled_reason
+
+
+def test_invalid_persisted_public_id_is_configuration_failure(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"id": {"_eq": "bad-public-id"}})
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    event = system_queryset(TriggerEvent).get()
+    assert not trigger.enabled and trigger.disabled_reason
+    assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
+
+
+@pytest.mark.parametrize("source_path", [
+    "tests.missing_trigger_source.RecordChanged", "tests.workflow_steps.MissingTriggerSource",
+])
+def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, settings, source_path):
+    """Runtime source disappearance is configuration failure, preserving repair diagnostics."""
+    actor, _, record, trigger = trigger_setup
+    schema = addon_schema(workflow_schema.schemas, "console")
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES, "record_changed": source_path,
+    }
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    event = system_queryset(TriggerEvent).get()
+    assert not trigger.enabled and "cannot be loaded" in trigger.disabled_reason
+    assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
+    data = result_data(execute_schema(schema, """query($id: String!) {
+      trigger(where: {id: {_eq: $id}}) { id source source_model display_name enabled disabled_reason }
+    }""", {"id": trigger.sqid}, user=actor))["trigger"]
+    assert len(data) == 1 and data[0]["source_model"] == "knowledge.Vault"
+    assert data[0]["display_name"] == "record_changed: vault"
+    assert data[0]["enabled"] is False
+    assert data[0]["disabled_reason"] == trigger.disabled_reason
+
+
+def test_capture_failure_preserves_the_enclosing_write(trigger_setup, monkeypatch, caplog):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+
+    def fail(*args, **kwargs):
+        raise IntegrityError("capture failed")
+
+    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail)
+    with transaction.atomic(), actor_context(actor):
+        record.name = "Retained"
+        record.save()
+        capture(record)
+        assert Vault.objects.filter(pk=record.pk, name="Retained").exists()
+    assert "Workflow trigger capture failed" in caplog.text
+
+
+def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypatch, caplog):
+    """The shared capture savepoint rolls back its ledger, retaining the source write."""
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+
+    def fail(*args, **kwargs):
+        raise IntegrityError("watch capture failed")
+
+    monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
+    with trigger_source(Vault, connect=True):
+        with transaction.atomic(), actor_context(actor):
+            record.name = "Retained despite capture failure"
+            record.save()
+            assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
+    assert not system_queryset(TriggerEvent).exists()
+    assert "Workflow source capture failed" in caplog.text
+
+
+@pytest.mark.parametrize("model_label", ["workflows.workflow", "decisions.decision", "auth.user"])
+def test_recursive_and_non_opted_models_are_refused(trigger_setup, model_label):
+    actor, _, _, trigger = trigger_setup
+    trigger.model_label = model_label
+    with actor_context(actor), pytest.raises(ValidationError):
+        trigger.save()
+
+
+def test_resource_condition_rejects_field_gated_reads(execution):
+    """The compiler uses the resource catalogue, which excludes read__error fields."""
+    owner = GraphQLSchemas([make_addon(schemas=workflow_schema.schemas)])
+    with pytest.raises(ValidationError, match="error.*not defined"):
+        owner.resource_filter(StepAttempt, {"error": {"_eq": "hidden"}})
+
+
+def test_resource_condition_reuses_expression_extensions_and_public_id_decoders(trigger_setup):
+    """Stored filters follow the same final input extension and SQL alias as requests."""
+    actor, _, record, _ = trigger_setup
+
+    @strawberry_django.type(Vault)
+    class FilterVault(AngeeNode):
+        name: str
+
+    resource = hasura_model_resource(
+        FilterVault, model=Vault, name="filter_vault", filterable=("id", "name", "upper_name"),
+        filter_expressions={"upper_name": Upper("name", output_field=models.CharField())},
+        sortable=("id",), aggregatable=(),
+        insert=False, update=False, delete=False,
+    )
+    owner = GraphQLSchemas([make_addon(schemas={"console": {
+        "query": [resource.query], "types": resource.types,
+    }})])
+    condition = owner.resource_filter(Vault, {"_and": [
+        {"id": {"_eq": str(record.sqid)}}, {"upper_name": {"_eq": "READY"}},
+    ]})
+    assert list(condition(Vault.objects.with_actor(actor)).values_list("pk", flat=True)) == [record.pk]
+
+
+@pytest.mark.parametrize("field", ["condition", "source", "model_label"])
+@pytest.mark.parametrize("partial", [False, True])
+def test_enabled_configuration_edits_require_disable(
+    execution, trigger_resource_schema, monkeypatch, settings, field, partial,
+):
+    """A co-editor cannot change a live rule or scope using its standing grants."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="source-stability", actor=actor)
+    editor = create_user("trigger-co-editor")
+    workflow.with_actor(actor).grant_record_access("editor", editor)
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
+        "other_changed": "tests.test_workflows_triggers.OtherChanged",
+    }
+    source_field = Trigger._meta.get_field("source")
+    monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(triggers.TriggerSource))
+    with trigger_source(Page):
+        with actor_context(actor):
+            trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+        trigger = Trigger.objects.enable(trigger, actor=actor)
+        trigger.with_actor(editor)
+        replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
+                       "model_label": "knowledge.page"}[field]
+        setattr(trigger, field, replacement)
+        with actor_context(editor), pytest.raises(ValidationError, match="Disable the trigger before editing"):
+            trigger.save(**({"update_fields": (field,)} if partial else {}))
+        trigger.refresh_from_db()
+        assert trigger.enabled and trigger.workflow.user_id != actor.pk
+        assert getattr(trigger, field) != replacement
+        trigger = Trigger.objects.disable(trigger, actor=editor)
+        trigger.with_actor(editor)
+        setattr(trigger, field, replacement)
+        with actor_context(editor):
+            trigger.save(**({"update_fields": (field,)} if partial else {}))
+        trigger.refresh_from_db()
+        expected = Page._meta.label if field == "model_label" else replacement
+        assert not trigger.enabled and getattr(trigger, field) == expected
+
+
+class OtherChanged(triggers.RecordChanged):
+    """An alternate native source used to verify activation invalidation."""
+
+    key = "other_changed"
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_bulk_authoring_cannot_bypass_trigger_configuration_owner(trigger_setup, bulk):
+    """Authored bulk writes cannot retain activation while bypassing model validation."""
+    admin, workflow, _, trigger = trigger_setup
+    editor = create_user("trigger-bulk-editor")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    trigger = Trigger.objects.enable(trigger, actor=admin)
+    original = trigger.condition
+    trigger.condition = {}
+    queryset = Trigger.objects.with_actor(editor).filter(pk=trigger.pk)
+    with pytest.raises(ValidationError, match="save"):
+        if bulk:
+            queryset.bulk_update([trigger], ["condition"])
+        else:
+            queryset.update(condition={})
+    trigger.refresh_from_db()
+    assert trigger.condition == original and trigger.enabled and trigger.workflow.user_id != admin.pk
+
+
+def test_bulk_creation_cannot_borrow_another_users_trigger_authority(trigger_setup):
+    """A workflow editor must use the enable owner to grant its principal."""
+    admin, workflow, _, trigger = trigger_setup
+    editor = create_user("trigger-bulk-creator")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    forged = Trigger(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
         enabled=True,
-        config={"model": UnpublishedTriggerSubject._meta.label_lower},
-        event_model_label=UnpublishedTriggerSubject._meta.label_lower,
     )
-    Trigger._base_manager.bulk_create([trigger])
-
-    errors = workflow_models.check_event_trigger_publishers(databases=["default"])
-
-    assert any(error.id == "angee.workflows.E001" for error in errors)
-    assert "declare changes() for the model to join the change feed" in "\n".join(
-        error.msg for error in errors
-    )
+    with pytest.raises(ValidationError, match="save"):
+        Trigger.objects.with_actor(editor).bulk_create([forged])
+    assert list(system_queryset(Trigger).values_list("pk", flat=True)) == [trigger.pk]
+    installed = Trigger(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+    assert system_queryset(Trigger).bulk_create([installed]) == [installed]
+    assert not installed.enabled
 
 
-@pytest.mark.parametrize("databases", [None, []])
-def test_event_trigger_check_without_databases_does_not_query(databases: list[str] | None) -> None:
-    """Django's ordinary system check must not open database connections."""
+@pytest.mark.parametrize("boundary", ["enable", "check_access", "check_admission", "trigger_input"])
+def test_trigger_actor_boundaries_drop_ambient_system_privileges(trigger_setup, monkeypatch, boundary):
+    """Enable checks the author; admission hooks act as the workflow principal."""
+    admin, workflow, record, trigger = trigger_setup
+    actor = create_user("trigger-hook-actor")
+    workflow.with_actor(admin).grant_record_access("editor", actor)
+    record = vault_for(actor, name="Ready")
+    hidden = vault_for(admin, name="Hidden")
+    seen = []
 
-    assert workflow_models.check_event_trigger_publishers(databases=databases) == []
+    def observe(*args, **kwargs):
+        seen.append((is_sudo(), current_actor(), Vault.objects.filter(pk=hidden.pk).exists()))
+        return {}
 
-
-def test_event_trigger_subject_refetch_uses_system_context(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """An event trigger can resolve an AngeeManager subject without caller read scope."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    _event_trigger(condition={"state": "ready"}, model=SecuredTriggerSubject)
-    with system_context(reason="test secured trigger subject seed"):
-        no_actor_subject = SecuredTriggerSubject.objects.create(name="no actor", state="ready")
-
-    workflow_triggers._on_change_published(
-        sender=SecuredTriggerSubject,
-        payload=ChangePayload.from_instance(no_actor_subject, action="create", update_fields=None),
-    )
-    assert len(_runs_for_subject(no_actor_subject)) == 1
-
-    with system_context(reason="test secured trigger subject denied seed"):
-        stranger = User.objects.create_user(username="trigger-stranger")
-        denied_subject = SecuredTriggerSubject.objects.create(name="denied", state="ready")
-
-    with actor_context(stranger):
-        workflow_triggers._on_change_published(
-            sender=SecuredTriggerSubject,
-            payload=ChangePayload.from_instance(denied_subject, action="create", update_fields=None),
-        )
-
-    assert len(_runs_for_subject(denied_subject)) == 1
+    if boundary == "enable":
+        monkeypatch.setattr(triggers.RecordChanged, "check_access", observe)
+    with system_context(reason="test trigger enable actor boundary"):
+        trigger = Trigger.objects.enable(trigger, actor=actor)
+    if boundary != "enable":
+        owner = triggers.RecordChanged if boundary == "check_access" else Trigger
+        if owner is Trigger:
+            monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+        monkeypatch.setattr(owner, boundary, observe)
+        capture(record)
+        with system_context(reason="test trigger admission actor boundary"):
+            assert Trigger.objects.drain() == 1
+    assert seen == ([(False, to_subject_ref(actor), False)] if boundary == "enable"
+                    else [(False, to_subject_ref(workflow.user), True)])
 
 
-def test_disabled_event_trigger_does_not_start_run(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """Disabled triggers stay inert even when the saved row matches."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    _event_trigger(condition={"state": "ready"}, enabled=False)
-
-    TriggerSubject.objects.create(name="fire", state="ready")
-
-    assert _run_count() == 0
-
-
-def test_event_trigger_refire_dedupes_by_subject(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """Saving the same matching subject again does not create a second run."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(condition={"state": "ready"})
-    assert trigger.config["admission_policy"] == "once_per_subject"
-    subject = TriggerSubject.objects.create(name="first", state="ready")
-
-    subject.name = "second"
-    subject.save(update_fields=["name"])
-
-    assert len(_runs_for_subject(subject)) == 1
-
-
-def test_event_admission_policy_has_legacy_default_and_readable_summaries() -> None:
-    declarations = importlib.import_module("angee.workflows.trigger_declarations")
-
-    legacy = declarations.EventTriggerConfig.model_validate({"model": "tests.TriggerSubject"})
-    each = declarations.EventTriggerConfig.model_validate(
-        {"model": "tests.TriggerSubject", "admission_policy": "each_change"}
-    )
-
-    assert legacy.admission_policy == declarations.EventAdmissionPolicy.ONCE_PER_SUBJECT
-    assert legacy.summary_for("Trigger subject") == "When Trigger subject changes, once per subject"
-    assert each.summary_for("Trigger subject") == "When Trigger subject changes, for each matching change"
-
-
-def test_event_trigger_each_change_uses_publisher_occurrence_identity(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """One publisher occurrence starts once while later changes to the same subject remain distinct."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(
-        condition={"state": "ready"},
-        config={"admission_policy": "each_change"},
-    )
-    subject = TriggerSubject.objects.create(name="first", state="draft")
-    TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
-    subject.refresh_from_db()
-    now = timezone.now()
-
-    first = Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id="change-1",
-        timestamp=now,
-    )
-    duplicate = Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id="change-1",
-        timestamp=now,
-    )
-    second = Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id="change-2",
-        timestamp=now + timedelta(seconds=1),
-    )
-
-    assert first is not None
-    assert duplicate is not None
-    assert duplicate.pk == first.pk
-    assert second is not None
-    assert second.pk != first.pk
-    with system_context(reason="inspect event occurrence runs"):
-        occurrences = list(WorkflowRun.objects.order_by("pk").values_list("occurrence_id", flat=True))
-    assert occurrences == ["change-1", "change-2"]
+def test_enabler_deactivation_does_not_disable_principal_admission(trigger_setup):
+    """The enabling user's lifecycle does not change the standing principal."""
+    admin, workflow, record, trigger = trigger_setup
+    actor = create_user("trigger-deactivated-actor")
+    workflow.with_actor(admin).grant_record_access("editor", actor)
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    system_queryset(type(actor)).filter(pk=actor.pk).update(is_active=False)
+    assert Trigger.objects.drain() == 1
     trigger.refresh_from_db()
-    assert trigger.hourly_fire_count == 2
+    assert trigger.enabled
+    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
 
 
-def test_manual_event_fire_is_idempotent_and_reprocesses_with_lineage(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """Existing records use trigger admission and native whole-run reprocessing."""
+def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, monkeypatch):
+    """Domain policy runs as the principal and rolls back when admission rejects."""
+    admin, workflow, record, trigger = trigger_setup
+    actor = create_user("trigger-domain-actor")
+    workflow.with_actor(admin).grant_record_access("editor", actor)
+    record = vault_for(actor, name="Ready")
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    seen = []
 
-    del workflow_trigger_tables, no_workflow_queue
-    admin = _platform_admin("workflow-manual-event-admin")
-    trigger = _event_trigger(
-        condition={"state": "ready"}, model=SecuredTriggerSubject,
-        config={"admission_policy": "each_change"},
-    )
-    with system_context(reason="manual event subject fixture"):
-        subject = SecuredTriggerSubject.objects.create(name="existing", state="draft")
-        SecuredTriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
-        subject.refresh_from_db()
+    def reject(self, record, *, actor):
+        seen.append(actor.pk)
+        raise ValidationError("Domain admission declined.")
 
-    first = Trigger.objects.fire_event(trigger, subject=subject, actor=admin, request_key="process-1")
-    duplicate = Trigger.objects.fire_event(trigger, subject=subject, actor=admin, request_key="process-1")
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+    monkeypatch.setattr(Trigger, "check_admission", reject)
+    assert Trigger.objects.drain() == 0
+    record.refresh_from_db()
+    assert record.name == "Ready" and seen == [workflow.user_id]
+    assert system_queryset(Trigger).get(pk=trigger.pk).enabled
+    assert "Domain admission declined" in system_queryset(TriggerEvent).get().rejection
+    monkeypatch.setattr(Trigger, "check_admission", lambda self, record, *, actor: None)
+    monkeypatch.setattr(Trigger, "trigger_input", lambda self, record: {"value": record.pk})
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    assert system_queryset(WorkflowRun).get().input == {"value": record.pk}
 
-    assert duplicate.pk == first.pk
-    assert first.trigger_id == trigger.pk
-    assert first.subject == subject
-    workflows_schema = importlib.import_module("angee.workflows.schema")
-    runs, pending_decisions, truncated, decisions_truncated = (
-        workflows_schema._workflow_subject_history(
-            workflows_schema.WorkflowObjectRefInput(
-                subject_declaration=subject._meta.label, id=str(subject.sqid),
-            ),
-            actor=admin,
+
+def test_transient_trigger_error_remains_pending_for_later_drain(trigger_setup, monkeypatch):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    original = Trigger.trigger_input
+    calls = 0
+
+    def transient(self, record):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OperationalError("temporary connection failure")
+        return original(self, record)
+
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+    monkeypatch.setattr(Trigger, "trigger_input", transient)
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert event.evaluated_at is None and event.rejection == ""
+    assert Trigger.objects.drain() == 1
+
+
+def test_unexpected_trigger_configuration_error_isolates_candidate(trigger_setup, monkeypatch, caplog):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    second = vault_for(actor, name="Other")
+    capture(record)
+    capture(second)
+    original = Trigger.validate_configuration
+
+    def broken(self):
+        if self.pk == trigger.pk and not getattr(self, "_retried", False):
+            raise RuntimeError("unexpected configuration bug")
+        return original(self)
+
+    monkeypatch.setattr(Trigger, "validate_configuration", broken)
+    # A second trigger owns an independent candidate in the same drain.
+    with actor_context(actor):
+        other = Trigger.objects.create(
+            workflow=trigger.workflow, source="record_changed", model_label="knowledge.vault",
+            condition={},
         )
-    )
-    assert list(runs) == [first]
-    assert list(pending_decisions) == []
-    assert truncated is False
-    assert decisions_truncated is False
-    run_to_terminal(first)
-    reprocessed = WorkflowRun.objects.reprocess(first, actor=admin, request_key="reprocess-1")
-    assert reprocessed.reprocessed_from_id == first.pk
-    assert reprocessed.subject == subject
-    assert reprocessed.input_present == first.input_present
-    assert reprocessed.input == first.input
+    Trigger.objects.enable(other, actor=actor)
+    capture(second)
+    assert Trigger.objects.drain() >= 1
+    assert "unexpected configuration bug" in caplog.text
+    assert system_queryset(TriggerEvent).filter(trigger=trigger, evaluated_at__isnull=True).exists()
 
 
-def test_manual_event_fire_rejects_disabled_mismatched_and_unauthorized_targets(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """Manual admission cannot bypass trigger state, declaration, or REBAC."""
+def test_domain_rejection_is_sanitized(trigger_setup, monkeypatch):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
 
-    del workflow_trigger_tables, no_workflow_queue
-    admin = _platform_admin("workflow-manual-event-guard-admin")
-    outsider = User.objects.create_user(username="workflow-manual-event-outsider")
-    with system_context(reason="manual event guard subject fixture"):
-        subject = SecuredTriggerSubject.objects.create(name="guarded", state="ready")
-    disabled = _event_trigger(condition={"state": "ready"}, enabled=False, model=SecuredTriggerSubject)
-    mismatched = _event_trigger(condition={"state": "ready"}, model=TriggerSubject)
+    def reject(self, record, *, actor):
+        raise ValidationError("Rejected\x00 secret")
 
-    with pytest.raises(ValidationError, match="enabled event trigger"):
-        Trigger.objects.fire_event(disabled, subject=subject, actor=admin, request_key="disabled")
-    with pytest.raises(ValidationError, match="does not match"):
-        Trigger.objects.fire_event(mismatched, subject=subject, actor=admin, request_key="mismatch")
-    with pytest.raises((RebacPermissionDenied, ValidationError)):
-        Trigger.objects.fire_event(disabled, subject=subject, actor=outsider, request_key="unauthorized")
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+    monkeypatch.setattr(Trigger, "check_admission", reject)
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert "Rejected" in event.rejection and "\x00" not in event.rejection
 
 
-def test_event_trigger_each_change_declines_unidentified_legacy_payload(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """Each-change rules never fabricate occurrence identity for a legacy publisher payload."""
+def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
+    seen = []
 
-    del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(condition={"state": "ready"}, config={"admission_policy": "each_change"})
-    subject = TriggerSubject.objects.create(name="legacy", state="draft")
-    subject.state = "ready"
+    class RecordHook:
+        trigger_sources = ("record_changed",)
 
-    assert Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id=None,
-        timestamp=timezone.now(),
-    ) is None
-    assert _run_count() == 0
+        def trigger_input(self, record):
+            return {"record": record}
 
+        def check_admission(self, record, *, actor):
+            seen.append("record")
 
-def test_event_duplicate_after_publication_replacement_returns_original_pinned_run(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """A retried occurrence resolves to its original run after a newer publication exists."""
+    class MessageHook:
+        trigger_sources = ("message_ingested",)
 
-    del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(
-        condition={"state": "ready"},
-        config={"admission_policy": "each_change"},
-    )
-    subject = TriggerSubject.objects.create(name="publication", state="draft")
-    TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
-    subject.refresh_from_db()
-    first = Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id="stable-change",
-        timestamp=timezone.now(),
-    )
-    assert first is not None
-    with system_context(reason="replace workflow publication after event admission"):
-        head = Workflow.objects.get(pk=trigger.workflow_id)
-        entry = head.steps.get(is_entry=True)
-        entry.name = "New entry"
-        entry.save(update_fields={"name", "updated_at"})
-        head.publish()
+        def trigger_input(self, record):
+            return {"message": record}
 
-    duplicate = Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id="stable-change",
-        timestamp=timezone.now(),
-    )
+        def check_admission(self, record, *, actor):
+            seen.append("message")
 
-    assert duplicate is not None
-    assert duplicate.pk == first.pk
-    assert duplicate.workflow_id == first.workflow_id
-    assert _run_count() == 1
+    class Combined(RecordHook, MessageHook):
+        source = "record_changed"
+        _trigger_hooks = Trigger._trigger_hooks
+        admission_input = Trigger.admission_input
+        admit_record = Trigger.admit_record
 
+    trigger = Combined()
+    hooks = trigger._trigger_hooks("trigger_input")
+    assert hooks == [RecordHook.trigger_input]
+    assert trigger._trigger_hooks("check_admission") == [RecordHook.check_admission]
+    assert trigger.admission_input("row") == {"record": "row"}
+    trigger.admit_record("row", actor=None)
+    assert seen == ["record"]
+    trigger.source = "other"
+    assert trigger.admission_input("row") == {}
+    trigger.admit_record("row", actor=None)
+    assert seen == ["record"]
 
-def test_event_failed_admission_rolls_back_counters_and_remains_retryable(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed atomic run creation consumes neither the occurrence nor rate-limit facts."""
+    class AnotherRecordHook:
+        trigger_sources = ("record_changed",)
 
-    del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(
-        condition={"state": "ready"},
-        config={"admission_policy": "each_change"},
-    )
-    subject = TriggerSubject.objects.create(name="retryable", state="draft")
-    TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
-    subject.refresh_from_db()
-    ContentType.objects.get_for_model(subject, for_concrete_model=False)
-    manager_type = type(WorkflowRun.objects)
-    original = manager_type._start_locked
+        def trigger_input(self, record):
+            return {"other": record}
 
-    def fail_start(*args: Any, **kwargs: Any) -> Any:
-        del args, kwargs
-        raise RuntimeError("admission failed")
+    class Conflict(RecordHook, AnotherRecordHook):
+        source = "record_changed"
 
-    monkeypatch.setattr(manager_type, "_start_locked", fail_start)
-    with pytest.raises(RuntimeError, match="admission failed"):
-        Trigger.objects.start_event(
-            trigger.pk,
-            subject=subject,
-            occurrence_id="retryable-change",
-            timestamp=timezone.now(),
-        )
-    trigger.refresh_from_db()
-    assert trigger.hourly_fire_count == 0
-    assert trigger.last_fire_at is None
-    monkeypatch.setattr(manager_type, "_start_locked", original)
-
-    admitted = Trigger.objects.start_event(
-        trigger.pk,
-        subject=subject,
-        occurrence_id="retryable-change",
-        timestamp=timezone.now(),
-    )
-    assert admitted is not None
-
-
-def test_event_trigger_cooldown_and_hourly_cap_are_locked_facts(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Cooldown and hourly caps skip same-window fires on the Trigger row."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    now = timezone.now()
-    monkeypatch.setattr(workflow_triggers.timezone, "now", lambda: now)
-    _event_trigger(
-        condition={"state": "cooldown"},
-        config={"cooldown_seconds": 60, "hourly_cap": 10},
-    )
-    _event_trigger(
-        condition={"state": "capped"},
-        config={"cooldown_seconds": 0, "hourly_cap": 1},
-    )
-
-    TriggerSubject.objects.create(name="cooldown-1", state="cooldown")
-    TriggerSubject.objects.create(name="cooldown-2", state="cooldown")
-    TriggerSubject.objects.create(name="capped-1", state="capped")
-    TriggerSubject.objects.create(name="capped-2", state="capped")
-
-    assert _run_count() == 2
-
-
-def test_event_trigger_bad_condition_is_logged_and_skipped(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """One invalid event condition never breaks the host model save."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(condition={"missing_field": "ready"}, enabled=False)
-    with system_context(reason="test historical invalid event trigger"):
-        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), enabled=True)
-
-    TriggerSubject.objects.create(name="invalid-condition", state="ready")
-
-    assert _run_count() == 0
-    assert "condition" in caplog.text
-
-
-def test_event_trigger_start_error_is_logged_and_does_not_break_save(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Engine start failures are isolated to the trigger dispatch path."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    importlib.import_module("angee.workflows.triggers")
-    _event_trigger(condition={"state": "ready"})
-
-    def fail_start(*args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        raise RuntimeError("start failed")
-
-    monkeypatch.setattr(type(Trigger.objects), "start_event", fail_start)
-
-    TriggerSubject.objects.create(name="start-error", state="ready")
-
-    assert "start failed" in caplog.text
-
-
-def test_bridge_sync_marked_saves_are_skipped_but_live_saves_fire(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """Rows created during Bridge.run_sync are backfill saves; live saves still fire."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    _event_trigger(condition={"state": "ready"})
-    now = timezone.now()
-    with system_context(reason="test workflows trigger bridge sync"):
-        bridge = make_integration("trigger-backfill", model=BackfillBridge, poll_interval=60)
-        bridge.run_sync(now=now)
-
-    assert _run_count() == 0
-
-    TriggerSubject.objects.create(name="live", state="ready")
-
-    assert _run_count() == 1
-
-
-def test_schedule_trigger_fires_when_due_and_computes_next_fire(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """The due scan uses an injected timestamp and advances next_fire_at."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    now = timezone.now().replace(microsecond=0)
-    trigger = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
-
-    assert workflow_triggers.run_due_schedule_triggers(now=now) == {"triggers": 1, "fired": 1, "skipped": 0}
-    trigger.refresh_from_db()
-
-    assert _run_count() == 1
-    assert trigger.next_fire_at == now + timedelta(hours=1)
-
-    assert workflow_triggers.run_due_schedule_triggers(now=now + timedelta(minutes=30)) == {
-        "triggers": 0,
-        "fired": 0,
-        "skipped": 0,
-    }
-    assert workflow_triggers.run_due_schedule_triggers(now=now + timedelta(hours=1)) == {
-        "triggers": 1,
-        "fired": 1,
-        "skipped": 0,
-    }
-    assert _run_count() == 2
-
-
-def test_schedule_start_failure_rolls_back_due_claim(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A failed pinned start leaves its schedule occurrence durably retryable."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    now = timezone.now().replace(microsecond=0)
-    trigger = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
-    with system_context(reason="retire schedule publication"):
-        published = Workflow.objects.current_published_for(trigger.workflow)
-        assert published is not None
-        published.archive()
-
-    assert workflow_triggers.run_due_schedule_triggers(now=now) == {
-        "triggers": 1,
-        "fired": 0,
-        "skipped": 1,
-    }
-    trigger.refresh_from_db()
-    assert trigger.next_fire_at == now
-    assert trigger.last_fire_at is None
-    assert trigger.hourly_fire_count == 0
-    assert _run_count() == 0
-    assert "failed to start workflow" in caplog.text
-
-
-def test_schedule_trigger_primes_missing_next_fire_with_injected_timestamp(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """A schedule trigger with no indexed due time is primed by the due scan."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    now = timezone.now().replace(microsecond=0)
-    trigger = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=None)
-
-    assert workflow_triggers.run_due_schedule_triggers(now=now) == {"triggers": 0, "fired": 0, "skipped": 0}
-    trigger.refresh_from_db()
-
-    assert _run_count() == 0
-    assert trigger.next_fire_at == now + timedelta(hours=1)
-
-
-def test_schedule_trigger_validation_requires_cron_xor_interval(
-    workflow_trigger_tables: None,
-) -> None:
-    """Schedule triggers declare exactly one valid scheduling primitive."""
-
-    del workflow_trigger_tables
-    with pytest.raises(ValidationError, match="cron or interval"):
-        _schedule_trigger(config={}, next_fire_at=None)
-    with pytest.raises(ValidationError, match="cron or interval"):
-        _schedule_trigger(config={"cron": "* * * * *", "interval_seconds": 60}, next_fire_at=None)
-    with pytest.raises(ValidationError, match="cron"):
-        _schedule_trigger(config={"cron": "not a cron"}, next_fire_at=None)
-
-
-def test_schedule_cron_catch_up_uses_one_base_at_max_after_now(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Cron catch-up asks croniter once from max(after, now), not once per missed tick."""
-
-    bases: list[Any] = []
-    after = timezone.now().replace(microsecond=0)
-    now = after + timedelta(days=30)
-
-    class FakeCroniter:
-        def __init__(self, cron: str, base: Any = None) -> None:
-            del cron
-            if base is not None:
-                bases.append(base)
-
-        def get_next(self, result_type: type[Any]) -> Any:
-            del result_type
-            return bases[-1] + timedelta(days=1)
-
-    declarations = importlib.import_module("angee.workflows.trigger_declarations")
-    monkeypatch.setattr(declarations, "croniter", FakeCroniter)
-    trigger = Trigger(kind=workflow_models.TriggerKind.SCHEDULE, config={"cron": "0 0 * * *"})
-
-    assert trigger.compute_next_fire_at(after=after, now=now) == now + timedelta(days=1)
-    assert bases == [now]
-
-
-def test_bad_schedule_row_is_logged_and_does_not_stop_scan(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Legacy bad schedule config skips that row while valid schedules keep firing."""
-
-    del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    now = timezone.now().replace(microsecond=0)
-    bad = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
-    good = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
-    with system_context(reason="test workflows invalid schedule row"):
-        models.QuerySet.update(Trigger.objects.filter(pk=bad.pk), config={"cron": "not a cron"})
-
-    assert workflow_triggers.run_due_schedule_triggers(now=now) == {"triggers": 2, "fired": 1, "skipped": 1}
-    good.refresh_from_db()
-    assert good.next_fire_at == now + timedelta(hours=1)
-    assert "schedule trigger" in caplog.text
-
-
-@pytest.mark.parametrize(
-    ("policy", "expected_outcome", "expected_branch"),
-    [
-        ({"min_success_ratio": 0.5}, "succeeded", "passed"),
-        ({"all_must_succeed": True}, "failed", "failed"),
-    ],
-)
-def test_map_aggregates_child_outcomes_and_routes_by_policy(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    item_fixture: list[dict[str, Any]],
-    policy: dict[str, Any],
-    expected_outcome: str,
-    expected_branch: str,
-) -> None:
-    """A map step fans out one target step and routes on aggregate policy."""
-
-    del workflow_trigger_tables, no_workflow_queue, item_fixture
-    workflow = _map_workflow(policy=policy, items=["ok", "bad", "also-ok"])
-    run = start_run(workflow)
-
-    run_to_terminal(run)
-    run.refresh_from_db()
-
-    assert run.status == workflow_models.RunStatus.SUCCEEDED
-    map_row = step_run_for(run, "map")
-    assert map_row.status == workflow_models.StepRunStatus.SUCCEEDED
-    assert map_row.outcome == expected_outcome
-    assert map_row.output["total"] == 3
-    assert map_row.output["successes"] == 2
-    assert map_row.output["failures"] == 1
-    assert step_run_for(run, expected_branch).status == workflow_models.StepRunStatus.SUCCEEDED
-    with system_context(reason="test workflows map children"):
-        item_rows = list(StepRun.objects.filter(run=run, step__key="item").order_by("map_index"))
-    assert [row.map_index for row in item_rows] == [0, 1, 2]
-
-
-def test_map_replay_does_not_duplicate_sibling_step_runs(
-    workflow_trigger_tables: None,
-    no_workflow_queue: None,
-    item_fixture: list[dict[str, Any]],
-) -> None:
-    """Replaying advance while a map is waiting reuses existing indexed siblings."""
-
-    del workflow_trigger_tables, no_workflow_queue, item_fixture
-    workflow = _map_workflow(policy={"all_must_succeed": True}, items=["one", "two", "three"])
-    run = start_run(workflow)
-
-    advance_once(run)
-    execute_started(run)
-    advance_once(run)
-    advance_once(run)
-
-    with system_context(reason="test workflows map replay"):
-        item_rows = list(StepRun.objects.filter(run=run, step__key="item").order_by("map_index"))
-        map_row = StepRun.objects.get(run=run, step__key="map")
-    assert [row.map_index for row in item_rows] == [0, 1, 2]
-    assert map_row.resume_state["map"]["items"] == ["one", "two", "three"]
-
-
-def test_console_can_enable_and_disable_triggers(
-    workflow_trigger_tables: None,
-) -> None:
-    """The console exposes explicit trigger enable/disable actions."""
-
-    del workflow_trigger_tables
-    workflows_schema = importlib.import_module("angee.workflows.schema")
-    schema = GraphQLSchemas(
-        [
-            SchemaAddon(
-                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
-            )
-        ]
-    ).build("console")
-    trigger = _event_trigger(condition={"state": "ready"}, enabled=False)
-    admin = _platform_admin("workflow-trigger-admin")
-
-    enable = """
-      mutation Enable($id: ID!) {
-        enable_workflow_trigger(trigger: $id) { ok message }
-      }
-    """
-    disable = """
-      mutation Disable($id: ID!) {
-        disable_workflow_trigger(trigger: $id) { ok message }
-      }
-    """
-
-    enabled = result_data(execute_schema(schema, enable, {"id": trigger.sqid}, user=admin))["enable_workflow_trigger"]
-    trigger.refresh_from_db()
-    assert enabled["ok"] is True
-    assert trigger.enabled is True
-
-    disabled = result_data(execute_schema(schema, disable, {"id": trigger.sqid}, user=admin))[
-        "disable_workflow_trigger"
-    ]
-    trigger.refresh_from_db()
-    assert disabled["ok"] is True
-    assert trigger.enabled is False
-
-
-def test_schedule_preview_projects_invalid_drafts_as_typed_data(
-    workflow_trigger_tables: None,
-) -> None:
-    """Expected authoring errors stay in the preview payload, not GraphQL errors."""
-
-    del workflow_trigger_tables
-    workflows_schema = importlib.import_module("angee.workflows.schema")
-    schema = GraphQLSchemas(
-        [
-            SchemaAddon(
-                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
-            )
-        ]
-    ).build("console")
-    admin = _platform_admin("workflow-trigger-preview-admin")
-    query = """
-      query Preview($config: JSON!, $count: Int!) {
-        workflow_schedule_preview(config: $config, count: $count) {
-          timezone occurrences errors
-        }
-      }
-    """
-
-    result = execute_schema(schema, query, {"config": {"interval_seconds": ""}, "count": 3}, user=admin)
-
-    assert result.errors is None
-    assert result_data(result)["workflow_schedule_preview"] == {
-        "timezone": "UTC",
-        "occurrences": [],
-        "errors": ["Value error, Schedule triggers require cron or interval_seconds, but not both."],
-    }
-
-
-def test_event_condition_draft_preserves_json_scalar_presence_and_invalid_opaque(
-    workflow_trigger_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The authored GraphQL projection carries false, zero and null without coercion."""
-
-    del workflow_trigger_tables
-    workflows_schema = importlib.import_module("angee.workflows.schema")
-    schema = GraphQLSchemas(
-        [
-            SchemaAddon(
-                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
-            )
-        ]
-    ).build("console")
-    class Discovery:
-        def change_publisher_models(self) -> tuple[type[models.Model], ...]:
-            return (TriggerSubject,)
-
-        def model_readable_fields(self, model: type[models.Model]) -> frozenset[str]:
-            assert model is TriggerSubject
-            return frozenset({"name", "state"})
-
-    monkeypatch.setattr(workflows_schema.GraphQLSchemas, "from_discovery", lambda: Discovery())
-    admin = _platform_admin("workflow-trigger-condition-admin")
-    catalogue_query = """
-      query EventConditionCatalogue($model: String!, $condition: JSON) {
-        workflow_event_condition_draft(model: $model, condition: $condition) {
-          fields { name scalar lookups { name key label value_schema } }
-        }
-      }
-    """
-    publishers_query = """
-      query EventPublishers { workflow_trigger_publishers { model } }
-    """
-    publishers = result_data(execute_schema(schema, publishers_query, user=admin))["workflow_trigger_publishers"]
-    fields_by_scalar: dict[str, tuple[str, str]] = {}
-    for publisher in publishers:
-        model = publisher["model"]
-        result = execute_schema(schema, catalogue_query, {"model": model, "condition": {}}, user=admin)
-        assert result.errors is None
-        for field in result_data(result)["workflow_event_condition_draft"]["fields"]:
-            fields_by_scalar.setdefault(field["scalar"], (model, field["name"]))
-            assert all(
-                lookup["key"] and lookup["label"] and lookup["value_schema"]
-                for lookup in field["lookups"]
-            )
-
-    draft_query = """
-      query EventConditionDraft($model: String!, $condition: JSON) {
-        workflow_event_condition_draft(model: $model, condition: $condition) {
-          clauses { field lookup value source_key }
-          opaque condition errors
-        }
-      }
-    """
-    model, field = next(iter(fields_by_scalar.values()))
-    condition = {field: None, "opaque_false": False, "opaque_zero": 0}
-    result = execute_schema(schema, draft_query, {"model": model, "condition": condition}, user=admin)
-    assert result.errors is None
-    draft = result_data(result)["workflow_event_condition_draft"]
-    assert draft["clauses"][0]["value"] is None
-    assert draft["opaque"] == {"opaque_false": False, "opaque_zero": 0}
-    assert draft["condition"] == condition
-
-    malformed = execute_schema(schema, draft_query, {"model": model, "condition": None}, user=admin)
-    assert malformed.errors is None
-    assert result_data(malformed)["workflow_event_condition_draft"]["errors"] == [
-        "Condition must be a JSON object."
-    ]
-
-    encode_query = """
-      query InvalidOpaque($model: String!, $condition: JSON, $opaque: JSON) {
-        workflow_event_condition_draft(model: $model, condition: $condition, clauses: [], opaque: $opaque) {
-          condition errors
-        }
-      }
-    """
-    original = {field: None}
-    result = execute_schema(schema, encode_query, {"model": model, "condition": original, "opaque": []}, user=admin)
-    assert result.errors is None
-    assert result_data(result)["workflow_event_condition_draft"] == {
-        "condition": original,
-        "errors": ["Opaque condition entries must be a JSON object."],
-    }
-
-
-def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
-    workflow_trigger_tables: None,
-) -> None:
-    """Trigger authoring projections load publication state once for the collection."""
-
-    del workflow_trigger_tables
-    workflows_schema = importlib.import_module("angee.workflows.schema")
-    schema = GraphQLSchemas(
-        [
-            SchemaAddon(
-                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
-            )
-        ]
-    ).build("console")
-    admin = _platform_admin("workflow-trigger-list-admin")
-    with system_context(reason="test trigger list projection"):
-        draft = Workflow.objects.create(name="Trigger list")
-        Step.objects.create(
-            workflow=draft,
-            key="start",
-            name="Start",
-            step_class="fixture",
-            is_entry=True,
-        )
-        draft.publish()
-        Trigger.objects.create(
-            workflow=draft,
-            execution_actor=admin,
-            kind=workflow_models.TriggerKind.EVENT,
-            config={"model": TriggerSubject._meta.label_lower, "condition": {}, "admission_policy": "each_change"},
-        )
-        Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
-        Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
-    query = """
-      query TriggerList {
-        workflow_triggers {
-          id summary activation_blocker last_fire_at
-          execution_actor { id display_name }
-        }
-      }
-    """
-
-    with CaptureQueriesContext(connection) as queries:
-        rows = result_data(execute_schema(schema, query, user=admin))["workflow_triggers"]
-
-    assert [row["summary"] for row in rows] == [
-        "When trigger subject changes, for each matching change",
-        "Manual start",
-        "Manual start",
-    ]
-    assert rows[0]["execution_actor"] == {
-        "id": str(admin.sqid),
-        "display_name": "workflow-trigger-list-admin",
-    }
-    trigger_selects = [
-        item["sql"] for item in queries.captured_queries
-        if Trigger._meta.db_table in item["sql"] and item["sql"].lstrip().upper().startswith("SELECT")
-    ]
-    assert len(trigger_selects) == 1
-    domain_selects = [
-        item["sql"]
-        for item in queries.captured_queries
-        if item["sql"].lstrip().upper().startswith("SELECT")
-        and (Trigger._meta.db_table in item["sql"] or Workflow._meta.db_table in item["sql"])
-    ]
-    assert domain_selects == trigger_selects
-
-
-def _event_trigger(
-    *,
-    condition: dict[str, Any],
-    enabled: bool = True,
-    config: dict[str, Any] | None = None,
-    model: type[models.Model] = TriggerSubject,
-) -> Trigger:
-    """Create an event trigger attached to a publishable workflow lineage."""
-
-    ContentType.objects.clear_cache()
-
-    trigger_config = {
-        "model": model._meta.label_lower,
-        "condition": condition,
-        **(config or {}),
-    }
-    with system_context(reason="test workflows event trigger"):
-        draft = Workflow.objects.create(name=f"Event {condition}")
-        Step.objects.create(
-            workflow=draft,
-            key="start",
-            name="Start",
-            step_class="fixture",
-            is_entry=True,
-        )
-        draft.publish()
-        trigger = Trigger.objects.create(
-            workflow=draft,
-            kind=workflow_models.TriggerKind.EVENT,
-            config=trigger_config,
-        )
-        if enabled:
-            trigger.enable()
-        return trigger
-
-
-def _schedule_trigger(*, config: dict[str, Any], next_fire_at: Any) -> Trigger:
-    """Create a schedule trigger attached to a published workflow lineage."""
-
-    with system_context(reason="test workflows schedule trigger"):
-        draft = Workflow.objects.create(name="Schedule")
-        Step.objects.create(
-            workflow=draft,
-            key="start",
-            name="Start",
-            step_class="fixture",
-            is_entry=True,
-        )
-        draft.publish()
-        trigger = Trigger.objects.create(
-            workflow=draft,
-            kind=workflow_models.TriggerKind.SCHEDULE,
-            config=config,
-            next_fire_at=next_fire_at,
-        )
-        trigger.enable()
-        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), next_fire_at=next_fire_at)
-        trigger.next_fire_at = next_fire_at
-        return trigger
-
-
-def test_trigger_creation_is_disabled_but_still_validates_rule_shape(
-    workflow_trigger_tables: None,
-) -> None:
-    """Every creation path disables rows without accepting malformed authored rules."""
-
-    del workflow_trigger_tables
-    with system_context(reason="test trigger creation contract"):
-        draft = Workflow.objects.create(name="Trigger creation")
-        trigger = Trigger.objects.create(
-            workflow=draft,
-            kind=workflow_models.TriggerKind.SCHEDULE,
-            enabled=True,
-            config={"interval_seconds": 60},
-        )
-        assert trigger.enabled is False
-        with pytest.raises(ValidationError, match="cron or interval"):
-            Trigger.objects.create(
-                workflow=draft,
-                kind=workflow_models.TriggerKind.SCHEDULE,
-                config={},
-            )
-
-
-def test_invalid_legacy_trigger_can_only_bypass_validation_to_disable(
-    workflow_trigger_tables: None,
-) -> None:
-    """Operational disable repairs actual state without opening a general validation bypass."""
-
-    del workflow_trigger_tables
-    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
-    with system_context(reason="test invalid legacy trigger"):
-        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), config={"cron": "invalid"})
-        trigger.refresh_from_db()
-        trigger.disable()
-        trigger.refresh_from_db()
-        assert trigger.enabled is False
-        trigger.config = {"cron": "invalid"}
-        with pytest.raises(ValidationError, match="cron"):
-            trigger.save(update_fields={"config", "updated_at"})
-
-
-def test_trigger_activation_preserves_caller_authorization_and_rejects_stale_lineage(
-    workflow_trigger_tables: None,
-) -> None:
-    """Direct actions require record access and cannot follow a stale instance to another head."""
-
-    del workflow_trigger_tables
-    trigger = _event_trigger(condition={}, enabled=False)
-    with pytest.raises((MissingActorError, RebacPermissionDenied)):
-        trigger.enable()
-    with pytest.raises((MissingActorError, RebacPermissionDenied)):
-        Trigger.objects.set_enabled(trigger, enabled=True)
-
-    with system_context(reason="test stale trigger activation"):
-        replacement = Workflow.objects.create(name="Replacement")
-        Step.objects.create(
-            workflow=replacement,
-            key="start",
-            name="Start",
-            step_class="fixture",
-            is_entry=True,
-        )
-        replacement.publish()
-        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), workflow_id=replacement.pk)
-        with pytest.raises(ValidationError, match="lineage changed"):
-            trigger.enable()
-
-
-def test_workflow_head_shares_reach_publications_and_versions_reject_direct_management(
-    workflow_trigger_tables: None,
-) -> None:
-    """Head user/group grants reach immutable versions through published lineage."""
-
-    del workflow_trigger_tables
-    admin = _platform_admin("workflow-share-admin")
-    reader = User.objects.create_user(username="workflow-share-reader")
-    group_reader = User.objects.create_user(username="workflow-share-group-reader")
-    with actor_context(admin):
-        group = Group.objects.create(name="workflow-share-group")
-        group.add_member(str(to_subject_ref(group_reader)))
-        head = Workflow.objects.create(name="Shared workflow")
-        Step.objects.create(
-            workflow=head,
-            key="start",
-            name="Start",
-            step_class="fixture",
-            is_entry=True,
-        )
-        published = head.publish()
-        head.grant_record_access("viewer", reader)
-        head.grant_record_access("viewer", group)
-
-    assert Workflow.objects.with_actor(reader).filter(pk=published.pk).exists()
-    assert Workflow.objects.with_actor(group_reader).filter(pk=published.pk).exists()
-
-    with pytest.raises(ValidationError, match="lineage head"):
-        published.validate_record_access_target()
-
-    with actor_context(admin):
-        head.revoke_record_access("viewer", reader)
-        head.revoke_record_access("viewer", group)
-    assert not Workflow.objects.with_actor(reader).filter(pk=published.pk).exists()
-    assert not Workflow.objects.with_actor(group_reader).filter(pk=published.pk).exists()
-
-
-@pytest.mark.parametrize(
-    "condition",
-    (
-        {"missing__exact": "value"},
-        {"name__year": 2026},
-        {"id__in": 1},
-    ),
-)
-def test_event_trigger_enable_compiles_condition_without_running_it(
-    workflow_trigger_tables: None,
-    condition: dict[str, Any],
-) -> None:
-    """Invalid fields, lookups and values are rejected before event delivery."""
-
-    del workflow_trigger_tables
-    trigger = _event_trigger(condition=condition, enabled=False)
-    with system_context(reason="test invalid event condition activation"):
-        with pytest.raises(ValidationError, match="condition is invalid"):
-            trigger.enable()
-
-
-def test_event_trigger_enable_accepts_empty_in_condition(
-    workflow_trigger_tables: None,
-) -> None:
-    """A provably empty lookup is valid and enables without querying subjects."""
-
-    del workflow_trigger_tables
-    trigger = _event_trigger(condition={"id__in": []}, enabled=False)
-    with system_context(reason="test empty event condition activation"):
-        trigger.enable()
-    trigger.refresh_from_db()
-    assert trigger.enabled is True
-
-
-def test_trigger_save_merges_partial_rule_fields_and_rejects_stale_activation(
-    workflow_trigger_tables: None,
-) -> None:
-    """Validation uses the locked effective row and a stale full save cannot re-enable it."""
-
-    del workflow_trigger_tables
-    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
-    stale = Trigger.objects.sudo(reason="test stale trigger").get(pk=trigger.pk)
-    with system_context(reason="test concurrent trigger edit"):
-        models.QuerySet.update(
-            Trigger.objects.filter(pk=trigger.pk),
-            kind=workflow_models.TriggerKind.MANUAL,
-            enabled=False,
-        )
-        stale.config = {"interval_seconds": 120}
-        with pytest.raises(ValidationError, match="enable or disable"):
-            stale.save()
-
-        current = Trigger.objects.get(pk=trigger.pk)
-        current.config = {"legacy": True}
-        current.save(update_fields={"config", "updated_at"})
-        current.refresh_from_db()
-        assert current.kind == workflow_models.TriggerKind.MANUAL
-        assert current.config == {"legacy": True}
-
-
-def test_rule_saves_preserve_operational_state_and_only_cadence_reschedules(
-    workflow_trigger_tables: None,
-) -> None:
-    """Rule authoring cannot overwrite counters or move a schedule for unrelated config."""
-
-    del workflow_trigger_tables
-    due_at = timezone.now() + timedelta(hours=1)
-    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=due_at)
-    stale = Trigger.objects.sudo(reason="test stale operational trigger").get(pk=trigger.pk)
-    fired_at = timezone.now()
-    with system_context(reason="test trigger operational state"):
-        models.QuerySet.update(
-            Trigger.objects.filter(pk=trigger.pk),
-            last_fire_at=fired_at,
-            hourly_window_started_at=fired_at,
-            hourly_fire_count=1,
-        )
-        stale.config = {"interval_seconds": 60, "cooldown_seconds": 10, "opaque": True}
-        stale.save()
-        stale.refresh_from_db()
-        assert stale.last_fire_at == fired_at
-        assert stale.hourly_fire_count == 1
-        assert stale.next_fire_at == due_at
-        stale.config = {"interval_seconds": "60"}
-        stale.save(update_fields={"config", "updated_at"})
-        stale.refresh_from_db()
-        assert stale.next_fire_at == due_at
-        stale.next_fire_at = due_at - timedelta(minutes=5)
-        with pytest.raises(RuntimeError, match="owning manager"):
-            stale.save(update_fields={"next_fire_at", "updated_at"})
-
-        stale.disable()
-        disabled_due_at = stale.next_fire_at
-        stale.config = {"interval_seconds": 120}
-        stale.save(update_fields={"config", "updated_at"})
-        stale.refresh_from_db()
-        assert stale.enabled is False
-        assert stale.next_fire_at == disabled_due_at
-
-
-def test_operational_fields_only_change_through_locked_manager_transitions(
-    workflow_trigger_tables: None,
-) -> None:
-    """Collection writes are closed and a stale public fire derives from the locked row."""
-
-    del workflow_trigger_tables
-    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
-    fired_at = timezone.now()
-    stale = Trigger.objects.sudo(reason="test stale fire caller").get(pk=trigger.pk)
-    with system_context(reason="test trigger operational guards"):
-        with pytest.raises(TypeError, match="QuerySet.update"):
-            Trigger.objects.filter(pk=trigger.pk).update(hourly_fire_count=99)
-        with pytest.raises(TypeError, match="bulk_update"):
-            Trigger.objects.bulk_update([trigger], ["event_model_label"])
-
-        models.QuerySet.update(
-            Trigger.objects.filter(pk=trigger.pk),
-            hourly_window_started_at=fired_at,
-            hourly_fire_count=4,
-        )
-        with transaction.atomic():
-            stale.record_fire(timestamp=fired_at + timedelta(seconds=1))
-
-        trigger.refresh_from_db()
-        assert trigger.hourly_window_started_at == fired_at
-        assert trigger.hourly_fire_count == 5
-        assert trigger.last_fire_at == fired_at + timedelta(seconds=1)
-
-
-@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL trigger serialization contract")
-def test_trigger_edit_and_activation_serialize_on_lineage_then_trigger(
-    workflow_trigger_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An activation racing a rule edit validates and schedules the committed rule."""
-
-    del workflow_trigger_tables
-    trigger = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=timezone.now())
-    with system_context(reason="prepare trigger activation race"):
-        trigger.disable()
-
-    edit_has_locks = Event()
-    release_edit = Event()
-    original_full_clean = Trigger.full_clean
-
-    def pause_locked_edit(instance: Trigger, *args: Any, **kwargs: Any) -> None:
-        if instance.pk == trigger.pk and instance.config == {"interval_seconds": 120} and not instance.enabled:
-            edit_has_locks.set()
-            assert release_edit.wait(timeout=10)
-        original_full_clean(instance, *args, **kwargs)
-
-    monkeypatch.setattr(Trigger, "full_clean", pause_locked_edit)
-
-    def edit_rule() -> None:
-        close_old_connections()
-        try:
-            with system_context(reason="concurrent trigger edit"):
-                row = Trigger.objects.get(pk=trigger.pk)
-                row.config = {"interval_seconds": 120}
-                row.save(update_fields={"config", "updated_at"})
-        finally:
-            connections.close_all()
-
-    def enable_rule() -> None:
-        close_old_connections()
-        try:
-            with system_context(reason="concurrent trigger activation"):
-                Trigger.objects.get(pk=trigger.pk).enable()
-        finally:
-            connections.close_all()
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        edited = pool.submit(edit_rule)
-        assert edit_has_locks.wait(timeout=10)
-        enabled = pool.submit(enable_rule)
-        release_edit.set()
-        edited.result(timeout=10)
-        enabled.result(timeout=10)
-
-    with system_context(reason="verify trigger activation race"):
-        trigger.refresh_from_db()
-    assert trigger.enabled is True
-    assert trigger.config == {"interval_seconds": 120}
-    assert trigger.next_fire_at is not None
-    assert trigger.next_fire_at > timezone.now() + timedelta(seconds=100)
-
-
-def test_event_index_uses_the_validated_alias_precedence(
-    workflow_trigger_tables: None,
-) -> None:
-    """The indexed target cannot disagree with declaration alias normalization."""
-
-    del workflow_trigger_tables
-    with system_context(reason="test trigger index projection"):
-        draft = Workflow.objects.create(name="Trigger alias")
-        trigger = Trigger.objects.create(
-            workflow=draft,
-            kind=workflow_models.TriggerKind.EVENT,
-            config={"model": "   ", "model_label": TriggerSubject._meta.label_lower},
-        )
-    assert trigger.event_model_label == TriggerSubject._meta.label_lower
-
-
-def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
-    """Create a workflow with one map control step and success/failure branches."""
-
-    with system_context(reason="test workflows map definition"):
-        draft = Workflow.objects.create(name=f"Map {policy}")
-        entry = Step.objects.create(
-            workflow=draft,
-            key="entry",
-            name="Entry",
-            step_class="fixture",
-            is_entry=True,
-            config={"outcome": "map"},
-        )
-        map_step = Step.objects.create(
-            workflow=draft,
-            key="map",
-            name="Map",
-            step_class="map",
-            config={"target_step": "item", "items": items, **policy},
-        )
-        Step.objects.create(workflow=draft, key="item", name="Item", step_class="fixture", config={"outcome": "done"})
-        passed = Step.objects.create(
-            workflow=draft, key="passed", name="Passed", step_class="fixture", config={"outcome": "done"}
-        )
-        failed = Step.objects.create(
-            workflow=draft, key="failed", name="Failed", step_class="fixture", config={"outcome": "done"}
-        )
-        Edge.objects.create(workflow=draft, source=entry, target=map_step, condition="map")
-        Edge.objects.create(workflow=draft, source=map_step, target=passed, condition="succeeded")
-        Edge.objects.create(workflow=draft, source=map_step, target=failed, condition="failed")
-        return draft.publish()
-
-
-def _runs_for_subject(subject: models.Model) -> list[WorkflowRun]:
-    """Return workflow runs started for ``subject``."""
-
-    with system_context(reason="test workflows trigger runs"):
-        return list(
-            WorkflowRun.objects.filter(
-                subject_object_id=subject.pk,
-                subject_content_type__app_label=subject._meta.app_label,
-                subject_content_type__model=subject._meta.model_name,
-            )
-            .select_related("trigger")
-            .order_by("pk")
-        )
-
-
-def _run_count() -> int:
-    """Return the workflow-run count under system context."""
-
-    with system_context(reason="test workflows trigger run count"):
-        return WorkflowRun.objects.count()
+    with pytest.raises(ImproperlyConfigured, match="Multiple trigger_input"):
+        Trigger._trigger_hooks(Conflict(), "trigger_input")

@@ -231,9 +231,20 @@ def test_endpoint_base_url_gains_one_graphql_suffix(
 ) -> None:
     """A base URL is suffixed with a single ``/graphql``."""
 
+    settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT = None
     settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
 
     assert OperatorDaemon.from_settings().endpoint == "http://localhost:9000/graphql"
+
+
+def test_endpoint_keeps_default_proxy_with_an_internal_daemon_url(settings) -> None:
+    """Configuring server transport must not expose its hostname to the browser."""
+
+    settings.ANGEE_OPERATOR_URL = "http://daemon:9010"
+    daemon = OperatorDaemon.from_settings()
+
+    assert daemon.endpoint == "/operator/graphql"
+    assert daemon.server_base == "http://daemon:9010"
 
 
 # --- admin bearer -------------------------------------------------------------

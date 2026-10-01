@@ -8,8 +8,8 @@ import {
   MutationDialog,
   mutationDialogValueCodecs,
   optionalTranslation,
-  type MutationDialogControlProps,
-  type MutationDialogField,
+  type DescriptorFieldControlProps,
+  type DescriptorField,
   type MutationDialogValues,
 } from "@angee/ui";
 import * as React from "react";
@@ -52,12 +52,12 @@ export function ConnectMountAction({
     invalidateModels: [invalidateModel],
   });
   const sourceControl = React.useCallback(
-    (props: MutationDialogControlProps) => (
+    (props: DescriptorFieldControlProps) => (
       <MountSourceBrowser {...props} backendClass={backendClass} />
     ),
     [backendClass],
   );
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "name",
@@ -101,7 +101,7 @@ export function ConnectMountAction({
         submittingLabel={t("mount.connect.submitting")}
         errorFallback={errorFallback}
         parseValues={parseMountConnectValues}
-        onSubmit={connect}
+        onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
         size="lg"
     />
   );

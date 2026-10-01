@@ -8,11 +8,13 @@ const mocks = vi.hoisted(() => ({
   fields: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: () => [vi.fn(), { fetching: false, error: null }],
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   Action: () => null,
   Field: (props: Record<string, unknown>) => {
     mocks.fields.push(props);

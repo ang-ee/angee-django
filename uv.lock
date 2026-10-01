@@ -543,18 +543,6 @@ wheels = [
 ]
 
 [[package]]
-name = "croniter"
-version = "6.2.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "python-dateutil" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/37/57/2e2a65aee2a70483cb28e2b7e15a072d00a523207593b44400d4717bb100/croniter-6.2.4.tar.gz", hash = "sha256:fc124f751b1b04805c2a04b061898b436b45ab2320b045e1e052ea895de65189", size = 166267, upload-time = "2026-07-10T09:52:59.955Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/ba/d678e5bd329646ca51d3c92addbc77804e86d21f4b6b6a027218e6abb010/croniter-6.2.4-py3-none-any.whl", hash = "sha256:8ef3d544107a5c05a150a2d78f8bf5a8eb9c5c4d93405a736b824109574e3f4d", size = 46677, upload-time = "2026-07-10T09:52:58.425Z" },
-]
-
-[[package]]
 name = "cross-web"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -691,6 +679,7 @@ name = "django-angee"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "billiard" },
     { name = "celery", extra = ["redis"] },
     { name = "channels" },
     { name = "cryptography" },
@@ -704,7 +693,7 @@ dependencies = [
     { name = "django-yamlconf" },
     { name = "django-zed-rebac" },
     { name = "hatch-angee" },
-    { name = "jsonschema" },
+    { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pydantic" },
     { name = "referencing" },
     { name = "uvicorn", extra = ["standard"] },
@@ -721,7 +710,6 @@ addons = [
     { name = "authlib" },
     { name = "channels" },
     { name = "channels-redis" },
-    { name = "croniter" },
     { name = "defusedxml" },
     { name = "django-anymail" },
     { name = "django-axes" },
@@ -732,7 +720,7 @@ addons = [
     { name = "httpcore" },
     { name = "httpx" },
     { name = "imapclient" },
-    { name = "jsonschema", extra = ["format-nongpl"] },
+    { name = "jsonpointer" },
     { name = "mail-parser-reply" },
     { name = "markdown-it-py" },
     { name = "mcp" },
@@ -747,7 +735,6 @@ addons = [
     { name = "python-magic" },
     { name = "pyyaml" },
     { name = "qrcode", extra = ["pil"] },
-    { name = "referencing" },
     { name = "ruamel-yaml" },
     { name = "slack-sdk" },
     { name = "strawberry-django-aggregates" },
@@ -772,6 +759,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billiard", specifier = ">=4.2.1,<4.3" },
     { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "channels", specifier = ">=4.0" },
     { name = "cryptography", specifier = ">=44" },
@@ -785,7 +773,7 @@ requires-dist = [
     { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", specifier = ">=0.18.2" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
-    { name = "jsonschema", specifier = ">=4.26" },
+    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "referencing", specifier = ">=0.37" },
@@ -799,7 +787,6 @@ addons = [
     { name = "authlib", specifier = ">=1.7.2" },
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
-    { name = "croniter", specifier = ">=6.0" },
     { name = "defusedxml", specifier = ">=0.7,<1" },
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
@@ -810,7 +797,7 @@ addons = [
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "imapclient", specifier = ">=3.1.0" },
-    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
+    { name = "jsonpointer", specifier = ">=3.1" },
     { name = "mail-parser-reply", specifier = ">=1.36" },
     { name = "markdown-it-py", specifier = ">=4.2" },
     { name = "mcp", specifier = ">=1.2" },
@@ -828,7 +815,6 @@ addons = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
-    { name = "referencing", specifier = ">=0.37" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.13.0" },

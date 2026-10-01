@@ -66,6 +66,7 @@ const MARKDOWN_EXTENSIONS = [
 function MarkdownEdit({
   value,
   onChange,
+  onCommit,
   field,
   readOnly,
   controlRef,
@@ -77,10 +78,12 @@ function MarkdownEdit({
   const viewRef = useCodeMirrorEditor(hostRef, {
     value: value ?? "",
     onChange,
+    onBlur: onCommit,
     readOnly,
     placeholder: String(field?.label ?? t("markdown.placeholder")),
     extensions: MARKDOWN_EXTENSIONS,
     controlRef,
+    controlProps: field?.controlProps,
   });
 
   function runCommand(command: MarkdownCommand): void {
@@ -177,7 +180,6 @@ function MarkdownEdit({
       ) : null}
       <div
         ref={hostRef}
-        aria-label={String(field?.label ?? t("markdown.placeholder"))}
         className={mode === "preview" ? "hidden" : undefined}
       />
       {mode === "preview" ? (
