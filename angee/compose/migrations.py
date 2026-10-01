@@ -498,7 +498,9 @@ class RuntimeMigrations:
         source = plan.source
         if not source.endswith("\n"):
             raise RuntimeError(f"{plan.origin}: source migration must end with a newline")
-        lines = [source, f"{MATERIALIZED_FOOTER}\n"]
+        # Own the list first: a source that declares no dependencies would
+        # otherwise append to Django's shared class attribute.
+        lines = [source, f"{MATERIALIZED_FOOTER}\n", "Migration.dependencies = list(Migration.dependencies)\n"]
         for dependency, resolved in plan.latest_dependencies:
             lines.extend(
                 (

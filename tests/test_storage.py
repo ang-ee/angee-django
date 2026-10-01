@@ -491,6 +491,28 @@ def test_upload_rejects_folders_from_other_drives(tmp_path: Path, drive: Any) ->
 
 
 @pytest.mark.django_db(transaction=True)
+def test_upload_naming_only_a_folder_targets_its_drive(tmp_path: Path, drive: Any) -> None:
+    """draft resolves the drive from a named folder the actor can read."""
+
+    with system_context(reason="test storage setup"):
+        other = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="other",
+            name="Other",
+            prefix="other",
+            created_by=drive.alice,
+        )
+        folder = Folder._base_manager.create(drive=other, name="Inbox", created_by=drive.alice)
+    with actor_context(drive.alice):
+        row = File.objects.draft(filename="routed.bin", folder_id=str(folder.sqid))
+    assert (row.drive_id, row.folder_id) == (other.pk, folder.pk)
+
+    stranger = get_user_model().objects.create_user(username="storage-bob", email="bob@example.com")
+    with actor_context(stranger), pytest.raises(exceptions.UploadTargetNotFound):
+        File.objects.draft(filename="nope.bin", folder_id=str(folder.sqid))
+
+
+@pytest.mark.django_db(transaction=True)
 def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None:
     """delete() trashes, restore() reverses, purge() removes row and bytes."""
 

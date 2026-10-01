@@ -14,6 +14,8 @@
 {# celery_broker_url, operator_url, mcp_url, operator_bind, pgdata_mount, and #}
 {# (process only) app_source; framework_source — plus the dev copier inputs #}
 {# addons_profile and work_state_source, which gate sources/workspace blocks. #}
+{# Process mode always renders development, even if a caller bypasses the Copier validator. #}
+{% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}
 version: 1
 kind: stack
 {% if stack_flavor == "framework" %}
@@ -249,7 +251,7 @@ jobs:
   # Bootstrap the addon dependency group before Django imports, then let the
   # provision command own its lifecycle and database wait in a fresh interpreter.
   provision:
-{% include "../../_shared/python-runtime.yaml.jinja" %}
+{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
@@ -265,7 +267,7 @@ jobs:
 
   # Codegen consumes both the provisioned Django SDL and this live daemon SDL.
   operator-schema:
-{% include "../../_shared/python-runtime.yaml.jinja" %}
+{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "operator_schema"]
 {% else %}    command: ["sh", "-c", "{{ python_sync }}exec python manage.py operator_schema"]
 {% endif %}    depends_on: [operator, provision]
@@ -281,7 +283,16 @@ jobs:
       - source://app:/app
     workdir: /app
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} codegen"]
-{% endif %}    depends_on: [deps, provision, operator-schema]
+{% endif %}    depends_on: [deps, provision, operator-schema]{% if effective_serve_mode == "production" %}
+  frontend-build:
+    runtime: container
+    image: {{ node_image }}
+    mounts:
+      - source://app:/app
+    workdir: /app
+    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]
+    depends_on: [codegen]
+{% endif %}
 {% else %}
   # The web image owns its package overlay, install, codegen, and static build.
   frontend-build:
@@ -317,7 +328,7 @@ services:
 {# form). A docker-mode host needs only the angee CLI, docker, and git. #}
     runtime: container
     image: {{ operator_image }}
-    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"]
+    command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"{% if effective_serve_mode == "production" %}, "--allowed-origin", "{% if ingress_domain_value == "localhost" %}http://localhost:{{ ui_port }}{% else %}https://{{ ingress_domain_value }}{% endif %}"{% endif %}]
     mounts:
       - "bind://.:${stack.root}"
       - "bind:///var/run/docker.sock:/var/run/docker.sock"
@@ -372,23 +383,25 @@ services:
 {% endif %}{% endif %}
   # Each container syncs its own venv; the provision job already prepared the host.
   django:
-{% include "../../_shared/python-runtime.yaml.jinja" %}
+{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
 {% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     ready:
       tcp: { port: {{ django_port }} }
-{% else %}    command:
+{% else %}    # Trust the connected Compose network, not a frontend IP that can change
+    # independently when the frontend container restarts.
+    command:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}{% if stack_flavor == "framework" %}exec python manage.py runserver 0.0.0.0:8000{% else %}CADDY_IP=$$(python -c 'import socket; print(socket.gethostbyname("caddy"))')
-        && exec python -m uvicorn angee.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$$CADDY_IP"{% endif %}
+        {{ python_sync }}{% if stack_flavor == "framework" and effective_serve_mode == "development" %}exec python manage.py runserver 0.0.0.0:8000{% else %}TRUSTED_PROXY_CIDR=$$(python -c 'import ipaddress as ip, socket; peer = ip.ip_address(socket.gethostbyname("{% if stack_flavor == "framework" %}frontend{% else %}caddy{% endif %}")); routes = (line.split() for line in open("/proc/net/route").read().splitlines()[1:]); networks = (ip.ip_network((ip.IPv4Address(int.from_bytes(bytes.fromhex(row[1]), "little")), int.from_bytes(bytes.fromhex(row[7]), "little").bit_count()), strict=False) for row in routes if row[7] != "00000000"); print(next(str(network) for network in networks if peer in network))')
+        && exec python manage.py serve --host 0.0.0.0 --port 8000 --forwarded-allow-ips "$$TRUSTED_PROXY_CIDR" --workers {% if effective_serve_mode == "production" %}{{ serve_workers }} --production{% else %}1{% endif %}{% endif %}
     ready:
       cmd: ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 1).close()"]
 {% endif %}      interval: 5s
       timeout: 3s
       start_period: 30s
       retries: 180
-    after: [provision{% if stack_flavor == "instance" %}, caddy{% endif %}]
+    after: [provision{% if stack_flavor == "instance" %}, caddy{% else %}{% if effective_serve_mode == "production" %}, frontend{% endif %}{% endif %}]
 
 {# pongo2 has no list literals and takes Django-style filter args; split a string. #}
 {# The shared worker plus one dedicated `celery-<queue>` worker per `celery_queues` entry: #}
@@ -401,7 +414,7 @@ services:
 {% for role in "worker,"|add:celery_queues|split:"," %}{% if role %}
   # Dedicated queue workers retain their own pool and concurrency policy.
   celery-{{ role }}:
-{% include "../../_shared/python-runtime.yaml.jinja" %}
+{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
 {% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
@@ -415,7 +428,7 @@ services:
 {% endif %}
 {% endif %}{% endfor %}
 
-{% if runtime_mode == "process" %}
+{% if runtime_mode == "process" and stack_flavor == "framework" %}
   # Vite dev server for the SPA. It proxies the curated Django HTTP surfaces
   # (/graphql/, /auth/csrf/, /forms/) so browser traffic stays same-origin.
   frontend:
@@ -448,7 +461,7 @@ services:
       STORYBOOK_PORT: "{{ storybook_port }}"
     after: [deps]
 {% endif %}
-{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
+{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}{% if effective_serve_mode == "development" %}
   # Vite dev server for containerized framework development.
   frontend:
     runtime: container
@@ -467,8 +480,9 @@ services:
       - >-
         corepack enable pnpm
         && exec pnpm --dir {{ web_path }} dev --host 0.0.0.0
+    # The slim node image has neither wget nor curl, so probe with its own runtime.
     ready:
-      http: { port: {{ ui_port }}, path: / }
+      cmd: ["node", "-e", "require('net').connect({{ ui_port }}, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
       interval: 5s
       timeout: 3s
       start_period: 30s
@@ -476,7 +490,7 @@ services:
     after: [django, codegen]{% if ingress_domain_value == "localhost" %}
     ports:
       - "${ports.ui}:{{ ui_port }}"{% else %}
-    route: { port: {{ ui_port }}, path: /, auth: none }{% endif %}
+    route: { port: {{ ui_port }}, path: /, auth: none }{% endif %}{% endif %}
 
   # The workspace dependency job also prepares the workshop and browser tools.
   storybook:
@@ -526,52 +540,4 @@ services:
     command: ["--headless", "--browser", "chromium", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931", "--allowed-hosts", "*", "--user-data-dir", "/data/profile"]
     after: [frontend]
     route: { port: 8931, auth: forward }
-{% endif %}{% endif %}{% if runtime_mode == "docker" %}{% if stack_flavor == "instance" %}
-  # Browser-facing ingress. Caddy serves the built SPA and proxies only backend
-  # endpoints over internal routes; SPA pages fall through to index.html.
-  caddy:
-    runtime: container
-    image: {{ caddy_image }}
-    mounts:
-      - source://app:/srv/project
-    command:
-      - sh
-      - "-c"
-      - |-
-        cat >/etc/caddy/Caddyfile <<'CADDY'
-        :80 {
-          encode zstd gzip
-
-          @django path /graphql/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/*
-          handle @django {
-            reverse_proxy django:8000
-          }
-
-          @operator_graphql path /operator/graphql /operator/graphql/*
-          handle @operator_graphql {
-            uri strip_prefix /operator
-            reverse_proxy operator:9000
-          }
-
-          @operator_logs path_regexp operator_logs ^/operator/services/[^/]+/logs/stream$
-          handle @operator_logs {
-            uri strip_prefix /operator
-            reverse_proxy operator:9000
-          }
-
-          handle {
-            root * /srv/project/{{ web_path }}/dist
-            try_files {path} /index.html
-            file_server
-          }
-        }
-        CADDY
-        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-    # Django resolves this named trusted proxy at boot. Caddy can start first:
-    # reverse_proxy resolves the Django upstream when handling a request.
-    after: [frontend-build]
-    ready:
-      http: { port: 80, path: / }
-    ports:
-      - "{{ ui_port }}:80"
-{% endif %}{% endif %}
+{% endif %}{% endif %}{% if stack_flavor == "instance" or effective_serve_mode == "production" %}{% include "../../_shared/static-frontend.yaml.jinja" %}{% endif %}
