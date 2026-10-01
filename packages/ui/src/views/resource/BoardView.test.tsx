@@ -4,6 +4,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
+import { DeclaredBoardCardBody } from "./board/cards";
 import type { RowGroup } from "./resource-view-list-body";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import type { ColumnDescriptor } from "../page";
@@ -92,6 +93,16 @@ beforeEach(() => {
   dndMocks.setActivatorNodeRef.mockClear();
 });
 afterEach(() => cleanup());
+
+test("a declared board card omits empty details while retaining zero", () => {
+  render(<DeclaredBoardCardBody columns={[
+    { field: "label", header: "Title" }, { field: "tags", header: "Tags" }, { field: "wordCount", header: "Words" },
+  ]} row={{ id: "one", label: "First", tags: [], wordCount: 0 }} />);
+  expect(screen.getByText("First")).toBeTruthy();
+  expect(screen.queryByText("Tags")).toBeNull();
+  expect(screen.getByText("Words")).toBeTruthy();
+  expect(screen.getByText("0")).toBeTruthy();
+});
 
 interface DemoRow extends Row {
   id: string;

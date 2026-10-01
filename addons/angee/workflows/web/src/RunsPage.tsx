@@ -58,7 +58,7 @@ export function RunsList({ baseFilter, embedded = false }: {
       headerExtras={({ record }) => typeof record?.subject_id === "string" && typeof record.subject_model === "string"
         ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
       <Field name="display_name" title readOnly />
-      <Field name="status" widget="statusbar" />
+      <Field name="status" widget="statusbar" status />
       <Group label={t("run.facts")} columns={2}>
         <Field name="outcome" hidden readOnly />
         <Field name="version.workflow" label={t("run.workflow")} />
@@ -76,7 +76,7 @@ export function RunsList({ baseFilter, embedded = false }: {
         showWhen={(row) => row.outcome === "error"} />
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
-      <Action id="cancel" label={t("action.cancel_workflow_run")} primary danger
+      <Action id="cancel" label={t("action.cancel_workflow_run")} placement="toolbar" primary danger
         visibleWhen={(record) => record.can_cancel === true} run={cancel}
         confirm={{ title: t("action.cancel_workflow_run"), body: t("action.cancelDescription"), danger: true }} />
       <Action id="reprocess" label={t("action.reprocess_workflow_run")}

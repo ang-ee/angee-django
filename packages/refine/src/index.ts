@@ -36,6 +36,7 @@ export {
   publicGraphQLErrorsFromUnknown,
   resolveGraphQLWebSocketEndpoint,
   type AngeeHasuraClientOptions,
+  type AngeeChangeLiveProvider,
   type AngeeHasuraDataProviderOptions,
   type AngeeHasuraLiveProviderOptions,
   type AngeeHasuraSchemaConfig,
@@ -157,6 +158,10 @@ export {
   type ResourceFacetResult,
   type ResourceRevision,
   type ResourceSaveVariables,
+  resourceMutationMeta,
+  type MutationRootArguments,
+  type ResourceMutationTarget,
+  type ResourceMutationOperations,
 } from "./operations";
 export {
   tanStackRouterProvider,
@@ -184,6 +189,7 @@ export {
   isFatalGraphQLWsClose,
   isFatalGraphQLWsCloseCode,
   sessionAuth,
+  viewAsAuth,
   type AuthFetch,
   type CsrfTokenOptions,
   type CsrfTokenProvider,

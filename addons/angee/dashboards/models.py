@@ -7,8 +7,9 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NoReturn, cast
 
+from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
@@ -17,10 +18,16 @@ from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    ConditionalSharedReaderMixin,
-    ConditionalSharedReaderQuerySet,
+    CreationKeyMixin,
+    CreationKeyQuerySet,
+    OptimisticLockMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.permissions import effective_rebac_definition
+from angee.base.scoping import read_scoped_queryset
+from angee.graphql.access import is_gated_read_axis
+from angee.graphql.data.hasura import declared_hasura_resource_fields
+from angee.graphql.introspection import FieldPathError, require_field_for_path
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -33,8 +40,51 @@ MAX_FILTER_DEPTH = 10
 MAX_FILTER_CLAUSES = 100
 
 
+def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any) -> list[bool]:
+    """Batch declared listing scopes, never infer authority from result counts.
+
+    ``resource`` declares the container-scope ``key`` (for example
+    ``{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}``).
+    Use the Task resource that declares the key, not the related Queue resource.
+    Listing admission reads that container, never a source row. The source
+    query still enforces its own row permissions. Unknown/invalid policies fail
+    validation; an inaccessible or missing scope yields false.
+    """
+
+    scopes: dict[tuple[type[models.Model], str], list[tuple[int, Any]]] = {}
+    for index, policy in enumerate(policies):
+        if set(policy) != {"resource", "key", "value"} or not all(
+            isinstance(value, str) and value for value in policy.values()
+        ):
+            raise ValidationError({"visibility": "Declare a resource, key and non-empty value."})
+        try:
+            model = apps.get_model(policy["resource"])
+            key = policy["key"].replace(".", "__")
+            if "." in policy["key"] or key not in declared_hasura_resource_fields(
+                model, "hasura_container_scope_fields"
+            ):
+                raise ValidationError({"visibility": "Use a declared container scope key."})
+            field = require_field_for_path(model, key)
+            container_path, separator, _leaf = key.rpartition("__")
+            container = require_field_for_path(model, container_path).related_model if separator else model
+        except (LookupError, ValueError, FieldDoesNotExist, FieldPathError) as error:
+            raise ValidationError({"visibility": "The scope resource or key does not exist."}) from error
+        definition = effective_rebac_definition(container)
+        if field.is_relation or not field.unique or definition is None or is_gated_read_axis(model, key):
+            raise ValidationError({"visibility": "Use a unique, ungated scalar key on a permission-managed scope."})
+        scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
+    allowed = [False] * len(policies)
+    for (model, key), entries in scopes.items():
+        rows = read_scoped_queryset(model, actor)
+        if rows is not None:
+            readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
+            for index, value in entries:
+                allowed[index] = value in readable
+    return allowed
+
+
 class DashboardConflictError(Exception):
-    """The caller's persisted identity or revision is no longer current."""
+    """The caller's persisted dashboard identity is no longer current."""
 
     def __init__(self, current_revision: int | None = None) -> None:
         self.current_revision = current_revision
@@ -98,6 +148,7 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
             "kind",
             "kindVersion",
             "title",
+            "visibility",
             "data",
             "options",
             "x",
@@ -119,10 +170,20 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
         _as_int(raw.get("kindVersion"), f"{path}.kindVersion", positive=True)
         if not isinstance(raw.get("title"), str) or not isinstance(raw.get("options"), dict):
             raise ValidationError({"snapshot": f"{path} has invalid title or options."})
+        if "visibility" in raw:
+            if not isinstance(raw["visibility"], dict):
+                raise ValidationError({"visibility": "The widget visibility policy must be an object."})
+            widget_visibility_answers([raw["visibility"]], None)
         data = raw.get("data")
-        if not isinstance(data, dict) or data.get("shape") not in {"value", "series", "rows", "none"}:
+        if not isinstance(data, dict) or data.get("shape") not in {"value", "series", "rows", "none", "resourceView"}:
             raise ValidationError({"snapshot": f"{path}.data has an invalid shape."})
-        if data["shape"] == "none":
+        if data["shape"] == "resourceView":
+            if set(data) != {"shape", "preset"} or not isinstance(data.get("preset"), str) or not data["preset"]:
+                raise ValidationError({"snapshot": f"{path}.data requires a resource-view preset."})
+            route = raw["options"].get("fullViewRoute")
+            if not isinstance(route, str) or not route.strip():
+                raise ValidationError({"snapshot": f"{path}.options.fullViewRoute is required."})
+        elif data["shape"] == "none":
             binding = data.get("binding")
             if (
                 set(data) != {"shape", "binding"}
@@ -255,7 +316,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
         data = widget["data"]
         if data["shape"] != "rows" and "columns" in widget["options"]:
             _invalid_query(f"widgets[{index}].options.columns", "columns are only valid for row widgets")
-        if data["shape"] == "none":
+        if data["shape"] in {"none", "resourceView"}:
             continue
         if set(data) != {"shape", "source"}:
             _invalid_query(path, "query widgets accept only shape and source")
@@ -386,7 +447,9 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 _invalid_query(f"{path}.source.refresh.seconds", "interval must be from 5 to 3600 seconds")
 
 
-class DashboardQuerySet(ConditionalSharedReaderQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class DashboardQuerySet(
+    CreationKeyQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any],
+):
     """Archive scopes layered over actor-scoped dashboard reads."""
 
 
@@ -410,24 +473,19 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
         if not client_creation_key:
             raise ValidationError({"client_creation_key": "A client creation key is required."})
-        existing = self.filter(owner=owner, client_creation_key=client_creation_key).first()
-        if existing is not None:
-            return existing
-        dashboard = self.model(
-            owner=owner,
-            scope="personal",
-            scope_key=None,
-            name=name.strip() or "Untitled dashboard",
-            description=description,
-            client_creation_key=client_creation_key,
-        )
-        try:
-            with transaction.atomic():
-                dashboard.full_clean()
-                dashboard.sudo(reason="dashboards.create_personal").save()
-        except IntegrityError:
-            return self.get(owner=owner, client_creation_key=client_creation_key)
-        return dashboard.with_actor(actor)
+        name = name.strip() or "Untitled dashboard"
+        def insert() -> Any:
+            dashboard = self.model(
+                owner=owner, scope="personal", scope_key=None, name=name, description=description,
+                client_creation_key=client_creation_key,
+            )
+            dashboard.full_clean(validate_constraints=False)
+            dashboard.validate_constraints(exclude={"client_creation_key"})
+            dashboard.sudo(reason="dashboards.create_personal").save()
+            return dashboard.with_actor(actor)
+
+        dashboard, _created = self.replay_or_insert(owner, client_creation_key, "", insert)
+        return dashboard
 
     def save_snapshot(
         self,
@@ -460,8 +518,9 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     raise DashboardConflictError()
                 if scope != "personal" and current.owner_id != owner.pk:
                     raise DashboardConflictError()
-                if current.revision != expected_revision:
+                if expected_revision is None:
                     raise DashboardConflictError(current.revision)
+                current.require_revision(expected_revision)
                 if current.scope != scope or current.scope_key != scope_key:
                     raise DashboardConflictError(current.revision)
             else:
@@ -529,6 +588,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     "title": item["title"],
                     "data": item["data"],
                     "options": item["options"],
+                    "visibility": item.get("visibility"),
                     "x": item["x"],
                     "y": item["y"],
                     "w": item["w"],
@@ -557,9 +617,8 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             if changed:
                 current.columns = canonical["columns"]
                 current.declaration_revision = declaration_revision
-                current.revision += 1
                 current.sudo(reason="dashboards.save_snapshot").save(
-                    update_fields=["columns", "declaration_revision", "revision", *dashboard_fields],
+                    update_fields=["columns", "declaration_revision", *dashboard_fields],
                 )
             return current.with_actor(actor)
 
@@ -567,8 +626,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         actor = current_actor()
         with transaction.atomic(), system_context(reason="dashboards.reset_snapshot"):
             locked = cast(Any, self.model).system_queryset(lock=("self",)).get(pk=dashboard.pk)
-            if locked.revision != expected_revision:
-                raise DashboardConflictError(locked.revision)
+            locked.require_revision(expected_revision)
             if (
                 locked.scope == "personal" or actor is None
                 or to_subject_ref(locked.owner) != actor
@@ -580,12 +638,15 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
 DashboardObjects = DashboardManager()
 
 
-class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
+class Dashboard(
+    CreationKeyMixin, OptimisticLockMixin,
+    ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel,
+):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
     runtime = True
     sqid_prefix = "dsh_"
-    shared_reader_policy_fields = ("owner",)
+    creation_key_scope = "owner"
     rebac_grantable = {"viewer": "share", "editor": "share"}
 
     class DashboardScope(models.TextChoices):
@@ -606,9 +667,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
     description = models.TextField(blank=True, default="")
     columns = models.PositiveSmallIntegerField(default=12)
     spec_version = models.PositiveSmallIntegerField(default=DASHBOARD_SCHEMA_VERSION)
-    revision = models.PositiveIntegerField(default=1)
     declaration_revision = models.CharField(max_length=128, blank=True, default="")
-    client_creation_key = models.CharField(max_length=128, null=True, blank=True)
 
     objects = DashboardObjects
 
@@ -647,21 +706,11 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
                 condition=models.Q(owner__isnull=True),
                 name="dashboard_installed_scoped_target",
             ),
-            models.UniqueConstraint(
-                fields=("owner", "client_creation_key"),
-                condition=models.Q(client_creation_key__isnull=False),
-                name="dashboard_owner_creation_key",
-            ),
+            CreationKeyMixin.creation_key_constraint(scope="owner", name="dashboard_owner_creation_key"),
         )
 
     def __str__(self) -> str:
         return self.name
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Installed baselines are readable by every authenticated actor."""
-
-        return self.owner_id is None
 
     def set_personal_archived(self, *, archived: bool, expected_revision: int) -> Any:
         """Archive one personal dashboard under its revision lock and actor gate."""
@@ -673,13 +722,11 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
             raise PermissionDenied("You cannot archive this dashboard.")
         with transaction.atomic(), system_context(reason="dashboards.archive"):
             locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
-            if locked.revision != expected_revision:
-                raise DashboardConflictError(locked.revision)
+            locked.require_revision(expected_revision)
             if locked.is_archived != archived:
                 locked.is_archived = archived
-                locked.revision += 1
                 locked.sudo(reason="dashboards.archive").save(
-                    update_fields=["is_archived", "revision"]
+                    update_fields=["is_archived"]
                 )
         return locked.with_actor(actor)
 
@@ -696,6 +743,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
                 "title": widget.title,
                 "data": widget.data,
                 "options": widget.options,
+                **({"visibility": widget.visibility} if widget.visibility is not None else {}),
                 "x": widget.x,
                 "y": widget.y,
                 "w": widget.w,
@@ -729,12 +777,11 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
         tier: str,
         source: str,
     ) -> None:
-        """Reconcile readers and validate snapshots, including unchanged resource rows."""
+        """Validate snapshots, including unchanged resource rows."""
 
         loaded = tuple(instances)
         for instance in loaded:
             dashboard = cast("Dashboard", instance)
-            dashboard.reconcile_shared_reader()
             dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source)
 
@@ -761,6 +808,7 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
     title = models.CharField(max_length=240)
     data = models.JSONField()
     options = models.JSONField(default=dict, blank=True)
+    visibility = models.JSONField(null=True, blank=True)
     x = models.PositiveSmallIntegerField(default=0)
     y = models.PositiveSmallIntegerField(default=0)
     w = models.PositiveSmallIntegerField(default=1)

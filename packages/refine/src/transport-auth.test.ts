@@ -1,6 +1,29 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { bearerAuth, bearerAuthFromGetter, sessionAuth, createCsrfTokenProvider } from "./transport-auth";
+import { bearerAuth, bearerAuthFromGetter, sessionAuth, createCsrfTokenProvider, viewAsAuth } from "./transport-auth";
+
+test("view-as sends only the current preview header and preserves other HTTP headers", async () => {
+  let userId: string | null = null;
+  const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response());
+  const request = bearerAuth("credential")(viewAsAuth(() => userId)(send));
+  const headers = () => new Headers(send.mock.lastCall?.[1]?.headers);
+  await request("/graphql/console/", { headers: { "X-Angee-View-As": "stale", "X-CSRFToken": "csrf" } });
+  expect(headers().has("X-Angee-View-As")).toBe(false);
+  userId = "public-person-id";
+  await request("/graphql/console/", { headers: { "X-CSRFToken": "csrf" } });
+  expect(headers().get("X-Angee-View-As")).toBe(userId);
+  expect(headers().get("Authorization")).toBe("Bearer credential");
+  expect(headers().get("X-CSRFToken")).toBe("csrf");
+  userId = null;
+  await request("/graphql/console/");
+  expect(headers().has("X-Angee-View-As")).toBe(false);
+});
+
+test("view-as preserves Request headers when no init headers are supplied", async () => {
+  const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response());
+  await viewAsAuth(() => "person")(send)(new Request("https://example.test/graphql/", { headers: { "X-CSRFToken": "csrf" } }));
+  expect(new Headers(send.mock.lastCall?.[1]?.headers).get("X-CSRFToken")).toBe("csrf");
+});
 
 /** Capture the `Authorization` header a wrapped fetch would send. */
 function authHeaderFor(

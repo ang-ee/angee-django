@@ -1,0 +1,30 @@
+# IAM access and credential actions
+
+The Share dialog is IAM's one-record People surface. `record_readers` lists
+named effective person readers through the REBAC reverse index after the
+model's declared share permissions are checked. Wildcard and authenticated
+audiences have no finite person roster.
+The index returns identities, not the relation paths that granted them. Exact
+direct grants come from `record_access`, including groups, subject types and
+each grantable relation; a reader may have more than one. A model owner
+contributes an `access.roles` component keyed by model. It registers its live
+role roster and admission/removal verbs with `useAccessRole`; IAM merges those
+rows only with the effective readers returned by the reverse index. A role
+admission that requests a follow grants read and follows in one server
+transaction. `FormView.railSlot(model)` presents the same Share adapter in the
+record rail. Direct relation labels come from scoped resource vocabulary's
+`relations` map; an undeclared label displays the lowercase relation id.
+The `access.direct` / `iam.direct`
+slot contribution controls whether a route offers direct shares. The app may
+exclude it through `surface.admit.slots["access.direct"] = []` while retaining
+the Share panel. A visibility policy offers only its owner-declared values and
+states their consequence alongside the control. A model owner registers one
+through `access.visibility` and `useAccessVisibility`; proposals uses it for
+the round's opening policy and its confirmed opening verb.
+
+Saved User records inherit IAM's issue-password action. `useIssuePasswordAction`
+is exported for other IAM-owned presentations. Eligibility comes from
+`can_issue_password`; the mutation is transient and the returned secret lives
+only in a read-only, copyable `usePrompt` reveal. No credential is added to a
+record or query cache. The existing manually entered reset action and its policy
+remain unchanged.

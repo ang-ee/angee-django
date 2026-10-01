@@ -1,7 +1,5 @@
 import * as React from "react";
 import { Glyph } from "../../../chrome/Glyph";
-import { ResourceViewSwitcher } from "../../../toolbars";
-import { type ResourceViewKind } from "../resource-view-model";
 import { type ActionDescriptor } from "../../page";
 import { RecordPager, type RecordNavigation } from "../RecordPager";
 import type { RecordSmartButtonDescriptor } from "./public";
@@ -9,25 +7,16 @@ export const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
 export const EMPTY_ACTIONS: readonly ActionDescriptor[] = [];
 
 export function RecordHeaderActions({
-  view,
   navigation,
   smartButtons,
-  onViewChange,
 }: {
-  view: ResourceViewKind;
   navigation: RecordNavigation | null;
   smartButtons: readonly RecordSmartButtonDescriptor[];
-  onViewChange: (view: ResourceViewKind) => void;
 }): React.ReactElement {
   return (
     <>
       <RecordSmartButtons buttons={smartButtons} />
       {navigation ? <RecordPager navigation={navigation} /> : null}
-      <ResourceViewSwitcher
-        view={view}
-        ariaLabel="Record view switcher"
-        onViewChange={onViewChange}
-      />
     </>
   );
 }

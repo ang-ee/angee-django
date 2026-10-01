@@ -81,7 +81,7 @@ export function InboxPage(): ReactElement {
           ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
         <Field name="is_open" hidden />
         <Field name="kind_label" title />
-        <Field name="verdict" widget="statusbar" options={verdicts} resolve={(row) =>
+        <Field name="verdict" widget="statusbar" status options={verdicts} resolve={(row) =>
           row.is_open === false && row.verdict === "PENDING" && typeof row.closed_reason === "string"
             ? { name: "verdict", options: closedReasons.filter((option) => option.value.toUpperCase() === row.closed_reason),
                 valueCodec: { toControl: () => row.closed_reason, fromControl: (value) => value } }
@@ -95,7 +95,7 @@ export function InboxPage(): ReactElement {
           <Field name="resolved_at" label={t("decision.resolvedAt")} showWhen={(row) => row.is_open === false && Boolean(row.resolved_at)} />
           <Field name="closed_reason" label={t("decision.closedReason")} showWhen={(row) => row.is_open === false && Boolean(row.closed_reason)} />
         </Group>
-        <Action id="decide" label={t("decision.submit")} primary icon="check"
+        <Action id="decide" label={t("decision.submit")} placement="toolbar" primary icon="check"
           visibleWhen={(record) => record.is_open === true && record.can_act === true}
           args={({ record }) => {
             const definition = jsonSchemaActionArgs(record?.form_schema, widgets, { initialValues: record?.resolution, translate: uiT });

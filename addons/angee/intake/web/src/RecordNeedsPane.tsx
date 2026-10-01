@@ -70,7 +70,11 @@ export function RecordNeedsPane({
         "source_message.id",
         "created_at",
       ]}
-      baseFilter={{ [targetField]: { exact: targetId } }}
+      baseFilter={
+        targetField === "project"
+          ? { OR: [{ project: { exact: targetId } }, { "task.project": { exact: targetId } }] }
+          : { task: { exact: targetId } }
+      }
       defaultGroup={{ field: "party" }}
       order={{ created_at: "DESC" }}
       columns={columns}

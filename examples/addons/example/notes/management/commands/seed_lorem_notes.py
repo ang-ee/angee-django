@@ -6,7 +6,7 @@ browser. Three model facts shape the implementation:
 * ``created_at`` / ``updated_at`` are ``auto_now_add`` / ``auto_now``
   (``angee.base.mixins``), so they cannot be set on insert — they are backfilled
   with a second ``bulk_update``.
-* Ownership is field-backed by ``created_by`` and admin reach is const-backed
+* Ownership is field-backed by ``owner`` and admin reach is const-backed
   via ``angee/role:admin`` in ``permissions.zed``, so a note carries no per-row
   REBAC tuples — bulk insert writes none.
 * Generation is seeded (``Faker.seed_instance``) so a run is reproducible.
@@ -98,7 +98,7 @@ class Command(BaseCommand):
                 raise CommandError(f"owner {options['owner']!r} not found — load demo data first") from exc
 
             if options["fresh"]:
-                removed, _ = note_model.objects.filter(created_by=owner).delete()
+                removed, _ = note_model.objects.filter(owner=owner).delete()
                 self.stdout.write(f"deleted {removed} existing notes for {options['owner']}")
 
             made = 0
@@ -118,13 +118,14 @@ class Command(BaseCommand):
                                 unique=True,
                             )
                         ),
+                        owner=owner,
                         created_by=owner,
                         updated_by=owner,
                     )
                     for _ in range(size)
                 ]
                 note_model.objects.bulk_create(notes)
-                # Owner access is field-backed by created_by and admin reach is
+                # Owner access is field-backed by owner and admin reach is
                 # const-backed via angee/role:admin, so bulk insert writes no
                 # per-note REBAC tuples.
                 # Backfill the timestamps auto_now_add/auto_now ignored on insert.

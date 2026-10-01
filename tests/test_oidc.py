@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
+from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
@@ -23,7 +24,7 @@ from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
-from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED
+from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_account_connect
@@ -783,30 +784,16 @@ def test_resolver_link_on_email_match_skips_service_accounts(
         assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-service-email").exists()
 
 
-def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The OIDC email-match path must use the user owner's people() scope directly."""
-
-    class QuerySet:
-        def filter(self, **kwargs: object) -> QuerySet:
-            return self
-
-        def order_by(self, *fields: str) -> QuerySet:
-            return self
-
-        def __getitem__(self, key: object) -> list[object]:
-            return []
-
-    class Manager:
-        def all(self) -> QuerySet:
-            return QuerySet()
+def test_oidc_email_match_fails_loud_without_person_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OIDC email-match path must use the user owner's person_for_email lookup."""
 
     class UserModel:
-        objects = Manager()
+        objects = object()
 
     monkeypatch.setattr(identity, "get_user_model", lambda: UserModel)
     resolver = object.__new__(identity.OidcIdentityResolver)
 
-    with pytest.raises(AttributeError, match="people"):
+    with pytest.raises(AttributeError, match="person_for_email"):
         resolver._find_by_email("someone@example.com")
 
 
@@ -814,23 +801,38 @@ def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.Mo
 def test_resolver_link_on_email_match_rejects_ambiguous_email(
     composed_tables: None,
 ) -> None:
-    """Email-match login fails closed when more than one user owns the email."""
+    """Legacy ambiguous email refuses login even when provisioning is enabled."""
 
     user_model = get_user_model()
     user_model.objects.create_user(username="email-match-a", email="dupe@example.com")
-    user_model.objects.create_user(username="email-match-b", email="DUPE@example.com")
-    oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
-
-    with pytest.raises(OAuthFlowError):
-        identity.resolve(
-            oauth_client,
-            sub="sub-dupe-email",
-            email="dupe@example.com",
-            claims={"sub": "sub-dupe-email", "email": "dupe@example.com", "email_verified": True},
+    constraint = next(
+        item for item in user_model._meta.constraints if item.name == "iam_user_person_email_unique"
+    )
+    with connection.schema_editor() as editor:
+        editor.remove_constraint(user_model, constraint)
+    try:
+        user_model.objects.create_user(username="email-match-b", email="DUPE@example.com")
+        oauth_client = _oauth_client(
+            link_on_email_match=True, create_on_login=True, allowed_email_domains=["example.com"],
         )
+        account_count = user_model._base_manager.count()
 
-    with system_context(reason="test oidc assertions"):
-        assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-dupe-email").exists()
+        with pytest.raises(IdentityFlowError) as caught:
+            identity.resolve(
+                oauth_client,
+                sub="sub-dupe-email",
+                email="dupe@example.com",
+                claims={"sub": "sub-dupe-email", "email": "dupe@example.com", "email_verified": True},
+            )
+
+        assert caught.value.code == IDENTITY_RESOLUTION_FAILED
+        assert user_model._base_manager.count() == account_count
+        with system_context(reason="test oidc assertions"):
+            assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-dupe-email").exists()
+    finally:
+        user_model._base_manager.filter(username="email-match-b").update(email="email-match-b@example.com")
+        with connection.schema_editor() as editor:
+            editor.add_constraint(user_model, constraint)
 
 
 @pytest.mark.django_db(transaction=True)

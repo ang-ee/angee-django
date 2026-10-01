@@ -11,6 +11,7 @@ import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import { Dialog } from "../../ui/dialog";
 import { DeletePreviewTree } from "./DeletePreviewTree";
+import { useRuntimeViewAs } from "../../runtime";
 
 export interface DeletePreviewDialogProps {
   preview: DeletePreview;
@@ -31,6 +32,8 @@ export function DeletePreviewDialog({
   onConfirm,
   onCancel,
 }: DeletePreviewDialogProps): React.ReactElement {
+  const viewAs = useRuntimeViewAs();
+  const previewBlocked = Boolean(viewAs.viewAs || viewAs.pending);
   const t = useUiT();
   const fullyBlocked = recordCount > 0 && blockedRecordCount >= recordCount;
   const treeNodes = treeNodesFor(preview.root);
@@ -72,8 +75,8 @@ export function DeletePreviewDialog({
               type="button"
               variant="danger"
               pending={isPending}
-              disabled={fullyBlocked || isPending}
-              onClick={onConfirm}
+              disabled={fullyBlocked || isPending || previewBlocked}
+              onClick={() => { if (!previewBlocked) onConfirm(); }}
             >
               <Glyph name="trash" />
               {t("deletePreview.delete")}

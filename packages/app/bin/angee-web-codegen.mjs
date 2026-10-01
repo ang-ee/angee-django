@@ -25,6 +25,7 @@ import {
   getNamedType,
   isRequiredArgument,
   parse,
+  parseType,
   print,
   validate,
 } from "graphql";
@@ -866,6 +867,7 @@ function saveFields(index) {
       return [{
         modelLabel,
         saveRoot,
+        arguments: resource.saveArguments ?? [],
         // The `<res>_set_input` parent patch type and `<res>_lines_insert_input`
         // line type name the save mutation's `patch`/`lines` arguments; either is
         // omitted from the operation when the schema does not expose it.
@@ -907,6 +909,10 @@ function renderSelectionTree(tree) {
 function saveDocument(resource) {
   const variables = ["$pk: ID!"];
   const args = ["pk: $pk"];
+  for (const { name, type } of [...resource.arguments].sort((left, right) => left.name.localeCompare(right.name))) {
+    variables.push(`$${assertGraphQLName(name)}: ${print(parseType(type))}`);
+    args.push(`${name}: $${name}`);
+  }
   if (resource.patchType) {
     variables.push(`$patch: ${assertGraphQLName(resource.patchType)}`);
     args.push("patch: $patch");

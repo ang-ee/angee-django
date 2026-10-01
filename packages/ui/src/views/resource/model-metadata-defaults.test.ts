@@ -30,11 +30,12 @@ import {
   relationFieldInfoForDescriptor,
   relationListFieldInfo,
 } from "./model-metadata-defaults";
-const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { relationFilterFields } from "../relation/relation-filter";
+import { buildColumns } from "./resource-view-list-body";
 
+const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
   kind: "date", server: { input: field.toUpperCase(), key: field },
@@ -86,15 +87,21 @@ const STATUS_OPTIONS = [
 ];
 
 describe("resource metadata defaults", () => {
-  test("an inherited select widget receives the same metadata choices as a declared select", () => {
-    const metadata = canonicalModel({ status: { ...NOTE_METADATA.fields.status!, widget: "select" } }, NOTE_METADATA.resource!);
-    const [inherited, declared] = columnsWithMetadataDefaults<Row>([
-      { field: "status" }, { field: "status", widget: "select" },
-    ], metadata);
-    expect(inherited).toEqual(declared);
-    expect(inherited?.options).toEqual(STATUS_OPTIONS);
+  test("scoped vocabulary overrides authored shared form and column labels", () => {
+    const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
+      ...NOTE_METADATA.fields, title: { ...NOTE_METADATA.fields.title!, label: "Subject" },
+    } };
+    expect(columnsWithMetadataDefaults([{ field: "title", header: "Title" }], scoped)[0]?.header).toBe("Subject");
+    expect(fieldsWithMetadataDefaults([{ name: "title", label: "Title" }], scoped)[0]?.label).toBe("Subject");
+    expect(NOTE_METADATA.fields.title?.label).toBeUndefined();
   });
-
+  test("bare enum columns use the badge with metadata labels and scoped tones", () => {
+    const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
+      ...NOTE_METADATA.fields, status: { ...NOTE_METADATA.fields.status!, tones: { IN_REVIEW: "warning" } },
+    } };
+    const [column] = columnsWithMetadataDefaults([{ field: "status" }], scoped);
+    expect(column).toMatchObject({ widget: "statusBadge", options: STATUS_OPTIONS, tone: { IN_REVIEW: "warning" } });
+  });
   const columns: readonly ColumnDescriptor<Row>[] = [
     { field: "title" },
     { field: "status", widget: "statusBadge" },
@@ -624,14 +631,15 @@ describe("money currencyField plumbing", () => {
     expect(column?.widget).toBe("float");
   });
 
-  test("a bare column for an enum/boolean field inherits no kind-derived widget", () => {
-    // List cells render enums, relations, and plain scalars natively; only an
-    // explicit backend widget (like `money`) is inherited onto a column.
+  test("a bare enum column renders as a status badge; a boolean inherits no widget", () => {
+    // An enum reads as a toned chip with its option label; relations and plain
+    // scalars render natively, and only an explicit backend widget (like `money`)
+    // is inherited otherwise.
     const resolved = columnsWithMetadataDefaults<Row>(
       [{ field: "status" }, { field: "isStarred" }],
       NOTE_METADATA,
     );
-    expect(resolved[0]?.widget).toBeUndefined();
+    expect(resolved[0]?.widget).toBe("statusBadge");
     expect(resolved[1]?.widget).toBeUndefined();
   });
 
@@ -725,6 +733,8 @@ describe("relation column read expansion", () => {
       schema,
     );
     expect(column?.field).toBe("product.display_name");
+    expect(column?.id).toBe("product");
+    expect(buildColumns([column!], {})[0]?.id).toBe("product");
     expect(column?.selectionPaths).toEqual([
       "product.id",
       "product.display_name",

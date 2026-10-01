@@ -217,7 +217,7 @@ def test_registration_requires_the_run_actors_read_permission(watched_source, re
 
 
 def test_watch_resources_follow_run_reads_and_record_reference_owner(
-    watched_source, register_step, workflow_permissions,
+    watched_source, register_step, composed_permissions,
 ):
     actor, _sent, record = watched_source
     register_step(Watch)

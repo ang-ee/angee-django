@@ -4,6 +4,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import type { DataResourceMetadata } from "@angee/metadata";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import type { AggregateBucket } from "@angee/refine";
 
 import { useDashboardWidgetData } from "./data";
 import type { WidgetSpec } from "./headless";
@@ -12,6 +13,7 @@ const state = vi.hoisted(() => ({
   resource: null as DataResourceMetadata | null,
   list: vi.fn(),
   refetch: vi.fn(),
+  aggregate: null as AggregateBucket | null,
 }));
 
 vi.mock("@angee/metadata", async (importOriginal) => ({
@@ -20,7 +22,7 @@ vi.mock("@angee/metadata", async (importOriginal) => ({
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/refine")>(),
-  useAngeeAggregate: () => ({ aggregate: null, fetching: false, error: null, updatedAt: null, refetch: state.refetch }),
+  useAngeeAggregate: () => ({ aggregate: state.aggregate, fetching: false, error: null, updatedAt: null, refetch: state.refetch }),
   useAngeeGroupBy: () => ({ buckets: [], totalCount: 0, fetching: false, error: null, updatedAt: null, refetch: state.refetch }),
 }));
 vi.mock("../views/resource/resource-operations", () => ({
@@ -44,6 +46,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   state.resource = null;
+  state.aggregate = null;
 });
 
 test("selects native row identity alongside requested fields and declared relation labels", () => {
@@ -74,4 +77,25 @@ test("reuses the empty query field map while metadata is unavailable", () => {
   rerender();
   expect(result.current.queryFields).toBe(fields);
   expect(result.current.identity).toBeNull();
+});
+
+test("a value measure is a heading count only for the count operation", () => {
+  state.resource = testDataResource("messaging.Message", {
+    query: testResourceQuery({ fields: { id: testQueryField("id") } }),
+    aggregateMeasures: [{ op: "sum", field: "amount", input: "AMOUNT" }],
+  });
+  state.aggregate = { key: null, count: 5, sum: { amount: 42 } };
+  const countSpec: WidgetSpec = { ...spec, kind: "stat", data: {
+    shape: "value", source: { resource: "messaging.Message", measure: { op: "count" } },
+  } };
+  const { result, rerender } = renderHook(({ widget }) => useDashboardWidgetData(widget), {
+    initialProps: { widget: countSpec },
+  });
+  expect(result.current.value).toBe(5);
+  expect(result.current.count).toBe(5);
+  rerender({ widget: { ...countSpec, data: { shape: "value", source: {
+    resource: "messaging.Message", measure: { op: "sum", field: "amount" },
+  } } } });
+  expect(result.current.value).toBe(42);
+  expect(result.current.count).toBeNull();
 });

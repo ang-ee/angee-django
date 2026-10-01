@@ -3,7 +3,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { Rss } from "lucide-react";
 
 import { enPostsMessages } from "./i18n";
-import { feedForm } from "./FeedsPage";
+import { feedForm } from "./FeedForm";
 
 const posts = defineBaseAddon({
   id: "posts",

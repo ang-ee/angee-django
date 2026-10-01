@@ -3,6 +3,7 @@ import { useForm, type FieldValues, type DefaultValues, type Path, type Resolver
 
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
+import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import { applyFormErrors, serverErrorsFromForm, formSubmitError, type FormSubmitResult } from "./validation-errors";
 import { useFieldValidation, type FieldValidationForm } from "./use-field-validation";
@@ -44,17 +45,19 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
   const form = useForm<TValues, unknown, TSubmitValues>({ defaultValues: options.defaultValues, resolver: options.resolver });
   const { handleSubmit, clearErrors } = form;
   const optionsRef = useLatestRef(options);
+  const preview = useLatestRef(useRuntimeViewAs());
   const submittingRef = React.useRef(false);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const run = React.useCallback(async (): Promise<boolean> => {
-    if (submittingRef.current) return false;
+    if (submittingRef.current || preview.current.viewAs || preview.current.pending) return false;
     submittingRef.current = true;
     clearErrors();
     let succeeded = false;
     const validateEditors = () => validateFields(form.getValues(), (name, error) => form.setError(name as Path<TValues>, error));
     try {
       await handleSubmit(async (collected) => {
+        if (preview.current.viewAs || preview.current.pending) return;
         if (validateEditors()) return;
         const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
@@ -68,7 +71,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
       }, () => { validateEditors(); })();
     } finally { submittingRef.current = false; }
     return succeeded;
-  }, [clearErrors, form, handleSubmit, t, toast, validateFields]);
+  }, [clearErrors, form, handleSubmit, preview, t, toast, validateFields]);
   const clearFieldError = React.useCallback((name: string) => clearErrors(name as Path<TValues>), [clearErrors]);
   return {
     form: { ...form, registerFieldValidation }, run,

@@ -13,15 +13,15 @@ from angee.base.fields import StateField
 from angee.base.mixins import (
     AuditMixin,
     HistoryMixin,
+    OwnerMixin,
     RevisionMixin,
-    SqidMixin,
 )
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeDataModel
 from angee.messaging.models import ThreadedModelMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, RevisionMixin):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin, RevisionMixin):
     """A short note used to exercise backend composition.
 
     Metadata changes are audited through ``history``; the ``body`` field is

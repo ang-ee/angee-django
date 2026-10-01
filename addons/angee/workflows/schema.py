@@ -211,7 +211,7 @@ class StepRunType(AngeeNode):
 class DecisionGroupWorkflowExtension:
     """Expose the unique waiting execution through its own read permission."""
 
-    step_run: StepRunType | None = actor_scoped_to_one("step_run", reverse=True)
+    step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
 
 @strawberry_django.type(Decision, name="DecisionType", extend=True)
@@ -354,7 +354,7 @@ class TriggerEventType(RecordReferenceNode):
     """Durable admission evidence with a started run until that run is pruned."""
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
-    started_run: WorkflowRunType | None = actor_scoped_to_one("started_run", reverse=True)
+    started_run: WorkflowRunType | None = actor_scoped_to_one("started_run")
     changed_at: auto
     evaluated_at: auto
     admitted_at: auto

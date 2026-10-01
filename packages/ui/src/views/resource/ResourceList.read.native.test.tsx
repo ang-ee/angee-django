@@ -26,7 +26,7 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-test.each(["missing", "failed"] as const)("an inline collection remains reachable during loading and after a %s record read", async (result) => {
+test.each(["missing", "failed"] as const)("an inline %s record read retains the loading state without record actions", async (result) => {
   let resolve!: (value: { data: Row | null }) => void;
   let reject!: (error: Error) => void;
   const getOne = vi.fn(() => new Promise<{ data: Row | null }>((done, fail) => { resolve = done; reject = fail; }));
@@ -45,16 +45,13 @@ test.each(["missing", "failed"] as const)("an inline collection remains reachabl
   </Provider>);
 
   fireEvent.click(await screen.findByRole("button", { name: "Open Retained note" }));
-  expect(await screen.findByRole("status")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "List view" })).toBeTruthy();
+  expect((await screen.findAllByRole("status")).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "List view" })).toBeNull();
   await act(async () => { result === "missing" ? resolve({ data: null }) : reject(new Error("Connection interrupted")); });
-  if (result === "missing") expect(await screen.findByRole("heading", { name: "Record not found" })).toBeTruthy();
+  if (result === "missing") expect(await screen.findByRole("heading", { name: "Record unavailable" })).toBeTruthy();
   else expect((await screen.findByRole("alert")).textContent).toContain("Connection interrupted");
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "List view" }));
-  expect(await screen.findByRole("button", { name: "Open Retained note" })).toBeTruthy();
-  expect(screen.queryByRole("heading", { name: "Record not found" })).toBeNull();
-  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "List view" })).toBeNull();
   expect(getOne).toHaveBeenCalledOnce();
 });

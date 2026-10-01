@@ -7,6 +7,7 @@ import {
   useSchemaFieldMetadata,
   type ModelMetadata,
   type Row,
+  holdsPermission,
 } from "@angee/metadata";
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
@@ -22,18 +23,19 @@ import {
   parsePageFields,
   parsePageGroups,
   parsePageTabs,
-  type ActionDescriptor,
   type FieldDescriptor,
   type GroupDescriptor,
   type TabDescriptor,
+  type TabLabel,
 } from "../page";
 import {
   fieldsWithMetadataDefaults,
   relationFieldInfoForDescriptor,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
-import type { RecordDeleteAction } from "./RecordActionBar";
-import { formViewSectionsSlot } from "./form-view-slots";
+import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
+import { formViewRailSlot, formViewRecordActionsSlot, formViewSectionsSlot } from "./form-view-slots";
+import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import {
   addFieldSelection,
   fieldErrorMessages,
@@ -79,6 +81,8 @@ export interface RecordFieldFocusOptions {
 export interface OverviewTabOptions {
   label?: React.ReactNode;
   position?: "first" | "last";
+  /** No Overview tab: the first record tab is the default. With no record tabs the overview still renders. */
+  hidden?: boolean;
 }
 
 export interface RecordPanelContext {
@@ -99,11 +103,13 @@ export interface RecordToolbarContext {
 
 export interface RecordTabDescriptor {
   id: string;
-  label: React.ReactNode;
+  label: TabLabel;
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
   render: (context: RecordPanelContext) => React.ReactNode;
+  /** Shown only while the loaded record satisfies it; absent until the record loads. */
+  visibleWhen?: (record: Row) => boolean;
   /**
    * Keep the panel mounted even while inactive. Base UI mounts a keep-mounted
    * panel eagerly from the first render, so do not opt in for eager work such as
@@ -121,7 +127,7 @@ export interface UseFormViewSurfaceProps {
   fields?: readonly FieldDescriptor[];
   groups?: readonly GroupDescriptor[];
   children?: React.ReactNode;
-  actions?: readonly ActionDescriptor[];
+  actions?: readonly RecordActionDescriptor[];
   returning?: readonly string[];
   defaultValues?: Record<string, unknown>;
   acknowledgedSource?: FormViewAcknowledgedSource;
@@ -142,6 +148,8 @@ export interface UseFormViewSurfaceProps {
   /** Called when the selected saved-record tab changes. */
   onRecordTabChange?: (tab: string) => void;
   defaultRecordTab?: string;
+  /** Without an Overview tab an unavailable tab id falls back to the first record tab. */
+  overviewHidden?: boolean;
   deleteAction?: RecordDeleteAction;
   deleteVisibleWhen?: (record: Row) => boolean;
 }
@@ -160,13 +168,16 @@ export interface FormViewSurface
   hasConditionalFields: boolean;
   requiredMessage: string;
   titleField: FieldDescriptor | undefined;
+  titlePlacementField: FieldDescriptor | undefined;
   titleFieldMessages: readonly string[];
   statusField: FieldDescriptor | undefined;
   bodyField: FieldDescriptor | undefined;
   sections: readonly FormSectionModel[];
+  railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
-  declaredActions: readonly ActionDescriptor[];
+  declaredActions: readonly RecordActionDescriptor[];
+  actionsBlocked: boolean;
   recordPanelContext: RecordPanelContext | null;
   recordToolbarContext: RecordToolbarContext;
   recordTabList: readonly RecordTabDescriptor[];
@@ -199,6 +210,7 @@ export function useFormViewSurface({
   recordTab,
   onRecordTabChange,
   defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
+  overviewHidden = false,
   deleteAction,
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
@@ -234,6 +246,16 @@ export function useFormViewSurface({
     [canonicalResource, modelLabel],
   );
   const sectionEntries = useModelSlot(sectionTargets);
+  const recordActionTargets = React.useMemo(
+    () => [...new Set([canonicalResource, modelLabel])].map((label) => formViewRecordActionsSlot(label)),
+    [canonicalResource, modelLabel],
+  );
+  const recordActionFieldEntries = useModelSlot(recordActionTargets);
+  const railTargets = React.useMemo(
+    () => [...new Set([canonicalResource, modelLabel])].map(formViewRailSlot),
+    [canonicalResource, modelLabel],
+  );
+  const railEntries = useModelSlot(railTargets);
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -260,7 +282,8 @@ export function useFormViewSurface({
           ...parsePageGroups(entry.content as React.ReactNode).map(
             (group, childOrder) => ({
               kind: "group" as const,
-              group,
+              // A contribution's permission gates every group and tab it declares.
+              group: entry.permission === undefined ? group : { ...group, permission: entry.permission },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -268,7 +291,8 @@ export function useFormViewSurface({
           ...parsePageTabs(entry.content as React.ReactNode).map(
             (tab, childOrder) => ({
               kind: "tab" as const,
-              tab,
+              tab: entry.permission === undefined ? tab : { ...tab, visibleWhen: (record: Row) =>
+                holdsPermission(record, entry.permission!) && (tab.visibleWhen?.(record) ?? true) },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -301,17 +325,21 @@ export function useFormViewSurface({
   // A canonical section may depend on a parent field omitted by a child's
   // projection. Read that field from its declared owner, never select invalid
   // child fields or require every consumer to duplicate the parent projection.
+  const contributionFields = React.useMemo(() => [
+    ...slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
+      ? declaration.tab.requiredFields ?? [] : []),
+    ...recordActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
+    ...railEntries.flatMap((entry) => entry.requiredFields ?? []),
+  ], [railEntries, recordActionFieldEntries, slotDeclarations]);
   const canonicalTabFields = React.useMemo(() => [...new Set(
-    slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
-      ? (declaration.tab.requiredFields ?? []).filter((path) => {
+    contributionFields.filter((path) => {
           const head = path.split(".")[0]!;
           return canonicalResource !== modelLabel
             && !modelMetadata?.fields[head]
             && canonicalMetadata?.fields[head]?.readable !== false
             && Boolean(canonicalMetadata?.fields[head]);
-        })
-      : []),
-  )], [canonicalMetadata, canonicalResource, modelLabel, modelMetadata, slotDeclarations]);
+        }),
+  )], [canonicalMetadata, canonicalResource, contributionFields, modelLabel, modelMetadata]);
   const isCreate = id == null;
   const overrideNode =
     isCreate && React.isValidElement(formOverride) ? formOverride : null;
@@ -366,9 +394,23 @@ export function useFormViewSurface({
       })),
     [declaredGroups, isCreate, modelMetadata, schemaMetadata],
   );
-  const formFields = React.useMemo(
+  const railGroups = React.useMemo(() => isCreate ? [] : recordRailGroups(railEntries).map((group) => ({
+    ...group,
+    fields: (group.fields ?? []).map((row) => ({
+      ...row,
+      field: withModeLockedFields(fieldsWithMetadataDefaults([row.field], modelMetadata), false)[0]!,
+    })),
+  })), [isCreate, modelMetadata, railEntries]);
+  const regularFormFields = React.useMemo(
     () => flattenedFormFields(resolvedFields, resolvedGroups),
     [resolvedFields, resolvedGroups],
+  );
+  const formFields = React.useMemo(
+    () => flattenedFormFields(regularFormFields, railGroups.map((group) => ({
+      fields: (group.fields ?? []).map((row) => row.field),
+      actions: [],
+    }))),
+    [regularFormFields, railGroups],
   );
   const defaultSlugSource = React.useMemo(
     () => formFields.find((field) => field.title)?.name,
@@ -393,6 +435,9 @@ export function useFormViewSurface({
   }, [formFields, modelMetadata, schemaMetadata]);
   const selection = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
+    if (!isCreate && modelMetadata?.fields.permissions?.readable !== false && modelMetadata?.fields.permissions) {
+      paths.add("permissions");
+    }
     for (const field of formFields) {
       // Write-only inputs (secrets such as OAuth client_secret) are projected
       // into the artifact with readable=false; render them, never select them.
@@ -414,11 +459,8 @@ export function useFormViewSurface({
       }
     }
     for (const extra of returning ?? []) paths.add(extra);
-    for (const declaration of slotDeclarations) {
-      if (declaration.kind !== "tab") continue;
-      for (const path of declaration.tab.requiredFields ?? []) {
+    for (const path of contributionFields) {
         if (!canonicalTabFields.includes(path)) paths.add(path);
-      }
     }
     const representation = modelMetadata?.resource.recordRepresentation;
     if (representation && modelMetadata.fields[representation]) paths.add(representation);
@@ -429,7 +471,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [canonicalTabFields, formFields, modelMetadata, relationByField, returning, schemaMetadata, slotDeclarations]);
+  }, [canonicalTabFields, contributionFields, formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -457,6 +499,10 @@ export function useFormViewSurface({
     t,
     readOnly,
   });
+  const visibleRailGroups = React.useMemo(
+    () => visibleRecordRailGroups(railGroups, save.displayRecord, modelMetadata),
+    [railGroups, save.displayRecord, modelMetadata],
+  );
   const canonicalTabSelection = React.useMemo(
     () => refineFieldsFromPaths(["id", ...canonicalTabFields]),
     [canonicalTabFields],
@@ -474,6 +520,7 @@ export function useFormViewSurface({
     ...(canonicalTabFields.length > 0 ? canonicalRead.result : undefined),
     ...save.displayRecord,
   }, [canonicalRead.result, canonicalTabFields, save.displayRecord]);
+  const actionsBlocked = save.formIsDirty || save.pending;
   const chrome = useFormViewRecordChrome({
     dataResource,
     modelLabel,
@@ -482,6 +529,7 @@ export function useFormViewSurface({
     isCreate,
     record: tabRecord,
     formReadOnly: save.formReadOnly,
+    actionsBlocked,
   });
 
   React.useEffect(() => {
@@ -490,14 +538,15 @@ export function useFormViewSurface({
   const fieldLayout = React.useMemo(
     () =>
       formViewFieldLayout(
-        formFields,
+        regularFormFields,
         resolvedFields,
         resolvedGroups,
         modelMetadata,
+        isCreate,
       ),
-    [formFields, modelMetadata, resolvedFields, resolvedGroups],
+    [isCreate, modelMetadata, regularFormFields, resolvedFields, resolvedGroups],
   );
-  const { titleField, statusField, bodyField, gridFields, gridGroups } =
+  const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
   const titleFieldMessages = titleField
     ? [
@@ -514,14 +563,18 @@ export function useFormViewSurface({
         gridFields,
         gridGroups,
         declaredGroupSequences,
+        isCreate,
       );
-      const stacked = groupSections.filter((section) => section.label == null);
-      const tabbedSections = groupSections
+      const permitted = groupSections.filter((section) =>
+        section.permission === undefined
+        || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)));
+      const stacked = permitted.filter((section) => section.label == null);
+      const tabbedSections = permitted
         .filter((section) => section.label != null)
         .sort(compareFormSections);
       return [...stacked, ...tabbedSections];
     },
-    [declaredGroupSequences, gridFields, gridGroups],
+    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord],
   );
   const subtitleParts = React.useMemo(
     () =>
@@ -561,7 +614,8 @@ export function useFormViewSurface({
       : deleteAction;
   const recordTabList = React.useMemo(
     () => mergeRecordTabs(
-      recordTabs ?? EMPTY_RECORD_TABS,
+      (recordTabs ?? EMPTY_RECORD_TABS).filter((tab) =>
+        !tab.visibleWhen || (tabRecord != null && tab.visibleWhen(tabRecord))),
       slotDeclarations.flatMap((declaration): RecordTabDescriptor[] => {
         if (declaration.kind !== "tab") return [];
         const tab = declaration.tab;
@@ -580,7 +634,7 @@ export function useFormViewSurface({
   );
   const activeRecordTab = recordTabList.some((tab) => tab.id === requestedRecordTab)
     ? requestedRecordTab
-    : FORM_VIEW_OVERVIEW_TAB_ID;
+    : overviewHidden && recordTabList[0] ? recordTabList[0].id : FORM_VIEW_OVERVIEW_TAB_ID;
   const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
@@ -619,13 +673,16 @@ export function useFormViewSurface({
     hasConditionalFields,
     requiredMessage: t("form.required"),
     titleField,
+    titlePlacementField,
     titleFieldMessages,
     statusField,
     bodyField,
     sections,
+    railGroups: visibleRailGroups,
     subtitleParts,
     lineRowErrors,
     declaredActions,
+    actionsBlocked,
     recordPanelContext,
     recordToolbarContext,
     recordTabList,

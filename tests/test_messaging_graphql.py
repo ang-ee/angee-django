@@ -10,7 +10,9 @@ from typing import Any
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
-from django.db import connection
+from django.contrib.auth.models import AnonymousUser
+from django.db import IntegrityError, connection, transaction
+from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -29,6 +31,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import (
     Backend,
     Drive,
@@ -180,12 +183,13 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.list_name == "channels"
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
-    # A channel is created by a bespoke connect flow, but its operator label is the one
-    # fact a human owns (update), and deleting it purges everything it ingested — the
-    # generic delete root lights the button, the authored `delete_channel` root drives
-    # the purge-accurate cascade preview + confirm.
+    # Connect owns channel creation. Updates include the operator label, spaces'
+    # team and intake's configuration; the authored delete root previews the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
-    assert channel.update_fields == ("display_name",)
+    assert channel.update_fields == (
+        "display_name", "team", "intake_queue", "intake_trigger",
+        "intake_field_map", "intake_requester_domains",
+    )
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "delete_channel"
     assert channel.roots.changes_name == "channelChanged"
@@ -293,7 +297,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
             request=_request(admin),
         )
-    )["record_thread"]["messages"][0]["parts"]
+    )["record_thread"]["messages"][-1]["parts"]
 
     expected = [
         ("TITLE", "", "Depth subject"),
@@ -357,6 +361,15 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
                 {
                     "id": str(message.sqid),
                     "parts": [{"id": str(part.sqid)} for part in message.parts.order_by("pk")],
+                }
+            )
+
+        if surface == "record_thread":
+            creation_note = messaging_models.Message._base_manager.get(thread=thread, message_type="notification")
+            expected.append(
+                {
+                    "id": str(creation_note.sqid),
+                    "parts": [{"id": str(part.sqid)} for part in creation_note.parts.order_by("pk")],
                 }
             )
 
@@ -781,12 +794,13 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
     )["record_thread"]
     assert visible == {
         "messages": [
+            {"sender": None},
             {
                 "sender": {
                     "display_name": "Ada Envelope",
                     "value": "ada-record@example.com",
                 }
-            }
+            },
         ]
     }
 
@@ -1030,14 +1044,17 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             request=_request(admin),
         )
     )["record_thread"]
-    assert before == {"error_code": None, "thread": None}
+    assert before == {"error_code": None, "thread": {"id": messaging_models.Thread._base_manager.get().sqid}}
 
     posted = _data(
         execute_schema(
             schema,
             """
             mutation PostRecordMessage($model: String!, $id: ID!, $body: String!) {
-              post_record_message(input: {model_label: $model, record_id: $id, body: $body}) {
+              post_record_message(
+                input: {model_label: $model, record_id: $id, body: $body}
+                client_creation_key: "comment-request"
+              ) {
                 error_code
                 follower_count
                 is_following
@@ -1068,7 +1085,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
     assert posted["message"]["title"] == ""
     assert posted["message"]["preview"] == "Follow up from GraphQL."
     assert posted["message"]["parts"][0]["fragment"]["text"] == "Follow up from GraphQL."
-    assert posted["thread"] == {"title": {"text": "Case 101"}, "message_count": 1}
+    assert posted["thread"] == {"title": {"text": "Case 101"}, "message_count": 2}
     assert posted["follower_count"] == 1
     assert posted["is_following"] is True
     assert posted["followers"] == [{"user": {"username": "msg-chatter-admin"}}]
@@ -1096,8 +1113,11 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
     )["record_thread"]
     assert after["error_code"] is None
     assert after["thread"]["title"] == {"text": "Case 101"}
-    assert after["thread"]["message_count"] == 1
-    assert after["thread"]["messages"] == [{"preview": "Follow up from GraphQL."}]
+    assert after["thread"]["message_count"] == 2
+    assert after["thread"]["messages"] == [
+        {"preview": "Follow up from GraphQL."},
+        {"preview": "Threaded ticket created"},
+    ]
     assert after["follower_count"] == 1
     assert after["is_following"] is True
 
@@ -1116,7 +1136,8 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             """
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
-                input: {model_label: $model, record_id: $id, body: $body, kind: NOTE}
+                input: {model_label: $model, record_id: $id, body: $body, kind: "note"}
+                client_creation_key: "note-request"
               ) {
                 error
                 error_code
@@ -1155,7 +1176,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             "preview": "Internal note from GraphQL.",
             "subtype": {"key": "note", "description": "Internal note"},
         },
-        "thread": {"message_count": 1},
+        "thread": {"message_count": 2},
     }
 
 
@@ -1235,6 +1256,7 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
     assert reply["thread"]["messages"] == [
         {"preview": "Reply from GraphQL.", "parent": {"preview": "Original from GraphQL."}},
         {"preview": "Original from GraphQL.", "parent": None},
+        {"preview": "Threaded ticket created", "parent": None},
     ]
 
 
@@ -1359,7 +1381,7 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
             {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
             request=_request(admin),
         )
-    )["record_thread"]["messages"][0]["reaction_groups"]
+    )["record_thread"]["messages"][-1]["reaction_groups"]
 
     assert grouped == [
         {
@@ -1423,6 +1445,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
     with system_context(reason="test.messaging.record_star.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 109")
         message = ticket.message_post("Star this.")
+        creation = messaging_models.Message._base_manager.get(thread_id=message.thread_id, message_type="notification")
     schema = _schema()
 
     starred = _data(
@@ -1479,7 +1502,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
     )["record_thread"]
     assert thread == {
         "error_code": None,
-        "messages": [{"id": message.sqid, "starred": True}],
+        "messages": [{"id": creation.sqid, "starred": False}, {"id": message.sqid, "starred": True}],
     }
 
     other_thread = _data(
@@ -1502,7 +1525,7 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
     )["record_thread"]
     assert other_thread == {
         "error_code": None,
-        "messages": [{"id": message.sqid, "starred": False}],
+        "messages": [{"id": creation.sqid, "starred": False}, {"id": message.sqid, "starred": False}],
     }
 
     unstarred = _data(
@@ -1547,6 +1570,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
     admin = _platform_admin("msg-edit-admin")
     with system_context(reason="test.messaging.record_chatter_edit.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 111")
+        creation = messaging_models.Message._base_manager.get(message_type="notification")
     schema = _schema()
 
     posted = _data(
@@ -1611,13 +1635,14 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
     assert updated["message"]["status"] == "EDITED"
     assert updated["message"]["preview"] == "Updated GraphQL body."
     assert updated["message"]["parts"][0]["fragment"]["text"] == "Updated GraphQL body."
-    assert updated["thread"]["message_count"] == 1
+    assert updated["thread"]["message_count"] == 2
     assert updated["thread"]["messages"] == [
         {
             "id": posted["message"]["id"],
             "status": "EDITED",
             "preview": "Updated GraphQL body.",
-        }
+        },
+        {"id": creation.sqid, "status": "SENT", "preview": "Threaded ticket created"},
     ]
 
 
@@ -1627,6 +1652,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
     admin = _platform_admin("msg-delete-admin")
     with system_context(reason="test.messaging.record_chatter_delete.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 113")
+        creation = messaging_models.Message._base_manager.get(message_type="notification")
     schema = _schema()
 
     first = _data(
@@ -1697,10 +1723,13 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
     assert deleted["error_code"] is None
     assert deleted["error"] is None
     assert deleted["deleted_message_id"] == first["id"]
-    assert deleted["message_result_count"] == 1
+    assert deleted["message_result_count"] == 2
     assert deleted["thread"] == {
-        "message_count": 1,
-        "messages": [{"id": second["id"], "preview": "Keep me."}],
+        "message_count": 2,
+        "messages": [
+            {"id": second["id"], "preview": "Keep me."},
+            {"id": creation.sqid, "preview": "Threaded ticket created"},
+        ],
     }
     first_exists = messaging_models.Message._base_manager.filter(
         **messaging_models.Message.public_id_lookup(first["id"])
@@ -1829,7 +1858,13 @@ def test_record_chatter_query_returns_tracking_values(composed_tables: None) -> 
                     "new_display": "Won",
                 },
             ],
-        }
+        },
+        {
+            "message_type": "NOTIFICATION",
+            "preview": "Threaded ticket created",
+            "subtype": {"key": "record_created", "description": "Record created"},
+            "tracking_values": [],
+        },
     ]
 
 
@@ -1959,7 +1994,7 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
 
     first_page = fetch(limit=2)
     assert first_page["error_code"] is None
-    assert first_page["message_result_count"] == 5
+    assert first_page["message_result_count"] == 6
     # The newest window is still selected, but returned chronological ascending.
     assert [message["preview"] for message in first_page["messages"]] == [
         "Window message 4",
@@ -2036,9 +2071,9 @@ def test_record_chatter_orders_interleaved_backfilled_email(composed_tables: Non
         return [message["preview"] for message in payload["messages"]]
 
     # Chronological order is Message 1, 2, Backfilled email, 3, 4, 5. The newest window
-    # is the three latest by send time — the backfilled email is *not* among them
+    # includes the newer creation note; the backfilled email is *not* among them
     # despite carrying the highest pk.
-    assert previews(limit=3) == ["Message 3", "Message 4", "Message 5"]
+    assert previews(limit=3) == ["Message 4", "Message 5", "Threaded ticket created"]
     # Cursoring before Message 3 returns the two rows chronologically before it, so the
     # interleaved backfilled email cannot be skipped at the page boundary.
     assert previews(limit=2, before=messages[2].sqid) == ["Message 2", "Backfilled email"]
@@ -2090,17 +2125,16 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     capabilities = {
         message["message_type"]: (message["can_edit"], message["can_delete"]) for message in payload["messages"]
     }
-    # A plain comment is editable and deletable; a tracked message is deletable
-    # (post access) but never editable (the mail edit rule blocks it).
+    # A plain comment is editable and deletable; tracking and system notes are retained.
     assert capabilities["COMMENT"] == (True, True)
-    assert capabilities["AUTO_COMMENT"] == (False, True)
+    assert capabilities["AUTO_COMMENT"] == (False, False)
 
 
 def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) -> None:
     """The record chatter API exposes current-user receipt-derived unread state.
 
     Unread counts derive from the follower's positional receipt; an inbox follower
-    gets no delivery rows, so ``notifications`` stays empty while the counts move.
+    also has an inbox item whose acknowledgement is independent of the cursor.
     ``mark_record_thread_read`` advances the receipt to the latest message.
     """
 
@@ -2164,8 +2198,8 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
         "error_code": None,
         "unread_count": 1,
         "needaction_count": 1,
-        # An inbox follower has no delivery rows — the receipt is the read state.
-        "notifications": [],
+        # Inbox rows record delivery independently of the follower cursor.
+        "notifications": [{"notification_type": "INBOX", "notification_status": "READY"}],
     }
 
     read = _data(
@@ -2189,7 +2223,7 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
     assert read["needaction_count"] == 0
     with system_context(reason="test.messaging.record_notifications.verify"):
         thread = ticket.message_thread(create=False)
-        follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, user=watcher)
+        follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, party__person__user=watcher)
         latest = messaging_models.Message._base_manager.filter(thread=thread).order_by("-pk").first()
         assert follower.last_read_message_id == latest.pk
 
@@ -2201,9 +2235,9 @@ def test_record_thread_unread_count_is_record_read_scoped(composed_tables: None)
     outsider = User.objects.create_user(username="msg-count-outsider", email="msg-count-outsider@example.com")
     with system_context(reason="test.messaging.record_unread_count.seed"):
         doc = messaging_models.ChatterDoc.objects.create(title="Gated count", status="open")
+        _grant(doc, "reader", reader)
         doc.message_subscribe(user=reader)
         doc.message_post("Unread for the reader.")
-    _grant(doc, "reader", reader)
     schema = _schema()
     query = """
         query RecordThreadUnreadCount($model: String!, $id: ID!) {
@@ -2278,6 +2312,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
     assert unread["unread_count"] == 2
     assert unread["needaction_count"] == 2
     assert {message["preview"]: message["needaction"] for message in unread["messages"]} == {
+        "Threaded ticket created": False,
         "First needaction item.": True,
         "Second needaction item.": True,
     }
@@ -2315,11 +2350,11 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
     assert done["unread_count"] == 1
     assert done["needaction_count"] == 1
     assert done["message"] == {"id": first.sqid, "needaction": False}
-    # An inbox follower has no delivery rows; done moved the receipt instead.
-    assert done["notifications"] == []
+    # The cursor moves independently of both delivered inbox items.
+    assert done["notifications"] == [{"message": {"id": second.sqid}}, {"message": {"id": first.sqid}}]
     with system_context(reason="test.messaging.record_message_done.verify"):
         thread = ticket.message_thread(create=False)
-        follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, user=watcher)
+        follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, party__person__user=watcher)
         assert follower.last_read_message_id == first.pk
 
     refreshed = _data(
@@ -2340,6 +2375,7 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
         )
     )["record_thread"]
     assert {message["id"]: message["needaction"] for message in refreshed["messages"]} == {
+        messaging_models.Message._base_manager.get(thread=thread, message_type="notification").sqid: False,
         first.sqid: False,
         second.sqid: True,
     }
@@ -2742,6 +2778,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     }
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_activity_lifecycle(composed_tables: None) -> None:
     """The custom record activity mutations schedule and complete chatter activities."""
 
@@ -2841,12 +2878,171 @@ def test_record_chatter_activity_lifecycle(composed_tables: None) -> None:
     assert completed["activity"]["feedback"] == "Customer confirmed."
     assert completed["activity"]["completed_at"] is not None
     assert completed["thread"] == {
-        "message_count": 1,
-        "messages": [{"preview": "Activity done: Call customer\n\nCustomer confirmed."}],
+        "message_count": 2,
+        "messages": [
+            {"preview": "Activity done: Call customer\n\nCustomer confirmed."},
+            {"preview": "Threaded ticket created"},
+        ],
     }
+
+    ungated = _data(execute_schema(
+        schema,
+        """mutation Log($id: ID!) {
+          log_record_activity(input: {
+            model_label: "messaging.ThreadedTicket", record_id: $id, activity_type: "call",
+            occurred_on: "2025-12-31", note: "  Agreed next steps."
+          }) { error_code activity { activity_type summary } }
+        }""",
+        {"id": ticket.sqid}, request=_request(admin),
+    ))["log_record_activity"]
+    assert ungated == {"error_code": None, "activity": {"activity_type": "call", "summary": "Agreed next steps."}}
+
+    with system_context(reason="tests.messaging.logged_exchange"):
+        record = ChatterDoc.objects.create(title="Exchange record")
+        reader = get_user_model().objects.create_user(username="exchange-reader")
+        write_relationships([RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(reader))])
+    logged = _data(execute_schema(
+        schema,
+        """
+        mutation Log($model: String!, $id: ID!) {
+          log_record_activity(input: {
+            model_label: $model, record_id: $id, activity_type: "call",
+            occurred_on: "2025-12-31", note: "Agreed next steps."
+          }) {
+            error_code
+            activity { status due_date note created_by { username } }
+            thread { message_count }
+          }
+        }
+        """,
+        {"model": "chatterdemo.ChatterDoc", "id": record.sqid},
+        request=_request(admin),
+    ))["log_record_activity"]
+    assert logged == {
+        "error_code": None,
+        "activity": {
+            "status": "DONE", "due_date": "2025-12-31", "note": "Agreed next steps.",
+            "created_by": {"username": "msg-activity-admin"},
+        },
+        "thread": {"message_count": 1},
+    }
+    readable = _data(execute_schema(
+        schema,
+        """query Activities($id: ID!) {
+          record_thread(input: {model_label: "chatterdemo.ChatterDoc", record_id: $id}) {
+            error_code activities { note status } activity_types { key name }
+          }
+        }""",
+        {"id": record.sqid}, request=_request(reader),
+    ))["record_thread"]
+    assert readable["error_code"] is None
+    assert readable["activities"] == [{"note": "Agreed next steps.", "status": "DONE"}]
+    assert {item["key"] for item in readable["activity_types"]} == {"call", "todo"}
+    denied = _data(execute_schema(
+        schema,
+        """mutation Log($id: ID!) {
+          log_record_activity(input: {
+            model_label: "chatterdemo.ChatterDoc", record_id: $id,
+            activity_type: "call", occurred_on: "2025-12-31", note: "No write access."
+          }) { error_code activity { id } }
+        }""",
+        {"id": record.sqid}, request=_request(reader),
+    ))["log_record_activity"]
+    assert denied["error_code"] == "PERMISSION_DENIED"
+    assert denied["activity"] is None
+    with actor_context(admin):
+        cleaned = record.activity_log("call", date(2025, 12, 31), "  Clear\x00 note.\nDetail\x00.")
+        assert cleaned.summary == "Clear note."
+        assert cleaned.note == "  Clear note.\nDetail."
+        with pytest.raises(ProtectedError):
+            messaging_schema.ActivityType.objects.get(key="call").delete()
+    with system_context(reason="tests.messaging.activity_foreign_key"), pytest.raises(IntegrityError):
+        with transaction.atomic():
+            messaging_models.ThreadActivity._base_manager.filter(pk=cleaned.pk).update(activity_type_id="unknown")
+            connection.check_constraints()
+
+
+def test_activity_catalog_writes_require_admin(composed_tables: None) -> None:
+    """Catalog writes are administrator-only, including through generated roots."""
+
+    admin = _platform_admin("activity-catalog-admin")
+    plain = User.objects.create_user(username="activity-catalog-reader")
+    schema = _schema()
+    inserted = _data(execute_schema(schema, """mutation {
+      insert_activity_types_one(object: {key: "meeting", name: "Meeting"}) { id key }
+    }""", request=_request(admin)))["insert_activity_types_one"]
+    assert inserted["key"] == "meeting"
+    catalog = messaging_schema.ActivityType
+    for user in (plain, AnonymousUser()):
+        for mutation, variables in (
+            ('mutation { insert_activity_types_one(object: {key: "forbidden", name: "Forbidden"}) { id } }', {}),
+            ('mutation($id: String!) { update_activity_types_by_pk('
+             'pk_columns: {id: $id}, _set: {name: "Changed"}) { id } }', {"id": inserted["id"]}),
+            ('mutation($id: String!) { delete_activity_types_by_pk(id: $id) { id } }', {"id": inserted["id"]}),
+        ):
+            result = execute_schema(schema, mutation, variables, request=_request(user))
+            assert result.errors or all(value is None for value in (result.data or {}).values())
+            with system_context(reason="tests.messaging.catalog_unchanged"):
+                assert list(catalog.objects.values_list("key", "name")) == [("meeting", "Meeting")]
+
+
+@pytest.mark.usefixtures("activity_catalog")
+def test_record_activity_window_search_and_identity_query_budget(composed_tables: None) -> None:
+    """Activity identities stay batched while search and page dates bound the rows."""
+
+    admin = _platform_admin("activity-window-admin")
+    reader = User.objects.create_user(username="activity-window-reader")
+    with system_context(reason="tests.messaging.activity_window"):
+        record = ChatterDoc.objects.create(title="Activity window")
+        write_relationships([RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(reader))])
+    schema = _schema()
+    query = """query($id: ID!, $search: String!, $limit: Int!) {
+      record_thread(input: {model_label: "chatterdemo.ChatterDoc", record_id: $id,
+        search: $search, message_limit: $limit}) {
+        error_code activities { summary user { username } created_by { username } }
+      }
+    }"""
+
+    def read(search: str = "", limit: int = 50) -> list[Any]:
+        payload = _data(execute_schema(schema, query, {"id": record.sqid, "search": search, "limit": limit},
+            request=_request(reader)))["record_thread"]
+        assert payload["error_code"] is None
+        return payload["activities"]
+
+    counts = []
+    for size in (2, 22):
+        with actor_context(admin):
+            for index in range(0 if size == 2 else 2, size):
+                record.activity_log("call", date(2026, 1, 1), f"Exchange {index}")
+        with CaptureQueriesContext(connection) as captured:
+            rows = read()
+        assert len(rows) == size
+        assert all(row["user"] is None and row["created_by"] is None for row in rows)
+        counts.append(len(captured))
+    assert counts[1] <= counts[0] + 2, counts
+    with system_context(reason="tests.messaging.activity_identity_read"):
+        write_relationships([RelationshipTuple(to_object_ref(admin), "directory_reader", to_subject_ref(reader))])
+    assert all(row["user"] == row["created_by"] == {"username": admin.username} for row in read())
+    assert read("absent") == []
+    assert len(read("Exchange 21")) == 1
+    assert len(read(limit=5)) == 5
+    with actor_context(admin):
+        first = record.message_post("First page")
+        last = record.message_post("Latest page")
+    with system_context(reason="tests.messaging.activity_window_dates"):
+        for message, month in ((first, 2), (last, 3)):
+            message.sent_at = datetime(2026, month, 1, tzinfo=timezone.utc)
+            message.save(update_fields=("sent_at",))
+    with actor_context(reader):
+        manager = messaging_models.ThreadActivity.objects
+        assert manager.for_record_window(record, role="chatter", search="", limit=50,
+            messages=[first, last], message_count=3, bounded=False) == []
+        assert manager.for_record_window(record, role="chatter", search="", limit=50,
+            messages=[], message_count=3, bounded=True) == []
 
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_bare_assignee_gets_pointer_not_parent(
     composed_tables: None,
     storage: str,
@@ -2905,7 +3101,8 @@ def test_activity_agenda_bare_assignee_gets_pointer_not_parent(
         # The subject reads its own assignments across both records, due-date ordered, and
         # nothing of the owner's own task — the assignee arm never crosses to a non-assignee.
         assert [row["summary"] for row in rows] == ["Email Alpha", "Call Beta"]
-        assert rows[0]["user"] == {"username": f"agenda-assignee-{storage}"}
+        # Activity assignment does not grant directory access to the user projection.
+        assert rows[0]["user"] is None
         assert rows[0]["attachment"] == {
             "label": "Alpha",
             "model_label": "messaging.ThreadedTicket",
@@ -2991,27 +3188,27 @@ def _replace_with_nested_part_tree(message: Any, owner: Any) -> None:
     fragment_kind = fragment_model.FragmentKind
     owner_id = owner.pk
     fragments = {
-        "title": fragment_model.objects.upsert(text="Depth subject", owner_id=owner_id),
+        "title": fragment_model.objects.upsert(text="Depth subject", created_by_id=owner_id),
         "list_id": fragment_model.objects.upsert(
             text="List-ID: updates.example",
             kind=fragment_kind.HEADER,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
         "unsubscribe": fragment_model.objects.upsert(
             text="<mailto:unsubscribe@example.com>",
             kind=fragment_kind.HEADER,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
-        "body": fragment_model.objects.upsert(text="Body paragraph.", owner_id=owner_id),
+        "body": fragment_model.objects.upsert(text="Body paragraph.", created_by_id=owner_id),
         "quote": fragment_model.objects.upsert(
             text="Quoted reply.",
             kind=fragment_kind.QUOTE,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
         "signature": fragment_model.objects.upsert(
             text="Regards, Ada",
             kind=fragment_kind.SIGNATURE,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
     }
     part_model._base_manager.filter(message=message).delete()
@@ -3193,6 +3390,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
     assert by_pk["messages_by_pk"] is None
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_complete_and_cancel_activity_authorize_through_record_read(composed_tables: None) -> None:
     """Complete/cancel reach the activity through the parent record's read.
 
@@ -3334,6 +3532,7 @@ def test_generic_delete_excludes_record_thread_from_its_creator(composed_tables:
         assert not messaging_models.Thread._base_manager.filter(sqid=inbox_thread.sqid).exists()
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_writer_completes_activity_they_neither_own_nor_are_assigned(
     composed_tables: None,
 ) -> None:
@@ -3652,7 +3851,11 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(composed_tables:
         messaging_models.Participant._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
         messaging_models.Participant._base_manager.create(thread=thread2, handle=handle, created_by_id=owner_id)
         # Thread-rooted CASCADE children: a bare follower and a delivery notification.
-        messaging_models.ThreadFollower._base_manager.create(thread=thread1, user_id=owner_id, created_by_id=owner_id)
+        messaging_models.ThreadFollower._base_manager.create(
+            thread=thread1,
+            party_id=messaging_models.ThreadFollower.objects.get_party_id(user_id=owner_id, create=True),
+            created_by_id=owner_id,
+        )
         messaging_models.ThreadNotification._base_manager.create(
             thread=thread1, message=msg1, user_id=owner_id, created_by_id=owner_id
         )

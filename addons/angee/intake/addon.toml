@@ -4,11 +4,23 @@ description = "External-request evidence captured onto project tasks and project
 keywords = ["intake", "requests", "needs", "triage", "customers"]
 category = "Productivity"
 depends_on = [
+  "angee.iam",
+  "angee.decisions",
   "angee.messaging",
   "angee.parties",
   "angee.projects",
   "angee.work",
 ]
+
+[[migrations]]
+name = "need_single_target"
+app_label = "intake"
+module = "runtime_migrations.need_single_target"
+
+[[migrations]]
+name = "need_access_decision"
+app_label = "intake"
+module = "runtime_migrations.need_access_decision"
 
 [resources]
 master = []

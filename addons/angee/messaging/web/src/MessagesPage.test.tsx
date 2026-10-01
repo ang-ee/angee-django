@@ -58,7 +58,8 @@ vi.mock("./i18n", () => ({
   useMessagingT: () => (key: string) => key,
 }));
 
-import { messageForm, MessagesPage } from "./MessagesPage";
+import { messageForm } from "./MessageForm";
+import { MessagesPage } from "./MessagesPage";
 
 describe("MessagesPage", () => {
   beforeEach(() => {

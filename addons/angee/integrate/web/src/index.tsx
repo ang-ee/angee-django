@@ -18,7 +18,6 @@ import {
   INTEGRATION_STREAMS_TAB_ID,
   INTEGRATION_STREAM_SEARCH_KEYS,
   IntegrationStreamsPane,
-  StreamsLabel,
   integrationHasStreams,
   integrationSyncCursorWidget,
 } from "./IntegrationStreams";
@@ -138,7 +137,7 @@ const integrate = defineBaseAddon({
       content: (
         <Tab
           id="streams"
-          label={<StreamsLabel />}
+          label={{ namespace: "integrate", key: "streams.title", fallback: enIntegrateMessages["streams.title"] }}
           requiredFields={["stream_count"]}
           visibleWhen={integrationHasStreams}
         >

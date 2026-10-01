@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMatches, useRouterState } from "@tanstack/react-router";
 import type {
   MessageResources,
   MessageVars,
@@ -9,6 +10,7 @@ import {
 } from "@angee/metadata";
 
 import type {
+  RuntimeVocabulary,
   ChatterContribution,
   ChatterRoute,
   DrawerContribution,
@@ -16,6 +18,7 @@ import type {
   FormOverrideMap,
   ModelSlotTarget,
   PreviewContribution,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 } from "./contracts";
@@ -24,10 +27,13 @@ import { createAngeeI18nInstance } from "./i18n";
 import {
   createRouteHref,
   type RouteHref,
+  type RuntimeResourceRoutes,
 } from "./route-href";
+import type { ResourceViewPreset } from "../views/resource/model/favorites";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
+import { setHumanDateLocale } from "../widgets/date-format";
 
 export const DEFAULT_LOGIN_PATH = "/login";
 export const HOME_PATH_PREFERENCE_KEY = "homePath";
@@ -69,18 +75,12 @@ export function readRuntimeRouteShortcuts(
   });
 }
 
-/** Route names derived from one resource-tagged collection declaration. */
-export interface RuntimeResourceRoutes {
-  collection: string;
-  record?: {
-    name: string;
-    param: string;
-  };
-}
+export type { RuntimeResourceRoutes } from "./route-href";
 
 export type ResourceRecordHrefLookup = (
   resource: string,
   id: string,
+  row?: Readonly<Record<string, unknown>>,
 ) => string | undefined;
 
 /**
@@ -89,15 +89,24 @@ export type ResourceRecordHrefLookup = (
  * there is no separate provider per registry.
  */
 export interface AppRuntime {
+  brand: RuntimeBrand | null;
+  /** Host-selected menu root; this constrains navigation, never server access. */
+  confineTo: string | null;
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
+  vocabulary: RuntimeVocabulary;
+  resourceViews: Readonly<Record<string, ResourceViewPreset>>;
+  defaultResourceView?: string;
+  /** Presets targeted by menu entries for the active collection route. */
+  menuResourceViewIds?: readonly string[];
   auth: RuntimeAuthState;
   logoutAction: RuntimeLogoutAction;
   userPreferences: RuntimeUserPreferencesState;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
+  /** Inherited route policies for the shell aside. */
   chatterRoutes: readonly ChatterRoute[];
   slots: readonly SlotContribution[];
   /** Addon-owned detail search keys cleared by routed record navigation. */
@@ -118,6 +127,8 @@ export interface AppRuntime {
 
 export interface RuntimeI18n {
   language?: string;
+  on?: (event: "languageChanged", listener: (language: string) => void) => unknown;
+  off?: (event: "languageChanged", listener: (language: string) => void) => unknown;
   getFixedT: (
     lng: string | readonly string[] | null,
     ns: string,
@@ -141,7 +152,30 @@ export interface RuntimeAuthState {
   user: RuntimeAuthUser | null;
   status: "resolving" | "anonymous" | "authenticated";
   hasRole: (role: string) => boolean;
+  /** Optional preview controller supplied by the app's identity owner. */
+  viewAs?: RuntimeViewAs;
 }
+
+/** Server-authorized preview identities; the app owns transitions and transport. */
+export interface RuntimeViewAs {
+  viewAs: { userId: string } | null;
+  currentUser: RuntimeAuthUser | null;
+  realUser: RuntimeAuthUser | null;
+  viewablePeople: readonly RuntimeAuthUser[];
+  enter: (userId: string) => void;
+  exit: () => void;
+  pending?: boolean;
+  error?: string | null;
+}
+
+const NO_VIEW_AS: RuntimeViewAs = {
+  viewAs: null,
+  currentUser: null,
+  realUser: null,
+  viewablePeople: [],
+  enter: () => undefined,
+  exit: () => undefined,
+};
 
 export interface RuntimeLogoutAction {
   logout: () => Promise<boolean>;
@@ -168,9 +202,13 @@ const ANONYMOUS_RUNTIME_AUTH: RuntimeAuthState = {
 const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
 
 const EMPTY_RUNTIME: AppRuntime = {
+  brand: null,
+  confineTo: null,
   widgets: {},
   statusTones: {},
   i18n: null,
+  vocabulary: { resources: {}, menus: {} },
+  resourceViews: {},
   auth: ANONYMOUS_RUNTIME_AUTH,
   logoutAction: {
     logout: async () => false,
@@ -211,16 +249,39 @@ export function AppRuntimeProvider(props: {
 }): React.ReactNode {
   const { runtime } = props;
   const parent = RuntimeContext.useMaybe();
+  const [languageRevision, setLanguageRevision] = useState(0);
   const value = useMemo<AppRuntime>(
     () => ({ ...EMPTY_RUNTIME, ...(parent ?? {}), ...runtime }),
-    [parent, runtime],
+    [parent, runtime, languageRevision],
   );
+  // Set before descendants render: the formatter API is pure and has no hook.
+  if (value.i18n?.language) setHumanDateLocale(value.i18n.language);
+  useEffect(() => {
+    const i18n = value.i18n;
+    if (!i18n?.on || !i18n.off) return;
+    const onLanguageChanged = (language: string) => {
+      setHumanDateLocale(language);
+      setLanguageRevision((revision) => revision + 1);
+    };
+    i18n.on("languageChanged", onLanguageChanged);
+    return () => { i18n.off?.("languageChanged", onLanguageChanged); };
+  }, [value.i18n]);
   return RuntimeContext.Provider({ value, children: props.children });
 }
 
 /** The merged runtime, or the empty runtime when unprovided. */
 export function useAppRuntime(): AppRuntime {
   return RuntimeContext.useMaybe() ?? EMPTY_RUNTIME;
+}
+
+/** The product identity contributed by the composed app, if any. */
+export function useRuntimeBrand(): RuntimeBrand | null {
+  return useAppRuntime().brand ?? null;
+}
+
+/** Preview state injected by the app; absent injection leaves preview inactive. */
+export function useRuntimeViewAs(): RuntimeViewAs {
+  return useRuntimeAuth().viewAs ?? NO_VIEW_AS;
 }
 
 /** The dashboard registry composed once by the app owner. */
@@ -267,18 +328,27 @@ function useResourceRoutes(resource: string): RuntimeResourceRoutes | undefined 
 /** Build record hrefs from a resource's composed collection route, when routed. */
 export function useResourceRecordHref(
   resource: string,
-): ((id: string) => string | undefined) | undefined {
-  const record = useResourceRoutes(resource)?.record;
+): ((id: string, row?: Readonly<Record<string, unknown>>) => string | undefined) | undefined {
+  const routes = useResourceRoutes(resource);
   const routeHref = useAppRuntime().routeHref;
   return useMemo(
     () =>
-      record === undefined
+      routes?.record === undefined
         ? undefined
-        : (id: string) => routeHref.maybe(record.name, {
+        : (id: string, row?: Readonly<Record<string, unknown>>) => {
+          const record = recordDestination(routes, row);
+          return record ? routeHref.maybe(record.name, {
             [record.param]: id,
-          }),
-    [record, routeHref],
+          }) : undefined;
+        },
+    [routes, routeHref],
   );
+}
+
+/** Row projections needed to choose an app-owned record destination. */
+export function useResourceRecordMatchFields(resource: string): readonly string[] {
+  const routes = useResourceRoutes(resource);
+  return useMemo(() => [...new Set(routes?.recordDestinations?.map(({ match }) => match.field) ?? [])], [routes]);
 }
 
 /** Resolve any resource-backed record href, degrading when its addon is absent. */
@@ -286,7 +356,7 @@ export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
   const metadata = useSchemaFieldMetadata();
   const { routesByResource, routeHref } = useAppRuntime();
   return useCallback(
-    (resource: string, id: string) => {
+    (resource: string, id: string, row?: Readonly<Record<string, unknown>>) => {
       if (!resource || !id) return undefined;
       const canonicalResource = canonicalModelLabelOrNull(
         metadata.resources ?? [],
@@ -294,7 +364,7 @@ export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
         "resource record route lookup",
       );
       const record = canonicalResource
-        ? routesByResource?.[canonicalResource]?.record
+        ? recordDestination(routesByResource?.[canonicalResource], row)
         : undefined;
       return record
         ? routeHref.maybe(record.name, { [record.param]: id })
@@ -304,9 +374,35 @@ export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
   );
 }
 
+function recordDestination(
+  routes: RuntimeResourceRoutes | undefined,
+  row?: Readonly<Record<string, unknown>>,
+): RuntimeResourceRoutes["record"] {
+  if (!routes) return undefined;
+  if (!routes.recordDestinations?.length) return routes.record;
+  const matching = routes.recordDestinations.filter(({ match }) => {
+    const value = match.field.split(".").reduce<unknown>((current, key) =>
+      current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined, row);
+    return value === match.equals;
+  });
+  if (matching.length > 1) throw new Error("Record matches more than one app route.");
+  return matching[0]?.record ?? routes.recordFallback;
+}
+
 /** The app-composed, fail-fast route href builder. */
 export function useRouteHref(): RouteHref {
   return RuntimeContext.use().routeHref;
+}
+
+/** Resolve the active declaration by the router's matched path. */
+export function useActiveRoute<T extends { path: string }>(routes: readonly T[]): T | undefined {
+  const matches = useMatches();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const fullPath = matches.at(-1)?.fullPath ?? pathname;
+  return useMemo(
+    () => routes.find((route) => route.path.replace(/\/$/, "") === fullPath?.replace(/\/$/, "")),
+    [routes, fullPath],
+  );
 }
 
 /** The app-owned login destination used by shell and IAM surfaces. */
@@ -355,21 +451,24 @@ export function useSlot(
  */
 export function useModelSlot(
   target: ModelSlotTarget | readonly ModelSlotTarget[],
+  options: { admit?: readonly string[]; inventorySlots?: readonly string[]; owner?: string } = {},
 ): readonly SlotContribution[] {
   const { slots } = useAppRuntime();
   return useMemo(() => {
     const targets: readonly ModelSlotTarget[] = Array.isArray(target)
       ? target as readonly ModelSlotTarget[]
       : [target as ModelSlotTarget];
+    // The route policy has already projected `slots`. Legacy page admission can
+    // name a contribution excluded by that policy until its prop is removed.
     return targets.flatMap((candidate) =>
       slots.filter(
         (entry) =>
           entry.slot === candidate.slot
           && entry.model === candidate.model
           && entry.impl === candidate.impl,
-      ),
+      ).filter((entry) => options.admit === undefined || options.admit.includes(entry.id)),
     );
-  }, [slots, target]);
+  }, [slots, target, options.admit]);
 }
 
 /** The addon-contributed file-preview renderers, in composed order. */

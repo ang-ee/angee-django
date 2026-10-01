@@ -108,6 +108,9 @@ function FieldDescriptorControlInstance({
   }, [onValidityChange]);
   const widgetField: DescriptorWidgetField = {
     name: field.name,
+    fill: field.fill,
+    containerWidth: field.containerWidth,
+    visibilityAction: field.visibilityAction,
     label: field.label,
     options: field.options,
     placeholder: field.placeholder,

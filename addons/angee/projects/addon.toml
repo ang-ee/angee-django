@@ -7,6 +7,7 @@ depends_on = [
   "django.contrib.contenttypes",
   "angee.iam",
   "angee.integrate",
+  "angee.knowledge",
   "angee.messaging",
   "angee.parties",
   "angee.scheduling",
@@ -21,3 +22,13 @@ demo = [
   { path = "resources/demo/030_projects.task.yaml", depends_on = ["resources/demo/010_projects.project.yaml", "resources/demo/020_projects.milestone.yaml", "work:resources/demo/012_work.stage.yaml"] },
   { path = "resources/demo/031_projects.task.yaml", depends_on = "resources/demo/030_projects.task.yaml" },
 ]
+
+[[migrations]]
+name = "owner_from_created_by"
+app_label = "projects"
+module = "runtime_migrations.owner_from_created_by"
+
+[[migrations]]
+name = "drop_derived_tuples"
+app_label = "projects"
+module = "runtime_migrations.drop_derived_tuples"

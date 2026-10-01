@@ -3,8 +3,8 @@ import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
-import { directoryForm } from "./DirectoriesPage";
-import { organizationForm } from "./OrganizationsPage";
+import { directoryForm } from "./DirectoryForm";
+import { organizationForm } from "./OrganizationForm";
 import { personForm } from "./PersonForm";
 import { partyForm } from "./PartyForm";
 import { partyPickerWidget } from "./PartyPicker";
@@ -122,7 +122,7 @@ const parties = defineBaseAddon({
 export { PARTIES_OVERVIEW_SLOT, PARTIES_REVIEW_TOOLBAR_SLOT, PERSON_FORM_FIELDS_SLOT, ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 export { senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
-export { useOrganizationFields } from "./OrganizationsPage";
+export { useOrganizationFields } from "./OrganizationForm";
 export {
   PartyContactSummary,
   partyAddressText,

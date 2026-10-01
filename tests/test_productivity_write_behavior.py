@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,19 +30,28 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.intake.models import Need as AbstractNeed
 from angee.projects.models import Task as AbstractTask
-from angee.work.models import Queue as AbstractQueue
-from angee.work.models import Stage as AbstractWorkStage
+from angee.testing.permissions import install_permission_schema
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
+from tests.composed_host import run_composed_tests
 from tests.conftest import (
     SchemaAddon,
     create_platform_admin,
     execute_schema,
     result_data,
 )
-from tests.projects_models import Task
-from tests.spaces_models import Group
+from tests.projects_models import Queue, Stage, Task
 from tests.tables import model_tables
+
+
+def test_composed_projects_schema_with_work(tmp_path: Path) -> None:
+    """Work's sortable relation path and phase mapping must survive schema import."""
+    run_composed_tests(tmp_path, "tests.test_work_task_access.SchemaImportTests", app="angee.work")
+
+
+def test_duplicate_merge_uses_live_link_backing(tmp_path: Path) -> None:
+    """Merged links follow their new target without writing relationship rows."""
+    run_composed_tests(tmp_path, "tests.test_work_task_access.DuplicateLinkTests", app="angee.work")
 
 
 class RoutingStageContainer(models.Model):
@@ -85,26 +95,6 @@ class RoutingSnoozeRecord(models.Model):
         app_label = "tests"
 
 
-class Queue(AbstractQueue, Group):
-    """Native materialized work queue, retaining Group and sequence ownership."""
-
-    class Meta(AbstractQueue.Meta):
-        abstract = False
-        app_label = "work"
-        db_table = "test_create_work_queue"
-        rebac_resource_type = "work/queue"
-
-
-class Stage(AbstractWorkStage):
-    """Production stage behavior used by the prepared-instance regressions."""
-
-    class Meta(AbstractWorkStage.Meta):
-        abstract = False
-        app_label = "work"
-        db_table = "test_create_work_stage"
-        rebac_resource_type = "work/stage"
-
-
 class CreateProject(AngeeDataModel):
     """A project identity for the task-to-project projection."""
 
@@ -144,12 +134,12 @@ class CreateTask(TaskWork, AuditMixin, AngeeDataModel):
 
 
 class CreateNeed(AbstractNeed):
-    """Production target normalization with explicit test-graph relations."""
+    """Production target exclusivity with explicit test-graph relations."""
 
     task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.CASCADE)
     project = models.ForeignKey(CreateProject, null=True, blank=True, on_delete=models.CASCADE)
     original_task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    party = None
+    party = models.ForeignKey("parties.Party", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     source_message = None
 
     class Meta:
@@ -167,7 +157,6 @@ class CreateTaskType(AngeeNode):
 @strawberry_django.type(CreateNeed)
 class CreateNeedType(AngeeNode):
     body: auto
-    targets_project: auto
 
 
 @strawberry_django.type(Stage)
@@ -209,7 +198,10 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
             permission read = task->read + project->read
         }
         """)
-    active.set_schema(replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]))
+    install_permission_schema(
+        replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
+        active=active,
+    )
     try:
         admin = create_platform_admin("productivity-create-admin")
         with system_context(reason="tests.productivity.create.queue"):
@@ -298,18 +290,16 @@ def test_graphql_need_create_preserves_task_target_provenance(productivity_creat
             schema,
             """
             mutation CreateNeed($task: ID!) {
-              insert_create_needs_one(object: {task: $task, body: "Task request"}) { id targets_project }
+              insert_create_needs_one(object: {task: $task, body: "Task request"}) { id }
             }
             """,
             {"task": task.sqid},
             user=actor,
         )
     )["insert_create_needs_one"]
-    assert created["targets_project"] is False
     need = CreateNeed.objects.as_user(actor).get(sqid=created["id"])
     assert need.task_id == task.pk
-    assert need.project_id == project.pk
-    assert need.targets_project is False
+    assert need.project_id is None
 
 
 @pytest.mark.parametrize("category", ("TRIAGE", "DUPLICATE"))

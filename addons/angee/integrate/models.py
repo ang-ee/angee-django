@@ -1740,7 +1740,6 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         """Django model options for integrations."""
 
         abstract = True
-        base_manager_name = "unscoped_objects"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
 
@@ -3056,7 +3055,6 @@ class SyncStream(AuditMixin, AngeeDataModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/sync_stream"
         rebac_id_attr = "pk"
         constraints = (
@@ -3303,7 +3301,6 @@ class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/record_link"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)

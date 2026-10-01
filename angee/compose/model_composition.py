@@ -19,6 +19,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from django.utils.module_loading import module_has_submodule
+from rebac.resources import model_resource_type
 
 from angee.base.models import AngeeModel
 from angee.base.transitions import revalidate_transition_metadata
@@ -240,6 +241,31 @@ class ModelComposition:
         """Return ``(field name, addon name)`` for fields supplied by source donors."""
 
         return self._contributed_field_origins.get(source, ())
+
+    def field_gate_owners(self) -> dict[str, dict[str, str]]:
+        """Map resource types to the packages owning their concrete donor columns.
+
+        Field names are canonical Django names, never foreign-key attnames.
+        Many-to-many and private fields cannot carry field gates.
+        """
+
+        owners: dict[str, dict[str, str]] = {}
+        for source in self.ordered_models:
+            resource_type = model_resource_type(source)
+            if not resource_type:
+                continue
+            columns = {
+                field.name
+                for donor in self.donors(source)
+                for field in donor._meta.local_fields
+                if field.concrete
+            }
+            owners[resource_type] = {
+                name: package
+                for name, package in sorted(self.contributed_field_origins(source))
+                if name in columns
+            }
+        return dict(sorted(owners.items()))
 
     def _validate_fields(self) -> None:
         """Reject competing additive fields and parent columns redeclared by children.

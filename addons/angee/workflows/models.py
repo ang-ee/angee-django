@@ -614,7 +614,7 @@ class DecisionWorkflow(models.Model):
         "group__step_run", "group__step_run__run", "group__step_run__run__version__workflow",
         "group__step_run__run__version__workflow__key",
     )
-    hasura_filter_aliases = {
+    hasura_aliases = {
         "workflow_name": "group__step_run__run__version__workflow__name",
         "node_key": "group__step_run__node_key",
     }

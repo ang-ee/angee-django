@@ -63,7 +63,7 @@ export type Fill = (typeof FILLS)[number];
 // is written. The `solid` column below and solid marks elsewhere (status dots,
 // slider indicators) both read it via `toneSolidBg`, so they can't drift.
 const SOLID_BG: Record<Tone, string> = {
-  neutral: "bg-fg",
+  neutral: "bg-neutral",
   brand: "bg-brand",
   accent: "bg-accent",
   info: "bg-info",
@@ -77,9 +77,19 @@ const SOLID_BG: Record<Tone, string> = {
 /** The solid-fill background utility for a tone (just the `bg-*`, no text/border).
  *  Solid marks (dots, bars) that aren't full pills read this rather than re-listing
  *  the palette. Note: a neutral *dot* stays muted (`bg-fg-muted`) — that's a mark
- *  treatment, distinct from the solid neutral chip's `bg-fg`. */
+ *  treatment, distinct from the solid neutral chip's `bg-neutral`. */
 export function toneSolidBg(tone: Tone): string {
   return SOLID_BG[tone];
+}
+
+/** Solid-fill token for SVG and inline CSS consumers of the semantic palette. */
+export function toneColorVar(tone: Tone): string {
+  return `var(--${tone})`;
+}
+
+/** Foreground token paired with a tone's solid fill. */
+export function toneOnColorVar(tone: Tone): string {
+  return tone === "neutral" ? "var(--color-fg-inverse)" : `var(--color-on-${tone})`;
 }
 
 // The tone-colored text utility per tone — the one place each on-surface
@@ -135,7 +145,7 @@ export function toneGlyph(tone: Tone): string {
 /** (tone × fill) → Tailwind classes. The single source for both axes. */
 export const toneFill: Record<Tone, Record<Fill, string>> = {
   neutral: {
-    solid: `${SOLID_BG.neutral} text-fg-inverse border-fg`,
+    solid: `${SOLID_BG.neutral} text-fg-inverse border-neutral`,
     soft: `bg-inset ${TONE_TEXT.neutral} border-border-subtle`,
     surface: `bg-sheet ${TONE_TEXT.neutral} border-border`,
     outline: `bg-transparent ${TONE_TEXT.neutral} border-border`,

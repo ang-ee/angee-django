@@ -60,7 +60,7 @@ class LiveChannelSession(LiveSession):
         if kind == "chat_titles":
             try:
                 apps.get_model("messaging", "Thread").objects.fill_chat_titles(
-                    self.bridge, payload, owner_id=self.bridge.owner_id
+                    self.bridge, payload, created_by_id=self.bridge.owner_id
                 )
             except Exception:
                 # Best-effort naming must never end the live session.

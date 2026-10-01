@@ -11,7 +11,7 @@ import httpx
 import pytest
 import strawberry
 from django.core.cache import cache
-from rebac import LocalBackend, ObjectRef, RelationshipTuple, SubjectRef
+from rebac import ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
 
 from angee.operator import daemon as daemon_module
@@ -19,6 +19,7 @@ from angee.operator import schema as operator_schema
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
 from angee.operator.models import OperatorConnection as _AbstractOperatorConnection
 from angee.operator.models import OperatorRole as _AbstractOperatorRole
+from angee.testing.permissions import install_permission_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -605,8 +606,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
     reader = next(relation for relation in connection.relations if relation.name == "reader")
     assert reader.backing == ConstBinding(target_id="operator_admin")
 
-    backend = LocalBackend()
-    backend.set_schema(schema)
+    backend = install_permission_schema(schema)
     operator = SubjectRef.of("auth/user", "operator-1")
     connection_ref = ObjectRef("operator/connection", "default")
 

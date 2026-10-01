@@ -116,6 +116,21 @@ def canonical_record_model(model: type[models.Model]) -> type[models.Model]:
     return typed[-1] if typed else concrete
 
 
+def is_record_target_model(model: type[models.Model]) -> bool:
+    """Whether rows of ``model`` can be targets of a polymorphic record edge.
+
+    Edges that name a record by canonical target (knowledge bindings, decision
+    evidence) admit only records with a REBAC type, so only such models — and their
+    MTI children and proxies — need delete-time care for those edges. A model with
+    several concrete MTI parents has no canonical target, so it carries none.
+    """
+
+    try:
+        return model_resource_type(canonical_record_model(model)) is not None
+    except ValueError:
+        return False
+
+
 def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models.Model], ...]:
     """Return direct, installed MTI children in stable model-label order."""
 
@@ -209,7 +224,7 @@ class RecordRefMixin(models.Model):
                     f"{cls._meta.label} must declare exactly one GenericForeignKey for RecordRefMixin; "
                     f"found {len(references)}.",
                     obj=cls,
-                    id="angee.E022",
+                    id="angee.E029",
                 )
             )
         if hasattr(cls, "record_ref_field_prefix"):
@@ -218,7 +233,7 @@ class RecordRefMixin(models.Model):
                     f"{cls._meta.label}.record_ref_field_prefix is obsolete; "
                     "the GenericForeignKey owns its field names.",
                     obj=cls,
-                    id="angee.E023",
+                    id="angee.E030",
                 )
             )
         return errors

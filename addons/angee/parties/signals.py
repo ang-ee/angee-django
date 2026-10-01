@@ -1,4 +1,4 @@
-"""Parties-owned signal receivers that keep the derived contact counters honest.
+"""Parties-owned identity links and derived contact-counter receivers.
 
 ``Handle.party`` (the resolved owner) and ``Party.handle_count`` are derived facts
 the managers/mixin maintain on every supported save path (``link`` / ``confirm`` /
@@ -19,9 +19,11 @@ from typing import Any
 
 from django.apps import apps
 from django.db import transaction
-from django.db.models.signals import class_prepared, post_delete
+from django.db.models.signals import post_delete
 from rebac import system_context
 
+from angee.base.signals import connect_for_models
+from angee.iam.events import person_created
 from angee.parties.models import Handle, PartyHandle
 
 _DISPATCH_PREFIX = "parties.counters"
@@ -29,32 +31,21 @@ logger = logging.getLogger(__name__)
 
 
 def connect() -> None:
-    """Wire counter-integrity receivers onto every concrete Handle/PartyHandle model."""
+    """Wire person creation and concrete Handle/PartyHandle counter receivers."""
 
-    for model in apps.get_models():
-        _bind(model)
-    # Models prepared after app population — e.g. test-defined concrete models — bind
-    # as their class finalizes, so the receivers cover them too.
-    class_prepared.connect(_on_class_prepared, dispatch_uid=f"{_DISPATCH_PREFIX}.class_prepared")
-
-
-def _on_class_prepared(sender: Any, **kwargs: Any) -> None:
-    """Bind receivers onto a newly prepared concrete Handle/PartyHandle model."""
-
-    del kwargs
-    _bind(sender)
+    person_created.connect(_link_person, dispatch_uid="parties.person_created")
+    connect_for_models(post_delete, _resolve_from_link, applies=lambda model: issubclass(model, PartyHandle),
+                       dispatch_uid=f"{_DISPATCH_PREFIX}.phdel")
+    connect_for_models(post_delete, _recount_handle_party, applies=lambda model: issubclass(model, Handle),
+                       dispatch_uid=f"{_DISPATCH_PREFIX}.hdel")
 
 
-def _bind(model: Any) -> None:
-    """Connect the counter receivers to one concrete Handle or PartyHandle model."""
+def _link_person(sender: Any, instance: Any, **kwargs: Any) -> None:
+    """Create the account's person in IAM's transaction, including on replay."""
 
-    if model._meta.abstract:
-        return
-    label = model._meta.label_lower
-    if issubclass(model, PartyHandle):
-        post_delete.connect(_resolve_from_link, sender=model, dispatch_uid=f"{_DISPATCH_PREFIX}.phdel.{label}")
-    elif issubclass(model, Handle):
-        post_delete.connect(_recount_handle_party, sender=model, dispatch_uid=f"{_DISPATCH_PREFIX}.hdel.{label}")
+    del sender, kwargs
+    with system_context(reason="parties.person_created"):
+        apps.get_model("parties", "Party").objects.for_user(instance)
 
 
 def _resolve_from_link(sender: Any, instance: Any, **kwargs: Any) -> None:

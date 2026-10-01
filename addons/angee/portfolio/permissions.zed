@@ -1,32 +1,29 @@
 // Authorization schema for workspace-visible portfolio strategy.
 // @rebac_package: portfolio
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 4
 
 definition portfolio/role {
     relation member:   auth/user | auth/group#member | angee/role:admin#member
-    relation includes: portfolio/role
     relation admin:    angee/role // rebac:const=admin
 
-    permission effective_member = member + includes->effective_member + admin->member
+    permission effective_member = member + admin->member
 }
 
 definition portfolio/product {
-    relation reader:  auth/user:*
     relation manager: portfolio/role // rebac:const=portfolio_admin
 
     permission create = manager->effective_member
-    permission read   = reader + manager->effective_member
+    permission read   = authenticated + manager->effective_member
     permission write  = manager->effective_member
     permission delete = manager->effective_member
 }
 
 definition portfolio/initiative {
-    relation reader:  auth/user:*
     relation manager: portfolio/role // rebac:const=portfolio_admin
 
     permission create = manager->effective_member
-    permission read   = reader + manager->effective_member
+    permission read   = authenticated + manager->effective_member
     permission write  = manager->effective_member
     permission delete = manager->effective_member
 }
@@ -34,11 +31,10 @@ definition portfolio/initiative {
 definition portfolio/initiative_project {
     relation initiative: portfolio/initiative // rebac:field=initiative
     relation project:    projects/project      // rebac:field=project
-    relation reader:     auth/user:*
     relation manager:    portfolio/role // rebac:const=portfolio_admin
 
     permission create = manager->effective_member
-    permission read   = reader + manager->effective_member
+    permission read   = authenticated + manager->effective_member
     permission write  = manager->effective_member
     permission delete = manager->effective_member
 }
@@ -49,22 +45,20 @@ definition portfolio/initiative_project {
 definition portfolio/update {
     relation project:    projects/project
     relation initiative: portfolio/initiative
-    relation reader:     auth/user:*
     relation manager:    portfolio/role // rebac:const=portfolio_admin
 
     permission create = project->write + initiative->write + manager->effective_member
-    permission read   = reader + manager->effective_member
+    permission read   = authenticated + manager->effective_member
     permission write  = project->write + initiative->write + manager->effective_member
     permission delete = project->write + initiative->write + manager->effective_member
 }
 
 definition portfolio/release {
     relation product: portfolio/product // rebac:field=product
-    relation reader:  auth/user:*
     relation manager: portfolio/role // rebac:const=portfolio_admin
 
     permission create = manager->effective_member
-    permission read   = reader + manager->effective_member
+    permission read   = authenticated + manager->effective_member
     permission write  = manager->effective_member
     permission delete = manager->effective_member
 }

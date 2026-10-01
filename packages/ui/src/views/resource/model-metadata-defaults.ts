@@ -19,6 +19,7 @@ import type { WidgetOption } from "../../widgets";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { titleCase } from "../../lib/titleCase";
 import { enumValueLabel, groupFieldLabel } from "../../lib/labels";
+import { isTone, type Tone } from "../../lib/tones";
 
 /** A form field's resolved relation target — which model the picker lists, its
  * display field, and whether the related model can be created inline. */
@@ -226,7 +227,7 @@ const ENUM_OPTION_WIDGETS = new Set([
   "colorDot",
 ]);
 
-/** Apply metadata-derived column labels and enum options without overriding props. */
+/** Apply metadata defaults and scoped vocabulary, retaining authored column identity. */
 export function columnsWithMetadataDefaults<TRow extends object>(
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
@@ -235,9 +236,14 @@ export function columnsWithMetadataDefaults<TRow extends object>(
   return columns.map((column) => {
     const field = metadata?.fields[column.field];
     const options = enumOptions(field);
-    // A relation-terminal column names a GraphQL object or object list, neither
-    // selectable as a leaf. The metadata owner supplies identity and display
-    // paths; a to-one cell reads the label path and a to-many cell renders records.
+    const widget = column.widget ?? (field?.kind === "enum" ? "statusBadge" : field?.widget);
+    const vocabularyTones = field?.tones
+      ? Object.fromEntries(Object.entries(field.tones).filter((entry): entry is [string, Tone] => isTone(entry[1])))
+      : undefined;
+    // A relation-terminal column (`product` or `project.product`) names a GraphQL
+    // object, which cannot be selected as a leaf. The metadata owner resolves its
+    // id + record-representation leaves and the scalar display path, so the query
+    // selects `{ product { id name } }` and the cell reads `product.name`.
     const relationRepresentation = metadata
       ? relationRepresentationForPath(
           column.field,
@@ -250,7 +256,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       : relationRepresentation?.displayPath ?? null;
     return {
       ...column,
-      ...(relationLabelField ? { field: relationLabelField } : {}),
+      ...(relationLabelField ? { id: column.id ?? column.field, field: relationLabelField } : {}),
       ...(relationRepresentation
         ? { selectionPaths: [...new Set([...relationRepresentation.selectionPaths, ...(column.selectionPaths ?? [])])] }
         : {}),
@@ -258,23 +264,24 @@ export function columnsWithMetadataDefaults<TRow extends object>(
         ? { relationList: relationRepresentation.relationList, interactive: column.interactive ?? true }
         : {}),
       header: fieldLabel(column.field, field, column.header),
-      // A bare column inherits the backend's explicit widget (e.g. `"money"` over a
-      // Decimal), so its cell renders through the registered widget instead of the raw
-      // scalar. Only the explicit backend widget is inherited — kind/scalar-derived
-      // defaults stay out, because list cells render enums, relations, and plain
-      // scalars natively (unlike a form, which needs an edit widget per field). A
+      // A bare enum uses the badge; other columns inherit only the backend's
+      // explicit widget (e.g. `"money"` over a Decimal). Scalar and relation
+      // cells otherwise render natively. A
       // relation resolved to its label path renders the scalar label as text, so it
       // drops the relation's `many2one` edit widget.
-      ...(!relationLabelField && column.widget === undefined && field?.widget
-        ? { widget: field.widget }
+      ...(!relationLabelField && column.widget === undefined && widget
+        ? { widget }
         : {}),
       ...(column.currencyField === undefined && field?.currencyField
         ? { currencyField: field.currencyField }
         : {}),
       ...(column.options === undefined &&
-      isEnumOptionWidget(column.widget ?? (!relationLabelField ? field?.widget ?? undefined : undefined)) &&
+      isEnumOptionWidget(widget ?? undefined) &&
       options.length > 0
         ? { options }
+        : {}),
+      ...(column.tone === undefined && vocabularyTones
+        ? { tone: vocabularyTones }
         : {}),
     };
   });
@@ -316,13 +323,13 @@ export function fieldsWithMetadataDefaults(
   });
 }
 
-/** Resolve a field label from explicit props, resource metadata, then title-case. */
+/** Scoped vocabulary wins over authored labels; otherwise use the title-case default. */
 export function fieldLabel(
   name: string,
   metadata: ModelFieldMetadata | undefined,
   explicit?: ReactNode,
 ): ReactNode {
-  return explicit ?? titleCase(name);
+  return metadata?.label ?? explicit ?? titleCase(name);
 }
 
 /** Resolve a grouping-field label from resource metadata, then field text. */
@@ -330,7 +337,7 @@ export function resourceFieldGroupLabel(
   name: string,
   metadata: ModelFieldMetadata | undefined,
 ): string {
-  return groupFieldLabel(name);
+  return metadata?.label ?? groupFieldLabel(name);
 }
 
 /** Return enum widget options for a metadata field, or an empty list. */

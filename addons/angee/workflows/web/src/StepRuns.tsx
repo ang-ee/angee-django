@@ -56,7 +56,7 @@ export function StepRuns({ runId }: { runId: string }) {
       <Field name="is_mapped" hidden />
       <Field name="is_map" hidden />
       <Field name="node_label" title />
-      <Field name="status" widget="statusbar" />
+      <Field name="status" widget="statusbar" status />
       <Group columns={2}>
         <Field name="map_index" label={t("step.mapIndex")} showWhen={(row) => row.is_mapped === true} />
         <Field name="map_settled" label={t("step.mapSettled")} showWhen={(row) => row.is_map === true} />
@@ -69,10 +69,10 @@ export function StepRuns({ runId }: { runId: string }) {
       </Group>
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
-      <Action id="retry" label={t("action.retry_step")} primary run={retry}
+      <Action id="retry" label={t("action.retry_step")} placement="toolbar" primary run={retry}
         visibleWhen={(row) => row.can_retry === true && row.requires_duplicate_acknowledgement !== true}
         confirm={{ title: t("action.retry_step"), body: t("action.retryDescription") }} />
-      <Action id="retry-duplicate" label={t("action.retry_step_accepting_duplicate")} primary danger
+      <Action id="retry-duplicate" label={t("action.retry_step_accepting_duplicate")} placement="toolbar" primary danger
         visibleWhen={(row) => row.can_retry === true && row.requires_duplicate_acknowledgement === true}
         args={acknowledgement}
         submit={(_values, { record }) => typeof record?.id === "string" ? retryDuplicate(record.id) : null} />

@@ -21,7 +21,9 @@ export function useProposalFormDeclaration(): React.ReactElement {
   return (
     <Form resource={PROPOSAL_MODEL} layout="tabs" actions={actions}>
       <Field name="display_name" title readOnly />
-      <Field name="state" widget="statusbar" readOnly />
+      <Field name="permissions" hidden readOnly />
+      <Field name="revision" hidden readOnly />
+      <Field name="state" widget="statusbar" status readOnly />
       <Group label={t("proposal.group.identity")} columns={2}>
         <Field name="round" createOnly />
         <Field name="responder" createOnly />
@@ -30,6 +32,7 @@ export function useProposalFormDeclaration(): React.ReactElement {
         <Field name="track" readOnly />
       </Group>
       <Group label={t("proposal.group.offer")} columns={2}>
+        <Field name="statement" widget="markdown.editor" />
         <Field name="cost" />
         <Field name="currency" />
         <Field name="staffing" />
@@ -39,6 +42,10 @@ export function useProposalFormDeclaration(): React.ReactElement {
         <Field name="valid_until" />
       </Group>
       <Group label={t("proposal.group.receipts")} columns={2}>
+        <Field name="disclosed_at" readOnly />
+        <Field name="track_published_at" readOnly />
+        <Field name="retired_at" readOnly />
+        <Field name="retired_by" readOnly />
         <Field name="submitted_at" readOnly />
         <Field name="submitted_by" readOnly />
         <Field name="decided_at" readOnly />

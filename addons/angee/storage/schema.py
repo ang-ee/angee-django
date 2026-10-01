@@ -8,37 +8,45 @@ from urllib.parse import urlencode
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.urls import reverse
-from rebac import ObjectRef, system_context
+from graphql import GraphQLError
+from rebac import ObjectRef, PermissionDenied, system_context
+from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
+from angee.base.identity import instance_from_public_id
+from angee.base.refs import canonical_record_target
+from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
     require_instance_for_id,
-    require_public_id,
-    to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.permissions import RolePermission
+from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
-from angee.storage.models import UploadState
+from angee.storage.models import FileVisibility, UploadState
 
 Backend = apps.get_model("storage", "Backend")
 Drive = apps.get_model("storage", "Drive")
 Folder = apps.get_model("storage", "Folder")
 MimeType = apps.get_model("storage", "MimeType")
 File = apps.get_model("storage", "File")
+FileAttachment = apps.get_model("storage", "FileAttachment")
 
 _STORAGE_ADMIN_ROLE = ObjectRef("storage/role", "storage_admin")
 """Role whose effective members may manage backends and drives."""
+
+strawberry.enum(cast(Any, FileVisibility))
 
 
 @strawberry_django.type(MimeType)
@@ -76,11 +84,8 @@ class DriveType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["backend_id"])
-    def backend(self) -> strawberry.ID:
-        """Return the parent backend's public id without exposing the row."""
-
-        return require_public_id(Backend, cast(Any, self).backend_id)
+    backend: strawberry.ID | None = actor_scoped_public_id("backend")
+    owns_items: auto
 
 
 @strawberry_django.type(Folder)
@@ -94,17 +99,8 @@ class FolderType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["drive_id"])
-    def drive(self) -> strawberry.ID | None:
-        """Return the drive's public id; smart folders have none."""
-
-        return to_public_id(Drive, cast(Any, self).drive_id)
-
-    @strawberry_django.field(only=["parent_id"])
-    def parent(self) -> strawberry.ID | None:
-        """Return the parent folder's public id, if any."""
-
-        return to_public_id(Folder, cast(Any, self).parent_id)
+    drive: strawberry.ID | None = actor_scoped_public_id("drive")
+    parent: strawberry.ID | None = actor_scoped_public_id("parent")
 
 
 @strawberry_django.type(File)
@@ -122,37 +118,88 @@ class FileType(AuthoredRefMixin, AngeeNode):
     size_bytes: auto
     metadata: JSON
     upload_state: auto
+    visibility: auto
     is_trashed: auto
     trashed_at: auto
     created_at: auto
     updated_at: auto
     mime_type: MimeTypeType | None
 
-    @strawberry_django.field(only=["drive_id"])
-    def drive(self) -> strawberry.ID:
-        """Return the drive's public id without exposing the drive object."""
-
-        return require_public_id(Drive, cast(Any, self).drive_id)
-
-    @strawberry_django.field(only=["folder_id"])
-    def folder(self) -> strawberry.ID | None:
-        """Return the folder's public id, if the file is in one."""
-
-        return to_public_id(Folder, cast(Any, self).folder_id)
+    drive: strawberry.ID | None = actor_scoped_public_id("drive")
+    folder: strawberry.ID | None = actor_scoped_public_id("folder")
 
     @strawberry_django.field
-    def url(self) -> str:
-        """Return the token proxy download URL for READY rows, empty otherwise.
+    def url(self, info: strawberry.Info) -> str | None:
+        """Return a READY row's download URL, empty when unready, null in previews.
 
-        Minted here in actor scope — only a reader of the row resolves this
-        field — so the URL is a short-lived capability the download view honours
-        without a second access check (see :meth:`File.download_url`).
+        The bearer token names the current actor. Download lookup re-checks
+        that actor's read permission, so revocation stops subsequent requests
+        even before the token expires (see :meth:`File.download_url`).
         """
 
+        if getattr(request_from_info(info), "view_as", None) is not None:
+            return None
         row = cast(Any, self)
         if row.upload_state != UploadState.READY:
             return ""
         return str(row.download_url())
+
+
+@strawberry.type
+class RecordFileAttachmentType:
+    """An actor-readable attachment and its independently authorized file."""
+
+    id: strawberry.ID
+    label: str
+    file: FileType
+
+
+@strawberry.type
+class RecordFilesType:
+    """The attachment capability and visible edges of one readable record."""
+
+    available: bool
+    can_upload: bool
+    attachments: list[RecordFileAttachmentType]
+
+
+@strawberry.type
+class StorageQuery:
+    """Record-scoped attachment reads shared by public and console schemas."""
+
+    @strawberry.field(name="record_files")
+    def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
+        """List file-readable edges without granting access through the target."""
+
+        try:
+            model = apps.get_model(model_label.strip())
+        except (LookupError, ValueError):
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        if model_resource_type(model) is None:
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        record = instance_from_public_id(model, str(record_id))
+        if record is None:
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        manager = FileAttachment._default_manager
+        available = manager.has_record_arm(canonical_record_target(record))
+        if not available:
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        return RecordFilesType(
+            available=True,
+            can_upload=record.has_access("write"),
+            attachments=[
+                RecordFileAttachmentType(id=strawberry.ID(str(edge.sqid)), label=edge.label, file=edge.file)
+                for edge in manager.for_record(record)
+            ],
+        )
+
+
+@strawberry.input
+class FileUploadRecordInput:
+    """The model and public identity of the upload's attachment target."""
+
+    model_label: str = strawberry.field(name="model_label")
+    record_id: PublicID = strawberry.field(name="record_id")
 
 
 @strawberry.input
@@ -166,6 +213,8 @@ class FileUploadBeginInput:
     drive_slug: str = strawberry.field(name="drive_slug", default="")
     folder: PublicID | None = None
     content_hash: str = strawberry.field(name="content_hash", default="")
+    visibility: FileVisibility = cast(FileVisibility, FileVisibility.INHERITED)
+    record: FileUploadRecordInput | None = None
 
 
 @strawberry.type
@@ -221,10 +270,12 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class FolderWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create a real folder through ``Folder.objects.create_in_drive``."""
 
         del info
+        if client_creation_key is not None:
+            raise ValidationError({"client_creation_key": "Folder creation does not support creation keys."})
         try:
             return Folder.objects.create_in_drive(
                 drive_id=str(data["drive"]),
@@ -252,12 +303,12 @@ _DRIVE_RESOURCE = hasura_model_resource(
     DriveType,
     model=Drive,
     name="drives",
-    filterable=["id", "slug", "name", "is_archived", "backend"],
+    filterable=["id", "slug", "name", "is_archived", "backend", "owns_items"],
     sortable=["slug", "name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["is_archived", "created_at"],
-    insertable=["backend", "slug", "name", "description", "prefix"],
-    updatable=["name", "description", "prefix", "is_archived"],
+    insertable=["backend", "slug", "name", "description", "prefix", "owns_items"],
+    updatable=["name", "description", "prefix", "is_archived", "owns_items"],
     field_id_decode={"backend": public_pk_decoder(Backend)},
     write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields=("backend",)),
 )
@@ -286,6 +337,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "filename",
         "title",
         "upload_state",
+        "visibility",
         "is_trashed",
         "updated_at",
         "drive",
@@ -336,6 +388,20 @@ class StorageMutation:
         """Reserve a draft file and tell the client where to send bytes."""
 
         try:
+            record = None
+            if input.record is not None:
+                try:
+                    model = apps.get_model(input.record.model_label.strip())
+                except (LookupError, ValueError) as error:
+                    raise exceptions.UploadRecordDenied() from error
+                if model_resource_type(model) is None:
+                    raise exceptions.UploadRecordDenied()
+                try:
+                    record = resolve_action_target(
+                        model, input.record.record_id, reason="storage.upload.record_target",
+                    )
+                except GraphQLError as error:
+                    raise exceptions.UploadRecordDenied() from error
             row = File.objects.draft(
                 filename=input.filename,
                 mime_type=input.mime_type,
@@ -344,6 +410,8 @@ class StorageMutation:
                 drive_slug=input.drive_slug,
                 folder_id=str(input.folder) if input.folder else "",
                 content_hash=input.content_hash,
+                visibility=input.visibility,
+                record=record,
             )
         except exceptions.UploadError as error:
             return FileUploadBeginPayload(error=str(error), error_code=error.code)
@@ -352,6 +420,18 @@ class StorageMutation:
         token = row.issue_upload_token()
         upload_url = f"{reverse('storage_upload')}?{urlencode({'token': token})}"
         return FileUploadBeginPayload(method="proxy", file=row, upload_url=upload_url, upload_token=token)
+
+    @strawberry.mutation(name="set_file_visibility")
+    @action_guard("Could not change file visibility.")
+    def set_file_visibility(self, id: PublicID, visibility: FileVisibility) -> ActionResult:
+        """Dispatch to the visibility owner with one missing-or-denied response."""
+
+        try:
+            row = resolve_action_target(File, id, reason="storage.file.visibility_target")
+            row.set_visibility(visibility)
+        except (GraphQLError, ObjectDoesNotExist, PermissionDenied) as error:
+            raise ValidationError("File is unavailable or access is denied.") from error
+        return ActionResult(ok=True, message="File visibility updated.")
 
     @strawberry.mutation(name="file_upload_finalize")
     def file_upload_finalize(self, input: FileUploadFinalizeInput) -> FileUploadFinalizePayload:
@@ -440,6 +520,8 @@ _SHARED_TYPES = [
     DriveType,
     FolderType,
     FileType,
+    RecordFileAttachmentType,
+    RecordFilesType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,
     *_MIME_TYPE_RESOURCE.types,
@@ -451,6 +533,7 @@ _SHARED_TYPES = [
 schemas = {
     "public": {
         "query": [
+            StorageQuery,
             _MIME_TYPE_RESOURCE.query,
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,
@@ -465,6 +548,7 @@ schemas = {
     },
     "console": {
         "query": [
+            StorageQuery,
             _MIME_TYPE_RESOURCE.query,
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,

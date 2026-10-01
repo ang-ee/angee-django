@@ -3,7 +3,7 @@
 import pytest
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
-from angee.base.exceptions import exception_text
+from angee.base.errors import exception_text
 
 
 @pytest.mark.parametrize("error,expected", [

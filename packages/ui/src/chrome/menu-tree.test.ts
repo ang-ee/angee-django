@@ -32,6 +32,17 @@ const MENU: readonly ChromeMenuItem[] = [
   { id: "single", label: "Single", to: "/single" },
 ];
 
+test("confinement selects one root for the rail and palette without mutating composition", () => {
+  const tree = MenuTree.from([...MENU, { id: "notes.extra", parentId: "notes", to: "/notes/extra" }]);
+  const confined = tree.confineTo("notes");
+  expect(confined.railMenuItems().map((node) => node.id)).toEqual(["notes"]);
+  expect(confined.navigableItems().map(({ item }) => item.id)).toEqual(["notes.all", "notes.archive", "notes.extra"]);
+  expect(confined.settingsEntry()).toBeUndefined();
+  expect(tree.roots).toHaveLength(3);
+  expect(() => tree.confineTo("missing")).toThrow(/Unknown menu root/);
+  expect(() => tree.confineTo("notes.all")).toThrow(/Unknown menu root/);
+});
+
 describe("resolveMenuRouteTargets", () => {
   const routeHref = createRouteHref([
     { name: "dashboards.addon", path: "/dashboards/addon/$key" },
@@ -73,6 +84,20 @@ describe("resolveMenuRouteTargets", () => {
         routeHref,
       ),
     ).toThrow(/declares internal target.*use route and params/);
+  });
+
+  test("menu view defaults are URL intent and never change path specificity", () => {
+    const tree = MenuTree.from(resolveMenuRouteTargets([{
+      id: "desk", route: "desk.home", defaultResourceView: "desk.a-long-preset-name", children: [
+        { id: "desk.notes", route: "desk.notes" },
+      ],
+    }], createRouteHref([
+      { name: "desk.home", path: "/desk" },
+      { name: "desk.notes", path: "/desk/notes" },
+    ])));
+    expect(tree.roots[0]?.target).toBe("/desk?preset=desk.a-long-preset-name");
+    expect(tree.activeItem("/desk/notes/r1")?.id).toBe("desk.notes");
+    expect(tree.activeItem("/desk")?.id).toBe("desk");
   });
 
   test("rejects params without their route owner", () => {

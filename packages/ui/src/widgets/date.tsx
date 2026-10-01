@@ -23,7 +23,7 @@ function DateEdit({
   const t = useUiT();
   const [open, setOpen] = useState(false);
   const date = dateFromValue(value);
-  const label = formatDate(date) || widgetLabel(field, t("date.select"));
+  const label = formatDate(date, { density: "full" }) || widgetLabel(field, t("date.select"));
 
   if (readOnly) return <DateRead value={value} />;
 
@@ -67,16 +67,23 @@ function DateRead({
   value,
 }: WidgetRenderProps<DateWidgetValue>): ReactElement {
   const date = dateFromValue(value);
-  const label = formatDate(date);
+  const label = formatDate(date, { density: "full" });
   return (
-    <span className="text-13 tabular-nums text-fg" title={valueLabel(value)}>
-      {label}
+    <span className="text-13 tabular-nums text-fg" title={label || valueLabel(value)}>
+      {label || "—"}
     </span>
   );
+}
+
+function DateCell({ value }: WidgetRenderProps<DateWidgetValue>): ReactElement {
+  const date = dateFromValue(value);
+  return <span className="tabular-nums" title={formatDate(date, { density: "full" })}>
+    {formatDate(date, { density: "list" }) || "—"}
+  </span>;
 }
 
 export const dateWidget = {
   edit: DateEdit,
   read: DateRead,
-  cell: DateRead,
+  cell: DateCell,
 } satisfies WidgetDefinition<DateWidgetValue>;

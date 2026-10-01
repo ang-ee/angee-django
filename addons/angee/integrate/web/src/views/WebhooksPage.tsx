@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useRecordActionMutation, type ActionContext } from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, useRecordAction, useRecordActionMutation, type RecordActionRunner } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -20,11 +20,9 @@ const webhookList = (
 export function WebhooksPage(): React.ReactElement {
   const t = useIntegrateT();
   const [sendTest] = useRecordActionMutation<ActionFieldName>("test_webhook_delivery");
-  const [rotateSecret] = useAuthoredMutation(RotateWebhookSecret);
-  const rotate = React.useCallback(
-    async (ctx: ActionContext) => {
-      const id = recordActionId(ctx);
-      if (!id) return;
+  const [rotateSecret] = useAuthoredMutation(RotateWebhookSecret, { transient: true });
+  const rotateById = React.useCallback<RecordActionRunner>(
+    async (id, ctx) => {
       const result = await rotateSecret({ id });
       const outcome = result?.rotate_webhook_secret;
       if (outcome && !outcome.ok)
@@ -40,6 +38,7 @@ export function WebhooksPage(): React.ReactElement {
               label: t("webhooks.signingSecret"),
               defaultValue: secret,
               readOnly: true,
+              copyable: true,
             },
           ],
         });
@@ -48,6 +47,7 @@ export function WebhooksPage(): React.ReactElement {
     },
     [rotateSecret, t],
   );
+  const rotate = useRecordAction(rotateById);
 
   return (
     <ResourceList resource={MODEL} placement="inline" routed>

@@ -7,14 +7,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import reversion
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
+from reversion.models import Version
 
 from angee.addons import addon_manifest
+from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeModel
 from angee.base.tiers import ResourceTier
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
@@ -29,6 +32,7 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 
@@ -683,6 +687,42 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
         assert second.created == 0
         assert second.updated == 0
         assert second.skipped == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_import_records_native_revisions(tmp_path: Path) -> None:
+    """A seeded revisioned row has a history entry after the import transaction."""
+
+    class RevisionImportRow(RevisionMixin, AngeeModel):
+        title = models.CharField(max_length=80)
+        revisioned_fields = ("title",)
+
+        class Meta:
+            app_label = "base"
+            rebac_resource_type = "base/revision-import-row"
+
+    class RevisionLedger(Resource):
+        class Meta(Resource.Meta):
+            app_label = "base"
+            abstract = False
+
+    (tmp_path / "010_base.revisionimportrow.csv").write_text(
+        "_xref,title\nfirst,Initial\n", encoding="utf-8",
+    )
+    owner = addon(tmp_path, manifest={"master": ({"path": "010_base.revisionimportrow.csv"},)})
+    reversion.register(RevisionImportRow, fields=RevisionImportRow.revisioned_fields)
+    try:
+        with model_tables((RevisionImportRow, RevisionLedger)):
+            RevisionLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+            with system_context(reason="revision import assertion"):
+                row = RevisionImportRow.objects.get(title="Initial")
+            versions = Version.objects.get_for_object(row)
+            assert versions.count() == 1
+            assert versions.first().field_dict["title"] == "Initial"
+            RevisionLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+            assert Version.objects.get_for_object(row).count() == 1
+    finally:
+        reversion.unregister(RevisionImportRow)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2149,6 +2189,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     ],
     ids=["shared", "child-only", "different-subject", "field-backed", "const-backed"],
 )
+@pytest.mark.django_db(transaction=True)
 def test_mti_grants_follow_ancestor_relation_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_relation: str, expected_parent: bool
 ) -> None:
@@ -2161,14 +2202,14 @@ def test_mti_grants_follow_ancestor_relation_contract(
     from angee.resources import grants
 
     active = LocalBackend()
-    active.set_schema(parse_zed(f"""
+    install_permission_schema(parse_zed(f"""
         definition auth/user {{}}
         definition auth/group {{ relation member: auth/user }}
         definition mtidemo/parent {{
             {parent_relation}
         }}
         definition mtidemo/child {{ relation reviewer: auth/user }}
-    """))
+    """), active=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     subject = SubjectRef.of("auth/user", "2")
     # Xref resolution and real MTI identity enumeration are covered by the
@@ -2199,11 +2240,11 @@ def test_invalid_explicit_mti_grant_still_fails_native_validation(
     from angee.resources import grants
 
     active = LocalBackend()
-    active.set_schema(parse_zed("""
+    install_permission_schema(parse_zed("""
         definition auth/user {}
         definition mtidemo/parent {}
         definition mtidemo/child {}
-    """))
+    """), active=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     monkeypatch.setattr(grants, "backend", lambda: active)
     monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])

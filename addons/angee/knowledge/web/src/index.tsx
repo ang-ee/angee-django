@@ -5,7 +5,12 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 
 import { enKnowledgeMessages } from "./i18n";
+import { recordPagesContribution } from "./RecordPagesPane";
 import { vaultCreateForm } from "./views/vault-form";
+
+export { KnowledgePageView, type KnowledgePageViewProps } from "./KnowledgePageView";
+export { RecordPagesPane, recordPagesContribution, recordPagesTarget, type RecordPagesContributionOptions, type RecordPagesTarget } from "./RecordPagesPane";
+export { RecordNotesStream, recordNotesContribution, type RecordNotesStreamProps, type RecordNotesContributionOptions } from "./RecordNotesStream";
 
 const KNOWLEDGE_ID = "knowledge";
 
@@ -39,6 +44,7 @@ const knowledge = defineBaseAddon({
   routes: knowledgeRoutes,
   menus: knowledgeMenu,
   i18n: { knowledge: enKnowledgeMessages },
+  chatter: [recordPagesContribution()],
   // The Vault create form, used wherever a vault is created (the wiki's
   // relation-picker inline create resolves it via the model name).
   forms: { "knowledge.Vault": vaultCreateForm },

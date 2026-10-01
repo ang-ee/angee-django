@@ -107,6 +107,9 @@
   --tooltip-bg:        var(--n-900);
   --tooltip-fg:        var(--n-0);
 
+  /* Solid neutral fill */
+  --neutral:           var(--n-900);
+
   /* Text */
   --text-primary:      var(--n-900);
   --text-secondary:    var(--n-700);
@@ -324,6 +327,8 @@
   --surface-overlay:   color-mix(in oklab, var(--black) 65%, transparent);
   --surface-popover:   var(--n-875);
   --surface-inset:     var(--n-825);
+
+  --neutral:           var(--n-125);
 
   --text-primary:      var(--n-125);
   --text-secondary:    var(--n-225);

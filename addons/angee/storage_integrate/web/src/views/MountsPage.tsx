@@ -1,20 +1,17 @@
-import { IntegrationSyncColumns, IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
+import { IntegrationSyncColumns } from "@angee/integrate";
 import {
   Column,
-  Field,
-  Form,
   List,
   ResourceList,
-  registerForm,
   SlotOutlet,
   useSlot,
-  type RegisteredFormProps,
 } from "@angee/ui";
 import * as React from "react";
 
 import { MOUNT_MODEL } from "../documents";
 import { useStorageIntegrateT } from "../i18n";
 import { STORAGE_MOUNT_TOOLBAR_SLOT } from "../slots";
+import { mountForm } from "./MountForm";
 
 /** Local and future vendor-backed external storage mounts. */
 export function MountsPage(): React.ReactElement {
@@ -39,23 +36,3 @@ export function MountsPage(): React.ReactElement {
     </ResourceList>
   );
 }
-
-function MountForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
-  const t = useStorageIntegrateT();
-  const syncAction = useIntegrationSyncAction("sync_mount", t("mount.action.sync"));
-  return (
-      <Form {...props} resource={MOUNT_MODEL}>
-        <Field name="display_name" title readOnly />
-        <Field name="mode" readOnly />
-        <Field name="backend_class" readOnly />
-        <Field name="drive" readOnly />
-        <Field name="lifecycle" readOnly />
-        <Field name="runtime_status" widget="colorDot" readOnly />
-        <Field name="config" widget="json" readOnly />
-        {IntegrationSyncFields({ label: t("mount.group.sync") })}
-        {syncAction}
-      </Form>
-  );
-}
-
-export const mountForm = registerForm(MOUNT_MODEL, MountForm);

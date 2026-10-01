@@ -8,7 +8,7 @@ definition notes/role {
 }
 
 definition notes/note {
-    relation owner: auth/user // rebac:field=created_by
+    relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     // Assignment is standing evidence access; the review step writes no grants.
@@ -29,6 +29,8 @@ definition notes/note {
     permission write  = owner + editor + trigger_editor->member + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 
     // Owners alone see the personal flags; readers get the rest of the note.
     permission read__is_starred  = owner

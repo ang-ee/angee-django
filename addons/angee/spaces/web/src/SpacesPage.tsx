@@ -1,4 +1,7 @@
 import * as React from "react";
+import { useGroupRecordTabs } from "./group-record-tabs";
+import type { DocumentType } from "@angee/gql/console";
+import { holdsPermission } from "@angee/metadata";
 import {
   Action,
   Button,
@@ -20,16 +23,17 @@ import {
   type DescriptorField,
   type MutationDialogValues,
   type RecordPanelContext,
-  type RecordTabDescriptor,
   type RowActionDeclaration,
   type StringIdRow,
   useAuthoredResourceMutation,
+  useEnumOptions,
 } from "@angee/ui";
 import { ThreadTranscript } from "@angee/messaging";
 
 import {
   AddSpaceMembership,
   RemoveSpaceMembership,
+  SetMembershipNotifications,
   SPACE_MEMBERSHIP_INVALIDATES,
   UpdateSpaceMembershipRole,
 } from "./documents";
@@ -37,12 +41,17 @@ import { useSpacesT } from "./i18n";
 
 const MODEL = "spaces.Group";
 
-type MembershipRow = StringIdRow;
+type MembershipNotifications = DocumentType<typeof SetMembershipNotifications>["set_membership_notifications"];
+interface MembershipRow extends StringIdRow {
+  permissions?: readonly string[];
+  notification_policy?: MembershipNotifications["notification_policy"];
+  subtype_keys?: MembershipNotifications["subtype_keys"];
+}
 interface SpaceThreadRow extends StringIdRow {
   title?: { text?: string | null } | null;
   groups?: ReadonlyArray<{ id?: string | null; name?: string | null } | null> | null;
 }
-type SpaceMembershipRole = "OWNER" | "MODERATOR" | "MEMBER" | "VIEWER";
+type SpaceMembershipRole = DocumentType<typeof AddSpaceMembership>["add_space_membership"]["role"];
 
 /** Narrow a dialog value onto the wire's MembershipRole enum, defaulting MEMBER. */
 function membershipRole(value: unknown): SpaceMembershipRole {
@@ -87,10 +96,11 @@ function threadColumns(
   ];
 }
 
-function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
+export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [addOpen, setAddOpen] = React.useState(false);
   const [roleRow, setRoleRow] = React.useState<MembershipRow | null>(null);
+  const [notificationRow, setNotificationRow] = React.useState<MembershipRow | null>(null);
   const [add, addState] = useAuthoredResourceMutation(AddSpaceMembership, {
     invalidateModels: SPACE_MEMBERSHIP_INVALIDATES,
   });
@@ -98,15 +108,27 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
     UpdateSpaceMembershipRole,
     { invalidateModels: SPACE_MEMBERSHIP_INVALIDATES },
   );
-  const busy = addState.fetching || updateState.fetching;
-  const roleOptions = React.useMemo(
-    () => [
-      { value: "OWNER", label: t("group.roster.role.owner") },
-      { value: "MODERATOR", label: t("group.roster.role.moderator") },
-      { value: "MEMBER", label: t("group.roster.role.member") },
-      { value: "VIEWER", label: t("group.roster.role.viewer") },
-    ],
-    [t],
+  const [setNotifications, notificationState] = useAuthoredResourceMutation(
+    SetMembershipNotifications,
+    { invalidateModels: SPACE_MEMBERSHIP_INVALIDATES },
+  );
+  const busy = addState.fetching || updateState.fetching || notificationState.fetching;
+  const roleOptions = useEnumOptions("spaces.Membership", "role", { casing: "upper" });
+  const availableRoles = form.displayRecord?.membership_roles;
+  const addRoleOptions = React.useMemo(
+    () => roleOptions.filter((option) => Array.isArray(availableRoles) && availableRoles.includes(option.value)),
+    [availableRoles, roleOptions],
+  );
+  const policyOptions = useEnumOptions("spaces.Membership", "notification_policy", { casing: "upper" });
+  const notificationFields = React.useMemo<readonly DescriptorField[]>(
+    () => [{
+      name: "policy",
+      label: t("group.roster.notifications"),
+      widget: "select",
+      options: policyOptions,
+      required: true,
+    }],
+    [policyOptions, t],
   );
   const addFields = React.useMemo<readonly DescriptorField[]>(
     () => [
@@ -120,11 +142,11 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
         name: "role",
         label: t("group.roster.role"),
         widget: "select",
-        options: roleOptions,
+        options: addRoleOptions,
         required: true,
       },
     ],
-    [roleOptions, t],
+    [addRoleOptions, t],
   );
   const roleFields = React.useMemo<readonly DescriptorField[]>(
     () => [
@@ -156,6 +178,7 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
         label: t("group.roster.changeRole"),
         icon: "pencil",
         variant: "ghost",
+        visible: (row: MembershipRow) => holdsPermission(row, "write__role"),
         disabled: () => busy,
         pendingPolicy: "disable-actions",
         onSelect: (row: MembershipRow) => setRoleRow(row),
@@ -178,8 +201,20 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
         },
         icon: "trash",
         variant: "ghost",
+        visible: (row: MembershipRow) => holdsPermission(row, "delete"),
         disabled: () => busy,
         pendingPolicy: "disable-actions",
+      }),
+      defineRowAction({
+        kind: "page",
+        id: "set-membership-notifications",
+        label: t("group.roster.notifications"),
+        icon: "bell",
+        variant: "ghost",
+        visible: (row: MembershipRow) => holdsPermission(row, "set_notifications"),
+        disabled: () => busy,
+        pendingPolicy: "disable-actions",
+        onSelect: (row: MembershipRow) => setNotificationRow(row),
       }),
     ],
     [busy, t],
@@ -189,24 +224,31 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
       <ListView<MembershipRow>
         resource="spaces.Membership"
         scope="local"
-        fields={["id", "party.display_name", "role", "is_confirmed", "source", "created_at"]}
+        fields={[
+          "id", "party.display_name", "role", "is_confirmed", "source", "created_at",
+          "permissions", "notification_policy", "subtype_keys",
+        ]}
         baseFilter={{ group: { exact: recordId } }}
         columns={columns}
         rowActions={rowActions}
         toolbarActions={
-          <Button type="button" variant="primary" size="sm" onClick={() => setAddOpen(true)}>
-            <Glyph decorative name="plus" />
-            {t("group.roster.add")}
-          </Button>
+          addRoleOptions.length > 0 && (
+            <Button type="button" variant="primary" size="sm" disabled={busy} onClick={() => setAddOpen(true)}>
+              <Glyph decorative name="plus" />
+              {t("group.roster.add")}
+            </Button>
+          )
         }
         emptyContent={t("group.roster.empty")}
       />
       <MutationDialog
-        open={addOpen}
+        open={addOpen && addRoleOptions.length > 0}
         onOpenChange={setAddOpen}
         title={t("group.roster.add")}
         fields={addFields}
-        initialValues={{ role: "MEMBER" }}
+        initialValues={{
+          role: addRoleOptions.find((option) => option.value === "MEMBER")?.value ?? addRoleOptions[0]?.value,
+        }}
         submitLabel={t("group.roster.add")}
         submittingLabel={t("group.roster.adding")}
         errorFallback={t("group.roster.addError")}
@@ -241,6 +283,28 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
         })}
         onSubmitted={() => setRoleRow(null)}
       />
+      <MutationDialog
+        open={notificationRow !== null}
+        onOpenChange={(open) => {
+          if (!open) setNotificationRow(null);
+        }}
+        title={t("group.roster.notifications")}
+        fields={notificationFields}
+        initialValues={{ policy: notificationRow?.notification_policy }}
+        submitLabel={t("group.roster.saveNotifications")}
+        submittingLabel={t("group.roster.savingRole")}
+        errorFallback={t("group.roster.notificationsError")}
+        parseValues={parseNotificationValues}
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await setNotifications({
+            id: notificationRow?.id ?? "",
+            policy: values.policy,
+            subtype_keys: notificationRow?.subtype_keys ?? [],
+          }),
+        })}
+        onSubmitted={() => setNotificationRow(null)}
+      />
     </>
   );
 }
@@ -258,7 +322,17 @@ function parseMembershipRoleValues(values: MutationDialogValues) {
   return { role: membershipRole(values.role).toLowerCase() };
 }
 
-function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
+function parseNotificationValues(
+  values: MutationDialogValues,
+): { policy: MembershipNotifications["notification_policy"] } {
+  const policy = mutationDialogValueCodecs.requiredString(values.policy, "policy");
+  if (policy !== "INBOX" && policy !== "EMAIL" && policy !== "MUTED") {
+    throw new TypeError("Select a valid notification policy.");
+  }
+  return { policy };
+}
+
+export function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
   const [selectedThread, setSelectedThread] = React.useState<{
     groupId: string;
@@ -305,25 +379,10 @@ function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   );
 }
 
-function groupRecordTabs(t: ReturnType<typeof useSpacesT>): readonly RecordTabDescriptor[] {
-  return [
-    {
-      id: "roster",
-      label: t("group.tabs.roster"),
-      render: (context) => <GroupRosterTab {...context} />,
-    },
-    {
-      id: "threads",
-      label: t("group.tabs.threads"),
-      render: (context) => <GroupThreadsTab {...context} />,
-    },
-  ];
-}
-
 /** Shared spaces compose the common resource list, roster list, and messaging thread detail. */
 export function SpacesPage(): React.ReactElement {
   const t = useSpacesT();
-  const tabs = React.useMemo(() => groupRecordTabs(t), [t]);
+  const tabs = useGroupRecordTabs();
   return (
     <ResourceList resource={MODEL} placement="inline" routed recordTabs={tabs}>
       <List resource={MODEL}>
@@ -332,7 +391,7 @@ export function SpacesPage(): React.ReactElement {
         <Column field="visibility" header={t("group.visibility")} />
         <Column field="created_at" />
       </List>
-      <Form resource={MODEL}>
+      <Form resource={MODEL} returning={["permissions", "membership_roles"]}>
         <Field name="name" title />
         <Group label={t("group.details")} columns={2}>
           <Field name="slug" />

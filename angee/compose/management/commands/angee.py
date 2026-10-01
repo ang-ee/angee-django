@@ -178,7 +178,7 @@ class Command(BaseCommand):
             ["migrate", "--noinput", "--skip-checks"],
             ["reconcile_permissions"],
             rebac_sync,
-            ["check"],
+            ["check", "--database", "default"],
             resources_load,
             ["schema"],
         ]

@@ -171,8 +171,8 @@ class ProjectContract:
         if "DATABASE_URL" in os.environ:
             database = self.env.db()
             if "postgresql" in database.get("ENGINE", ""):
-                # Permission scopes compile to large predicates; PostgreSQL's JIT
-                # spends seconds compiling them for millisecond queries.
+                # Permission reads may embed many index lookups; fresh-table
+                # estimates can make PostgreSQL JIT slower than the query.
                 options = database.setdefault("OPTIONS", {})
                 options.setdefault("options", "-c jit=off")
                 pool_default = environ.Env.parse_value(seed.get("ANGEE_DB_POOL", False), bool)

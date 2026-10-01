@@ -45,8 +45,9 @@ definition scopedemo/projection_doc {
 }
 
 definition scopedemo/shared_doc {
-    relation shared: auth/user:*
+    relation shared: scopedemo/shared_doc // rebac:const={"target_id":"shared","filters":{"is_shared":true}}
 
-    permission create = shared
-    permission read = shared
+    permission shared_reader = authenticated
+    permission create = shared->shared_reader
+    permission read = shared->shared_reader
 }

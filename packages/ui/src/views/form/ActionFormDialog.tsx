@@ -12,6 +12,7 @@ import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import { useRuntimeViewAs } from "../../runtime";
 import {
   emptyDialogValue,
   emptyValueForField,
@@ -197,15 +198,14 @@ function ActionSubmitButton({
   label: React.ReactNode;
 }): React.ReactElement {
   const values = useWatch({ control }) as ArgValues;
-  const ready = args.every(
-    (arg) => arg.optional || !emptyDialogValue(values[arg.name]),
-  );
+  const preview = useRuntimeViewAs();
+  const ready = args.every((arg) => arg.optional || !emptyDialogValue(values[arg.name]));
   return (
     <Button
       type="submit"
       variant={danger ? "danger" : "primary"}
       size="sm"
-      disabled={!ready || submitting || disabled}
+      disabled={!ready || submitting || disabled || Boolean(preview.viewAs || preview.pending)}
       loading={submitting}
     >
       {label}
@@ -341,6 +341,7 @@ function ActionRelationControl({
     <RelationFieldWidget
       relation={relation}
       filters={arg.filters}
+      create={arg.create ?? null}
       value={relationValueId(value)}
       readOnly={readOnly}
       placeholder={arg.placeholder}
@@ -380,6 +381,7 @@ function ActionRelationListControl({
     <RelationMultiFieldWidget
       relation={relation}
       filters={arg.filters}
+      create={arg.create}
       value={Array.isArray(value) ? value : []}
       readOnly={readOnly}
       aria-label={typeof arg.label === "string" ? arg.label : arg.name}

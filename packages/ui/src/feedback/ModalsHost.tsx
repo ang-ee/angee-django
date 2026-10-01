@@ -13,6 +13,10 @@ import {
 import { useUiT } from "../i18n";
 import { AlertDialog } from "../ui/alert-dialog";
 import { Input } from "../ui/input";
+import { Button } from "../ui/button";
+import { FieldRoot, FieldLabel } from "../ui/field";
+import { ErrorBanner } from "../fragments/ErrorBanner";
+import { Glyph } from "../chrome/Glyph";
 
 export interface ConfirmOptions {
   title: ReactNode;
@@ -31,6 +35,8 @@ export interface PromptField {
   defaultValue?: string;
   /** Show the value uneditable — e.g. revealing a freshly rotated secret. */
   readOnly?: boolean;
+  /** Offer clipboard copying when the field is read-only. */
+  copyable?: boolean;
 }
 
 export interface PromptOptions {
@@ -103,6 +109,7 @@ function useQueuedDialog<TOptions, TResult>(): QueuedDialog<TOptions, TResult> {
   const resolveActive = useCallback((result: TResult) => {
     const request = activeRef.current;
     if (!request) return;
+    activeRef.current = null;
     request.resolve(result);
     setRequests((current) => current.filter((item) => item.id !== request.id));
   }, []);
@@ -275,36 +282,37 @@ function PromptDialogForm({
             ) : null}
             <div className="grid gap-3">
               {options.fields.map((field, index) => (
-                <label key={field.name} className="grid gap-1">
-                  {field.label ? (
-                    <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">
-                      {field.label}
-                    </span>
-                  ) : null}
-                  <Input
-                    type={field.type ?? "text"}
-                    value={values[field.name] ?? ""}
-                    placeholder={field.placeholder}
-                    readOnly={field.readOnly}
-                    autoFocus={index === 0 && !field.readOnly}
-                    aria-label={
-                      typeof field.label === "string" ? field.label : field.name
-                    }
-                    onChange={(event) => {
-                      const next = event.currentTarget.value;
-                      setValues((current) => ({
-                        ...current,
-                        [field.name]: next,
-                      }));
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !readOnly) {
-                        event.preventDefault();
-                        submit();
-                      }
-                    }}
-                  />
-                </label>
+                <FieldRoot key={field.name}>
+                  <FieldLabel htmlFor={`prompt-${request.id}-${field.name}`} className={field.label ? undefined : "sr-only"}>
+                    {field.label ?? field.name}
+                  </FieldLabel>
+                  <div className="flex items-start gap-2">
+                    <Input
+                      id={`prompt-${request.id}-${field.name}`}
+                      type={field.type ?? "text"}
+                      value={values[field.name] ?? ""}
+                      placeholder={field.placeholder}
+                      readOnly={field.readOnly}
+                      autoFocus={index === 0 && !field.readOnly}
+                      onChange={(event) => {
+                        const next = event.currentTarget.value;
+                        setValues((current) => ({
+                          ...current,
+                          [field.name]: next,
+                        }));
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !readOnly) {
+                          event.preventDefault();
+                          submit();
+                        }
+                      }}
+                    />
+                    {field.readOnly && field.copyable ? (
+                      <PromptCopyButton value={values[field.name] ?? ""} />
+                    ) : null}
+                  </div>
+                </FieldRoot>
               ))}
             </div>
           </AlertDialog.Body>
@@ -321,5 +329,29 @@ function PromptDialogForm({
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>
+  );
+}
+
+function PromptCopyButton({ value }: { value: string }): ReactElement {
+  const t = useUiT();
+  const [state, setState] = useState<"ready" | "copying" | "copied" | "failed">("ready");
+  const copy = async () => {
+    setState("copying");
+    try {
+      await navigator.clipboard.writeText(value);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+  };
+  return (
+    <div className="grid gap-2">
+      <Button type="button" variant="secondary" disabled={state === "copying"} onClick={() => void copy()}>
+        <Glyph name={state === "copied" ? "check" : "copy"} />
+        {t("modal.copy")}
+      </Button>
+      <span role="status" className="text-xs text-fg-muted">{state === "copied" ? t("modal.copied") : null}</span>
+      <ErrorBanner description={state === "failed" ? t("modal.copyFailed") : null} />
+    </div>
   );
 }

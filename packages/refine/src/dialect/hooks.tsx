@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
   useCustom,
   useCustomMutation,
@@ -8,6 +8,7 @@ import {
   useKeys,
   useResourceSubscription,
   type BaseRecord,
+  type GetListResponse,
   type HttpError,
 } from "@refinedev/core";
 
@@ -399,6 +400,11 @@ export function useAngeeGroupByBatch(
   );
 }
 
+// Native structural sharing keeps equivalent query results stable between renders.
+function combineListQueries(queries: UseQueryResult<GetListResponse<BaseRecord>>[]) {
+  return queries.map(({ data, error, isFetching, refetch }) => ({ data, error, isFetching, refetch }));
+}
+
 /**
  * Batch the leaf record pages of a server-grouped view into one {@link useQueries}
  * round — one `getList` per currently-rendered expanded bucket, instead of one
@@ -446,7 +452,9 @@ export function useAngeeListBatch(
     enabled: canQuery,
     meta: { dataProviderName: schemaName },
   });
+  const scopeKeys = useStableArray(requests.map(({ scope }) => scope.key));
   const queries = useQueries({
+    combine: combineListQueries,
     queries: requests.map(({ meta, pagination }) => ({
       queryKey: keys()
         .data(schemaName)
@@ -468,11 +476,11 @@ export function useAngeeListBatch(
   return useMemo(
     () =>
       new Map(
-        requests.map(({ scope }, index) => {
+        scopeKeys.map((key, index) => {
           const query = queries[index];
           const data = query?.data;
           return [
-            scope.key,
+            key,
             {
               refetch: () => { void query?.refetch(); },
               rows: (data?.data ?? []) as readonly Row[],
@@ -483,7 +491,7 @@ export function useAngeeListBatch(
           ] as const;
         }),
       ),
-    [requests, queries],
+    [scopeKeys, queries],
   );
 }
 

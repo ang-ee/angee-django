@@ -26,7 +26,7 @@ class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, ou
 
 
 @pytest.fixture
-def linked_decision(execution, register_step, workflow_permissions):
+def linked_decision(execution, register_step, composed_permissions):
     """Compose permission contributions and reach a real review's decision wait."""
 
     admin, _sent = execution

@@ -1,5 +1,5 @@
-import { Button, EmptyState, Glyph, useResolvedWidget } from "@angee/ui";
-import type { ReactElement } from "react";
+import { Button, EmptyState, Glyph, formatDateTime, useResolvedWidget } from "@angee/ui";
+import type { ReactElement, Ref } from "react";
 
 import type { KnowledgePageDetail } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
@@ -8,11 +8,13 @@ import { useKnowledgeT } from "../i18n";
 export function PageReader({
   detail,
   onEdit,
+  editButtonRef,
   onDelete,
 }: {
   detail: KnowledgePageDetail;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit?: () => void;
+  editButtonRef?: Ref<HTMLButtonElement>;
+  onDelete?: () => void;
 }): ReactElement {
   const t = useKnowledgeT();
   const markdown = useResolvedWidget("markdown.preview");
@@ -32,16 +34,20 @@ export function PageReader({
             {detail.title || t("editor.titlePlaceholder")}
           </h1>
           <p className="mt-1 text-12 text-fg-muted">
-            {t("page.lastUpdated", { value: detail.updated_at })}
+            {t("page.lastUpdated", { value: formatDateTime(detail.updated_at) })}
           </p>
         </div>
-        <Button type="button" size="sm" variant="secondary" onClick={onEdit}>
-          <Glyph name="edit" />
-          {t("page.edit")}
-        </Button>
-        <Button type="button" size="iconSm" variant="ghost" aria-label={t("editor.deleteLabel")} onClick={onDelete}>
-          <Glyph name="trash" />
-        </Button>
+        {onEdit ? (
+          <Button ref={editButtonRef} type="button" size="sm" variant="secondary" onClick={onEdit}>
+            <Glyph name="edit" />
+            {t("page.edit")}
+          </Button>
+        ) : null}
+        {onDelete ? (
+          <Button type="button" size="iconSm" variant="ghost" aria-label={t("editor.deleteLabel")} onClick={onDelete}>
+            <Glyph name="trash" />
+          </Button>
+        ) : null}
       </header>
       {detail.kind === "folder" ? (
         <EmptyState icon="folder" title={t("editor.folderTitle")} description={t("editor.folderDescription")} />

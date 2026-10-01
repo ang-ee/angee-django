@@ -16,6 +16,7 @@ from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables
 
@@ -45,19 +46,20 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    active.set_schema(
-        parse_zed(
-            """
-            definition auth/user {}
-            definition tests/scoped_aggregate_record {
-                relation reader: auth/user
-                relation writer: auth/user
-                permission read = reader + writer
-            }
-            """
-        )
-    )
     with model_tables((ScopedAggregateRecord,)):
+        install_permission_schema(
+            parse_zed(
+                """
+                definition auth/user {}
+                definition tests/scoped_aggregate_record {
+                    relation reader: auth/user
+                    relation writer: auth/user
+                    permission read = reader + writer
+                }
+                """
+            ),
+            active=active,
+        )
         try:
             resource = hasura_model_resource(
                 ScopedAggregateRecordType,

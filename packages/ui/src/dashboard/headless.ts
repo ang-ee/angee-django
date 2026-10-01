@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import type { DataResourceQuery } from "@angee/metadata";
+import type { ResourceListSnapshot } from "../views/resource/resource-view-surface";
 import * as v from "valibot";
 
 import { JsonValueSchema, type JsonObject } from "../widgets/json-value";
@@ -64,6 +65,7 @@ export const WidgetDataSpecSchema = v.variant("shape", [
   v.strictObject({ shape: v.literal("value"), source: WidgetSourceSchema }),
   v.strictObject({ shape: v.literal("series"), source: WidgetSourceSchema }),
   v.strictObject({ shape: v.literal("rows"), source: WidgetSourceSchema }),
+  v.strictObject({ shape: v.literal("resourceView"), preset: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({
     shape: v.literal("none"),
     binding: v.strictObject({
@@ -103,6 +105,17 @@ export function widgetColumns(spec: { options: JsonObject }) {
   return v.safeParse(v.optional(WidgetColumnsSchema), spec.options.columns);
 }
 
+/** A readable scope row authorizes listing, independently of the widget's results. */
+/** Who sees a widget: a container the reader must read, named through the resource that declares
+ *  the scope — e.g. `{ resource: "projects.Task", key: "queue__slug", value: "<slug>" }`, never the
+ *  container's own model. */
+export const WidgetVisibilitySchema = v.strictObject({
+  resource: v.pipe(v.string(), v.minLength(1)),
+  key: v.pipe(v.string(), v.minLength(1)),
+  value: v.pipe(v.string(), v.minLength(1)),
+});
+export type WidgetVisibility = v.InferOutput<typeof WidgetVisibilitySchema>;
+
 export const WidgetSpecSchema = v.pipe(v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   id: v.pipe(v.string(), v.minLength(1)),
@@ -110,6 +123,7 @@ export const WidgetSpecSchema = v.pipe(v.strictObject({
   kind: v.pipe(v.string(), v.minLength(1)),
   kindVersion: PositiveInteger,
   title: v.string(),
+  visibility: v.optional(WidgetVisibilitySchema),
   data: WidgetDataSpecSchema,
   options: v.record(v.string(), JsonValueSchema),
   x: NonNegativeInteger,
@@ -120,6 +134,14 @@ export const WidgetSpecSchema = v.pipe(v.strictObject({
 }), v.rawCheck(({ dataset, addIssue }) => {
   if (!dataset.typed) return;
   const widget = dataset.value;
+  if (widget.data.shape === "resourceView" && (
+    typeof widget.options.fullViewRoute !== "string" || !widget.options.fullViewRoute.trim()
+  )) {
+    addIssue({ message: "Resource-view widgets require options.fullViewRoute.", path: [
+      { type: "object", origin: "value", input: widget, key: "options", value: widget.options },
+      { type: "object", origin: "value", input: widget.options, key: "fullViewRoute", value: widget.options.fullViewRoute },
+    ] });
+  }
   if (widget.isArchived || !("columns" in widget.options)) return;
   const optionsPath: [v.ObjectPathItem, v.ObjectPathItem] = [
     { type: "object", origin: "value", input: widget, key: "options", value: widget.options },
@@ -179,18 +201,30 @@ export type WidgetDataSpec = v.InferOutput<typeof WidgetDataSpecSchema>;
 export type WidgetColumn = v.InferOutput<typeof WidgetColumnsSchema>[number];
 export type WidgetSpec = v.InferOutput<typeof WidgetSpecSchema>;
 export type DashboardSnapshot = v.InferOutput<typeof DashboardSnapshotSchema>;
-export type WidgetDataShape = Exclude<WidgetDataSpec["shape"], "none"> | "none";
+export type WidgetDataShape = WidgetDataSpec["shape"];
 
 export interface DashboardDefinition {
   key: string;
   title: string;
   revision: string;
+  /** Display the declared layout without offering layout edits. */
+  editable?: boolean;
   columns?: number;
   resource?: string;
   widgets: readonly WidgetSpec[];
   routeName?: string;
   /** Code-only components for shape=none widgets, keyed by stable widget id. */
   authored?: Readonly<Record<string, ComponentType>>;
+  /** Code-only list declarations keyed by the shipped resource-view preset they host. */
+  views?: Readonly<Record<string, ComponentType<HostedResourceViewProps>>>;
+}
+
+export interface HostedResourceViewProps {
+  /** Forward this to the standard List's onListStateChange. */
+  onListStateChange: (state: ResourceListSnapshot) => void;
+  presentation: "embedded";
+  scope: "inherit";
+  chrome: { viewSwitcher: false; pager: false; columnChooser: false };
 }
 
 export interface DashboardCapabilities {
@@ -199,7 +233,7 @@ export interface DashboardCapabilities {
   canArchive: boolean;
 }
 
-export type DashboardLoadState =
+export type DashboardLoadState = { capabilities: DashboardCapabilities } & (
   | { status: "loading" }
   | { status: "absent" }
   | { status: "forbidden"; message?: string }
@@ -212,8 +246,8 @@ export type DashboardLoadState =
       revision: number;
       name: string;
       description?: string;
-      capabilities: DashboardCapabilities;
-    };
+      declarationRevision: string;
+    });
 
 export interface DashboardSaveCommand {
   target: DashboardTarget;
@@ -239,6 +273,7 @@ export interface DashboardSummary {
   description?: string;
   owner?: string;
   resources: readonly string[];
+  presets?: readonly string[];
   revision: number;
   customized: boolean;
   available: boolean;
@@ -251,7 +286,7 @@ export interface DashboardStoreBinding {
   save: (command: DashboardSaveCommand) => Promise<DashboardSaveResult>;
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
   createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
-  duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
+  duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
   archive: (id: string, expectedRevision: number, archived: boolean) => Promise<DashboardSaveResult>;
 }
 
@@ -266,10 +301,17 @@ export interface DashboardCatalogueBinding {
 export interface DashboardStore {
   useDashboard: (target: DashboardTarget) => DashboardStoreBinding;
   useCatalogue: () => DashboardCatalogueBinding;
+  /** Actor-scoped policy answers; missing or pending answers never mount gated widgets. */
+  useWidgetVisibility?: (policies: readonly WidgetVisibility[]) => {
+    allowed: readonly boolean[];
+    loading: boolean;
+    error: Error | null;
+  };
 }
 
 export interface DashboardWidgetData {
   value: number | null;
+  count?: number | null;
   series: readonly { key: string; label: string; value: number }[];
   rows: readonly Record<string, unknown>[];
   queryFields: DataResourceQuery["fields"];
@@ -286,6 +328,8 @@ export interface DashboardWidgetRenderProps {
   data: DashboardWidgetData;
   authored?: ReactNode;
   titleId?: string;
+  onCountChange?: (count: number | null) => void;
+  hostedView?: ComponentType<HostedResourceViewProps>;
 }
 
 export interface DashboardWidgetKind {

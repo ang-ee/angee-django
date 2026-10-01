@@ -16,38 +16,18 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.db.models.signals import class_prepared, pre_delete
+from django.db.models.signals import pre_delete
 
+from angee.base.signals import connect_for_models
 from angee.messaging.models import ThreadedModelMixin
 
 
 def connect() -> None:
     """Wire chatter-thread teardown onto every threaded model, now and as they prepare."""
 
-    for model in apps.get_models():
-        _bind_teardown(model)
-    # Models prepared after app population — e.g. test-defined threaded records — bind as
-    # their class is finalized, so the teardown covers them too.
-    class_prepared.connect(_on_class_prepared, dispatch_uid="messaging.chatter_teardown.class_prepared")
-
-
-def _on_class_prepared(sender: Any, **kwargs: Any) -> None:
-    """Bind teardown onto a newly prepared model when it is a threaded record."""
-
-    del kwargs
-    _bind_teardown(sender)
-
-
-def _bind_teardown(model: Any) -> None:
-    """Connect the chatter-thread teardown receiver to one concrete threaded model."""
-
-    if model._meta.abstract or not issubclass(model, ThreadedModelMixin):
-        return
-    pre_delete.connect(
-        teardown_record_thread,
-        sender=model,
-        dispatch_uid=f"messaging.chatter_teardown.{model._meta.label_lower}",
-    )
+    connect_for_models(pre_delete, teardown_record_thread,
+                       applies=lambda model: issubclass(model, ThreadedModelMixin),
+                       dispatch_uid="messaging.chatter_teardown")
 
 
 def teardown_record_thread(sender: Any, instance: Any, **kwargs: Any) -> None:

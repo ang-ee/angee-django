@@ -18,6 +18,17 @@ describe("defineAddon", () => {
 });
 
 describe("composeAddons", () => {
+  test("normalizes shipped views and rejects duplicate or foreign ids", () => {
+    const preset = { id: "desk.open", resource: "Note", label: "Open", fixedFilter: { title: { exact: "Open" } } };
+    const addon = defineAddon({ id: "desk", resourceViews: [preset] });
+    const canonicalizeModel = () => "notes.Note";
+    expect(composeAddons([addon], { canonicalModelLabel: canonicalizeModel }).resourceViews["desk.open"])
+      .toEqual({ ...preset, resource: "notes.Note", preset: "desk.open" });
+    expect(() => composeAddons([defineAddon({ id: "desk", resourceViews: [preset, preset] })], { canonicalModelLabel: canonicalizeModel }))
+      .toThrow(/resource view/);
+    expect(() => composeAddons([defineAddon({ id: "other", resourceViews: [preset] })], { canonicalModelLabel: canonicalizeModel }))
+      .toThrow(/namespace/);
+  });
   test("composes normalized status vocabulary and rejects duplicate claims", () => {
     const a = defineAddon({ id: "a", statusTones: { " REVIEWED ": "success" } });
     const b = defineAddon({ id: "b", statusTones: { queued: "warning" } });

@@ -481,7 +481,7 @@ def test_claim_own_records_a_contested_identity_without_reassigning_control(comp
     del composed_tables
     with system_context(reason="test contested claim_own"):
         first_user = User.objects.create_user(username="first", email="shared@example.com", password="x")
-        competing_user = User.objects.create_user(username="competing", email="shared@example.com", password="x")
+        competing_user = User.objects.create_user(username="competing", email="competing@example.com", password="x")
         handle = Handle.objects.claim_own(
             first_user,
             platform=Handle.Platform.EMAIL,

@@ -5,4 +5,19 @@ name = "angee.spaces"
 description = "Shared groups with canonical rosters, role-derived access, and group threads"
 keywords = ["spaces", "groups", "rosters", "roles"]
 category = "Data"
-depends_on = ["angee.iam", "angee.parties", "angee.messaging"]
+depends_on = ["angee.iam", "angee.parties", "angee.messaging", "angee.knowledge"]
+
+[[migrations]]
+name = "drop_stored_roster"
+app_label = "spaces"
+module = "runtime_migrations.drop_stored_roster"
+
+[[migrations]]
+name = "owner_column"
+app_label = "spaces"
+module = "runtime_migrations.owner_column"
+
+[[migrations]]
+name = "shared_reader_cleanup"
+app_label = "spaces"
+module = "runtime_migrations.shared_reader_cleanup"

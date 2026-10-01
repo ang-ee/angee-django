@@ -5,12 +5,15 @@ collected. Register this connected model graph from conftest, before Django
 creates the test database, without depending on a test module's import order.
 """
 
+from angee.intake.models import ChannelIntake
+from angee.messaging.models import ActivityType as AbstractActivityType
 from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
 from angee.messaging.models import Part as AbstractPart
 from angee.messaging.models import Thread as AbstractThread
+from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
@@ -20,9 +23,11 @@ from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
+from angee.parties.models import PartyHandle as AbstractPartyHandle
+from angee.parties.models import Person as AbstractPerson
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
-from angee.spaces.models import ThreadSpace
+from angee.spaces.models import ChannelSpace, ThreadSpace
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
 
@@ -65,6 +70,18 @@ class Party(AbstractParty):
         rebac_resource_type = "parties/party"
 
 
+class Person(AbstractPerson, Party):
+    """Concrete identity required by party-keyed messaging followers."""
+
+    class Meta(AbstractPerson.Meta):
+        """Django model options for the canonical test person."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_person"
+        rebac_resource_type = "parties/person"
+
+
 class Handle(AbstractHandle):
     """Concrete handle (a message sender/recipient) used by messaging tests."""
 
@@ -77,6 +94,16 @@ class Handle(AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
+
+
+class PartyHandle(AbstractPartyHandle):
+    """Concrete identity link registered before source-model test table setup."""
+
+    class Meta(AbstractPartyHandle.Meta):
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_party_handle"
+        rebac_resource_type = "parties/party_handle"
 
 
 class Fragment(AbstractFragment):
@@ -93,7 +120,7 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Channel(ImapChannelSampling, AbstractChannel, Integration):
+class Channel(ChannelIntake, ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
 
     rebac_grantable = AbstractChannel.rebac_grantable
@@ -119,6 +146,16 @@ class Thread(ThreadProjects, ThreadSpace, ThreadPublic, AbstractThread):
         app_label = "messaging"
         db_table = "test_messaging_thread"
         rebac_resource_type = "messaging/thread"
+
+
+class ActivityType(AbstractActivityType):
+    """Concrete activity catalog for source-addon compositions."""
+
+    class Meta(AbstractActivityType.Meta):
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_activity_type"
+        rebac_resource_type = "messaging/activity_type"
 
 
 class MessageSubtype(AbstractMessageSubtype):
@@ -207,3 +244,15 @@ class TrackingValue(AbstractTrackingValue):
         app_label = "messaging"
         db_table = "test_messaging_tracking_value"
         rebac_resource_type = "messaging/tracking_value"
+
+
+class ThreadActivity(AbstractThreadActivity):
+    """Concrete record-thread activity used by messaging tests."""
+
+    class Meta(AbstractThreadActivity.Meta):
+        """Django model options for the canonical test thread activity."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_thread_activity"
+        rebac_resource_type = "messaging/thread_activity"
