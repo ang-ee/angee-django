@@ -186,9 +186,10 @@ class Fail(_Settlement):
                 until=Now() + step_run.step.retry.delay_for(retries),
                 state=step_run.state, retries=retries,
             )
+        error_field = apps.get_model("workflows", "StepAttempt")._meta.get_field("error")
         return rows.update(
             **rows._cleared_wait(), status=StepRunStatus.FAILED,
-            outcome=ERROR_OUTCOME, output={"error": self.error}, retries=retries,
+            outcome=ERROR_OUTCOME, output={"error": error_field.get_prep_value(self.error)}, retries=retries,
         )
 
 

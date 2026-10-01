@@ -1153,6 +1153,7 @@ def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_s
     if phase == "body":
         assert attempt.result == "failed"
         assert attempt.error == expected[:StepAttempt._meta.get_field("error").max_length]
+        assert system_queryset(StepRun).get(pk=step_run.pk).output == {"error": attempt.error}
         assert len(attempt.stacktrace) == StepAttempt._meta.get_field("stacktrace").max_length
         assert retained_run.error == ""
     else:
