@@ -15,14 +15,14 @@ from rebac import system_context
 from rebac.errors import MissingActorError
 
 from angee.addons import addon_manifest
-from angee.base.models import CATALOGUE_TIERS, AngeeModel
+from angee.base.models import AngeeModel
+from angee.base.tiers import ResourceTier
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import AngeeResource, build_resource
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
-from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
@@ -310,12 +310,6 @@ def test_resource_entries_reject_malformed_exclusion_setting(settings: Any) -> N
         SelectionValidationLedger.objects._entries_for((), tiers=[Resource.Tier.DEMO])
 
 
-def test_catalogue_tier_literals_match_resource_tiers() -> None:
-    """Base catalogue tier literals stay in sync with the resource tier owner."""
-
-    assert set(CATALOGUE_TIERS) == set(ResourceTier.values)
-
-
 def test_entry_graph_detects_cycles(tmp_path: Path) -> None:
     """Dependency cycles fail before any rows load."""
 
@@ -354,11 +348,11 @@ def test_entry_requires_exactly_one_registered_source(tmp_path: Path) -> None:
         ResourceEntry.from_declaration(owner, "master", {"model": "base.ImportNote"})
 
 
-def test_unregistered_source_key_raises_with_install_hint(tmp_path: Path) -> None:
-    """Materializing an entry whose source kind is not registered fails with a hint."""
+def test_unregistered_source_key_uses_shared_registry_error(tmp_path: Path) -> None:
+    """Materializing an unknown source reports the configured registry keys."""
 
     unknown = ResourceEntry(addon=addon(tmp_path), tier="master", source_key="ipfs", source_value="x")
-    with pytest.raises(ImproperlyConfigured, match="not registered"):
+    with pytest.raises(ImproperlyConfigured, match="No impl for key 'ipfs'.*known: path, url"):
         unknown.materialize()
 
 
@@ -371,7 +365,7 @@ def test_resource_unique_constraint_is_addon_xref_pair() -> None:
         if isinstance(constraint, models.UniqueConstraint)
     }
 
-    assert constraints["%(app_label)s_resource_addon_xref"].fields == (
+    assert constraints["%(app_label)s_%(class)s_addon_xref"].fields == (
         "source_addon",
         "xref",
     )
@@ -490,7 +484,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) -> None:
+def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tables) -> None:
     """The loader owns persona lookup: ledger + app-registry aliases in one call.
 
     A demo-seed hook resolves ``<addon>.<xref>`` by the same alias convention the
@@ -509,35 +503,10 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) 
 
             app_label = "base"
 
-    class LedgerXrefLedger(Resource):
-        """Ledger model without the production uniqueness constraint."""
-
-        source_addon = models.CharField(max_length=200)
-        xref = models.CharField(max_length=160)
-        target_model = models.CharField(max_length=120)
-        target_id = models.CharField(max_length=120, blank=True, default="")
-
-        class Meta:
-            """Django model options for the test ledger."""
-
-            app_label = "base"
-
-    with model_tables((LedgerXrefTarget, LedgerXrefLedger)):
-        # No concrete ``resources.Resource`` exists under bare test settings (the composer
-        # is not run), so stand the ledger model in for the helper's own ledger lookup only;
-        # every other ``get_model`` (the target-model resolution inside ``resolve_xref``)
-        # delegates to the real registry, and the addon-alias map is built from the real
-        # installed apps.
-        real_get_model = apps.get_model
-
-        def fake_get_model(app_label: str, model_name: str, *args: Any, **kwargs: Any) -> Any:
-            if (app_label, model_name) == ("resources", "Resource"):
-                return LedgerXrefLedger
-            return real_get_model(app_label, model_name, *args, **kwargs)
-
-        monkeypatch.setattr(apps, "get_model", fake_get_model)
+    ledger = apps.get_model("resources", "Resource")
+    with model_tables((LedgerXrefTarget,)), system_context(reason="test ledger xref registry aliases"):
         target = LedgerXrefTarget.objects.create(name="alice")
-        LedgerXrefLedger.objects.create(
+        ledger.objects.create(
             tier=Resource.Tier.MASTER,
             source_addon="angee.resources",
             xref="user_alice",
@@ -1338,6 +1307,58 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
         assert third.skipped == 0
         existing.refresh_from_db()
         assert existing.label == "Changed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_adoption_accepts_mti_parent_unique_fields(tmp_path: Path) -> None:
+    """A child can adopt through a natural key constrained on its concrete parent."""
+
+    class ParentDocument(AngeeModel):
+        """Parent owns the natural key."""
+
+        vault = models.CharField(max_length=40)
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = "base"
+            constraints = (models.UniqueConstraint(fields=("vault", "title"), name="uniq_resource_parent_document"),)
+
+    class ChildDocument(ParentDocument):
+        """Child inherits the natural key without restating its constraint."""
+
+        body = models.TextField(blank=True)
+
+        class Meta:
+            app_label = "base"
+
+    class DocumentLedger(Resource):
+        """Ledger for the inherited-key test."""
+
+        class Meta(Resource.Meta):
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.childdocument.csv").write_text(
+        "_xref,vault,title,body\ndocument,home,Welcome,Seeded\n", encoding="utf-8",
+    )
+    owner = addon(tmp_path, manifest={
+        "master": (),
+        "install": ({"path": "resources/010_base.childdocument.csv", "adopt": ["vault", "title"]},),
+        "demo": (),
+    })
+
+    with model_tables((ParentDocument, ChildDocument, DocumentLedger)):
+        with system_context(reason="mti adoption fixture"):
+            existing = ChildDocument.objects.create(vault="home", title="Welcome", body="Existing")
+
+        result = DocumentLedger.objects.load_addons((owner,), tiers=[Resource.Tier.INSTALL])
+
+        assert (result.created, result.updated) == (0, 1)
+        existing.refresh_from_db()
+        assert existing.body == "Seeded"
+        assert DocumentLedger.objects.get(xref="document").target_id == existing.public_id
 
 
 @pytest.mark.django_db(transaction=True)

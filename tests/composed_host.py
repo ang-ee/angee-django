@@ -2,9 +2,9 @@
 
 Run this file directly so Django constructs the real generated models without
 sharing pytest's hand-built source-addon models or global app registry. Only the
-temporary runtime directory is written; this host uses an in-memory database and
-never runs live migrations or loads resource fixtures. Native addon tests can
-create their own disposable SQLite test database through Django's test runner.
+temporary runtime directory is written. Native addon tests use Django's test
+runner with SQLite by default; ``--test-postgresql`` accepts the runner's
+PostgreSQL DATABASE_URL and creates a separate native test database.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import environ
+
 
 def boot(
     source_root: Path,
@@ -25,9 +27,22 @@ def boot(
     *,
     include_examples: bool = True,
     root_apps: list[str] | None = None,
+    test_postgresql: bool = False,
 ) -> None:
     """Compose selected app roots and their native dependency closure."""
 
+    database: dict[str, Any] = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+    if test_postgresql:
+        database_url = os.environ.get("DATABASE_URL", "")
+        database = environ.Env.db_url_config(database_url)
+        if database["ENGINE"] != "django.db.backends.postgresql":
+            raise ValueError("--test-postgresql requires a PostgreSQL DATABASE_URL.")
+        # DiscoverRunner creates this secondary database. A composed-host test
+        # can run beside another one on a different xdist worker, so give each
+        # worker its own name just as pytest-django does for the primary database.
+        worker = os.environ.get("PYTEST_XDIST_WORKER")
+        suffix = f"_{worker}" if worker else ""
+        database["TEST"] = {"NAME": f"test_composed_{database['NAME']}{suffix}"}
     addon_dirs = [source_root / "addons"]
     if include_examples:
         addon_dirs.append(source_root / "examples" / "addons")
@@ -56,7 +71,7 @@ def boot(
             "ANGEE_RUNTIME_DIR": runtime_dir,
             "ANGEE_ADDON_DIRS": tuple(addon_dirs),
             "INSTALLED_APPS": installed_apps,
-            "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+            "DATABASES": {"default": database},
         },
     )
     namespace = {name: value for name, value in namespace.items() if name.isupper() and not name.startswith("_")}
@@ -104,7 +119,16 @@ def resource_values() -> dict[str, Any]:
                             try:
                                 model_field = model._meta.get_field(name)
                             except FieldDoesNotExist as error:
-                                failures.append(f"{prefix}: {error}")
+                                resource_class = getattr(model, "resource_class", None)
+                                resource_field = resource_class.fields.get(name) if resource_class else None
+                                if resource_field is None:
+                                    failures.append(f"{prefix}: {error}")
+                                else:
+                                    checked_values += 1
+                                    try:
+                                        resource_field.clean(row)
+                                    except (ValidationError, ValueError) as resource_error:
+                                        failures.append(f"{prefix}: {name} rejected by resource: {resource_error}")
                                 continue
                             if model_field.is_relation:
                                 continue
@@ -180,19 +204,24 @@ def main() -> None:
     )
     parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests", "schemas"), default="resources")
     parser.add_argument("--test-label", action="append", default=[])
+    parser.add_argument("--test-postgresql", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.test_postgresql and args.action != "tests":
+        parser.error("--test-postgresql is available only for native test runs")
     boot(
         args.source_root.resolve(),
         args.runtime_dir.resolve(),
         [path.resolve() for path in args.addon_dir],
         include_examples=not args.no_examples,
         root_apps=args.app,
+        test_postgresql=args.test_postgresql,
     )
     if args.action == "tests":
         from django.apps import apps
         from django.conf import settings
         from django.core.management import call_command
+        from django.db import connection
         from django.test.runner import DiscoverRunner
 
         class ComposedTestRunner(DiscoverRunner):
@@ -204,12 +233,13 @@ def main() -> None:
                 return databases
 
         assert args.test_label, "Native tests require explicit test labels"
-        assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
-        assert settings.DATABASES["default"]["NAME"] == ":memory:"
+        if not args.test_postgresql:
+            assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
+            assert settings.DATABASES["default"]["NAME"] == ":memory:"
         settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
         settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
-        args.output.write_text(json.dumps({"failures": failures}) + "\n")
+        args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")
         raise SystemExit(bool(failures))
     if args.action == "state":
         from django.apps import apps

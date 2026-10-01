@@ -1,9 +1,9 @@
 import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Button, Code, MutationDialog, RowsListView, SubjectPicker,
+  formSubmitError, Button, Code, MutationDialog, RowsListView, SubjectPicker,
   defineRowAction, mutationDialogValueCodecs, useAuthoredResourceMutation,
-  type ListColumn, type MutationDialogField, type RecordPanelContext,
+  type ListColumn, type DescriptorField, type RecordPanelContext,
 } from "@angee/ui";
 
 import {
@@ -17,7 +17,7 @@ export function GroupMembersTab({ recordId }: RecordPanelContext): ReactElement 
   const query = useAuthoredQuery(IamGroupAccess, { id: recordId }, { models: IAM_GROUP_MUTATION_INVALIDATES });
   const [addMember] = useAuthoredResourceMutation(IamAddGroupMember, { invalidateModels: IAM_GROUP_MUTATION_INVALIDATES });
   const members = useMemo(() => query.data?.groups_by_pk?.members ?? [], [query.data]);
-  const fields = useMemo<readonly MutationDialogField[]>(() => [{
+  const fields = useMemo<readonly DescriptorField[]>(() => [{
     name: "subject",
     label: t("group.member"),
     required: true,
@@ -72,7 +72,9 @@ export function GroupMembersTab({ recordId }: RecordPanelContext): ReactElement 
       parseValues={(values) => ({ subject: mutationDialogValueCodecs.requiredString(values.subject, "subject") })}
       onSubmit={async ({ subject }) => {
         const result = await addMember({ group_id: recordId, subject, caveat_name: "" });
-        if (!result?.add_group_member) throw new Error(t("group.addError"));
+        return result?.add_group_member
+          ? { status: "ok", data: result }
+          : formSubmitError(t("group.addError"));
       }}
     />}
   />;

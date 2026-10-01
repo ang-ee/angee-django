@@ -9,6 +9,7 @@ from rebac import SubjectRef, system_context, to_subject_ref
 
 from angee.iam.auth import ModelBackend, can_authenticate_user
 from angee.iam.permissions import is_platform_admin
+from angee.workflows.testing.models import Workflow
 
 
 @pytest.mark.parametrize("kind,is_active,allowed", [
@@ -68,3 +69,20 @@ def test_human_authority_resolves_current_user_state() -> None:
     with system_context(reason="test.iam.principal_policy.deactivate"):
         users.filter(pk=person.pk).update(kind="person", is_active=False)
     assert users.active_person_for_subject(subject) is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_service_user_tracks_identity_and_deactivates_on_delete(composed_tables: None) -> None:
+    """A workflow's non-login principal survives rename and retained attribution."""
+    with system_context(reason="test.workflow.principal"):
+        workflow = Workflow.objects.create(key="principal-lifecycle", name="Before")
+        user_id = workflow.user_id
+        assert user_id is not None
+        workflow.name = "After"
+        workflow.save(update_fields={"name"})
+        user = get_user_model()._base_manager.get(pk=user_id)
+        assert (user.username, user.first_name, user.kind) == (f"workflow-{workflow.sqid}", "After", "service")
+        assert not user.has_usable_password()
+        Workflow.objects.filter(pk=workflow.pk).delete()
+        user.refresh_from_db()
+        assert not user.is_active

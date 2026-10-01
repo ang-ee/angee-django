@@ -13,6 +13,7 @@ import {
 } from "../resource/model-metadata-defaults";
 import { RelationPicker } from "./RelationPicker";
 import { useRelationPickerOptions } from "./relation-options";
+import { RecordReference } from "./RecordReference";
 
 export interface RelationFieldWidgetProps {
   value?: string | null;
@@ -36,14 +37,23 @@ export interface RelationFieldWidgetProps {
 }
 
 /**
- * The auto-wired relational form control: renders a searchable `RelationPicker`
+ * The auto-wired relational form control: read-only values compose `RecordReference`;
+ * editable values render a searchable `RelationPicker`
  * and — when the related model has a create mutation — offers in-place create
  * with fields derived from its metadata. `FormView` resolves the relation target
  * (model, display field, create) from the SDL and the selected record's label
  * from its own read. Opening the picker starts the bounded option read, and
  * typing searches that collection on the server.
  */
-export function RelationFieldWidget(
+export function RelationFieldWidget(props: RelationFieldWidgetProps): ReactElement {
+  if (props.readOnly) return props.value ? <RecordReference
+    model={props.relation.resource} id={props.value}
+    label={props.selectedOption?.value === props.value ? props.selectedOption.label : undefined}
+  /> : <></>;
+  return <EditableRelationFieldWidget {...props} />;
+}
+
+function EditableRelationFieldWidget(
   {
   value,
   onChange,

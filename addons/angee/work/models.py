@@ -22,6 +22,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator, RegexVa
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from django_choices_field import IntegerChoicesField
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -204,8 +205,8 @@ class Queue(models.Model, metaclass=RebacModelBase):
         validators=(MinValueValidator(1),),
     )
     cycle_cooldown_weeks = models.PositiveSmallIntegerField(default=0)
-    cycle_start_day = models.PositiveSmallIntegerField(
-        choices=CycleStartDay.choices,
+    cycle_start_day = IntegerChoicesField(
+        choices_enum=CycleStartDay,
         default=CycleStartDay.MONDAY,
         validators=(MinValueValidator(0), MaxValueValidator(6)),
     )
@@ -645,7 +646,6 @@ class TaskWork(StagedModelMixin):
     """Same-row work contribution folded into ``projects.Task``."""
 
     extends = "projects.Task"
-    runtime = False
     stage_container_field_name = "queue"
 
     if TYPE_CHECKING:
@@ -1378,7 +1378,6 @@ class UserWork(ResourceLoadMixin):
     """Provision personal queues after IAM user resources load."""
 
     extends = "iam.User"
-    runtime = False
 
     class Meta:
         """Abstract same-row provisioning donor for IAM users."""
@@ -1392,7 +1391,6 @@ class UserWork(ResourceLoadMixin):
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Ensure every loaded user has exactly one personal queue."""
 
@@ -1400,4 +1398,4 @@ class UserWork(ResourceLoadMixin):
         for user in sorted(instances, key=lambda instance: instance.pk or 0):
             queue_model.objects.provision_personal(user)
 
-        super().after_resource_load(instances, tier=tier, source=source, publish=publish)
+        super().after_resource_load(instances, tier=tier, source=source)

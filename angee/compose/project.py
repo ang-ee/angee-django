@@ -45,13 +45,26 @@ class ProjectContract:
         self._project_apps: object = ()
 
     def compose(self) -> None:
-        """Populate ``namespace`` from project settings, defaults, and addon contracts."""
+        """Publish project defaults and addon settings only after composition succeeds.
+
+        Django may inspect the importing settings module during app discovery.
+        Keeping work private prevents it from capturing a partial app graph, and
+        a failed reload leaves the previously published settings intact.
+        """
 
         from angee.compose.composer import Composer
 
-        root = self.load()
-        prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
-        Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+        published = self.namespace
+        self.namespace = {}
+        try:
+            root = self.load()
+            prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
+            Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+            composed = self.namespace
+        finally:
+            self.namespace = published
+        self._reset_settings()
+        self.namespace.update(composed)
 
     def load(self) -> Path:
         """Load project settings and defaults without composing the Django app graph.

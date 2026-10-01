@@ -23,13 +23,14 @@ import {
   TableRow,
 } from "../../ui/table";
 import { RequiredMark } from "../../ui/label";
+import { titleCase } from "../../lib/titleCase";
 import type {
   WidgetDefinition,
   WidgetField,
   WidgetRenderProps,
 } from "../../widgets/types";
 import type { FormSpecFieldDescriptor } from "./form-spec";
-import { LabeledDescriptorField } from "./MutationDialog";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { updatedRecord } from "./field-values";
 import { isCompositeFieldDescriptor, isFieldVisible } from "./form-view-model";
 import { messagesForDottedPath } from "./validation-errors";
@@ -58,6 +59,7 @@ export function RowsField({
   field,
   messages = [],
   readOnly = false,
+  disabled,
   onChange,
   onCommit,
   controlRef,
@@ -76,11 +78,12 @@ export function RowsField({
     return (rowTitle ? visibleColumns : columns).map((column) => {
       const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
       const control = visibleColumns.includes(column) ? <LabeledDescriptorField
-        field={{ ...column, name: cellPath, label: column.label ?? column.name }}
+        field={{ ...column, name: cellPath, label: column.label ?? titleCase(column.name) }}
         value={row[column.name]}
         dialogValues={row}
         messages={messagesForDottedPath(messages, cellPath)}
         readOnly={readOnly || column.readOnly}
+        disabled={disabled}
         showLabel={Boolean(rowTitle)}
         showDescription={Boolean(rowTitle)}
         onChange={(next) => onChange?.(rows.map((current, currentIndex) =>
@@ -100,7 +103,7 @@ export function RowsField({
       role="group"
       id={field?.controlProps?.id}
       aria-labelledby={field?.controlProps?.["aria-labelledby"]}
-      aria-label={field?.controlProps?.["aria-labelledby"] ? undefined : typeof field?.label === "string" ? field.label : fieldName}
+      aria-label={field?.controlProps?.["aria-labelledby"] ? undefined : typeof field?.label === "string" ? field.label : titleCase(fieldName)}
       aria-describedby={field?.controlProps?.["aria-describedby"]}
       className="space-y-4"
     >
@@ -115,7 +118,7 @@ export function RowsField({
       <Table
         id={field?.controlProps?.id}
         aria-label={
-          typeof field?.label === "string" ? field.label : fieldName
+          typeof field?.label === "string" ? field.label : titleCase(fieldName)
         }
         aria-describedby={field?.controlProps?.["aria-describedby"]}
         density={readOnly ? "compact" : "comfortable"}
@@ -133,7 +136,7 @@ export function RowsField({
                     : undefined
                 }
               >
-                {column.label ?? column.name}
+                {column.label ?? titleCase(column.name)}
                 <RequiredMark required={column.required} className="ml-1" />
               </TableHead>
             ))}
@@ -184,6 +187,7 @@ function rowsValue(value: unknown): RowsValue {
 }
 
 export const rowsWidget = {
+  acceptsRowTemplate: true,
   edit: RowsEdit,
   read: RowsRead,
 } satisfies WidgetDefinition<RowsValue>;

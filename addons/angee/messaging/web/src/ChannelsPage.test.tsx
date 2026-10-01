@@ -92,7 +92,7 @@ describe("ChannelsPage", () => {
     expect(screen.getByText("Connect bridge")).toBeTruthy();
     expect(screen.getByText("Bridge form fields")).toBeTruthy();
     expect(pageMocks.columnFields).toEqual(
-      expect.arrayContaining(["sync_stage", "last_sync_status", "last_sync_items", "last_sync_completed_at"]),
+      expect.arrayContaining(["sync_stage", "last_sync_items", "last_sync_completed_at"]),
     );
     expect(pageMocks.fieldNames).toEqual(
       expect.arrayContaining([

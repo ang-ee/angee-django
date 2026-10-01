@@ -1,22 +1,23 @@
 /// <reference path="./css.d.ts" />
 import * as React from "react";
-import * as dagre from "@dagrejs/dagre";
 import {
   Background,
   Controls,
   MarkerType,
   Position,
   ReactFlow,
-  applyEdgeChanges,
-  applyNodeChanges,
+  Handle,
+  useUpdateNodeInternals,
   type Edge,
   type FitViewOptions,
   type Node,
+  type NodeProps,
   type ReactFlowInstance,
-  type Rect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
+import { DEFAULT_GRAPH_LAYOUT as DEFAULT_LAYOUT, layoutGraph } from "./graph-layout";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useValueStable } from "../lib/use-value-stable";
 import { type Tone } from "../lib/tones";
@@ -39,6 +40,8 @@ export interface GraphViewNode<
   selected?: boolean;
   highlighted?: boolean;
   position?: GraphViewPosition;
+  /** Named output handles; omitted preserves the default unnamed output. */
+  ports?: readonly GraphViewPort[];
   meta?: TMeta;
 }
 
@@ -49,12 +52,24 @@ export interface GraphViewEdge<
   id: string;
   source: string;
   target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
   kind: TKind;
   ariaLabel?: string;
   label?: React.ReactNode;
   /** Controlled native React Flow selection state. */
   selected?: boolean;
   meta?: TMeta;
+}
+
+export interface GraphViewPort {
+  id: string;
+  label?: string;
+}
+
+export interface GraphViewStatus {
+  label: React.ReactNode;
+  tone?: Tone;
 }
 
 export interface GraphViewNodeStyle {
@@ -112,14 +127,6 @@ export interface GraphViewConnection {
   targetHandle?: string | null;
 }
 
-export interface GraphViewGeometry<TNodeKind extends string = string> {
-  nodeBounds: (id: string) => Rect | undefined;
-  nodeSize: (kind: TNodeKind) => { width: number; height: number };
-  layout: () => Required<GraphViewLayout>;
-  intersects: (bounds: Rect, excludeIds?: ReadonlySet<string>) => boolean;
-  firstFreePosition: (kind: TNodeKind, preferred: GraphViewPosition, axis?: "horizontal" | "vertical", excludeIds?: ReadonlySet<string>) => GraphViewPosition;
-}
-
 export interface GraphViewProps<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -132,23 +139,19 @@ export interface GraphViewProps<
   edgeStyles?: Readonly<Partial<Record<TEdgeKind, GraphViewEdgeStyle>>>;
   defaultEdgeStyle?: GraphViewEdgeStyle;
   layout?: GraphViewLayout;
+  status?: Readonly<Record<string, GraphViewStatus | undefined>>;
   fitViewOptions?: FitViewOptions;
-  /** Imperative read-only access to React Flow's rendered node geometry. */
-  geometryRef?: React.Ref<GraphViewGeometry<TNodeKind>>;
-  /** Programmatic focus target for hosts that swap the graph with another pane. */
-  surfaceRef?: React.Ref<HTMLDivElement>;
   /** Accessible name for the focusable graph surface. */
   ariaLabel?: string;
   className?: string;
   onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>, activation: GraphViewActivation) => void;
   onEdgeClick?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>, activation: GraphViewActivation) => void;
   nodesDraggable?: boolean;
-  onNodeDragEnd?: (
-    node: GraphViewNode<TNodeKind, TNodeMeta>,
-    position: GraphViewPosition,
-  ) => void;
   onConnect?: (edge: GraphViewConnection) => void;
-  onNodeSelect?: (node: GraphViewNode<TNodeKind, TNodeMeta> | null) => void;
+  isValidConnection?: (edge: GraphViewConnection) => boolean;
+  onReconnect?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta>, connection: GraphViewConnection) => void;
+  /** Reports settled pointer and keyboard positions in one batch to the controlled owner. */
+  onNodesPositionChange?: (positions: Readonly<Record<string, GraphViewPosition>>) => void;
   /** Full current selection for graph actions that require more than one node. */
   onNodesSelect?: (nodes: readonly GraphViewNode<TNodeKind, TNodeMeta>[]) => void;
   onEdgeSelect?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta> | null) => void;
@@ -165,6 +168,8 @@ interface GraphViewNodeData<
 > extends Record<string, unknown> {
   node: GraphViewNode<TKind, TMeta>;
   label: React.ReactNode;
+  style: GraphViewNodeStyle;
+  status?: GraphViewStatus;
 }
 
 interface GraphViewEdgeData<
@@ -192,14 +197,7 @@ const DEFAULT_EDGE_STYLE: Required<GraphViewEdgeStyle> = {
 const EMPTY_EDGE_STYLES = {} as Readonly<Partial<Record<string, GraphViewEdgeStyle>>>;
 const DEFAULT_FIT_VIEW_OPTIONS: FitViewOptions = { padding: 0.18 };
 
-const DEFAULT_LAYOUT: Required<GraphViewLayout> = {
-  rankdir: "TB",
-  nodesep: 34,
-  ranksep: 76,
-  edgesep: 18,
-  marginx: 24,
-  marginy: 24,
-};
+const NODE_TYPES = { angee: GraphNode };
 
 export function GraphView<
   TNodeKind extends string = string,
@@ -213,17 +211,17 @@ export function GraphView<
   edgeStyles = EMPTY_EDGE_STYLES as Readonly<Partial<Record<TEdgeKind, GraphViewEdgeStyle>>>,
   defaultEdgeStyle,
   layout,
+  status,
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
-  geometryRef,
-  surfaceRef,
   ariaLabel,
   className,
   onNodeClick,
   onEdgeClick,
   nodesDraggable = false,
-  onNodeDragEnd,
   onConnect,
-  onNodeSelect,
+  isValidConnection,
+  onReconnect,
+  onNodesPositionChange,
   onNodesSelect,
   onEdgeSelect,
 }: GraphViewProps<
@@ -256,7 +254,6 @@ export function GraphView<
     const style = nodeStyleFor(node.kind, nodeStyles);
     return {
       id: node.id,
-      position: node.position,
       width: style.width,
       height: style.height,
     };
@@ -276,89 +273,94 @@ export function GraphView<
       }),
     [geometryEdges, geometryNodes, resolvedLayout],
   );
-  const layoutedGraph = React.useMemo(() => {
-    return {
-      nodes: nodes.map((node) => ({
-        ...toReactFlowNode(node, resolvedNodeStyles),
-        position: geometryLayout.positions.get(node.id) ?? node.position ?? { x: 0, y: 0 },
-      })),
-      edges: edges
-        .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id))
-        .map((edge) => toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle)),
-    };
-  }, [edges, geometryLayout, nodes, resolvedDefaultEdgeStyle, resolvedEdgeStyles, resolvedNodeStyles]);
-  const [renderNodes, setRenderNodes] = React.useState(layoutedGraph.nodes);
-  const [renderEdges, setRenderEdges] = React.useState(layoutedGraph.edges);
+  // Only transient selection/dragging is local; records and settled positions stay controlled.
+  const [selection, setSelection] = React.useState<Readonly<Record<string, boolean>>>({});
+  const [edgeSelection, setEdgeSelection] = React.useState<Readonly<Record<string, boolean>>>({});
+  const [dragging, setDragging] = React.useState<Readonly<Record<string, GraphViewPosition>>>({});
+  const [measured, setMeasured] = React.useState<Readonly<Record<string, { width: number; height: number }>>>({});
+  const nodeSet = JSON.stringify(nodes.map((node) => node.id).sort());
+  const edgeSet = JSON.stringify(edges.map((edge) => edge.id).sort());
+  const [previousNodeSet, setPreviousNodeSet] = React.useState(nodeSet);
+  const [previousEdgeSet, setPreviousEdgeSet] = React.useState(edgeSet);
+  // A changed data set starts a new local selection; retained nodes keep their measurements.
+  if (nodeSet !== previousNodeSet) {
+    setPreviousNodeSet(nodeSet);
+    setSelection({});
+    setDragging({});
+    setMeasured(Object.fromEntries(nodes.flatMap((node) => {
+      const dimensions = measured[node.id];
+      return dimensions ? [[node.id, dimensions] as const] : [];
+    })));
+  }
+  if (edgeSet !== previousEdgeSet) {
+    setPreviousEdgeSet(edgeSet);
+    setEdgeSelection({});
+  }
+  const nodeCache = React.useRef(new Map<string, RenderNode<TNodeKind, TNodeMeta>>());
+  const renderNodes = React.useMemo(() => {
+    const next = new Map<string, RenderNode<TNodeKind, TNodeMeta>>();
+    const result = nodes.map((node) => {
+      const selected = node.selected ?? selection[node.id] ?? false;
+      const position = dragging[node.id] ?? node.position ?? geometryLayout.positions.get(node.id)!;
+      const previous = nodeCache.current.get(node.id);
+      const style = resolvedNodeStyles[node.kind];
+      const overlay = status?.[node.id];
+      if (previous && sameNodeContent(previous.data.node, node)
+        && previous.data.style === style && previous.data.status === overlay
+        && previous.selected === selected && previous.measured === measured[node.id]
+        && previous.position.x === position.x && previous.position.y === position.y) {
+        next.set(node.id, previous);
+        return previous;
+      }
+      const rendered = {
+        ...toReactFlowNode(node, resolvedNodeStyles, overlay, selected),
+        position, measured: measured[node.id],
+      };
+      next.set(node.id, rendered);
+      return rendered;
+    });
+    nodeCache.current = next;
+    return result;
+  }, [nodes, resolvedNodeStyles, status, selection, dragging, measured, geometryLayout]);
+  const renderEdges = React.useMemo(() => edges
+    .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id))
+    .map((edge) => ({
+      ...toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle),
+      selected: edge.selected ?? edgeSelection[edge.id] ?? false,
+    })), [edges, geometryLayout, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
   const instanceRef = React.useRef<ReactFlowInstance<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>> | null>(null);
-  React.useEffect(() => {
-    setRenderNodes(layoutedGraph.nodes);
-    setRenderEdges(layoutedGraph.edges);
-  }, [layoutedGraph]);
   // React Flow re-emits selection state whenever its store adopts replaced
   // nodes. Consumers set state from these callbacks, so re-emitting an
   // unchanged selection loops: setState → re-render → store resync → re-emit
   // ("Maximum update depth exceeded" in StoreUpdater). Emit only on change.
-  const lastSelectionSignature = React.useRef<string | null>(null);
-  React.useImperativeHandle(geometryRef, () => ({
-    nodeBounds: (id) => {
-      const instance = instanceRef.current;
-      const node = instance?.getNode(id);
-      if (!instance || !node) return undefined;
-      const bounds = instance.getNodesBounds([id]);
-      const declared = nodeStyleFor(node.data.node.kind, nodeStyles);
-      return {
-        ...bounds,
-        width: bounds.width > 0 ? bounds.width : declared.width,
-        height: bounds.height > 0 ? bounds.height : declared.height,
-      };
-    },
-    nodeSize: (kind) => {
-      const style = nodeStyleFor(kind, nodeStyles);
-      return { width: style.width, height: style.height };
-    },
-    layout: () => resolvedLayout,
-    intersects: (bounds, excludeIds = new Set()) => (
-      instanceRef.current?.getIntersectingNodes(bounds, true).some((node) => !excludeIds.has(node.id)) ?? false
-    ),
-    firstFreePosition: (kind, preferred, axis = "horizontal", excludeIds = new Set()) => {
-      const instance = instanceRef.current;
-      const style = nodeStyleFor(kind, nodeStyles);
-      if (!instance) return preferred;
-      const step = axis === "horizontal" ? style.width + resolvedLayout.nodesep : style.height + resolvedLayout.ranksep;
-      const occupied = (position: GraphViewPosition) => instance.getIntersectingNodes({ ...position, width: style.width, height: style.height }, true).some((node) => !excludeIds.has(node.id));
-      const bounds = instance.getNodesBounds(instance.getNodes());
-      const span = axis === "horizontal" ? bounds.width + style.width : bounds.height + style.height;
-      const limit = Math.ceil(span / step) + 1;
-      for (let distance = 0; distance <= limit; distance += 1) {
-        for (const direction of distance === 0 ? [0] : [1, -1]) {
-          const offset = distance * direction * step;
-          const candidate = axis === "horizontal" ? { x: preferred.x + offset, y: preferred.y } : { x: preferred.x, y: preferred.y + offset };
-          if (!occupied(candidate)) return candidate;
-        }
-      }
-      const exterior = axis === "horizontal"
-        ? [
-            { x: bounds.x + bounds.width + resolvedLayout.nodesep, y: preferred.y },
-            { x: bounds.x - style.width - resolvedLayout.nodesep, y: preferred.y },
-          ]
-        : [
-            { x: preferred.x, y: bounds.y + bounds.height + resolvedLayout.ranksep },
-            { x: preferred.x, y: bounds.y - style.height - resolvedLayout.ranksep },
-          ];
-      return exterior.sort((left, right) => Math.hypot(left.x - preferred.x, left.y - preferred.y) - Math.hypot(right.x - preferred.x, right.y - preferred.y))[0]!;
-    },
-  }), [geometryRef, nodeStyles, resolvedLayout]);
+  const lastNodeSelection = React.useRef<string | null>(null);
+  const lastEdgeSelection = React.useRef<string | null>(null);
+  const controlledNodeSelection = nodes.some((node) => node.selected !== undefined);
+  const controlledEdgeSelection = edges.some((edge) => edge.selected !== undefined);
+  function emitNodeSelection(selected: readonly GraphViewNode<TNodeKind, TNodeMeta>[]): void {
+    const signature = JSON.stringify(selected.map((node) => node.id));
+    if (!controlledNodeSelection && lastNodeSelection.current === signature) return;
+    lastNodeSelection.current = signature;
+    onNodesSelect?.(selected);
+  }
+  function emitEdgeSelection(selected: readonly GraphViewEdge<TEdgeKind, TEdgeMeta>[]): void {
+    const signature = JSON.stringify(selected.map((edge) => edge.id));
+    if (!controlledEdgeSelection && lastEdgeSelection.current === signature) return;
+    lastEdgeSelection.current = signature;
+    onEdgeSelect?.(selected[0] ?? null);
+  }
 
   return (
     <div
-      ref={surfaceRef}
       tabIndex={-1}
       role={ariaLabel ? "region" : undefined}
       aria-label={ariaLabel}
       className={cn("min-h-0 outline-none", className)}
     >
-      <ReactFlow
+      <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
         onInit={(instance) => { instanceRef.current = instance; }}
+        nodeTypes={NODE_TYPES}
+        deleteKeyCode={null}
         nodes={renderNodes}
         edges={renderEdges}
         onKeyDown={(event) => {
@@ -381,16 +383,51 @@ export function GraphView<
           }
         }}
         onNodesChange={(changes) => {
-          setRenderNodes((current) => applyNodeChanges(changes, current));
+          const positions: Record<string, GraphViewPosition> = {};
+          const nextSelection = new Map(renderNodes.map((node) => [node.id, node.selected]));
+          let selectionChanged = false;
+          for (const change of changes) {
+            if (change.type === "select") {
+              setSelection((current) => ({ ...current, [change.id]: change.selected }));
+              nextSelection.set(change.id, change.selected);
+              selectionChanged = true;
+            }
+            if (change.type === "position" && change.position) {
+              if (!change.dragging) positions[change.id] = change.position;
+              setDragging((current) => {
+                const next = { ...current };
+                if (change.dragging) next[change.id] = change.position!;
+                else delete next[change.id];
+                return next;
+              });
+            }
+            if (change.type === "dimensions" && change.dimensions) {
+              const dimensions = change.dimensions;
+              setMeasured((current) => current[change.id]?.width === dimensions.width
+                && current[change.id]?.height === dimensions.height
+                ? current : { ...current, [change.id]: dimensions });
+            }
+          }
+          if (Object.keys(positions).length) onNodesPositionChange?.(positions);
+          if (selectionChanged && controlledNodeSelection) emitNodeSelection(nodes.filter((node) => nextSelection.get(node.id)));
         }}
         onEdgesChange={(changes) => {
-          setRenderEdges((current) => applyEdgeChanges(changes, current));
+          const nextSelection = new Map(renderEdges.map((edge) => [edge.id, edge.selected]));
+          let selectionChanged = false;
+          for (const change of changes) {
+            if (change.type === "select") {
+              setEdgeSelection((current) => ({ ...current, [change.id]: change.selected }));
+              nextSelection.set(change.id, change.selected);
+              selectionChanged = true;
+            }
+          }
+          if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
         }}
         fitView
         fitViewOptions={fitViewOptions}
         nodesDraggable={nodesDraggable}
         nodesConnectable={Boolean(onConnect)}
-        elementsSelectable={Boolean(onNodeSelect || onNodesSelect || onEdgeSelect)}
+        elementsSelectable={Boolean(onNodesSelect || onEdgeSelect)}
         onNodeClick={
           onNodeClick
             ? (event, node) => onNodeClick(node.data.node, graphActivation(event))
@@ -403,19 +440,15 @@ export function GraphView<
               }
             : undefined
         }
-        onNodeDragStop={
-          onNodeDragEnd
-            ? (_event, node) =>
-                onNodeDragEnd(node.data.node, {
-                  x: node.position.x,
-                  y: node.position.y,
-                })
-            : undefined
-        }
+        isValidConnection={isValidConnection}
+        edgesReconnectable={Boolean(onReconnect)}
+        onReconnect={onReconnect ? (edge, connection) => {
+          if (edge.data?.edge && (!isValidConnection || isValidConnection(connection))) onReconnect(edge.data.edge, connection);
+        } : undefined}
         onConnect={
           onConnect
             ? (connection) => {
-                if (!connection.source || !connection.target) return;
+                if (!connection.source || !connection.target || (isValidConnection && !isValidConnection(connection))) return;
                 onConnect({
                   source: connection.source,
                   target: connection.target,
@@ -426,17 +459,10 @@ export function GraphView<
             : undefined
         }
         onSelectionChange={
-          onNodeSelect || onNodesSelect || onEdgeSelect
+          onNodesSelect || onEdgeSelect
             ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
-                const signature = JSON.stringify([
-                  selectedNodes.map((node) => node.id),
-                  selectedEdges.map((edge) => edge.id),
-                ]);
-                if (lastSelectionSignature.current === signature) return;
-                lastSelectionSignature.current = signature;
-                onNodeSelect?.(selectedNodes[0]?.data.node ?? null);
-                onNodesSelect?.(selectedNodes.map((node) => node.data.node));
-                onEdgeSelect?.(selectedEdges[0]?.data?.edge ?? null);
+                if (!controlledNodeSelection) emitNodeSelection(selectedNodes.map((node) => node.data.node));
+                if (!controlledEdgeSelection) emitEdgeSelection(selectedEdges.flatMap((edge) => edge.data ? [edge.data.edge] : []));
               }
             : undefined
         }
@@ -444,6 +470,11 @@ export function GraphView<
         <Background color="var(--border-subtle)" gap={20} />
         <Controls showInteractive={false} />
       </ReactFlow>
+      <div role="status" className="sr-only">
+        {nodes.filter((node) => status?.[node.id]).map((node) => (
+          <span key={node.id}>{node.ariaLabel ?? (typeof node.title === "string" ? node.title : node.id)}: {status?.[node.id]?.label}. </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -462,21 +493,25 @@ function toReactFlowNode<
 >(
   node: GraphViewNode<TKind, TMeta>,
   nodeStyles: Readonly<Record<TKind, GraphViewNodeStyle>>,
+  status?: GraphViewStatus,
+  selected = node.selected,
 ): RenderNode<TKind, TMeta> {
   const style = nodeStyleFor(node.kind, nodeStyles);
-  const emphasized = node.selected || node.highlighted;
+  const emphasized = selected || node.highlighted;
   return {
     id: node.id,
     domAttributes: { "data-graph-node-id": node.id } as RenderNode<TKind, TMeta>["domAttributes"],
-    selected: node.selected,
+    selected,
     ariaLabel: node.ariaLabel,
-    type: style.type ?? "default",
+    type: "angee",
     position: { x: 0, y: 0 },
     sourcePosition: Position.Bottom,
     targetPosition: Position.Top,
     data: {
       node,
-      label: <GraphNodeLabel node={node} style={style} />,
+      label: <GraphNodeLabel node={node} style={style} status={status} />,
+      style,
+      status,
     },
     style: {
       width: style.width,
@@ -490,6 +525,8 @@ function toReactFlowNode<
         : style.background ?? "var(--surface-sheet)",
       color: style.color ?? "var(--text-primary)",
       padding: 0,
+      borderStyle: "solid",
+      borderRadius: 6,
     },
   };
 }
@@ -514,6 +551,8 @@ function toReactFlowEdge<
     ariaLabel: edge.ariaLabel,
     source: edge.source,
     target: edge.target,
+    sourceHandle: edge.sourceHandle,
+    targetHandle: edge.targetHandle,
     type: "smoothstep",
     data: { edge },
     label: edge.label,
@@ -529,12 +568,14 @@ function toReactFlowEdge<
 function GraphNodeLabel<TKind extends string>({
   node,
   style,
+  status,
 }: {
   node: GraphViewNode<TKind>;
   style: GraphViewNodeStyle;
+  status?: GraphViewStatus;
 }): React.ReactElement {
   return (
-    <div className="min-w-0 px-3 py-2 text-left">
+    <div className="relative min-w-0 px-3 py-2 text-left">
       <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
         <span className="truncate text-13 font-semibold text-fg">
           {node.title}
@@ -543,6 +584,7 @@ function GraphNodeLabel<TKind extends string>({
           {node.kindLabel ?? node.kind}
         </Badge>
       </div>
+      {status ? <Badge className="absolute -top-3 right-2" tone={status.tone ?? "neutral"} density="compact">{status.label}</Badge> : null}
       {node.code ? (
         <Code truncate tone="muted">
           {node.code}
@@ -557,59 +599,24 @@ function GraphNodeLabel<TKind extends string>({
   );
 }
 
-function layoutGraph<
-  TEdgeKind extends string,
->({
-  nodes,
-  edges,
-  layout,
-}: {
-  nodes: readonly { id: string; position?: GraphViewPosition; width: number; height: number }[];
-  edges: readonly { id: string; source: string; target: string; kind: TEdgeKind }[];
-  layout: Required<GraphViewLayout>;
-}): {
-  positions: ReadonlyMap<string, GraphViewPosition>;
-  visibleEdgeIds: ReadonlySet<string>;
-} {
-  // @dagrejs/dagre is pinned EXACT at 3.0.0: 3.1.0/3.1.1 regress on large
-  // multigraphs with >=3 parallel edges between one node pair (dagre's
-  // intersectRect throws "Not possible to find intersection inside of the
-  // rectangle" — live repro: the platform model graph's created_by/updated_by/
-  // owner edges). Re-test with the platform graph before widening the range.
-  const graph = new dagre.graphlib.Graph({ directed: true, multigraph: true });
-  graph.setDefaultEdgeLabel(() => ({}));
-  graph.setGraph(layout);
 
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  for (const node of nodes) {
-    graph.setNode(node.id, { width: node.width, height: node.height });
-  }
-  for (const edge of edges) {
-    // Dagre throws "Not possible to find intersection inside of the
-    // rectangle" for edges it cannot lay out: an endpoint that is not a
-    // declared node (setEdge would auto-create it dimensionless) or a
-    // self-loop. Live graph data contains both (filtered-out endpoints,
-    // self-referential relations), so the layout skips them; self-loops
-    // still render — React Flow draws them without dagre's help.
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
-    if (edge.source === edge.target) continue;
-    graph.setEdge(edge.source, edge.target, { weight: 1 }, edge.id);
-  }
-
-  dagre.layout(graph);
-
-  return {
-    positions: new Map(nodes.map((node) => {
-      const position = graph.node(node.id);
-      return [node.id, node.position ?? {
-        x: position.x - node.width / 2,
-        y: position.y - node.height / 2,
-      }];
-    })),
-    visibleEdgeIds: new Set(edges
-      .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
-      .map((edge) => edge.id)),
-  };
+function GraphNode({ id, data, isConnectable }: NodeProps<RenderNode<string, Record<string, unknown>>>): React.ReactElement {
+  const t = useUiT();
+  const updateNodeInternals = useUpdateNodeInternals();
+  const portsSignature = JSON.stringify(data.node.ports?.map((port) => port.id));
+  React.useEffect(() => { updateNodeInternals(id); }, [id, portsSignature, data.style.type, updateNodeInternals]);
+  return (
+    <>
+      {data.style.type !== "input" ? <Handle type="target" position={Position.Top} isConnectable={isConnectable} aria-label={t("graph.input")} /> : null}
+      {data.label}
+      {data.node.ports ? <div className="flex justify-around gap-1 px-2 pb-2 text-2xs text-fg-muted">
+        {data.node.ports.map((port, index, ports) => <span key={port.id}>
+          {port.label ?? port.id}
+          <Handle id={port.id} type="source" position={Position.Bottom} isConnectable={isConnectable} aria-label={port.label ?? port.id} style={{ left: ((index + 1) / (ports.length + 1)) * 100 + "%" }} />
+        </span>)}
+      </div> : data.style.type !== "output" ? <Handle type="source" position={Position.Bottom} isConnectable={isConnectable} aria-label={t("graph.output")} /> : null}
+    </>
+  );
 }
 
 function nodeStyleFor<TKind extends string>(
@@ -619,4 +626,12 @@ function nodeStyleFor<TKind extends string>(
   const style = nodeStyles[kind];
   if (!style) throw new Error(`Missing graph node style for "${kind}".`);
   return style;
+}
+
+function sameNodeContent(left: GraphViewNode, right: GraphViewNode): boolean {
+  return left.kind === right.kind && left.kindLabel === right.kindLabel
+    && left.title === right.title && left.code === right.code && left.detail === right.detail
+    && left.ariaLabel === right.ariaLabel && left.highlighted === right.highlighted
+    && left.meta === right.meta && left.ports === right.ports
+    && left.selected === right.selected && left.position?.x === right.position?.x && left.position?.y === right.position?.y;
 }

@@ -156,11 +156,11 @@ describe("FeedsPage", () => {
     expect(pageMocks.columnFields).toEqual(
       expect.arrayContaining([
         "display_name",
-        "backend_class",
+        "feed_backend_class",
         "handle.display_name",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
+        "sync_stage",
         "last_sync_completed_at",
       ]),
     );

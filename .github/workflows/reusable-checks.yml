@@ -86,23 +86,41 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run pytest -q -n auto --dist loadfile --durations=25 ${{ inputs.pytest-extra-args }}
-      - name: Verify workflow concurrency contracts execute on PostgreSQL
+      - name: Verify workflow and decision contracts execute on PostgreSQL
+        # Run this independent database proof even if the preceding suite fails.
+        if: ${{ !cancelled() }}
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
+        # Review concurrency includes simultaneous all seats, a requester-less
+        # first seat, and recovery after a settlement signal skips a busy run.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
-          uv run pytest -q --nomigrations --junitxml=workflow-concurrency.xml \
-            tests/test_workflow_attempt_concurrency.py \
-            tests/test_workflow_dispatch_concurrency.py \
-            tests/test_workflow_runtime_concurrency.py \
-            tests/test_workflow_start_concurrency.py \
-            tests/test_workflow_map_concurrency.py \
-            tests/test_workflow_definition_concurrency.py \
-            tests/test_workflow_test_snapshots.py::test_concurrent_test_request_reuses_one_snapshot_run_and_dispatch \
-            tests/test_workflows_engine.py::test_postgres_lock_sql_scopes_joined_engine_queries_to_self \
-            tests/test_workflows_triggers.py::test_trigger_edit_and_activation_serialize_on_lineage_then_trigger
-          uv run python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL concurrency tests, got tests={len(cases)}, skipped={skipped}"'
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --junitxml=workflow-concurrency.xml \
+            tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
+            tests/test_workflows_runtime.py tests/test_workflows_install.py \
+            tests/test_workflows_subject.py tests/test_workflows_publication.py \
+            tests/test_workflows_testing.py tests/test_testing.py \
+            tests/test_workflows_io.py tests/test_workflows_contract.py tests/test_workflows_graphql.py \
+            tests/test_workflows_fix_round.py \
+            tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
+            tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
+            tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
+            tests/test_decision_display_nested.py \
+            tests/test_workflows_map_definition.py tests/test_workflows_map.py \
+            tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \
+            tests/test_workflows_await_definition.py tests/test_workflows_children.py \
+            tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
+            tests/test_workflows_retention.py \
+            tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
+            tests/test_workflows_triggers_concurrency.py tests/test_workflows_messaging.py \
+            tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
+            tests/test_workflows_parties.py \
+            tests/test_composed_note_workflow.py \
+            tests/test_extraction_steps.py tests/test_extraction_decisions.py \
+            tests/test_composed_extraction_workflow.py \
+            tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}

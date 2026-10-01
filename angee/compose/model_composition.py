@@ -130,6 +130,7 @@ class ModelComposition:
         for model in dict.fromkeys(declarations):
             self._validate_import(model)
         self._validate_fields()
+        self._validate_donor_managers()
         for source in self.ordered_models:
             self.grantable(source)
 
@@ -284,6 +285,20 @@ class ModelComposition:
                     and (field.concrete or field.many_to_many)
                 )
             )
+
+    def _validate_donor_managers(self) -> None:
+        """Reject independently declared managers with one name on a target."""
+
+        for source in self.ordered_models:
+            owners: dict[str, tuple[models.Manager, type[models.Model]]] = {}
+            for donor in self.donors(source):
+                for manager in donor._meta.local_managers:
+                    previous = owners.setdefault(manager.name, (manager, donor))
+                    if previous[0].creation_counter != manager.creation_counter:
+                        raise ImproperlyConfigured(
+                            f"{source._meta.label_lower} composes manager {manager.name!r} from "
+                            f"both {previous[1]._meta.label} and {donor._meta.label}"
+                        )
 
     def validate_concrete(self, concrete_models: Iterable[type[models.Model]]) -> None:
         """Validate transition declarations against final Django classes after import."""

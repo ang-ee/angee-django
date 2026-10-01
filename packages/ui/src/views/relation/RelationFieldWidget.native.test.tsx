@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
+import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { useRelationSelectedOption } from "./relation-options";
 import { customFilterChipsFor } from "../resource/resource-view-utils";
@@ -13,6 +14,46 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
+
+test("read-only relation values use their retained label and record route without picker queries", () => {
+  const getOne = vi.fn();
+  const getList = vi.fn();
+  const resource = testDataResource("contacts.Address", { recordRepresentation: "name" });
+  const runtime = {
+    routeHref: createRouteHref([{ name: "addresses", path: "/addresses" }, { name: "address.record", path: "/addresses/$id" }]),
+    routesByResource: { "contacts.Address": { collection: "addresses", record: { name: "address.record", param: "id" } } },
+  };
+  render(<Provider resources={[resource]} dataProvider={{ getOne, getList }}>
+    <AppRuntimeProvider runtime={runtime}><RelationFieldWidget readOnly value="address-1"
+      selectedOption={{ value: "address-1", label: "Retained sender" }}
+      relation={{ resource: "contacts.Address", labelField: "name", canCreate: true }} />
+    </AppRuntimeProvider>
+  </Provider>);
+  expect(screen.getByRole("link", { name: "Retained sender" }).getAttribute("href")).toBe("/addresses/address-1");
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(getOne).not.toHaveBeenCalled();
+  expect(getList).not.toHaveBeenCalled();
+});
+
+test("empty read-only relations render no editable placeholder and unrouted values retain their label", () => {
+  const getOne = vi.fn();
+  const getList = vi.fn();
+  const relation = { resource: "contacts.Address", labelField: "name", canCreate: false };
+  const { rerender } = render(<Provider dataProvider={{ getOne, getList }}>
+    <RelationFieldWidget readOnly value={null} relation={relation} placeholder="Choose a sender" />
+  </Provider>);
+  expect(screen.queryByText("Choose a sender")).toBeNull();
+  expect(screen.queryByRole("button")).toBeNull();
+  rerender(<Provider resources={[testDataResource("contacts.Address")]} dataProvider={{ getOne, getList }}>
+    <RelationFieldWidget readOnly value="address-1" relation={relation}
+      selectedOption={{ value: "address-1", label: "Retained sender" }} />
+  </Provider>);
+  expect(screen.getByText("Retained sender")).toBeTruthy();
+  expect(screen.queryByRole("link")).toBeNull();
+  expect(getOne).not.toHaveBeenCalled();
+  expect(getList).not.toHaveBeenCalled();
+});
 
 function SelectedFilter({ value }: { value: string }) {
   const selected = useRelationSelectedOption(

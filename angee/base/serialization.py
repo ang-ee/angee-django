@@ -30,6 +30,19 @@ def canonical_json_sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def strip_null_bytes(value: Any) -> Any:
+    """Remove NUL characters from strings and JSON keys before text/JSON storage."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {strip_null_bytes(key): strip_null_bytes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [strip_null_bytes(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(strip_null_bytes(item) for item in value)
+    return value
+
+
 def json_safe(value: Any) -> Any:
     """Return a JSON-serializable representation of ``value``."""
 

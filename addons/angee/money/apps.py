@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from django.apps import AppConfig
-from django.conf import settings
 from django.core import checks
 
 _CHECKS_REGISTERED = False
@@ -52,6 +51,10 @@ def check_reference_currency_setting(
     ``ImproperlyConfigured`` from the rate manager). This check makes the pending
     choice visible without blocking the build.
     """
+
+    # AppConfig discovery inspects every module attribute; exposing LazySettings
+    # there would configure Django before the composer has completed its graph.
+    from django.conf import settings
 
     from angee.money.models import REFERENCE_CURRENCY_SETTING
 

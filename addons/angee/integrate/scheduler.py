@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from rebac import system_context
 
@@ -16,7 +16,15 @@ _QUEUED_RECOVERY_SECONDS = 300
 
 
 def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
-    """Claim every due bridge row and enqueue one sync task for each."""
+    """Claim and enqueue due bridges from autocommit, recovering send failures.
+
+    The per-bridge transaction must commit before sending so a synchronous broker
+    failure can reset its queue token here. An enclosing transaction would defer
+    that failure beyond this recovery boundary.
+    """
+
+    if connection.in_atomic_block:
+        raise RuntimeError("enqueue_due_bridges requires autocommit.")
 
     timestamp = now or timezone.now()
     stale_before = timestamp - timedelta(seconds=_QUEUED_RECOVERY_SECONDS)
@@ -25,15 +33,16 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
 
     with system_context(reason="integrate.scheduler"):
         for model in models_with(base=Bridge):
+            due = model._default_manager.of_concrete_type().due_for_enqueue(
+                timestamp=timestamp, stale_before=stale_before
+            )
             due_ids = list(
-                model._default_manager.due_for_enqueue(timestamp=timestamp, stale_before=stale_before)
-                .order_by("pk")
-                .values_list("pk", flat=True)
+                due.order_by("pk").values_list("pk", flat=True)
             )
             for pk in due_ids:
                 with transaction.atomic():
                     bridge = (
-                        model._default_manager.due_for_enqueue(timestamp=timestamp, stale_before=stale_before)
+                        due
                         .lock_if_supported()
                         .filter(pk=pk)
                         .first()

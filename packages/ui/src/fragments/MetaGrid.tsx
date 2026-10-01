@@ -27,15 +27,17 @@ export type MetaSectionProps = Omit<
 > & {
   className?: string;
   title: React.ReactNode;
+  /** Semantic depth within the containing page; presentation remains unchanged. */
+  headingLevel?: 2 | 3 | 4 | 5 | 6;
 };
 
 export const metaGridVariants = tv({
   slots: {
     grid:
-      "grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-13",
+      "grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-13",
     row: "contents",
-    label: "normal-case tracking-normal",
-    value: "m-0 min-w-0 break-words text-fg",
+    label: "max-w-[12rem] normal-case tracking-normal [overflow-wrap:anywhere]",
+    value: "m-0 min-w-0 text-fg [overflow-wrap:anywhere]",
     action: "ml-2 inline-flex align-middle",
     section: "space-y-2",
   },
@@ -75,12 +77,12 @@ export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
 MetaGrid.displayName = "MetaGrid";
 
 export const MetaSection = React.forwardRef<HTMLElement, MetaSectionProps>(
-  function MetaSection({ children, className, title, ...props }, ref) {
+  function MetaSection({ children, className, title, headingLevel = 3, ...props }, ref) {
     const styles = metaGridVariants();
 
     return (
       <section ref={ref} className={styles.section({ className })} {...props}>
-        <SectionEyebrow as="h3">{title}</SectionEyebrow>
+        <SectionEyebrow as={`h${headingLevel}`}>{title}</SectionEyebrow>
         {children}
       </section>
     );

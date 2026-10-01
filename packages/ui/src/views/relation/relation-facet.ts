@@ -1,9 +1,11 @@
 import * as React from "react";
 import { useAngeeFacets } from "@angee/refine";
 import { ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
-import type { ResourceToolbarFilterField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../toolbars";
+import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../toolbars";
 import type { ResourceViewFilter } from "../resource/resource-view-model";
 import { resourceFieldGroupLabel } from "../resource/model-metadata-defaults";
+import { groupLabel } from "../resource/resource-view-list-body";
+import { useUiT } from "../../i18n";
 import type { FacetDescriptor } from "../page";
 import { useGroupOperation } from "../resource/resource-operations";
 
@@ -13,7 +15,7 @@ const EMPTY_OPTIONS: readonly FacetDescriptor[] = [];
 export type RelationFacetOptions = FacetDescriptor;
 export interface RelationFacets {
   filters: readonly ResourceToolbarFilterOption[];
-  filterFields: readonly ResourceToolbarFilterField[];
+  filterFields: readonly FilterClauseField[];
   groupOptions: readonly ResourceToolbarGroupOption[];
 }
 interface DeclaredRelationFacet {
@@ -24,12 +26,13 @@ interface DeclaredRelationFacet {
   groupOption?: ResourceToolbarGroupOption;
 }
 
-/** Relation choices and bucket predicates share the resource query's axis. */
+/** Declared facet choices and bucket predicates share the resource query's axis. */
 export function useRelationFacets(
   resource: string,
   options: readonly RelationFacetOptions[] | undefined = EMPTY_OPTIONS,
   activeFilter?: ResourceViewFilter,
 ): RelationFacets {
+  const t = useUiT();
   const metadata = useModelMetadata(resource);
   const query = React.useMemo(() => metadata ? ResourceQuery.from(metadata) : null, [metadata]);
   const facets = React.useMemo<readonly DeclaredRelationFacet[]>(() => {
@@ -57,12 +60,26 @@ export function useRelationFacets(
   return React.useMemo(() => ({
     filters: facets.flatMap((facet) => (result.facets[facet.field]?.options ?? []).flatMap((option) => {
       const filter = facet.axis.drill({ key: option.key });
-      return filter ? [{ id: `${facet.field}:${option.value}`, label: option.label, chipLabel: option.label, filter }] : [];
+      const label = facetOptionLabel(facet, option, metadata, t);
+      return filter ? [{ id: `${facet.field}:${option.value}`, label, chipLabel: label, filter }] : [];
     })),
     filterFields: facets.map((facet) => ({
       id: facet.field, field: facet.field, label: facet.label, type: "selection" as const,
-      options: (result.facets[facet.field]?.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+      options: (result.facets[facet.field]?.options ?? []).map((option) => ({
+        value: option.value, label: facetOptionLabel(facet, option, metadata, t),
+      })),
     })),
     groupOptions: facets.flatMap((facet) => facet.groupOption ? [facet.groupOption] : []),
-  }), [facets, result.facets]);
+  }), [facets, metadata, result.facets, t]);
+}
+
+function facetOptionLabel(
+  facet: DeclaredRelationFacet,
+  option: { label: string; key: Record<string, unknown> },
+  metadata: ReturnType<typeof useModelMetadata>,
+  t: ReturnType<typeof useUiT>,
+): string {
+  return metadata?.fields[facet.field]?.kind === "enum"
+    ? groupLabel(facet.axis.bucketLabel({ key: option.key }), { field: facet.field }, metadata, t("list.emptyValue"), t)
+    : option.label;
 }

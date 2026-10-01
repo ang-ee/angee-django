@@ -1,9 +1,12 @@
 _meta:
   model: knowledge.MarkdownPage
 rows:
-  - xref: md_getting_started
+  - xref: page_getting_started
     fields:
-      page: knowledge.page_getting_started
+      vault: knowledge.vault_handbook
+      parent: knowledge.page_guides
+      title: Getting Started
+      created_by: iam.user_admin
       body: |
         # Getting Started
 
@@ -13,9 +16,11 @@ rows:
         - Pages form a tree inside a vault.
         - A note carries a markdown body; a folder just groups pages.
         - Link pages with `[[Wikilinks]]` to build backlinks.
-  - xref: md_architecture
+  - xref: page_architecture
     fields:
-      page: knowledge.page_architecture
+      vault: knowledge.vault_handbook
+      title: Architecture
+      created_by: iam.user_admin
       body: |
         # Architecture
 
@@ -29,9 +34,11 @@ rows:
         1. The framework owns the seams.
         2. Addons own the product logic.
         3. The composer turns contracts into a runnable project.
-  - xref: md_wikilinks
+  - xref: page_wikilinks
     fields:
-      page: knowledge.page_wikilinks
+      vault: knowledge.vault_handbook
+      title: Wikilinks
+      created_by: iam.user_admin
       body: |
         # Wikilinks
 

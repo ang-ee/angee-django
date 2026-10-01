@@ -22,7 +22,7 @@ def test_dashboard_archive_locks_and_checks_revision(monkeypatch: pytest.MonkeyP
     rows.get.return_value = locked
 
     class ArchiveTarget:
-        Scope = Dashboard.Scope
+        DashboardScope = Dashboard.DashboardScope
         scope = "personal"
         pk = 7
         _state = SimpleNamespace(db="default", adding=False)

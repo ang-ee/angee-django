@@ -79,4 +79,15 @@ describe("moneyWidget.edit", () => {
     fireEvent.change(input, { target: { value: "99.99" } });
     expect(onChange).toHaveBeenCalledWith("99.99");
   });
+
+  it("shows stored money at the row currency precision while retaining significant digits", () => {
+    const { getByRole, rerender } = render(createElement(moneyWidget.edit!, {
+      value: "60.000000", row: { currency: { code: "EUR" } },
+    }));
+    expect((getByRole("textbox") as HTMLInputElement).value).toBe("60.00");
+    rerender(createElement(moneyWidget.edit!, {
+      value: "60.123400", row: { currency: { code: "EUR" } },
+    }));
+    expect((getByRole("textbox") as HTMLInputElement).value).toBe("60.123400");
+  });
 });

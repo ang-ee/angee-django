@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import date
+from enum import StrEnum
 from typing import Annotated, Any, Self, cast
 
 import strawberry
@@ -41,7 +42,7 @@ from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
-from angee.integrate.schema import BridgeTypeMixin, IntegrationType
+from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options
 from angee.messaging.models import ThreadedModelMixin
@@ -161,6 +162,7 @@ class MessagingPairingQuery:
         channel = resolve_action_target(
             Channel,
             id,
+            queryset=Channel.objects.of_concrete_type(),
             reason="messaging.graphql.channel_pairing",
         )
         return _pairing_result(connect.channel_pairing, channel)
@@ -175,7 +177,7 @@ class MessagingPairingMutation:
         """Resume retained pairing material or start a new pairing session."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.resume_channel_pairing"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.resume_channel_pairing"
         ) as channel:
             _pairing_result(connect.resume_channel_pairing, channel)
         return ActionResult(ok=True, message="Channel connection started.")
@@ -186,7 +188,7 @@ class MessagingPairingMutation:
         """Submit one consume-once account password to the live channel session."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.submit_channel_password"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.submit_channel_password"
         ) as channel:
             _pairing_result(connect.submit_channel_password, channel, password)
         return ActionResult(ok=True, message="Password submitted.")
@@ -196,7 +198,7 @@ class MessagingPairingMutation:
         """Skip one optional consume-once secret round."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.skip_channel_password"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.skip_channel_password"
         ) as channel:
             _pairing_result(connect.skip_channel_password, channel)
         return ActionResult(ok=True, message="Password skipped.")
@@ -206,7 +208,7 @@ class MessagingPairingMutation:
         """Wipe released pairing material and restart with a fresh session."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.reset_channel_pairing"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.reset_channel_pairing"
         ) as channel:
             _pairing_result(connect.reset_channel_pairing, channel)
         return ActionResult(ok=True, message="Pairing reset; link the channel again.")
@@ -216,7 +218,7 @@ class MessagingPairingMutation:
         """Stop the live session while retaining reusable pairing material."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.disconnect_channel"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.disconnect_channel"
         ) as channel:
             _pairing_result(connect.disconnect_channel, channel)
         return ActionResult(ok=True, message="Disconnected channel.")
@@ -246,9 +248,11 @@ class MessagingChannelMutation:
         """
 
         with transaction.atomic():
-            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel))
-            preview = DeletePreview.from_counts(channel, Channel.objects.inventory(channel))
-            if confirm:
+            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel).of_concrete_type())
+            preview = DeletePreview.from_counts(
+                channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
+            )
+            if confirm and not preview.has_blockers:
                 try:
                     Channel.objects.purge(channel)
                 except (ProtectedError, RestrictedError) as error:
@@ -425,10 +429,7 @@ class MessageType(AngeeNode):
     parent: "MessageType | None"
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None"
-    # The FK targets the Integration MTI parent (a messaging Channel or a posts
-    # Feed both produce messages), so the projection is the parent type — a
-    # ChannelType declaration would crash resolving a Feed-ingested row.
-    channel: IntegrationType | None
+    channel: ChannelType | None
     tracking_values: list[TrackingValueType]
     participants: list[ParticipantType]
     created_at: auto
@@ -617,8 +618,7 @@ class ThreadType(AngeeNode):
     title: FragmentType | None
     message_count: auto
     last_message_at: auto
-    # Integration parent, same reason as MessageType.channel.
-    channel: IntegrationType | None
+    channel: ChannelType | None
     messages: list[MessageType]
     participants: list[ParticipantType]
     created_at: auto
@@ -923,12 +923,20 @@ class RecordThreadInput(RecordReferenceInput):
     message_types: list[str] = strawberry.field(name="message_types", default_factory=list)
 
 
+@strawberry.enum
+class RecordMessagePostKind(StrEnum):
+    """Kinds of author-created record chatter."""
+
+    COMMENT = "comment"
+    NOTE = "note"
+
+
 @strawberry.input
 class RecordMessagePostInput(RecordReferenceInput):
     """Fields accepted when posting an internal chatter message."""
 
     body: str
-    kind: str = "comment"
+    kind: RecordMessagePostKind = RecordMessagePostKind.COMMENT
     parent_message_id: strawberry.ID | None = strawberry.field(name="parent_message_id", default=None)
     attachment_ids: list[strawberry.ID] = strawberry.field(name="attachment_ids", default_factory=list)
     recipient_user_ids: list[strawberry.ID] = strawberry.field(name="recipient_user_ids", default_factory=list)
@@ -1364,8 +1372,7 @@ class MessagingMutation:
             attachments = _storage_files(input.attachment_ids)
             recipient_user_ids = tuple(user.pk for user in _users_from_public_ids(input.recipient_user_ids))
             parent = _message(input.parent_message_id) if input.parent_message_id is not None else None
-            kind = _record_message_post_kind(input.kind)
-            if kind == "note":
+            if input.kind is RecordMessagePostKind.NOTE:
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
                 message = cast(Any, record).message_log(input.body, attachments=attachments, parent=parent)
@@ -1756,7 +1763,7 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
 
         del info
         queryset = self.write_target_queryset()
-        channel = require_instance_for_id(Channel, str(pk), queryset=queryset)
+        channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
         Channel.objects.purge(channel)
         return channel
 
@@ -1765,13 +1772,13 @@ _CHANNEL_RESOURCE = hasura_model_resource(
     ChannelType,
     model=Channel,
     name="channels",
+    get_queryset=lambda info: Channel.objects.of_concrete_type(),
     filterable=[
         "id",
         "display_name",
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
@@ -1791,7 +1798,6 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         *_CHANNEL_EXTENSION_GROUP_FIELDS,
     ],
@@ -2073,17 +2079,6 @@ def _referenced_record(input: RecordReferenceInput) -> Any | None:
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     return None if record is None else _readable_record(record)
-
-
-def _record_message_post_kind(kind: str) -> str:
-    """Return the normalized side-chatter post kind."""
-
-    value = str(kind or "comment").strip().lower()
-    if value in {"comment", "message"}:
-        return "comment"
-    if value == "note":
-        return "note"
-    raise ValueError("Message kind must be 'comment' or 'note'.")
 
 
 def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReactionGroupType]:

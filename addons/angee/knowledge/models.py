@@ -1,12 +1,9 @@
 """Source models for the knowledge addon.
 
 A :class:`Vault` is the permission and namespace boundary; every
-addressable thing inside it is a :class:`Page` — a thin identity row
-whose kind-specific content lives in one-to-one sidecars. This addon
-ships :class:`MarkdownPage`, the body sidecar for markdown-based kinds;
-extension addons contribute further kinds by writing new ``kind``
-values and their own sidecar model with a one-to-one to
-``knowledge.Page``.
+addressable thing inside it is a :class:`Page`. A :class:`MarkdownPage`
+is the concrete child for pages with a versioned markdown body; extension
+addons contribute their own child models for other content shapes.
 """
 
 from __future__ import annotations
@@ -14,13 +11,15 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, ClassVar, cast
 
+import reversion
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import models, transaction
 from markdown_it import MarkdownIt
 from rebac import (
     MissingActorError,
@@ -32,12 +31,14 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.backends import backend as rebac_backend
+from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
 
+from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
-from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
+from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target, concrete_child, concrete_child_models
 from angee.knowledge.retrieval import RetrievalBackend
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -104,7 +105,7 @@ class VaultManager(AngeeManager):
         return vault.with_actor(actor)
 
 
-class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Vault(AuditMixin, AngeeDataModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
     Deleting a vault cascade-deletes every page inside it; the crud delete
@@ -124,9 +125,7 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
     description = models.TextField(blank=True, default="")
     icon = models.CharField(max_length=64, blank=True, default="")
     accent = models.CharField(max_length=32, blank=True, default="")
-    retrieval_class = ImplClassField(
-        base_class=RetrievalBackend,
-        registry_setting="ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES",
+    retrieval_class = ImplClassField(RetrievalBackend,
         default="lexical",
     )
     """Registry key for the retrieval backend this vault searches through."""
@@ -191,31 +190,34 @@ class PageManager(AngeeManager):
         if parent is not None:
             relationships["parent"] = (parent,)
         actor = self.check_create(relationships)
-        page = self.model(vault=vault, **fields)
+        kind = fields.pop("kind", self.model.PageKind.NOTE)
+        page_model = self.model
+        if kind != self.model.PageKind.FOLDER:
+            if kind not in (self.model.PageKind.NOTE, self.model.PageKind.TEMPLATE):
+                raise ValueError(f"Unsupported page kind: {kind!r}")
+            page_model = self.model._meta.apps.get_model("knowledge", "MarkdownPage")
+            fields["kind"] = kind
+        page = page_model(vault=vault, **fields)
         page.full_clean()
         page.sudo(reason="knowledge.page.create").save()
-        return page.with_actor(actor)
+        return self.model._base_manager.get(pk=page.pk).with_actor(actor)
 
 
-class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Page(AuditMixin, AngeeDataModel, HistoryMixin):
     """Universal addressable content node inside a vault.
 
-    A page is thin identity — title, hierarchy, and the ``kind``
-    discriminator. Kind-specific content lives in one-to-one sidecar
-    models; this addon ships :class:`MarkdownPage` for markdown-based
-    kinds.
+    A page owns title and hierarchy. A concrete child owns each content shape;
+    a parent row without a child is a folder.
     """
 
     runtime = True
 
     sqid_prefix = "pg_"
 
-    class Kind(models.TextChoices):
+    class PageKind(models.TextChoices):
         """Built-in page kinds.
 
-        ``kind`` itself is an open ``CharField`` — extension addons store
-        their own kind values and pair them with their own sidecar model
-        (a one-to-one to ``knowledge.Page``) without touching this model.
+        Note and template share the markdown shape and differ only in intent.
         """
 
         NOTE = "note", "Note"
@@ -234,7 +236,6 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         blank=True,
         related_name="children",
     )
-    kind = models.CharField(max_length=16, default=Kind.NOTE, db_index=True)
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
 
@@ -252,6 +253,18 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         """Return the page title for Django displays."""
 
         return self.title
+
+    @property
+    def kind(self) -> str:
+        """Project the page's kind from its concrete child."""
+
+        for child_model in concrete_child_models(self._meta.apps.get_model("knowledge", "Page")):
+            child = concrete_child(self, child_model)
+            if child is not None:
+                if child_model is self._meta.apps.get_model("knowledge", "MarkdownPage"):
+                    return str(child.kind)
+                return child._meta.model_name
+        return str(self.PageKind.FOLDER)
 
 
 class RecordBindingManager(AngeeManager):
@@ -500,7 +513,7 @@ class RecordBindingManager(AngeeManager):
             raise PermissionDenied(message)
 
 
-class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
@@ -605,7 +618,7 @@ class StaleBodyError(ValueError):
 
 
 class UnsupportedPageKindError(ValueError):
-    """Raised when a body write targets a page kind without a markdown sidecar."""
+    """Raised when a body write targets a page without a markdown child."""
 
 
 class StructuredEditError(ValueError):
@@ -624,40 +637,22 @@ class MarkdownPageManager(AngeeManager):
     """Factories for actor-scoped markdown body writes."""
 
     def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:
-        """Create or update ``page``'s markdown body, last-write-wins.
+        """Update ``page``'s markdown body, last-write-wins.
 
         ``expected_hash`` is an optimistic-concurrency token: when supplied
         and the stored ``body_hash`` differs, the write is rejected with
         :class:`StaleBodyError` so the caller can reload and retry.
         """
 
-        if page.kind not in self.model.page_kinds:
+        if page.kind == Page.PageKind.FOLDER:
             raise UnsupportedPageKindError(f"Pages of kind {page.kind!r} carry no markdown body.")
         with transaction.atomic():
-            markdown = self.select_for_update().filter(page=page).first()
-            if markdown is None:
-                markdown = self._create_body(page, body)
-                if markdown is not None:
-                    return markdown
-                # A concurrent first writer won the insert race; lock its row.
-                markdown = self.select_for_update().get(page=page)
+            markdown = self.select_for_update().get(pk=page.pk)
             if expected_hash is not None and expected_hash != markdown.body_hash:
                 raise StaleBodyError("Body hash is stale; reload the page and retry.")
             markdown.body = body
             markdown.save(update_fields=("body",))
             return markdown
-
-    def _create_body(self, page: Any, body: str) -> Any:
-        """Insert the first body row, or ``None`` when a concurrent writer won."""
-
-        actor = self.check_create({"page": (page,)})
-        markdown = self.model(page=page, body=body)
-        try:
-            with transaction.atomic():
-                markdown.sudo(reason="knowledge.markdown_page.create").save()
-        except IntegrityError:
-            return None
-        return markdown.with_actor(actor)
 
     # -- structure-aware edits --------------------------------------------
     # Thin write-orchestrators: read the current body (actor-scoped), splice it
@@ -724,12 +719,20 @@ class MarkdownPageManager(AngeeManager):
         authority — this read only computes candidate text, never the checked hash.
         """
 
-        markdown = self.filter(page=page).first()
+        markdown = self.filter(pk=page.pk).first()
         return "" if markdown is None else markdown.body
 
 
-class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
-    """Markdown body sidecar for markdown-based page kinds.
+class SectionOp(StrEnum):
+    """How a markdown section is spliced; member names are GraphQL wire values."""
+
+    REPLACE = "replace"
+    APPEND = "append"
+    PREPEND = "prepend"
+
+
+class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
+    """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
     ``word_count`` are derived on save. Body edits are versioned through
@@ -737,26 +740,14 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
     """
 
     runtime = True
+    extends = "knowledge.Page"
 
     revisioned_fields = ("body",)
-
-    sqid_prefix = "mdp_"
-
-    page_kinds: ClassVar[tuple[str, ...]] = cast("tuple[str, ...]", (Page.Kind.NOTE, Page.Kind.TEMPLATE))
-    """Page kinds that carry a markdown body sidecar."""
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
 
-    SECTION_OPS: ClassVar[tuple[str, ...]] = ("replace", "append", "prepend")
-    """Section splice operations accepted by :meth:`spliced_section`."""
-
-    page = models.OneToOneField(
-        "knowledge.Page",
-        on_delete=models.CASCADE,
-        related_name="markdown",
-        limit_choices_to={"kind__in": page_kinds},
-    )
+    kind = StateField(choices_enum=Page.PageKind, default=Page.PageKind.NOTE)
     body = models.TextField(blank=True, default="")
     body_hash = models.CharField(max_length=64, blank=True, default="", editable=False)
     word_count = models.PositiveIntegerField(default=0, db_index=True)
@@ -767,12 +758,17 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         """Django model options."""
 
         abstract = True
+        # Django creates the concrete MTI page_ptr; preserve Page.markdown.
+        default_related_name = "markdown"
         rebac_resource_type = "knowledge/markdown_page"
+        constraints = (
+            models.CheckConstraint(condition=~models.Q(kind=Page.PageKind.FOLDER), name="ck_markdown_page_not_folder"),
+        )
 
     def __str__(self) -> str:
-        """Return the owning page id for Django displays."""
+        """Return the inherited page title for Django displays."""
 
-        return f"markdown:{self.page_id}"
+        return self.title
 
     @staticmethod
     def hash_body(body: str) -> str:
@@ -862,10 +858,10 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         return matches[0]
 
     @staticmethod
-    def spliced_section(body: str, heading_path: str | list[str], op: str, content: str) -> str:
+    def spliced_section(body: str, heading_path: str | list[str], op: SectionOp | str, content: str) -> str:
         """Return ``body`` with one section's content spliced, never re-rendered.
 
-        ``op`` is one of :attr:`SECTION_OPS`: ``replace`` swaps the section body,
+        ``op`` is a :class:`SectionOp`: ``replace`` swaps the section body,
         ``append``/``prepend`` add ``content`` after/before it (after nested
         children for ``append`` — the range is section-inclusive). The heading
         line and everything outside the section are byte-identical (after CRLF
@@ -874,14 +870,20 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         — e.g. inside a code block — are untouched.
         """
 
-        if op not in MarkdownPage.SECTION_OPS:
-            raise StructuredEditError(f"Unknown section op {op!r}; expected one of {MarkdownPage.SECTION_OPS}.")
+        try:
+            op = SectionOp(op)
+        except ValueError as error:
+            raise StructuredEditError(f"Unknown section op {op!r}; expected one of {tuple(SectionOp)}.") from error
         normalized = MarkdownPage._normalize_newlines(body)
         start, end = MarkdownPage.section_range(normalized, heading_path)
         lines = normalized.split("\n")
         existing = lines[start + 1 : end]
         addition = MarkdownPage._normalize_newlines(content).split("\n")
-        blocks = {"replace": [addition], "prepend": [addition, existing], "append": [existing, addition]}[op]
+        blocks = {
+            SectionOp.REPLACE: [addition],
+            SectionOp.PREPEND: [addition, existing],
+            SectionOp.APPEND: [existing, addition],
+        }[op]
         section_body = MarkdownPage._join_blocks(blocks)
         spliced = [lines[start]]
         if section_body:
@@ -986,6 +988,9 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
                 field_names |= {"body_hash", "word_count", "updated_at"}
                 kwargs["update_fields"] = field_names
         super().save(*args, **kwargs)
+        if reversion.is_active():
+            # django-reversion follows MTI parent links when reading field_dict.
+            reversion.add_to_revision(self.page_ptr)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,7 +1011,7 @@ class LinkManager(AngeeManager):
         created after the link still resolves on the source page's next save.
         """
 
-        page = markdown.page
+        page = markdown.page_ptr
         assert page is not None
         wanted = parse_wikilinks(markdown.body)
         pages = type(page)._base_manager
@@ -1028,7 +1033,7 @@ class LinkManager(AngeeManager):
             )
 
 
-class Link(SqidMixin, AngeeModel):
+class Link(AngeeDataModel):
     """Wikilink edge from one page to another, derived from the source body.
 
     Indexer-authored (see :class:`LinkManager`) — no user-facing mutation,

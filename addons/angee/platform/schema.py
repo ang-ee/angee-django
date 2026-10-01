@@ -31,6 +31,7 @@ from angee.platform import composed
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
 _Addon = apps.get_model("platform", "Addon")
+strawberry.enum(cast(Any, _Addon.AddonKind))
 
 
 @strawberry.enum
@@ -143,7 +144,7 @@ class PlatformAddon:
     id: str = strawberry.field(resolver=_addon_id)
     label: str = strawberry.field(resolver=_Addon.get_display_label)
     namespace: str
-    kind: str
+    kind: _Addon.AddonKind
     model_count: int
     field_count: int
     resource_count: int
@@ -278,12 +279,9 @@ class AddonNode:
     description: auto
     category: auto
     keywords: list[str]
-    # Exposed as the string value, not an `auto` enum: strawberry would name the
-    # generated enums `Source`/`State`, colliding with `integrate`'s connection-source
-    # enum and the shared StateField names.
-    kind: str
-    source: str
-    state: str
+    kind: auto
+    source: auto
+    state: auto
     forced: auto
     pending: auto
     model_count: auto

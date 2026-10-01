@@ -1,6 +1,6 @@
 import * as React from "react";
 import { runActionResult, useAuthoredMutation } from "@angee/refine";
-import { Action, Column, Facet, Field, Form, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
+import { savedFormSubmitResult, useUiT, Action, Column, Facet, Field, Form, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
 import { IntegrationSyncColumns, IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 import type { DocumentVariables } from "@angee/refine";
 
@@ -34,6 +34,7 @@ export function VcsBridgesPage(): React.ReactElement {
 }
 
 function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const uiT = useUiT();
   const t = useIntegrateVcsT();
   const syncAction = useIntegrationSyncAction("sync_vcs_bridge", t("action.syncNow"));
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
@@ -78,14 +79,14 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
       if (data.webhookSecret !== undefined) fields.webhook_secret = data.webhookSecret;
       if (context.isCreate) {
         const variables = { data: fields } as DocumentVariables<typeof IntegrateCreateVcsBridge>;
-        return (await createBridge(variables))?.create_vcs_bridge ?? null;
+        return savedFormSubmitResult((await createBridge(variables))?.create_vcs_bridge, uiT("form.genericSaveError"));
       }
       const variables = {
         data: { ...fields, id: context.id },
       } as DocumentVariables<typeof IntegrateUpdateVcsBridge>;
-      return (await updateBridge(variables))?.update_vcs_bridge ?? null;
+      return savedFormSubmitResult((await updateBridge(variables))?.update_vcs_bridge, uiT("form.genericSaveError"));
     },
-    [createBridge, updateBridge],
+    [createBridge, updateBridge, uiT],
   );
 
   return (

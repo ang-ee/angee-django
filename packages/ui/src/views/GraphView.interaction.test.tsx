@@ -5,6 +5,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { GraphView } from "./GraphView";
+import { createUiTestProviders } from "../testing";
+
+const { Provider } = createUiTestProviders();
 
 beforeAll(() => {
   class ResizeObserverStub {
@@ -23,6 +26,35 @@ afterEach(() => {
 });
 
 describe("GraphView interactions", () => {
+  test("controlled native selection supports adding, toggling, and clearing multiple nodes", async () => {
+    const changed = vi.fn();
+    function ControlledSelection() {
+      const [selected, setSelected] = React.useState<readonly string[]>([]);
+      return <GraphView className="h-[360px] w-[520px]"
+        nodes={["a", "b"].map((id) => ({ id, kind: "node", title: id, selected: selected.includes(id) }))}
+        edges={[]} nodeStyles={{ node: { width: 160, height: 72, borderColor: "gray" } }}
+        onNodesSelect={(nodes) => { const ids = nodes.map((node) => node.id); changed(ids); setSelected(ids); }} />;
+    }
+    const view = render(<ControlledSelection />, { wrapper: Provider });
+    const first = await screen.findByTestId("rf__node-a");
+    const second = screen.getByTestId("rf__node-b");
+    fireEvent.click(first);
+    await waitFor(() => expect(first.className).toContain("selected"));
+    const modifier = navigator.userAgent.includes("Mac") ? "Meta" : "Control";
+    fireEvent.keyDown(window, { key: modifier });
+    fireEvent.click(second);
+    await waitFor(() => expect(changed).toHaveBeenLastCalledWith(["a", "b"]));
+    expect(first.className).toContain("selected");
+    expect(second.className).toContain("selected");
+    fireEvent.click(first);
+    await waitFor(() => expect(changed).toHaveBeenLastCalledWith(["b"]));
+    fireEvent.keyUp(window, { key: modifier });
+    expect(first.className).not.toContain("selected");
+    fireEvent.click(view.container.querySelector(".react-flow__pane")!);
+    await waitFor(() => expect(changed).toHaveBeenLastCalledWith([]));
+    expect(second.className).not.toContain("selected");
+  });
+
   test("renders controlled node selection with the shared selected recipe", async () => {
     const graph = (selected: boolean) => <GraphView
       className="h-[360px] w-[520px]"
@@ -44,26 +76,8 @@ describe("GraphView interactions", () => {
     expect(node.style.borderWidth).toBe("1px");
   });
 
-  test("forwards a programmatic focus target for pane navigation", async () => {
-    const surface = React.createRef<HTMLDivElement>();
-    render(
-      <GraphView
-        surfaceRef={surface}
-        ariaLabel="Workflow editor"
-        className="h-[360px] w-[520px]"
-        nodes={[]}
-        edges={[]}
-        nodeStyles={{}}
-      />,
-    );
-
-    surface.current?.focus();
-    expect(document.activeElement).toBe(surface.current);
-    expect(screen.getByRole("region", { name: "Workflow editor" })).toBe(surface.current);
-  });
-
   test("selects a node through the real xyflow canvas", async () => {
-    const onNodeSelect = vi.fn();
+    const onNodesSelect = vi.fn();
 
     render(
       <GraphView
@@ -92,7 +106,7 @@ describe("GraphView interactions", () => {
             borderColor: "var(--border-subtle)",
           },
         }}
-        onNodeSelect={onNodeSelect}
+        onNodesSelect={onNodesSelect}
       />,
     );
 
@@ -101,15 +115,15 @@ describe("GraphView interactions", () => {
     fireEvent.click(screen.getByText("Draft"));
 
     await waitFor(() => {
-      expect(onNodeSelect).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "draft" }),
+      expect(onNodesSelect).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: "draft" })],
       );
     });
   });
 
   test("reports whether native graph activation came from pointer or keyboard", async () => {
     const onNodeClick = vi.fn();
-    const onNodeSelect = vi.fn();
+    const onNodesSelect = vi.fn();
     render(
       <GraphView
         className="h-[360px] w-[520px]"
@@ -117,13 +131,13 @@ describe("GraphView interactions", () => {
         edges={[]}
         nodeStyles={{ step: { width: 160, height: 72, borderColor: "var(--border-subtle)" } }}
         onNodeClick={onNodeClick}
-        onNodeSelect={onNodeSelect}
+        onNodesSelect={onNodesSelect}
       />,
     );
     const node = await screen.findByTestId("rf__node-draft");
 
     fireEvent.click(node, { detail: 1 });
-    await waitFor(() => expect(onNodeSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" })));
+    await waitFor(() => expect(onNodesSelect).toHaveBeenCalledWith([expect.objectContaining({ id: "draft" })]));
     fireEvent.keyDown(node, { key: "Enter" });
     await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(2));
     fireEvent.keyDown(node, { key: " " });

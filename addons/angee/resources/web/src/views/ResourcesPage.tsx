@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Code, ListView, formatDateTime, textRoleVariants, type ResourceToolbarFilterField, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
+  Code, ListView, formatDateTime, textRoleVariants, type FilterClauseField, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 
 import { useResourcesT } from "../i18n";
 
@@ -59,7 +59,7 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceLedger
   ];
 }
 
-function filterFields(t: (key: string) => string): readonly ResourceToolbarFilterField[] {
+function filterFields(t: (key: string) => string): readonly FilterClauseField[] {
   return [
     {
       id: "source_addon",

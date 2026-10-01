@@ -35,7 +35,7 @@ def _patch_get(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
 def test_url_source_is_registered() -> None:
     """integrate contributes the ``url`` source into the resources registry."""
 
-    assert "url" in sources.source_keys()
+    assert "url" in sources.ResourceSource.registered_keys()
 
 
 def test_url_source_fetches_then_reads_from_cache(

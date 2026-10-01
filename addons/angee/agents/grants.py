@@ -14,6 +14,7 @@ from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
+from angee.iam.service_users import sync_service_user
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from angee.mcp.server import mcp_server
 
@@ -153,7 +154,7 @@ def resync_tool_grants() -> int:
         agents = list(agent_model._base_manager.select_related("user").order_by("pk"))
         for agent in agents:
             if agent.user_id is None:
-                agent.user = agent_model.objects.sync_service_user(agent)
+                agent.user = sync_service_user(agent, prefix="agent")
         migrated = _migrate_agent_principal_memberships(agents)
         sync_builtin_tool_catalogue()
         delete_relationships(

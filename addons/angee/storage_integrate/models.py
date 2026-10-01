@@ -15,8 +15,8 @@ from rebac import system_context
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.integrate.models import Bridge
-from angee.integrate.sync import SyncDispatch, current_bridge_progress
+from angee.integrate.models import Bridge, IntegrationCreateMode
+from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountEntry
 
@@ -50,13 +50,11 @@ class Mount(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "CONNECT"
-    integration_kind_label = "Mount"
+    integration_create_mode = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
 
     backend_class = ImplClassField(
-        base_class=MountBackend,
-        registry_setting="ANGEE_STORAGE_MOUNT_BACKEND_CLASSES",
+        MountBackend,
         default="local_folder",
         create_only=True,
     )
@@ -92,12 +90,9 @@ class Mount(Bridge):
             return None
         return super()._next_sync_at(now=now)
 
-    def sync(self) -> int | SyncDispatch:
+    def sync(self) -> int:
         """Reconcile the external source into this mount's storage drive."""
 
-        dispatched = self.dispatch_sync()
-        if dispatched is not None:
-            return dispatched
         drive = self.drive
         if drive is None:
             raise ValidationError({"drive": "The mount requires a storage drive."})
@@ -122,9 +117,7 @@ class Mount(Bridge):
             "scanned": 0,
         }
 
-        self._mirror_directories(
-            backend, drive=drive, folder_model=folder_model, cache=folder_cache, counts=counts
-        )
+        self._mirror_directories(backend, drive=drive, folder_model=folder_model, cache=folder_cache, counts=counts)
 
         for entry in backend.iter_entries():
             counts["scanned"] += 1
@@ -211,8 +204,7 @@ class Mount(Bridge):
         freshness: dict[str, _MountFileState] = {}
         with system_context(reason="storage_integrate.mount.freshness"):
             rows = (
-                file_model.objects
-                .filter(drive_id=self.drive_id)
+                file_model.objects.filter(drive_id=self.drive_id)
                 .order_by("pk")
                 .values_list(
                     "pk",

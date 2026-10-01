@@ -1,17 +1,9 @@
-from django.apps import AppConfig
-from django.core import checks
+"""Django identity of the extraction addon."""
 
-from angee.workflows_extraction.checks import check_extraction_settings
+from django.apps import AppConfig
 
 
 class WorkflowsExtractionConfig(AppConfig):
-    """Django application for immutable document extraction evidence."""
+    """Register the workflow adapter for extraction."""
 
-    default = True
     name = "angee.workflows_extraction"
-
-    def ready(self) -> None:
-        """Register extraction configuration checks after app population."""
-
-        super().ready()
-        checks.register(check_extraction_settings)

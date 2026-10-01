@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, ToastProvider, defaultWidgets } from "@angee/ui";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { WorkspaceCreateDialog } from "./WorkspaceCreateDialog";
@@ -199,6 +199,7 @@ function renderDialog(): ReturnType<typeof render> {
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <WorkspaceCreateDialog open onOpenChange={vi.fn()} />
     </AppRuntimeProvider>,
+    { wrapper: ToastProvider },
   );
 }
 

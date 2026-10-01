@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-import json
 import logging
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -22,8 +20,8 @@ from django.db.migrations.state import ModelState, ProjectState
 from django.db.migrations.writer import MigrationWriter
 
 from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
+from angee.storage.models import Folder
 from tests.conftest import make_addon, write_addon_manifest
 
 
@@ -890,123 +888,15 @@ def _upgrade_states(label):
     independently of live models. Unrelated columns are omitted; relation targets
     outside the affected tables use scalar stand-ins for this isolated database.
     """
-    from angee.storage.models import Folder
-    from angee.workflows.models import StepAttempt, StepRun, WorkflowRun
-    from angee.workflows_extraction.models import Extraction, ExtractionPage
-
-    if label == "workflows":
-        declarations = (
-            (WorkflowRun, ("parent_relation", "test_scope"), ("chk_wfr_test_scope",)),
-            (StepRun, ("waiting_kind",), ()),
-            (StepAttempt, ("lease_revocation_reason", "result_kind"), (
-                "chk_wsa_revocation_pair", "chk_wsa_result_pair", "chk_wsa_orchestration_error",
-            )),
-        )
-        extras = {
-            "workflowrun": {
-                "origin": models.CharField(max_length=32, default="manual"),
-                "test_step": models.IntegerField(null=True),
-                "test_source_step_id": models.IntegerField(null=True),
-            },
-            "stepattempt": {
-                "lease_revoked_at": models.DateTimeField(null=True),
-                "result_recorded_at": models.DateTimeField(null=True),
-                "orchestration_error": models.TextField(default=""),
-            },
-        }
-        legacy_fields = {
-            "workflowrun": {
-                "parent_relation": StateField(
-                    choices=[("owned_call", "Owned call"), ("continuation", "Continuation")],
-                    blank=True, default="", editable=False,
-                ),
-                "test_scope": StateField(
-                    choices=[("whole", "Whole workflow"), ("node", "Selected node")],
-                    blank=True, default="", editable=False,
-                ),
-            },
-            "steprun": {
-                "waiting_kind": StateField(
-                    choices=[
-                        ("scheduled", "Scheduled"), ("approval", "Approval"),
-                        ("external", "External input"), ("children", "Child steps"),
-                    ],
-                    blank=True, default="",
-                ),
-            },
-            "stepattempt": {
-                "lease_revocation_reason": models.CharField(
-                    max_length=32, blank=True,
-                    choices=[("canceled", "Canceled"), ("heartbeat_lost", "Heartbeat_Lost"),
-                             ("superseded", "Superseded")],
-                ),
-                "result_kind": models.CharField(
-                    max_length=32, blank=True,
-                    choices=[
-                        ("done", "Done"), ("wait", "Wait"), ("suspend", "Suspend"), ("error", "Error"),
-                        ("no_result", "No_Result"), ("preparation_error", "Preparation_Error"),
-                        ("transient_error", "Transient_Error"),
-                    ],
-                ),
-            },
-        }
-        legacy_constraints = {
-            "workflowrun": [models.CheckConstraint(
-                condition=(
-                    models.Q(origin="test", test_scope__in=("", "whole"),
-                             test_step__isnull=True, test_source_step_id__isnull=True)
-                    | models.Q(origin="test", test_scope="node",
-                               test_step__isnull=False, test_source_step_id__isnull=False)
-                    | (~models.Q(origin="test") & models.Q(
-                        test_scope="", test_step__isnull=True, test_source_step_id__isnull=True,
-                    ))
-                ), name="chk_wfr_test_scope",
-            )],
-            "stepattempt": [
-                models.CheckConstraint(
-                    condition=(models.Q(lease_revoked_at__isnull=True, lease_revocation_reason="")
-                               | (models.Q(lease_revoked_at__isnull=False) & ~models.Q(lease_revocation_reason=""))),
-                    name="chk_wsa_revocation_pair",
-                ),
-                models.CheckConstraint(
-                    condition=(models.Q(result_recorded_at__isnull=True, result_kind="")
-                               | (models.Q(result_recorded_at__isnull=False) & ~models.Q(result_kind=""))),
-                    name="chk_wsa_result_pair",
-                ),
-                models.CheckConstraint(
-                    condition=models.Q(orchestration_error="") | models.Q(result_kind="transient_error"),
-                    name="chk_wsa_orchestration_error",
-                ),
-            ],
-        }
-    elif label == "storage":
-        declarations = ((Folder, ("smart_kind",), ("uniq_storage_folder_owner_smart_kind",)),)
-        extras = {"folder": {"owner": models.IntegerField(null=True), "is_virtual": models.BooleanField(default=False)}}
-        legacy_fields = {"folder": {"smart_kind": StateField(
-            choices=[("trash", "Trash")], blank=True, default="", editable=False,
-        )}}
-        legacy_constraints = {"folder": [models.UniqueConstraint(
-            fields=("owner", "smart_kind"), condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
-            name="uniq_storage_folder_owner_smart_kind",
-        )]}
-    else:
-        old = ProjectState()
-        current = ProjectState()
-        for model, renames in (
-            (Extraction, (("engine", "profile"), ("engine_config", "profile_config"))),
-            (ExtractionPage, (("engine_metadata", "provider_metadata"),)),
-        ):
-            fields = {"id": models.AutoField(primary_key=True)}
-            old_fields = {"id": models.AutoField(primary_key=True)}
-            for old_name, new_name in renames:
-                fields[new_name] = model._meta.get_field(new_name).clone()
-                old_fields[old_name] = (
-                    ImplClassField(registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES", editable=False)
-                    if old_name == "engine" else models.JSONField(default=dict, blank=True, editable=False)
-                )
-            old.add_model(ModelState(label, model.__name__, old_fields))
-            current.add_model(ModelState(label, model.__name__, fields))
-        return old, current
+    declarations = ((Folder, ("smart_kind",), ("uniq_storage_folder_owner_smart_kind",)),)
+    extras = {"folder": {"owner": models.IntegerField(null=True), "is_virtual": models.BooleanField(default=False)}}
+    legacy_fields = {"folder": {"smart_kind": StateField(
+        choices=[("trash", "Trash")], blank=True, default="", editable=False,
+    )}}
+    legacy_constraints = {"folder": [models.UniqueConstraint(
+        fields=("owner", "smart_kind"), condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
+        name="uniq_storage_folder_owner_smart_kind",
+    )]}
 
     old = ProjectState()
     current = ProjectState()
@@ -1048,21 +938,15 @@ def isolated_upgrade_database():
         connections["default"] = original
 
 
-@pytest.mark.parametrize("label,schema_nullable,domain_inference", [
-    ("workflows", False, False), ("storage", False, False), ("workflows_extraction", False, False),
-    ("workflows", True, False), ("storage", True, False), ("workflows_extraction", False, True),
+@pytest.mark.parametrize("label,schema_nullable", [
+    ("storage", False), ("storage", True),
 ])
 @pytest.mark.django_db(transaction=True)
 def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
-    runtime_migration_probe, settings, monkeypatch, isolated_upgrade_database, label, schema_nullable, domain_inference,
+    runtime_migration_probe, settings, monkeypatch, isolated_upgrade_database, label, schema_nullable,
 ):
-    """Materialize real declarations, migrate test tables, and compare live owners."""
+    """Replay retained declarations and preserve floor rows without live source imports."""
     _, _, _, runtime_dir, _ = runtime_migration_probe
-    if domain_inference:
-        settings.ANGEE_EXTRACTION_PROFILE_CLASSES = {
-            **settings.ANGEE_EXTRACTION_PROFILE_CLASSES,
-            "inference": "example.domain.InferenceProfile",
-        }
     legacy, current = _upgrade_states(label)
     if schema_nullable:
         for key, model in legacy.models.items():
@@ -1080,7 +964,8 @@ def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
     _write_module(package / "0001_legacy.py", MigrationWriter(initial).as_string())
     monkeypatch.setitem(settings.MIGRATION_MODULES, label, f"{runtime_dir.name}.{label}.migrations")
     importlib.invalidate_caches()
-    materializer = RuntimeMigrations((apps.get_app_config(label),), runtime_dir=runtime_dir, labels=(label,))
+    addon = apps.get_app_config(label)
+    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=(label,))
     if schema_nullable:
         # Recompiling a legacy '' constraint through an already-nullable
         # StateField changes its meaning. Reject this partial graph before writes.
@@ -1115,35 +1000,10 @@ def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
         for key in legacy.models:
             editor.create_model(before.apps.get_model(*key))
     try:
-        if label == "workflows":
-            before.apps.get_model(label, "WorkflowRun")._base_manager.create()
-            before.apps.get_model(label, "WorkflowRun")._base_manager.create(
-                origin="test", test_scope="node", test_step=4, test_source_step_id=4, parent_relation="owned_call",
-            )
-            before.apps.get_model(label, "StepRun")._base_manager.create()
-            before.apps.get_model(label, "StepRun")._base_manager.create(waiting_kind="approval")
-            before.apps.get_model(label, "StepAttempt")._base_manager.create()
-            before.apps.get_model(label, "StepAttempt")._base_manager.create(
-                lease_revocation_reason="canceled", lease_revoked_at=datetime(2026, 1, 1, tzinfo=UTC),
-                result_kind="transient_error", result_recorded_at=datetime(2026, 1, 1, tzinfo=UTC),
-                orchestration_error="retained error",
-            )
-        elif label == "storage":
-            folder = before.apps.get_model(label, "Folder")
-            folder._base_manager.create(owner=1, is_virtual=True)
-            folder._base_manager.create(owner=1, is_virtual=True)
-            folder._base_manager.create(owner=1, is_virtual=True, smart_kind="trash")
-        else:
-            extraction = before.apps.get_model(label, "Extraction")
-            # The retired registry is absent in new settings; seed stored legacy
-            # keys without asking its historical enum to decode INSERT RETURNING.
-            with connection.cursor() as cursor:
-                cursor.executemany(
-                    f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
-                    "(engine, engine_config) VALUES (%s, %s)",
-                    [(key, json.dumps({"retained": key})) for key in ("inference", "none", "custom_domain")],
-                )
-            before.apps.get_model(label, "ExtractionPage")._base_manager.create(engine_metadata={"retained": [1, 2]})
+        folder = before.apps.get_model(label, "Folder")
+        folder._base_manager.create(owner=1, is_virtual=True)
+        folder._base_manager.create(owner=1, is_virtual=True)
+        folder._base_manager.create(owner=1, is_virtual=True, smart_kind="trash")
 
         def snapshot(state):
             # Raw SQL verifies storage without modern StateField coercing '' to None.
@@ -1162,30 +1022,12 @@ def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
             migration.apply(before, editor)
             source.forwards(after.apps, editor)  # Data conversion is idempotent.
         upgraded = snapshot(after)
-        if label == "workflows_extraction":
-            rows = upgraded[label, "extraction"]
-            assert [row["profile"] for row in rows] == ["none", "none", "custom_domain"]
-            assert [row["profile_config"] for row in rows] == [
-                row["engine_config"] for row in original[label, "extraction"]
-            ]
-            assert upgraded[label, "extractionpage"][0]["provider_metadata"] == (
-                original[label, "extractionpage"][0]["engine_metadata"]
-            )
-            # Rollback is deliberately lossy only for the obsolete transport key.
-            original[label, "extraction"][0]["engine"] = "none"
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
-                    "(profile, profile_config) VALUES (%s, %s)", ("none", "{}"),
-                )
-            original[label, "extraction"].append({"id": 4, "engine": "none", "engine_config": "{}"})
-        else:
-            assert upgraded == {
-                key: [{name: None if value == "" and name in current.models[key].fields
-                       and current.models[key].fields[name].null else value for name, value in row.items()}
-                      for row in rows]
-                for key, rows in original.items()
-            }
+        assert upgraded == {
+            key: [{name: None if value == "" and name in current.models[key].fields
+                   and current.models[key].fields[name].null else value for name, value in row.items()}
+                  for row in rows]
+            for key, rows in original.items()
+        }
         with connection.schema_editor() as editor:
             migration.unapply(
                 loader.project_state([(label, "0001_legacy")]), editor,
@@ -1198,7 +1040,7 @@ def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
 
 
 @pytest.mark.parametrize("label,name", [
-    ("workflows", "optional_states_nullable"), ("storage", "smart_kind_nullable"),
+    ("storage", "smart_kind_nullable"),
 ])
 @pytest.mark.parametrize("change", ["condition", "name", "remove"])
 def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, change):
@@ -1216,12 +1058,3 @@ def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, c
             else:
                 del constraints[index]
             assert not source.applies(evolved), (key, index, change)
-
-
-def test_workflow_state_upgrade_rejects_mixed_nullability():
-    from angee.workflows.runtime_migrations.optional_states_nullable import applies
-
-    legacy, _ = _upgrade_states("workflows")
-    legacy.models["workflows", "steprun"].fields["waiting_kind"].null = True
-    with pytest.raises(ValueError, match="partial nullable transition"):
-        applies(legacy)

@@ -6,7 +6,7 @@ import { useUiT } from "../../i18n";
 import { GalleryView } from "../GalleryView";
 import {
   ResourceViewSwitcher,
-  type ResourceToolbarFilterField,
+  type FilterClauseField,
   type ResourceToolbarFilterOption,
   type ResourceToolbarGroupOption,
 } from "../../toolbars";
@@ -51,7 +51,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   query?: ResourceQuery;
   columns: readonly ListColumn<TRow>[];
   filterOptions?: readonly ResourceToolbarFilterOption[];
-  customFilterFields?: readonly ResourceToolbarFilterField[];
+  customFilterFields?: readonly FilterClauseField[];
   groupOptions?: readonly ResourceToolbarGroupOption[];
   defaultGroup?: ResourceViewGroup | null;
   pageSize?: number;

@@ -1,10 +1,80 @@
 _meta:
   model: workflows.Workflow
 rows:
-  - xref: note_publish_approval
+  - xref: note_await_review
     fields:
-      name: Note publish approval
-      description: Demo workflow for reviewing a note before publish.
-      subject_declaration: notes.note
-      max_steps: 20
-      budget: {}
+      key: note-await-review
+      name: Await note review
+      description: Watch this note until a save moves it into review.
+      subject_model: notes.note
+      publish: true
+      draft:
+        nodes:
+          await_review:
+            step: note_await_review
+        results:
+          - {from: await_review}
+  - xref: note_publish
+    fields:
+      key: note-publish
+      name: Note publication
+      description: Validate, review when assigned, and publish a ready note.
+      subject_model: notes.note
+      publish: true
+      draft:
+        nodes:
+          validate:
+            step: note_validate_publication
+            next: {needs_review: review, ok: publish}
+          review:
+            step: note_review_publication
+            next: {approved: publish}
+          publish:
+            step: note_publish
+            input: {from: [review, validate]}
+        results:
+          - {from: publish}
+          - {from: review, when: [rejected, expired, superseded]}
+  - xref: note_review_batch
+    fields:
+      key: note-review-batch
+      name: Note review batch
+      description: Review each note independently and summarize the mapped outcomes.
+      publish: true
+      draft:
+        nodes:
+          reviews:
+            step: map
+            body: {step: note_review_publication}
+            next: {done: summarize, failed: summarize}
+          summarize:
+            step: note_collect_reviews
+        results:
+          - {from: summarize}
+  - xref: note_publication_parent
+    fields:
+      key: note-publication-parent
+      name: Note publication parent
+      description: Start an owned publication for this note and await its result.
+      subject_model: notes.note
+      publish: true
+      draft:
+        nodes:
+          start:
+            step: note_start_publication
+            next: {done: await}
+          await:
+            step: await_run
+            config: {expects: note-publish}
+            next:
+              published: result
+              rejected: result
+              expired: result
+              superseded: result
+              done: result
+              error: result
+              canceled: result
+          result:
+            step: note_publication_result
+        results:
+          - {from: result}

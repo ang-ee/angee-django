@@ -68,6 +68,7 @@ export interface RelationPickerProps {
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
   "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
   readOnly?: boolean;
   /**
    * Enables native in-place creation. A no-match typed query always offers the
@@ -128,6 +129,7 @@ export function RelationPicker({
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   "aria-required": ariaRequired,
+  "aria-invalid": ariaInvalid,
   readOnly,
   create,
   onCreated,
@@ -167,6 +169,7 @@ export function RelationPicker({
             aria-labelledby={ariaLabelledBy}
             aria-describedby={ariaDescribedBy}
             aria-required={ariaRequired}
+            aria-invalid={ariaInvalid}
             readOnly={readOnly}
             onCreate={
               create

@@ -125,15 +125,15 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
             name=config.name,
             label=config.label,
             namespace="tests",
-            kind=addon.Kind.CONSUMER,
-            state=addon.State.ENABLED,
+            kind=addon.AddonKind.CONSUMER,
+            state=addon.AddonState.ENABLED,
             model_count=2,
             field_count=line_row.field_count + tag_row.field_count,
             resource_count=7,
             depends_on=["example.dependency"],
             model_labels=[line_row.label, tag_row.label],
         )
-        addon.objects.create(name="example.remote", source=addon.Source.REMOTE)
+        addon.objects.create(name="example.remote", source=addon.AddonSource.REMOTE)
     with monkeypatch.context() as patch:
         patch.setattr(platform_schema, "platform_can_read", lambda: True)
         patch.setattr(composed, "model_rows", lambda: [line_row, tag_row])
@@ -219,7 +219,7 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.catalogue.search"):
         for name, label in (("example.zebra", ""), ("example.alpha", "Zulu"), ("other.hidden", "")):
-            addon.objects.create(name=name, label=label, source=addon.Source.REMOTE)
+            addon.objects.create(name=name, label=label, source=addon.AddonSource.REMOTE)
 
     data = _data(
         execute_schema(

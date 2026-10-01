@@ -9,12 +9,15 @@ import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { EmptyState } from "../../fragments/EmptyState";
 import { LoadingPanel } from "../../fragments/LoadingPanel";
+import { errorMessage } from "../../feedback";
 import {
   RecordChrome,
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
+import { ActionFormProvider } from "./ActionFormProvider";
 import type {
   FieldDescriptor,
   PageFieldKind,
@@ -122,29 +125,15 @@ export function FormView(props: FormViewProps): React.ReactElement {
 }
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
+  const surface = useFormViewSurface(props);
+  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+}
+
+function FormViewContent({ surface, ...props }: FormViewProps & {
+  surface: ReturnType<typeof useFormViewSurface>;
+}): React.ReactElement {
   const {
-    resource,
-    id,
     readOnly = false,
-    fields,
-    groups,
-    children,
-    actions,
-    returning,
-    defaultValues,
-    acknowledgedSource,
-    onSaved,
-    submit,
-    createSubmit,
-    readOnlyWhen,
-    onFieldInteractionStart,
-    onFieldInteractionCommit,
-    onDiscarded,
-    recordTabs,
-    recordTab,
-    onRecordTabChange,
-    deleteAction,
-    deleteVisibleWhen,
     submitLabel,
     toolbarStart,
     toolbar,
@@ -160,36 +149,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     lineSupplementalColumns,
     lineRelationFilters,
     recordPresentation = "document",
-    defaultRecordTab,
     overviewTab,
     publishBreadcrumbLabel = false,
     className,
   } = props;
-  const surface = useFormViewSurface({
-    resource,
-    id,
-    readOnly,
-    fields,
-    groups,
-    children,
-    actions,
-    returning,
-    defaultValues,
-    acknowledgedSource,
-    onSaved,
-    submit,
-    createSubmit,
-    readOnlyWhen,
-    onFieldInteractionStart,
-    onFieldInteractionCommit,
-    onDiscarded,
-    recordTabs,
-    recordTab,
-    onRecordTabChange,
-    defaultRecordTab,
-    deleteAction,
-    deleteVisibleWhen,
-  });
   const {
     t,
     activeRecordTab,
@@ -198,7 +161,9 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     formReadOnly,
     formIsDirty,
     displayRecord,
+    loadError,
     saveError,
+    saveConflict,
     declaredActions,
     recordChromeContext,
     recordActions,
@@ -222,6 +187,9 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     () => recordActions.filter((entry) => entry.recordActionPlacement === "menu"),
     [recordActions],
   );
+  const availableDeclaredActions = readOnly
+    ? declaredActions.filter((action) => action.run || action.submit)
+    : declaredActions;
   useBreadcrumbLeafLabel(
     titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
@@ -229,14 +197,27 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     ) || null,
     publishBreadcrumbLabel && !isCreate,
   );
+  const loadErrorBanner = <ErrorBanner
+    title={t("form.loadFailed")}
+    description={loadError ? errorMessage(loadError, t("form.loadFailed")) : null}
+    actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>}
+  />;
+  if (!isCreate && displayRecord == null) {
+    return <div className={cn("min-h-full bg-sheet", className)}>
+      {toolbar ? <ControlBand>
+        <div className="flex flex-1 items-center justify-end gap-2">{toolbar}</div>
+      </ControlBand> : null}
+      <div className={cn(FORM_VIEW_COLUMN_CLASS, "py-6")}>
+        {loading ? <LoadingPanel message={t("form.loading")} /> : loadError ? loadErrorBanner
+          : <EmptyState title={t("form.recordNotFound")} />}
+      </div>
+    </div>;
+  }
   const toolbarStartNode =
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const awaitingRecord = !isCreate && displayRecord == null && loading;
-  const overview = awaitingRecord ? (
-    <LoadingPanel message={t("form.loading")} />
-  ) : (
+  const overview = (
     <FormViewOverview
       surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
       linesTabLabel={linesTabLabel} linePrimaryFields={linePrimaryFields}
@@ -254,7 +235,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     </RecordChromeProvider>
   ) : overview;
   const recordExtrasPanel =
-    !awaitingRecord && recordPanelContext && recordExtras ? (
+    recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
         {recordExtras(recordPanelContext)}
       </div>
@@ -262,13 +243,11 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   const overviewWithFormExtras = (
     <>
       {overviewBody}
-      {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
+      {formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
     </>
   );
-  const formTitle = awaitingRecord
-    ? t("form.loading")
-    : typeof title === "function" ? title(recordToolbarContext) : title;
-  const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
+  const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
+  const headerExtra = headerExtras?.(recordToolbarContext);
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
     if (
@@ -315,19 +294,19 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (
-          declaredActions.length > 0 ||
+        {(
+          availableDeclaredActions.length > 0 ||
           visibleDeleteAction !== undefined ||
-          menuRecordActions.length > 0
+          (!readOnly && menuRecordActions.length > 0)
         ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
-            actions={declaredActions}
+            actions={availableDeclaredActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
             contributedActions={
-              recordChromeContext && menuRecordActions.length > 0 ? (
+              !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (
                 <RecordChromeProvider value={recordChromeContext}>
                   <SlotOutlet entries={menuRecordActions} />
                 </RecordChromeProvider>
@@ -352,6 +331,19 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     </ControlBand>
   );
 
+  const errorBanners = <>
+    {loadErrorBanner}
+    <ErrorBanner
+      description={saveError}
+      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      actions={saveConflict ? (
+        <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
+          {t("form.reloadSaved")}
+        </Button>
+      ) : undefined}
+    />
+  </>;
+
   const formElement = (
     <form
       className={cn("min-h-full bg-sheet", className)}
@@ -371,7 +363,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         )}
       >
         <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
-        <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+        {errorBanners}
         {tabbed ? (
           <>
             <Tabs.List>
@@ -416,7 +408,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
             <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            {errorBanners}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>
@@ -447,7 +439,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
             <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            {errorBanners}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (
                 <Tabs.Tab

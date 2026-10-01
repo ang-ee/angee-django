@@ -9,7 +9,8 @@ import {
   Glyph,
   MutationDialog,
   optionalTranslation,
-  type MutationDialogField,
+  type FormSubmitResult,
+  type DescriptorField,
   type MutationDialogParseValues,
   type MutationDialogValues,
 } from "@angee/ui";
@@ -21,7 +22,7 @@ import { usePairingConnect } from "./usePairingConnect";
 
 export type ConnectChannelFields = (
   t: MessagingT,
-) => readonly MutationDialogField[];
+) => readonly DescriptorField[];
 export type ConnectChannelParseValues<TValues> = (
   values: Readonly<Record<string, unknown>>,
   t: MessagingT,
@@ -109,9 +110,10 @@ function MutationConnectChannelAction<
   return (
     <ConnectChannelDialog
       {...props}
-      onSubmit={(values) =>
-        connect(props.variables ? props.variables(values) : values)
-      }
+      onSubmit={async (values) => ({
+        status: "ok",
+        data: await connect(props.variables ? props.variables(values) : values),
+      })}
     />
   );
 }
@@ -137,12 +139,13 @@ function PairingConnectChannelAction<
     <>
       <ConnectChannelDialog
         {...props}
-        onSubmit={(values) =>
-          connect(
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await connect(
             variables ? variables(values) : values,
             nextStep ? () => nextStep(values, t) : undefined,
-          )
-        }
+          ),
+        })}
       />
       {pairingDialog}
     </>
@@ -155,7 +158,7 @@ interface ConnectChannelDialogProps<
 > extends ConnectChannelActionBaseProps<TDocument, TValues> {
   onSubmit: (
     values: TValues,
-  ) => unknown | Promise<unknown>;
+  ) => FormSubmitResult<unknown> | Promise<FormSubmitResult<unknown>>;
 }
 
 function ConnectChannelDialog<

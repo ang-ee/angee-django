@@ -2,11 +2,17 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
+import { useForm } from "react-hook-form";
 import { boundedGraphQLTransportError } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
 import { fieldErrorMessages } from "./form-view-model";
 
 import {
+  actionFormSubmitResult,
+  actionOutcomeSubmitResult,
+  invalidFormSubmit,
+  formSubmitError,
+  applyFormErrors,
   directDottedPathMessages,
   lineRowErrorsFromDottedPaths,
   messagesForDottedPath,
@@ -267,4 +273,47 @@ describe("validationErrorsFromError", () => {
       formErrors: ["Could not save record."],
     });
   });
+});
+
+describe("shared form submission errors", () => {
+  test("adapts action outcomes without losing accepted data or issue messages", () => {
+    const outcome = { ok: true, message: "Saved", id: "one" };
+    expect(actionFormSubmitResult({ saved: outcome }, "saved")).toEqual({ status: "ok", data: outcome, message: "Saved" });
+    expect(actionFormSubmitResult({ saved: { ok: false, message: "Review", id: null, validation_errors: { title: ["Required"] } } }, "saved")).toEqual({
+      status: "invalid", issues: { fieldErrors: { title: ["Required"] }, formErrors: ["Review"] },
+    });
+    expect(actionFormSubmitResult(null, "saved")).toEqual({ status: "invalid", issues: { fieldErrors: {}, formErrors: [] } });
+  });
+
+  test("binds dotted issue paths and keeps their messages without duplicating descendants in the summary", () => {
+    const { result } = renderHook(() => useForm<Record<string, unknown>>());
+    act(() => {
+      applyFormErrors(result.current, invalidFormSubmit({
+        fieldErrors: { "rows.0.title": ["Required", "Use a unique title"], rowsExtra: ["Unknown field"] },
+        formErrors: ["Review the form"],
+      }), { fieldNames: ["rows"] });
+    });
+    expect(result.current.getFieldState("rows.0.title").error).toMatchObject({
+      type: "server", message: "Required Use a unique title", types: { server: ["Required", "Use a unique title"] },
+    });
+    expect(result.current.getFieldState("root.server").error?.message).toBe("Review the form rowsExtra: Unknown field");
+  });
+});
+
+test("normalized action outcomes retain their transport-owned validation map", () => {
+  const outcome = { ok: false, message: "Review", validationErrors: { title: ["Required"] } };
+  expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit({ fieldErrors: outcome.validationErrors, formErrors: ["Review"] }));
+});
+
+test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
+  const { result } = renderHook(() => useForm<Record<string, unknown>>());
+  expect(() => {
+    try {
+      // @ts-expect-error Deliberately exercise an outdated or malformed caller at runtime.
+      applyFormErrors(result.current, malformed);
+    } catch (cause) {
+      formSubmitError(cause, "Do not hide the developer error");
+    }
+  }).toThrow(/FormSubmitResult contract/);
+  expect(result.current.getFieldState("root.server").error).toBeUndefined();
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.platform.installer.AddonInstallerBackend"],
     # The AddonInstaller backend selection + registry (the row-less ImplClassField
     # shape). ``local`` (the dev default) edits the local settings.yaml. The
     # ``operator`` entry is contributed by the

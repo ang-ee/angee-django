@@ -42,6 +42,7 @@ export interface RelationFieldProps {
   id?: string;
   "aria-describedby"?: string;
   "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
   /**
    * When set, the popover offers a "Create …" row for the typed query whenever
    * it matches no option — the searchable, in-place create affordance.
@@ -82,6 +83,7 @@ export function RelationField({
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   "aria-required": ariaRequired,
+  "aria-invalid": ariaInvalid,
   id,
   onCreate,
   onOpenChange,
@@ -119,6 +121,7 @@ export function RelationField({
         aria-labelledby={ariaLabelledBy}
         aria-describedby={ariaDescribedBy}
         aria-required={ariaRequired}
+        aria-invalid={ariaInvalid}
       >
         <span
           className={cn(

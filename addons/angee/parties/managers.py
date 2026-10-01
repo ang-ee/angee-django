@@ -553,7 +553,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         durable anti-link unchanged; confirmation remains the explicit human action.
         """
 
-        party.with_actor(actor)._require_record_access("write")
+        party.require_access("write", actor)
         handle_model = apps.get_model("parties", "Handle")
         allowed_platforms = {
             str(handle_model.Platform.EMAIL),
@@ -611,8 +611,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
-            locked_party = parties[party.pk].with_actor(actor)
-            locked_party._require_record_access("write")
+            locked_party = parties[party.pk]
+            locked_party.require_access("write", actor)
             if not handle.with_actor(actor).has_access("read"):
                 raise PermissionDenied("Denied: cannot add this contact point.")
             if normalized_label and not handle.label and handle.has_access("write"):
@@ -649,7 +649,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
         if actor is None:
             raise PermissionDenied("an actor is required to assess a party-handle association")
-        handle.with_actor(actor)._require_record_access("read")
+        handle.require_access("read", actor)
         with system_context(reason="parties.party_handle.has_confirmed_association"):
             return self.filter(
                 handle_id=handle.pk,
@@ -662,8 +662,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
         if actor is None:
             raise PermissionDenied("an actor is required to assess a party-handle association")
-        party.with_actor(actor)._require_record_access("read")
-        handle.with_actor(actor)._require_record_access("read")
+        party.require_access("read", actor)
+        handle.require_access("read", actor)
         visible = read_scoped_queryset(self.model, actor)
         readable = (
             tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
@@ -730,9 +730,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         later human confirmation of Party ownership.
         """
 
-        party.with_actor(actor)._require_record_access("write")
-        handle.with_actor(actor)._require_record_access("read")
-        evidence.with_actor(actor)._require_record_access("read")
+        party.require_access("write", actor)
+        handle.require_access("read", actor)
+        evidence.require_access("read", actor)
         return self._propose_claimed_handle_authorized(
             party, handle, evidence=evidence, actor=actor, confidence=confidence
         )
@@ -748,7 +748,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
     ) -> Any:
         """Retain a claim after the caller authorized exact Handle and evidence reads."""
 
-        party.with_actor(actor)._require_record_access("write")
+        party.require_access("write", actor)
         if not 0 < confidence < 0.5:
             raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
         evidence_model = canonical_record_model(type(evidence))
@@ -1138,11 +1138,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
 @dataclass(frozen=True, slots=True)
 class DuplicatePartyCandidate:
-    """One deterministic duplicate candidate and the normalized handle it shares."""
+    """One deterministic pair with its normalized identity and readable evidence rows."""
 
     left: Any
     right: Any
     normalized_value: str
+    handles: tuple[Any, ...]
 
 
 class MergeVetoManager(AngeeManager):
@@ -1405,18 +1406,17 @@ class PartyQuerySet(AngeeQuerySet):
         for platform, normalized_value in shared_handles:
             shared_filter |= Q(platform=platform, normalized_value=normalized_value)
 
-        parties_by_handle: dict[tuple[str, str], list[Any]] = {}
-        for platform, normalized_value, party_id in (
-            handles.filter(shared_filter)
-            .values_list("platform", "normalized_value", "party_id")
-            .distinct()
-            .order_by("normalized_value", "platform", "party_id")
+        parties_by_handle: dict[tuple[str, str], dict[Any, list[Any]]] = {}
+        for handle in handles.filter(shared_filter).only("platform", "normalized_value", "party_id").order_by(
+            "normalized_value", "platform", "party_id", "pk",
         ):
-            parties_by_handle.setdefault((platform, normalized_value), []).append(party_id)
+            parties_by_handle.setdefault((handle.platform, handle.normalized_value), {}).setdefault(
+                handle.party_id, [],
+            ).append(handle)
 
         candidate_party_ids = {party_id for party_ids in parties_by_handle.values() for party_id in party_ids}
         forbidden = merge_veto_model.objects.forbidden_pairs(candidate_party_ids)
-        pairs: list[tuple[str, Any, Any]] = []
+        pairs: list[tuple[str, Any, Any, tuple[Any, ...]]] = []
         seen: set[tuple[Any, Any]] = set()
         for (_platform, normalized_value), party_ids in parties_by_handle.items():
             for party_a_id, party_b_id in combinations(party_ids, 2):
@@ -1424,14 +1424,15 @@ class PartyQuerySet(AngeeQuerySet):
                 if pair in seen or pair in forbidden:
                     continue
                 seen.add(pair)
-                pairs.append((normalized_value, *pair))
+                pairs.append((normalized_value, *pair, (*party_ids[party_a_id], *party_ids[party_b_id])))
                 if len(pairs) >= bounded:
                     break
             if len(pairs) >= bounded:
                 break
 
         paired_party_ids = {
-            party_id for _normalized_value, party_a_id, party_b_id in pairs for party_id in (party_a_id, party_b_id)
+            party_id for _normalized_value, party_a_id, party_b_id, _handles in pairs
+            for party_id in (party_a_id, party_b_id)
         }
         parties = {party.pk: party for party in self.canonical().filter(pk__in=paired_party_ids)}
         return [
@@ -1439,8 +1440,9 @@ class PartyQuerySet(AngeeQuerySet):
                 left=parties[party_a_id],
                 right=parties[party_b_id],
                 normalized_value=normalized_value,
+                handles=evidence,
             )
-            for normalized_value, party_a_id, party_b_id in pairs
+            for normalized_value, party_a_id, party_b_id, evidence in pairs
             if party_a_id in parties and party_b_id in parties
         ]
 
@@ -1469,7 +1471,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         party = self.with_actor(actor).from_public_id(party_id)
         if party is None:
             raise ValidationError({"party_id": "Party was not found."})
-        party.with_actor(actor)._require_record_access("read")
+        party.require_access("read", actor)
         reason = "parties.party.identity_basis"
         address_owner = apps.get_model("parties", "Address").objects
         link_owner = apps.get_model("parties", "PartyHandle").objects
@@ -1535,7 +1537,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         with transaction.atomic(), actor_context(actor):
             basis = self.identity_basis(party_id, actor=actor, lock=True)
             party, current = basis.party, basis.complete
-            party._require_record_access("write")
+            party.require_access("write")
             if basis.facts_hash != expected_facts_hash:
                 return "conflict", {}
             results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}

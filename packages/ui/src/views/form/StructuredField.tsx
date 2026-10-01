@@ -6,7 +6,7 @@ import { useUiT } from "../../i18n";
 import type { WidgetDefinition, WidgetField, WidgetRenderProps } from "../../widgets/types";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { initialFormSpecValue } from "./form-spec";
-import { LabeledDescriptorField } from "./MutationDialog";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { updatedRecord } from "./field-values";
 import { messagesForDottedPath } from "./validation-errors";
 
@@ -19,7 +19,7 @@ type StructuredWidgetField = WidgetField & {
   removeLabel?: string;
 };
 
-function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
+function ObjectField({ value, field, messages = [], readOnly = false, disabled, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
   const objectTemplate = structuredField(field).objectTemplate;
   if (!objectTemplate) throw new Error('The "object" widget requires field.objectTemplate.');
   const template = objectTemplate.filter((child) => !child.hidden);
@@ -33,6 +33,7 @@ function ObjectField({ value, field, messages = [], readOnly = false, onChange, 
         return <LabeledDescriptorField key={child.name} field={{ ...child, name: path }}
           value={objectValue[child.name]} messages={messagesForDottedPath(messages, path)}
           readOnly={readOnly || child.readOnly}
+          disabled={disabled}
           controlRef={index === focusIndex ? controlRef : undefined}
           onCommit={onCommit}
           onChange={(next) => onChange?.(updatedRecord(objectValue, child.name, next))} />;
@@ -41,7 +42,7 @@ function ObjectField({ value, field, messages = [], readOnly = false, onChange, 
   );
 }
 
-function ListField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
+function ListField({ value, field, messages = [], readOnly = false, disabled, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
   const t = useUiT();
   const descriptorField = structuredField(field);
   const item = descriptorField.itemTemplate;
@@ -60,15 +61,16 @@ function ListField({ value, field, messages = [], readOnly = false, onChange, on
           <div key={identities.current[index]} className="space-y-2 rounded-6 border border-border p-3">
             <LabeledDescriptorField field={{ ...item, name: path, label: item.label ?? t("form.list.item", { number: index + 1 }) }}
               value={entry} messages={messagesForDottedPath(messages, path)} readOnly={readOnly || item.readOnly}
+              disabled={disabled}
               controlRef={index === 0 ? controlRef : undefined}
               onCommit={onCommit}
               onChange={(next) => onChange?.(values.map((current, currentIndex) => currentIndex === index ? next : current))} />
             {!readOnly ? <div className="flex flex-wrap gap-1">
-              <Button type="button" size="sm" variant="ghost" disabled={index === 0} aria-label={t("form.list.moveUpNamed", { number: index + 1 })}
+              <Button type="button" size="sm" variant="ghost" disabled={disabled || index === 0} aria-label={t("form.list.moveUpNamed", { number: index + 1 })}
                 onClick={() => { identities.current = moved(identities.current, index, index - 1); onChange?.(moved(values, index, index - 1)); onCommit?.(); }}>{t("form.list.moveUp")}</Button>
-              <Button type="button" size="sm" variant="ghost" disabled={index === values.length - 1} aria-label={t("form.list.moveDownNamed", { number: index + 1 })}
+              <Button type="button" size="sm" variant="ghost" disabled={disabled || index === values.length - 1} aria-label={t("form.list.moveDownNamed", { number: index + 1 })}
                 onClick={() => { identities.current = moved(identities.current, index, index + 1); onChange?.(moved(values, index, index + 1)); onCommit?.(); }}>{t("form.list.moveDown")}</Button>
-              <Button type="button" size="sm" variant="ghost" disabled={descriptorField.minItems !== undefined && values.length <= descriptorField.minItems} aria-label={descriptorField.removeLabel
+              <Button type="button" size="sm" variant="ghost" disabled={disabled || (descriptorField.minItems !== undefined && values.length <= descriptorField.minItems)} aria-label={descriptorField.removeLabel
                 ? t("form.list.actionNamed", { action: removeLabel, number: index + 1 })
                 : t("form.list.removeNamed", { number: index + 1 })}
                 onClick={() => { identities.current.splice(index, 1); onChange?.(values.filter((_, currentIndex) => currentIndex !== index)); onCommit?.(); }}>{removeLabel}</Button>
@@ -76,7 +78,7 @@ function ListField({ value, field, messages = [], readOnly = false, onChange, on
           </div>
         );
       })}
-      {!readOnly ? <Button ref={values.length === 0 ? controlRef : undefined} type="button" size="sm" variant="secondary" disabled={descriptorField.maxItems !== undefined && values.length >= descriptorField.maxItems}
+      {!readOnly ? <Button ref={values.length === 0 ? controlRef : undefined} type="button" size="sm" variant="secondary" disabled={disabled || (descriptorField.maxItems !== undefined && values.length >= descriptorField.maxItems)}
         onClick={() => { identities.current.push(nextIdentity()); onChange?.([...values, initialFormSpecValue(item)]); onCommit?.(); }}>{addLabel}</Button> : null}
     </div>
   );

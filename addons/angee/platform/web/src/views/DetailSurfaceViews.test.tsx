@@ -121,7 +121,7 @@ describe("platform detail surfaces", () => {
       addon: {
         field_count: 7,
         id: "angee.storage",
-        kind: "required",
+        kind: "REQUIRED",
         label: "Storage",
         model_count: 2,
         namespace: "angee",
@@ -159,7 +159,7 @@ describe("platform detail surfaces", () => {
       addon: {
         field_count: 0,
         id: "example.base",
-        kind: "required",
+        kind: "REQUIRED",
         label: "example.base",
         model_count: 0,
         namespace: "example",

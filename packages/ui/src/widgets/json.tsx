@@ -8,6 +8,7 @@ import {
 import { json as jsonLanguage } from "@codemirror/lang-json";
 import { EditorView } from "@codemirror/view";
 import { cn } from "../lib/cn";
+import { useUiT } from "../i18n";
 import { Code, CodeBlock } from "../ui/code";
 import { useCodeMirrorEditor } from "./codemirror-editor";
 import type { JsonValue } from "./json-value";
@@ -33,6 +34,7 @@ function JsonEdit({
   controlRef,
   onValidityChange,
 }: WidgetRenderProps<unknown>): ReactElement {
+  const t = useUiT();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const formatted = formatJson(value);
   // The text last reflected to/from the parent; lets an external value update
@@ -46,7 +48,8 @@ function JsonEdit({
     lastValue.current = formatted;
     setDraft(formatted);
     setValid(true);
-  }, [formatted]);
+    onValidityChange?.(true);
+  }, [formatted, onValidityChange]);
 
   const handleStringChange = useCallback(
     (next: string) => {
@@ -66,21 +69,21 @@ function JsonEdit({
     onChange: handleStringChange,
     onBlur: onCommit,
     readOnly,
-    placeholder: widgetLabel(field, "JSON"),
+    placeholder: widgetLabel(field, t("json.label")),
     extensions: JSON_EXTENSIONS,
     controlRef,
+    controlProps: field?.controlProps,
   });
 
   return (
     <div>
       <div
         ref={hostRef}
-        aria-label={widgetLabel(field, "JSON")}
         className={cn(EDITOR_SHELL, !readOnly && !valid && "border-danger")}
       />
       {!readOnly && !valid ? (
         <p className="mt-1 text-12 text-danger-text" role="alert">
-          Invalid JSON
+          {t("json.invalid")}
         </p>
       ) : null}
     </div>
