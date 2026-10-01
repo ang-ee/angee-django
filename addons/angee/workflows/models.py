@@ -734,7 +734,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
             Trigger.check_admission(self, record, actor=actor)
 
     def clean(self) -> None:
-        """Reject invalid authoring at save and preserve server-owned activation."""
+        """Validate authoring and require disabling before changing an enabled rule."""
         super().clean()
         self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
@@ -749,7 +749,8 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
             getattr(self, self._meta.get_field(name).attname) != getattr(previous, self._meta.get_field(name).attname)
             for name in fields
         ):
-            self.enabled = False
+            if previous.enabled and self.enabled:
+                raise ValidationError("Disable the trigger before editing its rule.")
             self.disabled_reason = "Trigger configuration changed; enable it again."
 
     def save(self, *args: Any, **kwargs: Any) -> None:

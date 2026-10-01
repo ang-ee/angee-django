@@ -82,16 +82,22 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
     assert trigger.enabled and trigger.workflow.user_id != editor.pk
     for name in ("trigger_insert_input", "trigger_set_input"):
         fields = schema._schema.get_type(name).fields
-        assert {"enabled", "disabled_reason"}.isdisjoint(fields)
+        assert {"enabled", "disabled_reason", "execution_actor", "user"}.isdisjoint(fields)
+    assert "workflow" not in schema._schema.get_type("trigger_set_input").fields
+    edit = """mutation($id: String!) {
+      update_trigger_by_pk(pk_columns: {id: $id}, _set: {condition: {name: {_eq: "Ready"}}}) { id }
+    }"""
+    rejected = execute_schema(schema, edit, {"id": trigger.sqid}, user=editor)
+    assert rejected.errors and any("Disable the trigger before editing" in error.message for error in rejected.errors)
+    trigger.refresh_from_db()
+    assert trigger.enabled and trigger.condition == {}
     disable = "mutation($id: ID!) { disable_workflow_trigger(id: $id) { ok } }"
     assert result_data(execute_schema(schema, disable, {"id": trigger.sqid}, user=editor))[
         "disable_workflow_trigger"
     ]["ok"]
     trigger = system_queryset(Trigger).get(pk=trigger.pk)
     assert not trigger.enabled
-    result_data(execute_schema(schema, """mutation($id: String!) {
-      update_trigger_by_pk(pk_columns: {id: $id}, _set: {condition: {name: {_eq: "Ready"}}}) { id }
-    }""", {"id": trigger.sqid}, user=editor))
+    result_data(execute_schema(schema, edit, {"id": trigger.sqid}, user=editor))
     assert system_queryset(Trigger).get(pk=trigger.pk).condition == {"name": {"_eq": "Ready"}}
     result_data(execute_schema(schema, """mutation($id: String!) {
       delete_trigger_by_pk(id: $id) { id }

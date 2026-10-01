@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from types import MethodType, SimpleNamespace
+from unittest.mock import Mock, patch
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.fields import SqidField
 from angee.jobs.enqueue import celery_app
+from angee.workflows.context import StepContext
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
-from angee.workflows_integrate.archive_steps import ArchiveExtractor
+from angee.workflows_integrate.archive_steps import ArchiveExecute, ArchiveExtractor, ArchiveMappingUnit
 
 
 class TestFileExtractor(ArchiveExtractor):
@@ -96,6 +100,36 @@ class ArchiveWorkflowTests(TransactionTestCase):
             apps.get_model("storage.MimeType").objects.get_or_create(
                 mime_type="application/zip", defaults={"category": "archive", "label": "ZIP archive"},
             )
+
+    def test_execute_requires_target_write_before_effect_and_uses_authorized_id(self):
+        """A read-only reviewer cannot import; the extractor receives the resolved target id."""
+        with system_context(reason="archive target reader"):
+            reader = get_user_model().objects.create_user(username="archive-reader")
+        self.target.with_actor(self.actor).grant_record_access("viewer", reader)
+        canonical = str(self.target.sqid)
+        padded = SqidField(prefix=self.target.sqid_prefix, min_length=24).public_id_from_value(self.target.pk)
+        self.assertNotEqual(padded, canonical)
+        context = SimpleNamespace(
+            subject=self.source, input=ArchiveMappingUnit(extractor="test_drive", target=padded), actor=reader,
+            heartbeat=Mock(), begin_effect=Mock(), artifact=Mock(), done=Mock(side_effect=lambda value, **_: value),
+        )
+        context.load = MethodType(StepContext.load, context)
+        self.assertTrue(self.target.with_actor(reader).has_access("read"))
+        self.assertFalse(self.target.with_actor(reader).has_access("write"))
+        with patch.object(TestDriveExtractor, "execute") as execute:
+            execute.return_value = {"target": canonical}
+            with self.assertRaises(PermissionDenied):
+                ArchiveExecute().run(context)
+            context.heartbeat.assert_not_called()
+            context.begin_effect.assert_not_called()
+            execute.assert_not_called()
+
+            context.actor = self.actor
+            result = ArchiveExecute().run(context)
+            self.assertEqual(result.target, canonical)
+            self.assertEqual(result.result, {"target": canonical})
+            self.assertEqual(execute.call_args.args[1], canonical)
+            context.begin_effect.assert_called_once()
 
     def test_file_and_drive_resources_review_then_map(self):
         with actor_context(self.actor):

@@ -114,7 +114,7 @@ class MessageTriggerTests(TransactionTestCase):
             set(system_queryset(TriggerEvent).values_list("record_object_id", flat=True)), {message.pk},
         )
 
-    def test_channel_grant_is_listable_and_scope_edit_revokes_it(self):
+    def test_channel_grant_is_listable_and_disable_revokes_it(self):
         """Message read flows through the channel's direct reader grant."""
         trigger = self.trigger()
         grants = trigger.granted_relationships(actor=self.admin)
@@ -126,13 +126,16 @@ class MessageTriggerTests(TransactionTestCase):
         self.assertTrue(Message.objects.with_actor(self.workflow.user).filter(pk=message.pk).exists())
         self.assertTrue(self.channel.with_actor(self.workflow.user).has_access("read"))
         self.assertFalse(self.channel.integration_ptr.with_actor(self.workflow.user).has_access("read"))
+        Trigger.objects.disable(trigger, actor=self.admin)
+        trigger.refresh_from_db()
+        self.assertFalse(trigger.enabled)
+        self.assertEqual(trigger.granted_relationships(actor=self.admin), ())
         trigger.channel = self.make_channel("replacement-grant-scope")
         trigger.with_actor(self.admin)
         with actor_context(self.admin):
             trigger.save(update_fields=("channel",))
         trigger.refresh_from_db()
         self.assertFalse(trigger.enabled)
-        self.assertEqual(trigger.granted_relationships(actor=self.admin), ())
 
     def test_grant_target_label_follows_the_readers_channel_scope(self):
         """Workflow viewers see the tuple, but only channel readers see its label."""
@@ -227,17 +230,27 @@ class MessageTriggerTests(TransactionTestCase):
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.other)
         trigger = self.trigger(actor=self.owner)
-        trigger.channel = self.make_channel("replacement-scope")
+        original_channel = trigger.channel_id
+        replacement = self.make_channel("replacement-scope")
+        trigger.channel = replacement
         trigger.with_actor(self.other)
-        with actor_context(self.other):
+        with actor_context(self.other), self.assertRaisesMessage(ValidationError, "Disable the trigger before editing"):
             trigger.save(update_fields=("channel",))
         trigger.refresh_from_db()
-        self.assertFalse(trigger.enabled)
-        self.assertIn("changed", trigger.disabled_reason)
+        self.assertTrue(trigger.enabled)
+        self.assertEqual(trigger.channel_id, original_channel)
+        trigger = Trigger.objects.disable(trigger, actor=self.other)
+        trigger.with_actor(self.other)
+        trigger.channel = replacement
+        with actor_context(self.other):
+            trigger.save(update_fields=("channel",))
+        trigger = Trigger.objects.enable(trigger, actor=self.admin)
+        self.assertTrue(trigger.enabled)
+        self.assertEqual(trigger.channel_id, replacement.pk)
 
     def test_admission_rechecks_current_message_channel(self):
         """Moving a pending message cannot bypass its trigger's authored scope."""
-        self.trigger()
+        trigger = self.trigger()
         message = self.ingest()
         with system_context(reason="message source move"):
             Message.objects.filter(pk=message.pk).update(channel=self.make_channel("moved-channel"))
@@ -245,6 +258,12 @@ class MessageTriggerTests(TransactionTestCase):
         self.assertFalse(Trigger.objects.admit(event))
         event.refresh_from_db()
         self.assertIn("channel", event.rejection.lower())
+        trigger.refresh_from_db()
+        self.assertTrue(trigger.enabled)
+        later = self.ingest("message-after-rejection")
+        later_event = system_queryset(TriggerEvent).get(record_object_id=later.pk)
+        self.assertTrue(Trigger.objects.admit(later_event))
+        self.assertEqual(system_queryset(WorkflowRun).count(), 1)
 
     def test_protection_and_preview_name_the_retaining_trigger(self):
         """Disabled scopes retain their channel; names respect trigger visibility."""
