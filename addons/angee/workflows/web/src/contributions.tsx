@@ -22,7 +22,7 @@ export function DecisionRunOrigin() {
   if (!steps.length) return null;
   return <MetaSection headingLevel={2} title={t("catalogue.waitingRuns")}><ul className="space-y-2">{steps.map((step) =>
     <li key={step.id}><TextLink href={href("workflows.runs.record", { id: step.run.id })}>
-      {step.run.version?.workflow?.name ?? step.run.id}</TextLink>{" · "}{step.node_key}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
+      {step.run.display_name}</TextLink>{" · "}{step.node_label}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
 }
 
 function RunsTabLabel() { return useWorkflowsT()("runs.title"); }

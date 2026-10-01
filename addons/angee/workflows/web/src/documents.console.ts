@@ -9,7 +9,7 @@ export const TriggerGrantsDocument = graphql(`
   query TriggerGrants($id: String!) {
     trigger_by_pk(id: $id) {
       id can_edit enabled disabled_reason
-      grants { resource_type resource_id relation target_label }
+      grants { resource_type resource_id relation target_label target_kind }
     }
   }
 `);
@@ -25,8 +25,8 @@ export const RevokeWorkflowTriggerGrantDocument = graphql(`
 export const DecisionWaitingRunsDocument = graphql(`
   query DecisionWaitingRuns($group: String!) {
     steprun(where: { decision_group: { _eq: $group }, status: { _eq: "waiting" } }, order_by: [{ rank: asc }, { map_index: asc }]) {
-      id node_key map_index is_mapped
-      run { id version { workflow { key name } } }
+      id node_label map_index is_mapped
+      run { id display_name }
     }
   }
 `);

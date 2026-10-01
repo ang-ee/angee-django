@@ -41,7 +41,8 @@ test("the principal grants tab lists direct tuples and revokes through the trigg
   const requests: TriggerRequest[] = [];
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Principal grants" }));
-  expect((await screen.findAllByText("notes/role:trigger_editor")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("Role")).length).toBeGreaterThan(0);
+  expect(screen.queryByText("notes/role:trigger_editor")).toBeNull();
   expect(requests.some(({ query }) => query.includes("TriggerGrants"))).toBe(true);
   fireEvent.click(await screen.findByRole("button", { name: "Revoke grant" }));
   const dialog = await screen.findByRole("alertdialog");

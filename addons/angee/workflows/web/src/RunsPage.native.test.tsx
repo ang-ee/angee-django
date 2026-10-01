@@ -20,7 +20,7 @@ async function action(label: string, scope: HTMLElement = document.body) {
 
 async function openStep() {
   fireEvent.click(await screen.findByRole("tab", { name: "Step runs" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Open inspect" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Open Inspect source" }));
   return screen.findByRole("dialog", { name: "Step Run" });
 }
 
@@ -35,16 +35,19 @@ test("routed record uses the framework action menu, facts and retained JSON", as
   await waitFor(() => expect(document.body.textContent).toContain("R-7"));
 });
 
-test("empty run facts are omitted while populated facts remain visible", async () => {
-  const { unmount } = render(<RunStory run={runFixture({ finished_at: null })} />);
-  await screen.findByRole("heading", { name: "Run wfr_review" });
+test("empty run facts are omitted", async () => {
+  render(<RunStory run={runFixture({ finished_at: null })} />);
+  await screen.findByRole("heading", { name: "Record review run" });
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.queryByText(label)).toBeNull();
   }
-  unmount();
-  render(<RunStory run={runFixture({ outcome: "approved", reprocess_of: { id: "wfr_previous" },
+});
+
+test("populated run facts remain visible", async () => {
+  render(<RunStory run={runFixture({ outcome: "approved", outcome_label: "Approved", reprocess_of: { id: "wfr_previous" },
     parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } }, trigger_event: { id: "wte_review" } })} />);
-  await screen.findByText("approved");
+  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByText("Approved");
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.getByText(label)).toBeTruthy();
   }
@@ -114,7 +117,7 @@ test("reprocess confirms then navigates to the returned replacement through the 
   await waitFor(() => expect(requests.filter(({ query }) => query.includes("mutation"))).toHaveLength(1));
   expect(await screen.findByText("Run reprocessed.")).toBeTruthy();
   await waitFor(() => expect(requests.some(({ query, variables }) => query.includes("workflowrun_by_pk") && variables.id === "wfr_replacement")).toBe(true));
-  expect(await screen.findByRole("heading", { name: "Run wfr_replacement" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Record review run" })).toBeTruthy();
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
@@ -154,7 +157,7 @@ test("map facts distinguish ordinary steps, item zero, and empty map parents", a
   const indexes = ["Map index", "Map items settled", "Map items total"]
     .map((label) => headers.findIndex((header) => header.textContent === label));
   for (const [name, values] of [
-    ["inspect", ["", "", ""]],
+    ["Inspect source", ["", "", ""]],
     ["reviews", ["", "1", "2"]],
     ["reviews.body", ["0", "", ""]],
     ["empty_reviews", ["", "0", "0"]],
@@ -179,7 +182,7 @@ test("map facts distinguish ordinary steps, item zero, and empty map parents", a
 test("selected step opens in the shared drawer with attempts and artifacts", async () => {
   render(Recovery.render());
   const step = await openStep();
-  expect(await within(step).findByRole("heading", { name: "inspect" })).toBeTruthy();
+  expect(await within(step).findByRole("heading", { name: "Inspect source" })).toBeTruthy();
   expect(within(step).queryByText("Wait reason")).toBeNull();
   expect(within(step).queryByText("Map index")).toBeNull();
   expect(within(step).queryByText("Map items settled")).toBeNull();
@@ -287,6 +290,7 @@ test("run query failures retain the shared retry action", async () => {
 test("backend capability facts hide operator actions and retain complete error evidence", async () => {
   const error = "Retained details: " + "all evidence remains visible. ".repeat(50);
   render(<RunStory run={runFixture({ can_reprocess: false, outcome: "error", failure_reason: error })} />);
+  await screen.findByRole("heading", { name: "Record review run" });
   expect(await screen.findByText(error.trim())).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 });

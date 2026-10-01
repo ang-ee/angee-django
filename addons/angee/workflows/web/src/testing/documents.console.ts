@@ -2,7 +2,7 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 
 const RunFields = graphql(`
   fragment WorkflowRunFixture on WorkflowRunType {
-    id status origin outcome error failure_reason input output created_at finished_at
+    id display_name status origin outcome outcome_label error failure_reason input output created_at finished_at
     can_cancel can_reprocess run_as { id display_name }
     subject_model subject_id reprocess_of { id }
     parent_step { id run { id } }
@@ -12,7 +12,7 @@ const RunFields = graphql(`
 `);
 const StepRunFields = graphql(`
   fragment WorkflowStepRunFixture on StepRunType {
-    id node_key map_index is_mapped is_map map_settled map_total rank status outcome attempt waiting_kind wait_reason input output
+    id node_key node_label map_index is_mapped is_map map_settled map_total rank status outcome outcome_label attempt waiting_kind wait_reason input output
     can_retry requires_duplicate_acknowledgement
     awaited_run { id }
     attempts { id number result started_at finished_at error stacktrace }

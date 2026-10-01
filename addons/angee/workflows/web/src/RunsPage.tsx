@@ -43,34 +43,36 @@ export function RunsList({ baseFilter, embedded = false }: {
       emptyContent={t("runs.empty")}>
       <Facet field="version.workflow" label={t("run.workflow")} />
       <Facet field="origin" label={t("run.origin")} />
+      <Column field="version.workflow" header={t("run.workflow")}
+        render={(row) => typeof row.display_name === "string" ? row.display_name : null} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
-      <Column field="version.workflow.name" header={t("run.workflow")} />
       <Column field="subject_id" header={t("run.subject")} render={(row) => typeof row.subject_id === "string" && typeof row.subject_model === "string"
         ? <RecordReference model={row.subject_model} id={row.subject_id} /> : null} />
       <Column field="origin" header={t("run.origin")} widget="statusBadge" />
       <Column field="created_at" header={t("run.started")} />
       <Column field="finished_at" header={t("run.finished")} />
-      <Column field="outcome" header={t("run.outcome")} />
+      <Column field="outcome_label" header={t("run.outcome")} />
     </List>
     <Form readOnly returning={["can_cancel", "can_reprocess", "subject_model", "subject_id"]}
-      title={({ recordId }) => t("run.title", { id: recordId ?? "" })}
       headerExtras={({ record }) => typeof record?.subject_id === "string" && typeof record.subject_model === "string"
         ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
+      <Field name="display_name" title readOnly />
       <Field name="status" widget="statusbar" />
       <Group label={t("run.facts")} columns={2}>
+        <Field name="outcome" hidden readOnly />
         <Field name="version.workflow" label={t("run.workflow")} />
         <Field name="version.number" label={t("run.version")} />
         <Field name="origin" label={t("run.origin")} widget="statusBadge" />
         <Field name="run_as" label={t("run.runAs")} />
         <Field name="created_at" label={t("run.started")} />
         <Field name="finished_at" label={t("run.finished")} showWhen={(row) => Boolean(row.finished_at)} />
-        <Field name="outcome" label={t("run.outcome")} showWhen={(row) => Boolean(row.outcome)} />
+        <Field name="outcome_label" label={t("run.outcome")} showWhen={(row) => Boolean(row.outcome)} />
         <Field name="reprocess_of" label={t("run.reprocessOf")} showWhen={(row) => Boolean(row.reprocess_of)} />
         <Field name="parent_step.run" label={t("run.parent")} showWhen={(row) => Boolean(rowValueAtPath(row, "parent_step.run"))} />
         <Field name="trigger_event" label={t("trigger.event")} showWhen={(row) => Boolean(row.trigger_event)} />
       </Group>
-      <Field name="failure_reason" label={t("run.failureReason")} widget="textarea"
-        showWhen={(row) => row.outcome === "error" && Boolean(row.failure_reason)} />
+      <Field name="failure_reason" label={t("run.failureReason")} widget="textarea" body={false}
+        showWhen={(row) => row.outcome === "error"} />
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
       <Action id="cancel" label={t("action.cancel_workflow_run")} primary danger

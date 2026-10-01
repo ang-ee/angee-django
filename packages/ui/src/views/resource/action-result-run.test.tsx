@@ -176,6 +176,16 @@ describe("useActionResultRun", () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
+  test("a record action failure shows its message without validation details", async () => {
+    const { result } = renderHook(() => useActionResultRun(), { wrapper });
+
+    await act(async () => {
+      await result.current(async () => ({ ok: false, message: "No eligible record.", validationErrors: {} }));
+    });
+
+    expect(mocks.toast.danger).toHaveBeenCalledWith({ title: "No eligible record." });
+  });
+
   test("a missing payload toasts the no-result title", async () => {
     const { result } = renderHook(() => useActionResultRun(), { wrapper });
 

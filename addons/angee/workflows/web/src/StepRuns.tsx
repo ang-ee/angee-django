@@ -44,24 +44,24 @@ export function StepRuns({ runId }: { runId: string }) {
         </List> },
     ]}>
     <List fields={["is_mapped", "is_map"]} order={{ rank: "ASC", map_index: "ASC" }} pageSize={10} emptyContent={t("run.noSteps")}>
-      <Column field="node_key" />
+      <Column field="node_label" />
       <Column field="map_index" header={t("step.mapIndex")} showWhen={(row) => row.is_mapped === true} />
       <Column field="map_settled" header={t("step.mapSettled")} showWhen={(row) => row.is_map === true} />
       <Column field="map_total" header={t("step.mapTotal")} showWhen={(row) => row.is_map === true} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
-      <Column field="outcome" header={t("run.outcome")} />
+      <Column field="outcome_label" header={t("run.outcome")} />
       <Column field="attempt" header={t("step.attempts")} />
     </List>
     <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement"]}>
       <Field name="is_mapped" hidden />
       <Field name="is_map" hidden />
-      <Field name="node_key" title />
+      <Field name="node_label" title />
       <Field name="status" widget="statusbar" />
       <Group columns={2}>
         <Field name="map_index" label={t("step.mapIndex")} showWhen={(row) => row.is_mapped === true} />
         <Field name="map_settled" label={t("step.mapSettled")} showWhen={(row) => row.is_map === true} />
         <Field name="map_total" label={t("step.mapTotal")} showWhen={(row) => row.is_map === true} />
-        <Field name="outcome" label={t("run.outcome")} />
+        <Field name="outcome_label" label={t("run.outcome")} />
         <Field name="attempt" label={t("step.attempts")} />
         <Field name="waiting_kind" label={t("step.waitKind")} showWhen={(row) => optionToken(row.status) === "waiting"} />
         <Field name="awaited_run" label={t("step.awaitedRun")} showWhen={(row) => optionToken(row.waiting_kind) === "run"} />

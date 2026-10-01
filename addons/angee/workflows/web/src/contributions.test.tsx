@@ -20,8 +20,8 @@ const { Provider, clearClients, clients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 type WaitingRuns = DocumentType<typeof DecisionWaitingRunsDocument>;
-const visible: WaitingRuns = { steprun: [{ id: "wsr_review", node_key: "review", map_index: 0, is_mapped: false,
-  run: { id: "wfr_review", version: { workflow: { key: "record_review", name: "Record review" } } },
+const visible: WaitingRuns = { steprun: [{ id: "wsr_review", node_label: "Review document", map_index: 0, is_mapped: false,
+  run: { id: "wfr_review", display_name: "Record review" },
 }] };
 
 function origin(data: WaitingRuns = visible, error = false, pending = false) {
@@ -39,7 +39,7 @@ function origin(data: WaitingRuns = visible, error = false, pending = false) {
 test("decision origin asks for the current group and links its waiting run and step", async () => {
   const { custom } = origin();
   expect((await screen.findByRole("link", { name: "Record review" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
-  expect(screen.getByText(/· review$/)).toBeTruthy();
+  expect(screen.getByText(/· Review document$/)).toBeTruthy();
   expect(screen.queryByText(/\[0\]/)).toBeNull();
   expect(custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ group: "dcg_review" });
   expect(custom.mock.calls[0]?.[0].meta?.gqlQuery).toBe(DecisionWaitingRunsDocument);
@@ -52,7 +52,7 @@ test("decision origin asks for the current group and links its waiting run and s
 
 test("mapped waiting rows show item zero without inferring mapping from the node key", async () => {
   origin({ steprun: visible.steprun.map((step) => ({ ...step, is_mapped: true })) });
-  expect(await screen.findByText(/· review \[0\]/)).toBeTruthy();
+  expect(await screen.findByText(/· Review document \[0\]/)).toBeTruthy();
 });
 
 test("the optional decision origin occupies no space while loading", () => {
@@ -61,7 +61,7 @@ test("the optional decision origin occupies no space while loading", () => {
   expect(screen.queryByRole("status")).toBeNull();
 });
 
-test.each([{ steprun: [] }, { steprun: [{ id: "wsr_hidden", node_key: "hidden", map_index: 0, is_mapped: false, run: null }] }])(
+test.each([{ steprun: [] }, { steprun: [{ id: "wsr_hidden", node_label: "Hidden", map_index: 0, is_mapped: false, run: null }] }])(
   "groups without a visible waiting run render no contribution: %j", async ({ steprun }) => {
     const { container, custom } = origin({ steprun });
     await vi.waitFor(() => expect(custom).toHaveBeenCalledOnce());

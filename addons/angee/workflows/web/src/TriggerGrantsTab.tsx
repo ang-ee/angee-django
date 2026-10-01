@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Code, RowsListView, defineRowAction, type ListColumn } from "@angee/ui";
+import { RowsListView, defineRowAction, type ListColumn } from "@angee/ui";
 
 import { RevokeWorkflowTriggerGrantDocument, TriggerGrantsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -12,6 +12,7 @@ type GrantRow = {
   resource_id: string;
   relation: string;
   target_label: string | null;
+  target_kind: string;
 };
 
 /** Direct principal grants on the native trigger record tab. */
@@ -23,8 +24,7 @@ export function TriggerGrantsTab({ recordId }: { recordId: string }) {
     ...grant, id: `${grant.resource_type}:${grant.resource_id}#${grant.relation}`,
   })), [trigger?.grants]);
   const columns = useMemo<readonly ListColumn<GrantRow>[]>(() => [
-    { field: "target_label", header: t("trigger.grantTarget"), render: (row) => row.target_label ?? `${row.resource_type}:${row.resource_id}` },
-    { field: "resource_type", header: t("trigger.grantResource"), render: (row) => <Code truncate>{row.resource_type}:{row.resource_id}</Code> },
+    { field: "target_label", header: t("trigger.grantTarget"), render: (row) => row.target_label || row.target_kind },
     { field: "relation", header: t("trigger.grantRelation") },
   ], [t]);
   const actions = useMemo(() => [defineRowAction({

@@ -43,7 +43,7 @@ export function DecisionContext({ context, showFacts = true }: { context: unknow
         <dt className="flex min-w-0 flex-wrap items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
         <dd className="space-y-2">
           <FactValue value={fact.value} />
-          {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || fact.subject.id} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
+          {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || undefined} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
           <References heading="h3" title={t("context.evidence")} references={fact.evidence} openRecord={openRecord} />
         </dd>
       </div>)}</dl>
@@ -70,7 +70,7 @@ function References({ title, references, openRecord, heading: Heading = "h2" }: 
   return <section aria-label={title} className="space-y-1">
     <Heading className="text-sm font-medium">{title}</Heading>
     <ul className="flex min-w-0 flex-wrap gap-2">{references.map((reference, index) =>
-      <li key={`${reference.model}:${reference.id}:${index}`} className="min-w-0 max-w-full"><RecordReference {...reference} label={reference.label || reference.id} onOpen={() => openRecord(reference)} /></li>,
+      <li key={`${reference.model}:${reference.id}:${index}`} className="min-w-0 max-w-full"><RecordReference {...reference} label={reference.label || undefined} onOpen={() => openRecord(reference)} /></li>,
     )}</ul>
   </section>;
 }

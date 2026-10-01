@@ -27,7 +27,8 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
     groups: "workflowrun_groups", groupsCount: "workflowrun_groups_count" },
   typeNames: { filter: "workflowrun_bool_exp", order: "workflowrun_order_by",
     groupBySpec: "workflowrunGroupBySpec", groupOrder: "workflowrunGroupOrder", having: "workflowrunHaving" },
-  fields: [...["id", "subject_id", "subject_model", "created_at", "finished_at", "outcome"].map((name) => ({
+  recordRepresentation: "display_name",
+  fields: [...["id", "display_name", "subject_id", "subject_model", "created_at", "finished_at", "outcome", "outcome_label"].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
     creatable: false, updatable: false, requiredOnCreate: false,
   })), { name: "version", kind: "relation", relationObject: true, relationModelLabel: "workflows.WorkflowVersion",
@@ -48,7 +49,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   }))],
   query: testResourceQuery({ fields: {
     ...Object.fromEntries([
-      "id", "origin", "outcome", "subject_model", "subject_id", "error", "failure_reason", "input", "output", "can_cancel", "can_reprocess",
+      "id", "display_name", "origin", "outcome", "outcome_label", "subject_model", "subject_id", "error", "failure_reason", "input", "output", "can_cancel", "can_reprocess",
       "run_as.id", "run_as.display_name", "reprocess_of.id",
       "version.id", "version.number", "version.workflow.id", "version.workflow.name",
       "version.workflow.key", "parent_step.id", "parent_step.run.id", "trigger_event.id",
@@ -95,9 +96,9 @@ export const runEvidenceResourceFixture = testDataResource("workflows.WorkflowRu
 
 export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   capabilities: ["list", "detail"],
-  recordRepresentation: "node_key",
+  recordRepresentation: "node_label",
   fields: [
-    ...["id", "node_key", "outcome", "waiting_kind", "wait_reason"].map((name) => retainedField(name)),
+    ...["id", "node_key", "node_label", "outcome", "outcome_label", "waiting_kind", "wait_reason"].map((name) => retainedField(name)),
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
     ...["rank", "map_index", "map_settled", "map_total", "attempt"].map((name) => retainedField(name, "Int")),
@@ -108,7 +109,7 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   roots: { list: "steprun", detail: "steprun_by_pk", aggregate: "steprun_aggregate" },
   typeNames: { filter: "steprun_bool_exp", order: "steprun_order_by" },
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "run", "node_key", "status", "outcome", "attempt", "waiting_kind", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["id", "run", "node_key", "node_label", "status", "outcome", "outcome_label", "attempt", "waiting_kind", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
     rank: testQueryField("rank", { scalar: "Int", sort: { field: "rank" } }),
     map_index: testQueryField("map_index", { scalar: "Int", sort: { field: "map_index" } }),
     is_mapped: testQueryField("is_mapped", { scalar: "Boolean" }),
@@ -179,9 +180,9 @@ export const workflowResourceFixture = testDataResource("workflows.Workflow", {
 /** A retained L2 run typed by its generated fixture fragment. */
 export function runFixture(overrides: Partial<Run> = {}): Run {
   return {
-    id: "wfr_review", status: "FAILED", origin: "MANUAL", subject_model: "notes.Note", subject_id: "nte_7",
+    id: "wfr_review", display_name: "Record review run", status: "FAILED", origin: "MANUAL", subject_model: "notes.Note", subject_id: "nte_7",
     can_cancel: false, can_reprocess: true,
-    run_as: { id: "usr_operator", display_name: "Operator" }, input: { reference: "R-7" }, output: {}, outcome: "", error: "", failure_reason: null,
+    run_as: { id: "usr_operator", display_name: "Operator" }, input: { reference: "R-7" }, output: {}, outcome: "", outcome_label: "", error: "", failure_reason: null,
     created_at: "2026-09-29T09:00:00Z", finished_at: "2026-09-29T09:01:00Z", reprocess_of: null, parent_step: null, trigger_event: null,
     version: { id: "wfv_review", number: 2,
       workflow: { id: "wfl_review", key: "record_review", name: "Record review", subject_model: "notes.Note" } },
@@ -191,9 +192,9 @@ export function runFixture(overrides: Partial<Run> = {}): Run {
 
 export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
   return {
-    id: "wsr_inspect", node_key: "inspect", map_index: 0, is_mapped: false, is_map: false, map_settled: 0, map_total: 0, rank: 0,
+    id: "wsr_inspect", node_key: "inspect", node_label: overrides.node_key ?? "Inspect source", map_index: 0, is_mapped: false, is_map: false, map_settled: 0, map_total: 0, rank: 0,
     can_retry: true, requires_duplicate_acknowledgement: false,
-    status: "FAILED", outcome: "error", attempt: 1, waiting_kind: null, wait_reason: "", awaited_run: null,
+    status: "FAILED", outcome: "error", outcome_label: "Needs attention", attempt: 1, waiting_kind: null, wait_reason: "", awaited_run: null,
     input: { reference: "R-7" }, output: {},
     attempts: [{ id: "wsa_inspect", number: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
