@@ -75,7 +75,7 @@ describe("requester access cards", () => {
     expect(screen.getByText("Waiting for a decision").getAttribute("data-tone")).toBe("warning");
     expect(screen.getByText(/No password is created/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "View decision history" }).getAttribute("href"))
-      .toBe("/decisions.decisions.record/decision-1");
+      .toBe("/decisions.inbox.record/decision-1");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Give access" })); });
     expect(mocks.decide).toHaveBeenCalledExactlyOnceWith("need-1", {
       action: "APPROVE", expected_revision: 3,

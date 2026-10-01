@@ -6,7 +6,7 @@ export const DECISION_MODELS = [DECISION_MODEL, "decisions.DecisionGroup"];
 export const DecisionDocument = graphql(`
   query DecisionDetail($id: String!) {
     decisions_by_pk(id: $id) {
-      id kind revision is_open can_act form_schema basis context
+      id kind revision is_open permissions form_schema basis context
       verdict closed_reason resolution resolved_at expires_at
       subject_model subject_id
       requester { display_name }
