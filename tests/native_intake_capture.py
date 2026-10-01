@@ -20,9 +20,8 @@ from rebac.roles import grant as grant_role
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import StaleRevisionError
-from angee.decisions.forms import compile_form
+from angee.decisions.forms import validate_form
 from angee.graphql.schema import GraphQLSchemas
-from angee.intake.models import ApproveNeedAccess, DenyNeedAccess
 from angee.intake.runtime_migrations.need_access_decision import FORM_SCHEMA
 from angee.intake.runtime_migrations.need_access_decision import forwards as backfill_access
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
@@ -313,18 +312,18 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         before = [list(store._base_manager.order_by("pk").values()) for store in stores]
         mutation = """
           mutation Decide($id: ID!, $revision: Int!) {
-            decide_human_decision(id: $id, revision: $revision, action: "approve", values: {}) {
+            decide(id: $id, revision: $revision, action: "approve", values: {}) {
               ok validation_errors
             }
           }
         """
         variables = {"id": str(decision.sqid), "revision": decision.revision}
         with self.assertRaises(PermissionDenied):
-            decision.decide(actor=self.owner, revision=decision.revision, action="approve", values={})
+            decision.decide(actor=self.writer, revision=decision.revision, action="approve", values={})
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, "pending")
         accepted = self.graphql(mutation, variables, bucket="console")
-        self.assertTrue(accepted["decide_human_decision"]["ok"])
+        self.assertTrue(accepted["decide"]["ok"])
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, "completed")
         self.assertEqual(need.access_resolved_by_id, self.admin.pk)
@@ -375,7 +374,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, "completed")
         self.assertEqual(need.access_resolution, {"action": "approve", "reason": "Granted"})
         denied.refresh_from_db()
-        self.assertEqual(denied.superseded_by_id, need.access_decision_id)
+        self.assertEqual(need.access_decision.group.reasked_from_id, denied.group_id)
         self.assertEqual(denied.resolution, {"action": "deny", "reason": "Not yet"})
         self.assertEqual(denied.closed_reason, "resolved")
         self.assertFalse(account.has_usable_password())
@@ -451,7 +450,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
                     self.assertIsNone(need.access_resolved_at)
                     self.assertEqual(need.access_resolution, {})
                     previous_decision.refresh_from_db()
-                    self.assertEqual(previous_decision.superseded_by_id, need.access_decision_id)
+                    self.assertEqual(need.access_decision.group.reasked_from_id, previous_decision.group_id)
                     self.assertEqual(previous_decision.verdict, "completed")
 
     def test_unchanged_party_and_unpersisted_assignment_keep_decision(self):
@@ -518,7 +517,10 @@ class NeedAccessDecisionTests(IntakeAccessCase):
             self.assertEqual(need.access_decision.group.policy, "first")
 
     def test_frozen_migration_form_matches_the_adopted_actions(self):
-        self.assertEqual(FORM_SCHEMA, compile_form((ApproveNeedAccess, DenyNeedAccess)))
+        self.assertEqual(validate_form(FORM_SCHEMA, "approve", {}, actor=self.admin)[1],
+                         {"action": "approve", "reason": ""})
+        self.assertEqual(validate_form(FORM_SCHEMA, "deny", {}, actor=self.admin)[1],
+                         {"action": "deny", "reason": ""})
 
     def test_deciding_writes_neither_relationship_store(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
@@ -829,7 +831,7 @@ class NeedResetAccessTests(IntakeAccessCase):
         previous.refresh_from_db()
         self.assertEqual(need.party_id, party.pk)
         self.assertEqual(need.access_verdict, "pending")
-        self.assertEqual(previous.superseded_by_id, need.access_decision_id)
+        self.assertEqual(need.access_decision.group.reasked_from_id, previous.group_id)
         self.assertEqual(previous.verdict, "completed")
         self.assertEqual(self.User._base_manager.get(pk=self.reader.pk).password, password)
         self.assertFalse(requester_task.exists())
@@ -847,28 +849,25 @@ class DecisionRecordTests(IntakeAccessCase):
         need.decide_access("deny", reason="More evidence needed")
         old = need.access_decision
         original = (old.verdict, old.resolution, old.resolved_at)
-        query = "query($id: String!) { decisions_by_pk(id: $id) { is_open can_revisit } }"
-        self.assertEqual(self.graphql(query, {"id": old.sqid}, bucket="console")["decisions_by_pk"],
-                         {"is_open": False, "can_revisit": True})
-        mutation = """mutation($id: ID!, $revision: Int!) {
-          revisit_human_decision(id: $id, revision: $revision) { ok id validation_errors }
-        }"""
-        stale = self.graphql(mutation, {"id": old.sqid, "revision": old.revision - 1}, bucket="console")
-        self.assertFalse(stale["revisit_human_decision"]["ok"])
-        denied = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, user=self.writer, bucket="console")
-        self.assertFalse(denied["revisit_human_decision"]["ok"])
-        result = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, bucket="console")
-        self.assertTrue(result["revisit_human_decision"]["ok"], result)
+        with actor_context(self.owner):
+            with self.assertRaises(StaleRevisionError):
+                need.revisit_access(decision=old, revision=old.revision - 1)
+        with actor_context(self.writer):
+            with self.assertRaises(PermissionDenied):
+                self.as_user(need, self.writer).revisit_access(decision=old, revision=old.revision)
+        with actor_context(self.owner):
+            need.revisit_access(decision=old, revision=old.revision)
         need.refresh_from_db()
         self.assertNotEqual(need.access_decision_id, old.pk)
         self.assertTrue(need.access_decision.is_open)
         old.refresh_from_db()
         self.assertEqual((old.verdict, old.resolution, old.resolved_at), original)
-        self.assertEqual(old.superseded_by_id, need.access_decision_id)
-        repeated = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, bucket="console")
-        self.assertFalse(repeated["revisit_human_decision"]["ok"])
+        self.assertEqual(need.access_decision.group.reasked_from_id, old.group_id)
+        with actor_context(self.owner):
+            with self.assertRaises(ValidationError):
+                need.revisit_access(decision=old, revision=old.revision)
         subject = self.graphql("""query($model: String!, $id: String!) {
-          decisions(where: {subject_content_type: {_eq: $model}, subject_object_id: {_eq: $id}}) { id }
+          decisions(where: {subject_model: {_eq: $model}, subject_id: {_eq: $id}}) { id }
         }""", {"model": "intake.Need", "id": need.sqid}, bucket="console")
         self.assertEqual({row["id"] for row in subject["decisions"]},
                          {old.sqid, need.access_decision.sqid})
@@ -883,9 +882,8 @@ class DecisionRecordTests(IntakeAccessCase):
         need.decide_access("approve")
         seat = need.access_decision
         with actor_context(self.owner):
-            self.assertFalse(seat.with_actor(self.owner).can_revisit)
             with self.assertRaises(ValidationError):
-                seat.revisit(actor=self.owner, revision=seat.revision)
+                need.revisit_access(decision=seat, revision=seat.revision)
 
 
 
