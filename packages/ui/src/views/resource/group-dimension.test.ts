@@ -230,6 +230,12 @@ describe("localized labels over stable identities", () => {
       ),
     ).toEqual(["February 2026"]);
   });
+  test("boolean buckets use the translated yes/no labels", () => {
+    const t = (key: string) => ({ "list.yes": "Sí", "list.no": "No" })[key] ?? key;
+    expect(groupLabel(false, { field: "is_archived" }, null, "None", t)).toBe("No");
+    expect(groupLabel(true, { field: "is_archived" }, null, "None", t)).toBe("Sí");
+    expect(groupLabel("false", { field: "status" }, metadata, "None", t)).toBe("false");
+  });
   test("date-like relation labels and scalar text stay verbatim", () => {
     expect(
       groupLabel("2026-09", { field: "party" }, metadata, "None", TEST_T),

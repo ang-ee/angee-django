@@ -57,6 +57,12 @@ const page = (uids: number[], nextBeforeUid: number | null = null, total = uids.
   next_before_uid: nextBeforeUid, messages: uids.map((uid) => message(uid)),
 });
 const previewCalls = () => mocks.custom.mock.calls.filter(([request]) => request.meta.gqlQuery);
+// The dialog defaults Before to tomorrow (UTC); a changed value must differ from it on any day.
+const utcDateFromToday = (days: number) => {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
 
 function TestDialog() {
   return <Provider><AppRuntimeProvider runtime={{ i18n }}><ToastProvider>
@@ -226,7 +232,7 @@ describe("ImportImapSampleAction snapshot selection", () => {
   });
 
   test.each([
-    ["Mailbox", ""], ["Since", "2026-01-01"], ["Before", "2026-10-01"], ["Messages per page", "10"],
+    ["Mailbox", ""], ["Since", "2026-01-01"], ["Before", utcDateFromToday(2)], ["Messages per page", "10"],
   ])("changing %s invalidates the preview and selection without a mailbox request", async (label, value) => {
     await openDialog();
     await preview();
