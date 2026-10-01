@@ -12,9 +12,8 @@ from django.core.exceptions import ValidationError
 from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
-from django.db.models.signals import class_prepared
 from rebac import PermissionDenied, system_context
-from rebac.managers import RebacQuerySet
+from rebac.managers import RebacQuerySet, TrackedQuerySet
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id, instance_actor
@@ -308,19 +307,15 @@ class OwnerMixin(AuditMixin):
         return self
 
 
-class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
-    """Close generic collection edits and deletion around owner-controlled writes.
+class _AppendOnlyWrites:
+    """The closed collection-write policy shared by the scoped and base querysets.
 
-    Compose before the domain's base queryset to preserve authorization.
-    Retained evidence uses insert admission; retained state machines expose
-    exact conditional writes through their own methods and ``owner_update``.
     ``owner_update`` and ``owner_bulk_create`` are public, framework-protected
     APIs for domain owners that have already validated fields and predicates.
     They skip this class's guard only, preserving every downstream guard.
-    Instance invariants and collector retention remain model/FK concerns;
-    ``AuditMixin`` clears audit FKs through its collector policy without
-    calling this queryset.
     """
+
+    model: type[models.Model]
 
     def immutable_error(self, operation: str) -> ValidationError:
         """Identify the model whose generic collection mutation is forbidden."""
@@ -331,21 +326,15 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
     def validate_insert(self) -> None:
         """Let the domain owner narrow insert admission."""
 
-    def insert(self, obj: _ModelT) -> _ModelT:
-        """Validate one append before its ordinary authorized insertion."""
-
-        self.validate_insert()
-        return super().insert(obj)
-
     def bulk_create(
         self,
-        objs: Iterable[_ModelT],
+        objs: Iterable[Any],
         batch_size: int | None = None,
         ignore_conflicts: bool = False,
         update_conflicts: bool = False,
         update_fields: Iterable[str] | None = None,
         unique_fields: Iterable[str] | None = None,
-    ) -> list[_ModelT]:
+    ) -> list[Any]:
         """Reject conflict handling before asking the owner to admit inserts."""
 
         if ignore_conflicts or update_conflicts:
@@ -353,15 +342,15 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
         self.validate_insert()
         return self.owner_bulk_create(objs, batch_size=batch_size)
 
-    def owner_bulk_create(self, objs: Iterable[_ModelT], *, batch_size: int | None = None) -> list[_ModelT]:
+    def owner_bulk_create(self, objs: Iterable[Any], *, batch_size: int | None = None) -> list[Any]:
         """Protected API: insert an owner-validated batch through downstream guards."""
 
-        return super().bulk_create(objs, batch_size=batch_size)
+        return cast(list[Any], super().bulk_create(objs, batch_size=batch_size))  # type: ignore[misc]
 
     def owner_update(self, **kwargs: Any) -> int:
         """Protected API: apply an owner-validated write through downstream guards."""
 
-        return super().update(**kwargs)
+        return cast(int, super().update(**kwargs))  # type: ignore[misc]
 
     def update(self, **kwargs: Any) -> int:
         """Reject every collection edit."""
@@ -384,14 +373,30 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
         raise self.immutable_error("_raw_delete")
 
 
-class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyQuerySet)):  # type: ignore[misc]
-    """Give Django unscoped relation reads through the guarded domain queryset."""
+class AppendOnlyQuerySet(_AppendOnlyWrites, RebacQuerySet[_ModelT]):
+    """Close generic collection edits and deletion around owner-controlled writes.
 
-    def get_queryset(self) -> AppendOnlyQuerySet[Any]:
-        queryset = self.model._default_manager.get_queryset()
-        if not isinstance(queryset, AppendOnlyQuerySet):
-            raise ValueError(f"{self.model._meta.label} needs an append-only default manager.")
-        return queryset.system_context(reason=f"{self.model._meta.label_lower}.base_manager")
+    Compose before the domain's base queryset to preserve authorization.
+    Retained evidence uses insert admission; retained state machines expose
+    exact conditional writes through their own methods and ``owner_update``.
+    Instance invariants and collector retention remain model/FK concerns;
+    ``AuditMixin`` clears audit FKs through its collector policy without
+    calling this queryset.
+    """
+
+    def insert(self, obj: _ModelT) -> _ModelT:
+        """Validate one append before its ordinary authorized insertion."""
+
+        self.validate_insert()
+        return super().insert(obj)
+
+
+class AppendOnlyBaseQuerySet(_AppendOnlyWrites, TrackedQuerySet[_ModelT]):
+    """Unscoped rows for Django's own relation reads, with the same writes closed."""
+
+
+class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyBaseQuerySet)):  # type: ignore[misc]
+    """The base manager an append-only model declares: unfiltered reads, closed writes."""
 
 
 class AppendOnlyModel(models.Model):
@@ -406,6 +411,7 @@ class AppendOnlyModel(models.Model):
 
     class Meta:
         abstract = True
+        base_manager_name = "_append_only_base"
 
     def validate_append(self) -> None:
         """Let a domain owner narrow first insertion without replacing the guard."""
@@ -431,28 +437,6 @@ class AppendOnlyModel(models.Model):
     def _owner_delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete one row after its domain owner has checked retention and locks."""
         return super().delete(*args, **kwargs)
-
-
-def _append_only_base_manager(sender: type[models.Model], **kwargs: Any) -> None:
-    """Bind a guarded base manager even when composition drops Meta manager names."""
-    del kwargs
-    if not issubclass(sender, AppendOnlyModel) or sender._meta.abstract:
-        return
-    base = next((manager for manager in sender._meta.managers if isinstance(manager, AppendOnlyBaseManager)), None)
-    manager = next(
-        (manager for manager in sender._meta.managers if not isinstance(manager, AppendOnlyBaseManager)
-         and isinstance(manager.get_queryset(), AppendOnlyQuerySet)),
-        None,
-    )
-    if base is None or manager is None:
-        raise ValueError(f"{sender._meta.label} needs an append-only default manager.")
-    sender._meta.default_manager_name = manager.name
-    sender._meta.__dict__.pop("default_manager", None)
-    sender._meta.base_manager_name = base.name
-    sender._meta.__dict__.pop("base_manager", None)
-
-
-class_prepared.connect(_append_only_base_manager, weak=False, dispatch_uid="angee.base.append_only_base_manager")
 
 
 class ArchiveMixin(models.Model):
