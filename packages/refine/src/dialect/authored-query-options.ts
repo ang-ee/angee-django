@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { print } from "graphql";
 import {
   useDataProvider,
   useOnError,
@@ -21,7 +20,7 @@ import {
 
 import type { DocumentData } from "../typed-document";
 import type { AuthoredDocument, AuthoredVariables } from "./authored-hooks";
-import { authoredOperationData, queryMeta } from "./wire";
+import { authoredOperationData, graphqlDocumentIdentity, queryMeta } from "./wire";
 
 /** One cache identity for finite singleton, batch and imperative authored reads. */
 export function authoredQueryKey<TDocument extends AuthoredDocument>(
@@ -31,7 +30,7 @@ export function authoredQueryKey<TDocument extends AuthoredDocument>(
 ) {
   return [
     "angee", "authored", "finite", dataProviderName,
-    print(document), variables ?? {},
+    graphqlDocumentIdentity(document).identity, variables ?? {},
   ] as const;
 }
 
