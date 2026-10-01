@@ -209,8 +209,10 @@ def test_deletion_preview_counts_fast_deletes(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.django_db(transaction=True)
 @isolate_apps("django.contrib.auth")
-def test_deletion_preview_hides_rebac_child_leaves_without_read_access() -> None:
+def test_deletion_preview_hides_rebac_child_leaves_without_read_access(composed_tables: None) -> None:
     """Actor-scoped previews do not expose related resource row labels or ids."""
+
+    del composed_tables
 
     class PreviewScopedParent(models.Model):
         """Parent model targeted by a scoped cascade child."""

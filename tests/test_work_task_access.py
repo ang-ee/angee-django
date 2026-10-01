@@ -48,7 +48,8 @@ class TaskAccessTests(WorkCase):
             self.assertTrue(self.scoped(task, user))
         for user in (self.owner, self.assignee):
             self.assertTrue(self.scoped(task, user, "write"))
-        self.Task._base_manager.filter(pk=task.pk).update(stage=None, visibility="inherited")
+        with system_context(reason="tests.work.null_stage"):
+            self.Task._base_manager.filter(pk=task.pk).update(stage=None, visibility="inherited")
         self.assertFalse(self.scoped(task, self.member))
 
     def test_stage_position_controls_order(self):

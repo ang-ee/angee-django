@@ -224,13 +224,14 @@ def test_creation_and_column_updates_change_reads_without_tuples(public_policy, 
             (private, nonmatching, {shared.pk}),
         ):
             # Rate identity remains immutable through its public queryset. A
-            # trusted data migration can update columns via Django's base manager;
-            # the derived permission must immediately follow those persisted facts.
+            # trusted data migration uses Django's base manager with explicit system
+            # authority; derived permissions immediately follow the persisted facts.
             queryset = (
                 Group.system_queryset().filter(pk=row.pk)
                 if issubclass(model, Group) else model._base_manager.filter(pk=row.pk)
             )
-            assert queryset.update(**values) == 1
+            with system_context(reason="test.public_row.trusted_column_update"):
+                assert queryset.update(**values) == 1
             assert set(model.objects.with_actor(reader).values_list("pk", flat=True)) == expected
             for persisted in (shared, private):
                 assert public_policy.check_access(

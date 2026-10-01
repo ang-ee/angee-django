@@ -19,6 +19,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from django.utils.module_loading import module_has_submodule
+from rebac.mixins import INJECTED_BASE_MANAGER
 from rebac.resources import model_resource_type
 
 from angee.base.models import AngeeModel
@@ -319,6 +320,8 @@ class ModelComposition:
             owners: dict[str, tuple[models.Manager, type[models.Model]]] = {}
             for donor in self.donors(source):
                 for manager in donor._meta.local_managers:
+                    if manager.name == INJECTED_BASE_MANAGER:
+                        continue
                     previous = owners.setdefault(manager.name, (manager, donor))
                     if previous[0].creation_counter != manager.creation_counter:
                         raise ImproperlyConfigured(

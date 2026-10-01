@@ -16,7 +16,7 @@ from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import execute_schema, make_integration, result_data
-from tests.test_messaging import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
+from tests.messaging_models import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
 from tests.test_nexus import _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

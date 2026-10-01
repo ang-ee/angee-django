@@ -4,14 +4,17 @@ from django.db import models
 
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
+from angee.projects.models import Participant as AbstractParticipant
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
+from angee.projects.models import TaskRelation as AbstractTaskRelation
 from angee.proposals.models import ProjectProposalAccess, TaskProposalAccess
+from angee.work.models import Cycle as AbstractCycle
 from angee.work.models import ProjectWork, TaskWork
 from angee.work.models import Queue as AbstractQueue
 from angee.work.models import Stage as AbstractWorkStage
-from tests import test_sequence  # noqa: F401 -- register the queue's native sequence targets
+from tests import sequence_models  # noqa: F401 -- register the queue's native sequence targets
 from tests.spaces_models import Group
 
 
@@ -97,6 +100,16 @@ class ProjectBinding(AbstractProjectBinding):
         rebac_resource_type = "projects/project_binding"
 
 
+class Participant(AbstractParticipant):
+    """Concrete participant backing the installed projects permission graph."""
+
+    class Meta(AbstractParticipant.Meta):
+        abstract = False
+        app_label = "projects"
+        db_table = "test_projects_participant"
+        rebac_resource_type = "projects/participant"
+
+
 class Milestone(AbstractMilestone):
     """Concrete phase target for project progress and proposal boundaries."""
 
@@ -105,3 +118,19 @@ class Milestone(AbstractMilestone):
         app_label = "projects"
         db_table = "test_projects_milestone"
         rebac_resource_type = "projects/milestone"
+
+
+class Cycle(AbstractCycle):
+    class Meta(AbstractCycle.Meta):
+        abstract = False
+        app_label = "work"
+        rebac_resource_type = "work/cycle"
+
+
+class TaskRelation(AbstractTaskRelation):
+    """Concrete task relation between canonical project tasks."""
+
+    class Meta(AbstractTaskRelation.Meta):
+        abstract = False
+        app_label = "projects"
+        rebac_resource_type = "projects/task_relation"

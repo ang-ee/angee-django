@@ -103,6 +103,8 @@ def test_graphql_startup_discovers_publishers_without_building_schema(tmp_path: 
             SECRET_KEY="cold-startup-test",
             INSTALLED_APPS=[
                 "django.contrib.contenttypes",
+                "django.contrib.auth",
+                "rebac",
                 "angee.graphql.apps.GraphQLConfig",
                 "cold_graphql_addon.apps.ColdGraphQLAddonConfig",
             ],

@@ -20,6 +20,8 @@ def legacy_email_state(transactional_db, isolated_upgrade_database):
     model = ModelState.from_model(get_user_model())
     model.options["constraints"] = []
     model.managers = []
+    model.options.pop("base_manager_name", None)
+    model.options.pop("default_manager_name", None)
     model.bases = (models.Model,)
     state = ProjectState()
     state.add_model(model)

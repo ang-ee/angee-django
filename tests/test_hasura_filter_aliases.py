@@ -108,7 +108,7 @@ def test_invalid_alias_declarations_fail_during_resource_composition(monkeypatch
 
 def test_alias_cannot_override_a_computed_filter(monkeypatch):
     monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
-    with pytest.raises(ImproperlyConfigured, match="Duplicate filter alias 'parent_name'"):
+    with pytest.raises(ImproperlyConfigured, match=r"duplicate filter aliases: \['parent_name'\]"):
         build_resource(filter_expressions={"parent_name": models.Value("computed", output_field=models.CharField())})
 
 
@@ -116,5 +116,5 @@ def test_contributors_cannot_claim_the_same_alias(monkeypatch):
     """Conflicting inherited declarations fail instead of following Python MRO precedence."""
     monkeypatch.setattr(AngeeDataModel, "hasura_aliases", {"parent_name": "name"}, raising=False)
     monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
-    with pytest.raises(ImproperlyConfigured, match="Duplicate filter alias 'parent_name'"):
+    with pytest.raises(ImproperlyConfigured, match="duplicate sortable alias 'parent_name'"):
         build_resource()

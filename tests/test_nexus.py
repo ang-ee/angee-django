@@ -29,43 +29,10 @@ from tests.conftest import (
     execute_schema,
 )
 from tests.conftest import result_data as _data
-from tests.test_messaging import (
-    Handle,
-    Message,
-    MessageEdge,
-    Participant,
-    Party,
-    Person,
-    Thread,
-    ThreadedTicket,
-    ThreadFollower,
-)
+from tests.messaging_models import Handle, Message, MessageEdge, Participant, Party, Person, Thread, ThreadFollower
+from tests.nexus_models import Cadence, Tie
+from tests.test_messaging import ThreadedTicket
 from tests.test_project_access import project_access_schema as project_access_schema
-
-
-class Tie(AbstractTie):
-    """Concrete tie model used by nexus tests."""
-
-    class Meta(AbstractTie.Meta):
-        """Django model options for the canonical test tie."""
-
-        abstract = False
-        app_label = "nexus"
-        db_table = "test_nexus_tie"
-        rebac_resource_type = "nexus/tie"
-
-
-class Cadence(AbstractCadence):
-    """Concrete cadence model used by nexus tests."""
-
-    class Meta(AbstractCadence.Meta):
-        """Django model options for the canonical test cadence."""
-
-        abstract = False
-        app_label = "nexus"
-        db_table = "test_nexus_cadence"
-        rebac_resource_type = "nexus/cadence"
-
 
 nexus_schema = __import__("angee.nexus.schema", fromlist=["schemas"])
 User = get_user_model()

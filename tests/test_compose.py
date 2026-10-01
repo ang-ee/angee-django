@@ -16,6 +16,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, SystemCheckError
 from django.db import OperationalError, models
+from rebac import schema_changes
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
@@ -1238,10 +1239,9 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
         definition__resource_type="agents/skill",
         name="source",
     )
-    source.allowed_subjects = [{"type": "integrate/source", "relation": "", "wildcard": False}]
-    source.save(update_fields=["allowed_subjects"])
-
-    with pytest.raises(SystemCheckError, match=r"rebac\.E009"):
+    with pytest.raises(SystemCheckError, match=r"rebac\.E009"), schema_changes():
+        source.allowed_subjects = [{"type": "integrate/source", "relation": "", "wildcard": False}]
+        source.save(update_fields=["allowed_subjects"])
         call_command("check", "--tag", "rebac", verbosity=0)
 
     plan = Command._provision_plan(_provision_options())

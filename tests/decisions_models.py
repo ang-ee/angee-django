@@ -1,6 +1,7 @@
 """One concrete test model per decision resource, registered from conftest."""
 
 from angee.decisions import models as sources
+from angee.intake.models import DecisionIntake
 from angee.workflows.models import DecisionWorkflow
 
 
@@ -16,8 +17,8 @@ class DecisionGroup(sources.DecisionGroup):
         rebac_resource_type = "decisions/group"
 
 
-class Decision(DecisionWorkflow, sources.Decision):
-    """Concrete seat with the installed workflow query contribution."""
+class Decision(DecisionIntake, DecisionWorkflow, sources.Decision):
+    """Concrete seat with the installed intake and workflow contributions."""
 
     class Meta(sources.Decision.Meta):
         """Keep native source options on the isolated decision table."""

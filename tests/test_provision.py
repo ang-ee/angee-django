@@ -14,6 +14,7 @@ import strawberry
 from django.core.management import call_command
 from django.test import override_settings
 from django.test.utils import override_system_checks
+from rebac import schema_changes
 from rebac.backends import reset_backend
 from rebac.checks import check_universal_admin_in_roles
 from rebac.errors import SchemaError
@@ -55,7 +56,13 @@ class BareComposeConfig(AppConfig):
     name = "angee.compose"
     label = "compose"
 SECRET_KEY = "provision-process-probe"
-INSTALLED_APPS = ["django.contrib.contenttypes", "probe.apps.ProbeConfig", "probe.settings.BareComposeConfig"]
+INSTALLED_APPS = [
+    "django.contrib.contenttypes",
+    "django.contrib.auth",
+    "rebac",
+    "probe.apps.ProbeConfig",
+    "probe.settings.BareComposeConfig",
+]
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
 """,
         encoding="utf-8",
@@ -167,6 +174,7 @@ def test_rebac_sync_invalidates_the_native_backend_cache() -> None:
 
 
 @pytest.mark.django_db
+@schema_changes()
 def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks() -> None:
     """Old permission usersets cannot prevent sync from installing their replacement."""
 

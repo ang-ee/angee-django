@@ -10,10 +10,9 @@ from rebac.models import active_relationship_model
 from angee.messaging.models import NotificationPolicy, NotificationPreference
 from tests.messaging_campaign import add_member, fanout, grant, make_user
 from tests.messaging_campaign import audience_record as audience_record
-from tests.messaging_models import Message, MessageSubtype, Party, ThreadFollower, ThreadNotification
+from tests.messaging_models import Message, MessageSubtype, Party, Person, ThreadFollower, ThreadNotification
 from tests.projects_models import Project
 from tests.spaces_models import Membership
-from tests.test_messaging import Person
 from tests.test_spaces import spaces_tables as spaces_tables
 
 

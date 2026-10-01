@@ -6,10 +6,9 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
-import tests.test_agents_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
+from tests.agents_models import Agent
 from tests.test_agents import InferenceModel, _provider
-from tests.test_agents_graphql import Agent
 
 
 def test_deployment_identity_refreshes_deferred_handle(composed_tables: None, monkeypatch):

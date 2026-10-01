@@ -16,31 +16,7 @@ import pytest
 from django.db import connection, connections, transaction
 from rebac import system_context
 
-from angee.sequence.models import Sequence as AbstractSequence
-from angee.sequence.models import SequenceCounter as AbstractSequenceCounter
-
-
-class Sequence(AbstractSequence):
-    """Concrete named counter used by sequence tests."""
-
-    class Meta(AbstractSequence.Meta):
-        """Django model options for the canonical test sequence."""
-
-        abstract = False
-        app_label = "sequence"
-        db_table = "test_sequence_sequence"
-        rebac_resource_type = "sequence/sequence"
-
-
-class SequenceCounter(AbstractSequenceCounter):
-    """Concrete per-period counter row used by sequence tests."""
-
-    class Meta(AbstractSequenceCounter.Meta):
-        """Django model options for the canonical test sequence counter."""
-
-        abstract = False
-        app_label = "sequence"
-        db_table = "test_sequence_counter"
+from tests.sequence_models import Sequence
 
 
 def _make_sequence(**fields: Any) -> Any:

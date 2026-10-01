@@ -40,16 +40,9 @@ from angee.messaging_integrate_imap.parser import (
     synthetic_external_id,
 )
 from tests.conftest import make_integration
+from tests.messaging_models import Handle, Message, MessageEdge, Part, Participant, Thread
 from tests.stream_adapters import AdapterPages
-from tests.test_messaging import (
-    Handle,
-    Message,
-    MessageEdge,
-    Part,
-    Participant,
-    Thread,
-    _storage_drive,
-)
+from tests.test_messaging import _storage_drive
 from tests.test_messaging_graphql import Channel
 
 _INTERNAL_DATE = datetime(2026, 7, 2, 9, 30, tzinfo=UTC)

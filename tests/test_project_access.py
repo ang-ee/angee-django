@@ -385,11 +385,11 @@ def test_project_drive_access_reaches_folders_and_files(project_access_schema: A
 
 
 def test_projects_app_ready_does_not_require_composed_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Native deletion dispatch starts without looking up composed models or data."""
+    """Native deletion dispatch starts with an empty registry and without data."""
 
     def refuse_model_lookup(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Project startup must not look up composed models.")
 
     monkeypatch.setattr(apps, "get_model", refuse_model_lookup)
-    monkeypatch.setattr(apps, "get_models", refuse_model_lookup)
+    monkeypatch.setattr(apps, "get_models", lambda: ())
     apps.get_app_config("projects").ready()

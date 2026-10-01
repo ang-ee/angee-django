@@ -11,6 +11,8 @@ from pathlib import Path
 from django.db import connection
 from hatch_angee import discover
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_composed_note_workflow(tmp_path: Path) -> None:
     """Run the installed graph using the configured database backend."""
@@ -38,7 +40,7 @@ def test_composed_note_workflow(tmp_path: Path) -> None:
         env=env,
         capture_output=True,
         text=True,
-        timeout=240,
+        timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
     assert result.returncode == 0, f"composed note workflow failed:\n{result.stdout}\n{result.stderr}"

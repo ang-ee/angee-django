@@ -16,14 +16,18 @@ from tests.messaging_models import (
     Fragment,
     Handle,
     Message,
+    MessageEdge,
+    MessageStar,
     Part,
+    Participant,
     Party,
+    Reaction,
     Thread,
+    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
 )
-from tests.test_messaging import MessageEdge, MessageStar, Participant, Reaction, ThreadActivity
 from tests.test_messaging_graphql import _schema, _storage_drive, messaging_schema
 
 

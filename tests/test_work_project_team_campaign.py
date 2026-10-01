@@ -10,9 +10,9 @@ from rebac.evaluator import evaluator_scope
 
 from angee.work.models import ProjectWork
 from tests.conftest import installed_field_owners
+from tests.messaging_models import Person
 from tests.projects_models import Project
 from tests.spaces_models import Group, Membership
-from tests.test_messaging import Person
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 

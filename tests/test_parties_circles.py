@@ -18,10 +18,10 @@ from angee.parties.backends import ParsedContact
 from angee.parties.connections import ParsedConnection, ingest_connection
 from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from tests.messaging_models import Folder
-from tests.test_messaging import (
+from tests.messaging_models import (
     Circle,
     CircleMember,
+    Folder,
     Handle,
     Organization,
     Party,
@@ -29,8 +29,8 @@ from tests.test_messaging import (
     Person,
     Relationship,
     RelationshipKind,
-    _grant,
 )
+from tests.test_messaging import _grant
 
 User = get_user_model()
 

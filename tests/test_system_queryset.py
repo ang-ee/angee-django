@@ -12,6 +12,7 @@ from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
+from rebac.managers import TrackedQuerySet
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import lock_if_supported, system_queryset
@@ -82,7 +83,6 @@ class ThirdPartySystemQueryThing(RebacMixin):
         """Django model options for the test model."""
 
         app_label = "tests"
-        base_manager_name = "objects"
 
 
 @pytest.mark.parametrize("model", [Drive, File, Integration])
@@ -221,7 +221,7 @@ def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables:
         assert set(queryset.values_list("pk", flat=True)) == {selected.pk, excluded.pk}
         assert manager.db_manager("default").locked_get(pk=excluded.pk) == excluded
 
-    assert type(GuardedSystemQueryThing._base_manager) is models.Manager
+    assert isinstance(GuardedSystemQueryThing._base_manager.all(), TrackedQuerySet)
     assert list(GuardedSystemQueryThing.system_queryset()) == [selected]
 
 

@@ -11,11 +11,11 @@ from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import execute_schema, result_data
 from tests.messaging_campaign import grant
 from tests.messaging_models import Party, Person, ThreadFollower
+from tests.nexus_models import Cadence, Tie
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 from tests.t3_campaign import relationship_snapshot
-from tests.test_nexus import Cadence, Tie
 from tests.test_parties_follower_identity import identity_graphql as identity_graphql
 
 

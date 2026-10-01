@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     SubjectRef,
@@ -24,70 +24,10 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.base.identity import public_id_for
-from angee.tags.models import Tag as AbstractTag
-from angee.tags.models import TagAssignment as AbstractTagAssignment
-from angee.tags.models import TagRole as AbstractTagRole
 from tests.conftest import create_user
+from tests.messaging_models import Party
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.test_messaging import Party
-
-
-class Tag(AbstractTag):
-    """Concrete tag used by tags tests."""
-
-    class Meta(AbstractTag.Meta):
-        """Django model options for the canonical test tag."""
-
-        abstract = False
-        app_label = "tags"
-        db_table = "test_tags_tag"
-        rebac_resource_type = "tags/tag"
-
-
-class TagAssignment(AbstractTagAssignment):
-    """Concrete polymorphic tag edge used by tags tests."""
-
-    class Meta(AbstractTagAssignment.Meta):
-        """Django model options for the canonical test tag assignment."""
-
-        abstract = False
-        app_label = "tags"
-        db_table = "test_tags_assignment"
-        rebac_resource_type = "tags/tag_assignment"
-
-
-class ScopeFlagTag(AbstractTag):
-    """Concrete tag with an ordinary consumer marker unrelated to visibility."""
-
-    shared_marker = models.BooleanField(default=True)
-
-    class Meta(AbstractTag.Meta):
-        """Django model options for the consumer marker tag."""
-
-        abstract = False
-        app_label = "tags"
-        db_table = "test_tags_scope_flag_tag"
-        rebac_resource_type = "tags/tag"
-
-
-
-class TagRole(AbstractTagRole):
-    """Concrete table-less REBAC anchor for the ``tags/role`` namespace.
-
-    The composer emits this anchor in the runtime; the bare test env must
-    register it too so the const-backed ``admin`` arm of ``tags/role`` (reached
-    on every actor-scoped ``tags/tag`` read through
-    ``manager->effective_member``) resolves to a deny instead of raising
-    ``SchemaError``. ``managed = False`` — never a table, only a type anchor.
-    """
-
-    class Meta(AbstractTagRole.Meta):
-        """Django model options for the canonical test tags role anchor."""
-
-        abstract = False
-        managed = False
-        app_label = "tags"
-        rebac_resource_type = "tags/role"
+from tests.tags_models import Tag, TagAssignment
 
 
 def _shared_reader_exists(tag: Any) -> bool:
@@ -182,8 +122,8 @@ def test_consumer_marker_does_not_control_authenticated_reads(composed_tables: N
 
     del composed_tables
     with system_context(reason="tags marker setup"):
-        shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
-        scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+        shared = Tag.objects.create(name="Everyone", shared_marker=True)
+        scoped = Tag.objects.create(name="Local", shared_marker=False)
     _assert_authenticated_reads(shared)
     _assert_authenticated_reads(scoped)
 
@@ -193,13 +133,13 @@ def test_deleting_a_tag_removes_the_row_without_wildcard_tuples(composed_tables:
 
     del composed_tables
     with system_context(reason="tags delete setup"):
-        tag = ScopeFlagTag.objects.create(name="Temporary")
+        tag = Tag.objects.create(name="Temporary")
     _assert_authenticated_reads(tag)
     resource_id = str(tag.pk)
     with system_context(reason="tags delete"):
         tag.delete()
     with actor_context(SubjectRef.of("auth/user", "1")):
-        assert not ScopeFlagTag.objects.filter(pk=resource_id).exists()
+        assert not Tag.objects.filter(pk=resource_id).exists()
     assert not active_relationship_model().objects.filter(
         resource_type="tags/tag", resource_id=resource_id,
     ).exists()
@@ -210,7 +150,7 @@ def test_flipping_consumer_marker_keeps_authenticated_reads(composed_tables: Non
 
     del composed_tables
     with system_context(reason="tags marker setup"):
-        tag = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+        tag = Tag.objects.create(name="Local", shared_marker=False)
     for update_fields in ({"shared_marker"}, None):
         for marker in (True, False):
             with system_context(reason="tags marker update"):
@@ -225,12 +165,12 @@ def test_authenticated_reads_ignore_consumer_marker(composed_tables: None) -> No
     del composed_tables
     reader = create_user("tags-scope-reader")
     with system_context(reason="tags test actor scope setup"):
-        shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
-        scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+        shared = Tag.objects.create(name="Everyone", shared_marker=True)
+        scoped = Tag.objects.create(name="Local", shared_marker=False)
     with actor_context(reader):
-        assert set(ScopeFlagTag.objects.values_list("pk", flat=True)) == {shared.pk, scoped.pk}
+        assert set(Tag.objects.values_list("pk", flat=True)) == {shared.pk, scoped.pk}
     with actor_context(AnonymousUser()):
-        assert not ScopeFlagTag.objects.exists()
+        assert not Tag.objects.exists()
 
 
 def test_deferred_marker_stays_deferred_on_load(composed_tables: None) -> None:
@@ -238,9 +178,9 @@ def test_deferred_marker_stays_deferred_on_load(composed_tables: None) -> None:
 
     del composed_tables
     with system_context(reason="tags test deferred marker setup"):
-        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=False)
+        tag = Tag.objects.create(name="Deferred", shared_marker=False)
         with CaptureQueriesContext(connection) as ctx:
-            loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
+            loaded = Tag.objects.defer("shared_marker").get(pk=tag.pk)
     assert len(ctx.captured_queries) == 1
     assert loaded.get_deferred_fields() == {"shared_marker"}
 
@@ -250,8 +190,8 @@ def test_deferred_marker_save_preserves_authenticated_reads(composed_tables: Non
 
     del composed_tables
     with system_context(reason="tags test deferred marker save"):
-        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=True)
-        loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
+        tag = Tag.objects.create(name="Deferred", shared_marker=True)
+        loaded = Tag.objects.defer("shared_marker").get(pk=tag.pk)
         loaded.name = "Deferred renamed"
         loaded.save()
     _assert_authenticated_reads(tag)
@@ -262,8 +202,8 @@ def test_unrelated_save_keeps_authenticated_reads_without_tuples(composed_tables
 
     del composed_tables
     with system_context(reason="tags test complete save"):
-        tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
-        loaded = ScopeFlagTag.objects.get(pk=tag.pk)
+        tag = Tag.objects.create(name="Stable", shared_marker=True)
+        loaded = Tag.objects.get(pk=tag.pk)
         loaded.name = "Still stable"
         loaded.save()
     _assert_authenticated_reads(tag)
@@ -274,7 +214,7 @@ def test_targeted_content_save_needs_no_reader_reconciliation(composed_tables: N
 
     del composed_tables
     with system_context(reason="tags test targeted content save"):
-        tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
+        tag = Tag.objects.create(name="Stable", shared_marker=True)
         tag.name = "Renamed"
         with CaptureQueriesContext(connection) as queries:
             tag.save(update_fields={"name"})
@@ -290,17 +230,17 @@ def test_marker_bulk_writes_need_no_reader_reconciliation(composed_tables: None)
 
     del composed_tables
     with system_context(reason="tags bulk marker writes"):
-        tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
-        assert ScopeFlagTag.objects.filter(pk=tag.pk).update(shared_marker=False) == 1
+        tag = Tag.objects.create(name="Stable", shared_marker=True)
+        assert Tag.objects.filter(pk=tag.pk).update(shared_marker=False) == 1
         tag.shared_marker = True
-        assert ScopeFlagTag.objects.bulk_update([tag], ["shared_marker"]) == 1
-        [bulk] = ScopeFlagTag.objects.bulk_create([ScopeFlagTag(name="Bulk")])
-        assert ScopeFlagTag.objects.filter(pk=tag.pk).update(name="Renamed") == 1
+        assert Tag.objects.bulk_update([tag], ["shared_marker"]) == 1
+        [bulk] = Tag.objects.bulk_create([Tag(name="Bulk")])
+        assert Tag.objects.filter(pk=tag.pk).update(name="Renamed") == 1
         tag.refresh_from_db()
         assert tag.shared_marker is True
         assert tag.name == "Renamed"
         tag.name = "Bulk renamed"
-        assert ScopeFlagTag.objects.bulk_update([tag], ["name"]) == 1
+        assert Tag.objects.bulk_update([tag], ["name"]) == 1
         tag.refresh_from_db()
         assert tag.name == "Bulk renamed"
     _assert_authenticated_reads(tag)

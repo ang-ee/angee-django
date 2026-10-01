@@ -87,7 +87,7 @@ def _seed_target(import_reference):
         (RecordRefSubjectEdge, ("subject_content_type", "subject_object_id")),
         (WorkflowRun, ("subject_content_type", "subject_object_id")),
         (CurrencyRate, ("context_content_type", "context_object_id")),
-        (RecordLink, ("target_ct", "target_id")),
+        (RecordLink, ("target_content_type", "target_object_id")),
         (CustomColumnEdge, ("target_ct", "target_id")),
     ],
 )

@@ -1577,7 +1577,7 @@ def test_relation_filter_decoders_covers_public_id_relations_only() -> None:
 
 
 def test_relation_filter_decoders_never_overrides_a_declared_decoder() -> None:
-    """A caller-declared field decoder wins over the auto-derived one."""
+    """A caller-declared conversion is retained behind the relation read preflight."""
 
     sentinel = lambda value: value  # noqa: E731 - test double
     decoders = _relation_filter_decoders(
@@ -1586,7 +1586,7 @@ def test_relation_filter_decoders_never_overrides_a_declared_decoder() -> None:
         declared={"parent": sentinel},
     )
     assert decoders is not None
-    assert decoders["parent"] is sentinel
+    assert decoders["parent"].decoder is sentinel
 
 
 def test_filterable_relation_filters_by_public_id_without_field_id_decode(

@@ -67,12 +67,12 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
 
 def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(
-    transactional_db: Any,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The audit FK policy bypasses a queryset whose update path stays closed."""
 
-    del transactional_db
+    del composed_tables
     with pytest.raises(ValidationError, match="contenttypes.ContentType rows cannot be edited"):
         AppendOnlyQuerySet(model=ContentType).update(created_by=None)
     actor = create_user("append-only-auditor")

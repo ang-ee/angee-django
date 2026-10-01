@@ -18,6 +18,7 @@ from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
 from rebac import PermissionDenied, current_actor, system_context
 from rebac.relation_loading import relation_actor
+from rebac.resources import model_resource_type
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
@@ -582,7 +583,7 @@ class _RelationIDDecoder:
 
     def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
         queryset = read_scoped_queryset(self.model, actor)
-        if queryset is None:
+        if queryset is None and model_resource_type(self.model):
             queryset = self.model._default_manager.none()
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
@@ -896,11 +897,8 @@ def _declared_aliases(
                     ) from error
                 if field.is_relation:
                     raise ImproperlyConfigured(f"{model._meta.label} alias {name!r} must target a scalar field.")
-                expression = models.ExpressionWrapper(models.F(path), output_field=field)
-            elif isinstance(expression, models.F):
-                field = require_field_for_path(model, expression.name)
-                expression = models.ExpressionWrapper(expression, output_field=field)
-            if not isinstance(expression, models.Expression):
+                expression = models.F(path)
+            if not isinstance(expression, (models.F, models.Expression)):
                 raise ImproperlyConfigured(f"{model._meta.label} alias {name!r} must be a path or Django expression.")
             paths: set[str] = set()
             for part in (expression,) if isinstance(expression, models.F) else expression.flatten():
@@ -918,6 +916,9 @@ def _declared_aliases(
                     )
             assert_no_gated_read_fields(
                 model, paths, f"sortable alias {name!r}", "field-gated reads cannot be query axes",
+            )
+            expression = models.ExpressionWrapper(
+                expression, output_field=expression.resolve_expression(model._default_manager.all().query).output_field,
             )
             aliases[name] = SortAlias(
                 f"_angee_sort_{name}", partial(_sortable_alias_expression, expression, tuple(sorted(paths))),

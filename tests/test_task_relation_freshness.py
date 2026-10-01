@@ -34,6 +34,8 @@ class FreshnessStage(AbstractStage):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(AbstractStage.Meta.constraints)
+        # Its own type: the production type has one concrete model, in tests.projects_models.
+        rebac_resource_type = "scopedemo/freshness_stage"
 
 
 class FreshnessMilestone(AbstractMilestone):
@@ -43,6 +45,8 @@ class FreshnessMilestone(AbstractMilestone):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(getattr(AbstractMilestone.Meta, "constraints", ()))
+        # Its own type: the production type has one concrete model, in tests.projects_models.
+        rebac_resource_type = "scopedemo/freshness_milestone"
 
 
 class FreshnessTask(TaskWork, AbstractTask):
@@ -65,6 +69,8 @@ class FreshnessTask(TaskWork, AbstractTask):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(AbstractTask.Meta.constraints[:2])
+        # Its own type: the production type has one concrete model, in tests.projects_models.
+        rebac_resource_type = "scopedemo/freshness_task"
 
 
 @pytest.fixture
@@ -106,6 +112,13 @@ def test_cached_stage_recategorization_projects_current_lifecycle(task_relations
 
         task.title = "Now complete"
         task.save(update_fields=("title",))
+        persisted = FreshnessTask._base_manager.get(pk=task.pk)
+        assert persisted.status == task.TaskStatus.OPEN
+        assert persisted.done_at is None
+        # Lifecycle belongs to a stage write; its projection must still ignore
+        # the cached Stage object's old category.
+        assert task.stage.category == "started"
+        task.save(update_fields=("stage",))
 
     task.refresh_from_db()
     assert task.title == "Now complete"

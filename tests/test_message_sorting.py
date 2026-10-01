@@ -11,7 +11,7 @@ from rebac import actor_context, current_actor, system_context
 
 from angee.messaging.managers import MessageQuerySet
 from tests.conftest import Vendor, execute_schema, make_integration, result_data
-from tests.test_messaging import Channel, Fragment, Handle, Message, Part, Party, Thread
+from tests.messaging_models import Channel, Fragment, Handle, Message, Part, Party, Thread
 from tests.test_messaging_graphql import _platform_admin, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
