@@ -16,7 +16,7 @@ import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.c
 import { useDecisionsT } from "./i18n";
 import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./slots";
 
-/** Personal query defaults remain editable through the resource toolbar and saved views. */
+/** Open readable seats include delegated assignments; filters remain editable. */
 export function InboxPage(): ReactElement {
   const t = useDecisionsT();
   const uiT = useUiT();
@@ -27,9 +27,7 @@ export function InboxPage(): ReactElement {
   const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", {
     dataProviderName: "console", invalidateModels: DECISION_MODELS,
   });
-  const defaultFilter = useMemo<ResourceViewFilter>(() => ({
-    assignees: { exact: user?.id ?? "" }, is_open: { exact: true },
-  }), [user?.id]);
+  const defaultFilter = useMemo<ResourceViewFilter>(() => ({ is_open: { exact: true } }), []);
   if (!user) return <LoadingPanel />;
 
   return (
@@ -55,7 +53,7 @@ export function InboxPage(): ReactElement {
         <Column field="expires_at" header={t("inbox.expiresAt")} />
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
-      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "subject_model", "subject_id"]}
+      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "permissions", "form_schema", "resolution", "subject_model", "subject_id"]}
         formExtras={({ record }) => {
           const assignees = Array.isArray(record?.assignees)
             ? record.assignees.map((value: unknown) => value && typeof value === "object" && "display_name" in value
@@ -96,7 +94,7 @@ export function InboxPage(): ReactElement {
           <Field name="closed_reason" label={t("decision.closedReason")} showWhen={(row) => row.is_open === false && Boolean(row.closed_reason)} />
         </Group>
         <Action id="decide" label={t("decision.submit")} placement="toolbar" primary icon="check"
-          visibleWhen={(record) => record.is_open === true && record.can_act === true}
+          permission="act" visibleWhen={(record) => record.is_open === true}
           args={({ record }) => {
             const definition = jsonSchemaActionArgs(record?.form_schema, widgets, { initialValues: record?.resolution, translate: uiT });
             return { ...definition, size: "lg" as const,

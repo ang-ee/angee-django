@@ -43,12 +43,10 @@ function fixture(initialEntry = "/decisions", authenticated = true) {
   return { getList, router };
 }
 
-test("queries only the current user's open seats and links the loaded decision", async () => {
+test("queries open readable seats, including delegated seats, and links the loaded decision", async () => {
   const { getList } = fixture();
   expect(await screen.findByText("River")).toBeTruthy();
-  expect(getList.mock.calls[0]?.[0].meta?.gqlVariables?.where).toEqual({
-    _and: [{ assignees: { _eq: "user-1" } }, { is_open: { _eq: true } }],
-  });
+  expect(getList.mock.calls[0]?.[0].meta?.gqlVariables?.where).toEqual({ is_open: { _eq: true } });
   expect(screen.getByRole("link", { name: "Open Review" }).getAttribute("href")).toMatch(/^\/decisions\/decision-1\?recordNav=/);
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /New Decision/ })).toBeNull();
@@ -57,9 +55,7 @@ test("queries only the current user's open seats and links the loaded decision",
 test("the native filter box edits personal predicates and preserves unrelated search", async () => {
   const { getList, router } = fixture("/decisions?keep=external&page=3");
   await screen.findByText("River");
-  fireEvent.click(screen.getByRole("button", { name: "Remove Assigned to me" }));
-  await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({ is_open: { _eq: true } }));
-  fireEvent.click(screen.getByRole("button", { name: "Filter and group" }));
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
   fireEvent.click(await screen.findByRole("button", { name: "Requested by me" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     _and: [{ is_open: { _eq: true } }, { requester: { _eq: "user-1" } }],
