@@ -142,7 +142,7 @@ class MessageTriggerTests(TransactionTestCase):
         query = """query($id: String!) {
           trigger_by_pk(id: $id) { grants { resource_type resource_id relation target_label } }
         }"""
-        for actor, label in ((self.admin, str(self.channel)), (self.other, None)):
+        for actor, label in ((self.admin, self.channel.record_display_label), (self.other, None)):
             with actor_context(actor):
                 result = schema.execute_sync(
                     query, variable_values={"id": trigger.sqid},
