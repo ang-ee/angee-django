@@ -235,6 +235,8 @@ class ChannelManager(IntegrationManager):
         # `delete`; this preflight denies at resolve regardless. A divergent-zed preflight
         # test (delete narrower than write) is only meaningful once the deferred thread/
         # message `delete` arm (see teardown FOLLOW-UP) splits the scopes.
+        if channel.declared_concrete_model() is not self.model:
+            raise ValueError("A channel child must be deleted through its own capability.")
         if not channel.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {channel._meta.label}")
         thread_model = apps.get_model("messaging", "Thread")

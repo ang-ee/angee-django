@@ -33,15 +33,16 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
 
     with system_context(reason="integrate.scheduler"):
         for model in models_with(base=Bridge):
+            due = model._default_manager.of_concrete_type().due_for_enqueue(
+                timestamp=timestamp, stale_before=stale_before
+            )
             due_ids = list(
-                model._default_manager.due_for_enqueue(timestamp=timestamp, stale_before=stale_before)
-                .order_by("pk")
-                .values_list("pk", flat=True)
+                due.order_by("pk").values_list("pk", flat=True)
             )
             for pk in due_ids:
                 with transaction.atomic():
                     bridge = (
-                        model._default_manager.due_for_enqueue(timestamp=timestamp, stale_before=stale_before)
+                        due
                         .lock_if_supported()
                         .filter(pk=pk)
                         .first()

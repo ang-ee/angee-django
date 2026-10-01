@@ -42,7 +42,7 @@ from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
-from angee.integrate.schema import BridgeTypeMixin, IntegrationType
+from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options
 from angee.messaging.models import ThreadedModelMixin
@@ -162,6 +162,7 @@ class MessagingPairingQuery:
         channel = resolve_action_target(
             Channel,
             id,
+            queryset=Channel.objects.of_concrete_type(),
             reason="messaging.graphql.channel_pairing",
         )
         return _pairing_result(connect.channel_pairing, channel)
@@ -176,7 +177,7 @@ class MessagingPairingMutation:
         """Resume retained pairing material or start a new pairing session."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.resume_channel_pairing"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.resume_channel_pairing"
         ) as channel:
             _pairing_result(connect.resume_channel_pairing, channel)
         return ActionResult(ok=True, message="Channel connection started.")
@@ -187,7 +188,7 @@ class MessagingPairingMutation:
         """Submit one consume-once account password to the live channel session."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.submit_channel_password"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.submit_channel_password"
         ) as channel:
             _pairing_result(connect.submit_channel_password, channel, password)
         return ActionResult(ok=True, message="Password submitted.")
@@ -197,7 +198,7 @@ class MessagingPairingMutation:
         """Skip one optional consume-once secret round."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.skip_channel_password"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.skip_channel_password"
         ) as channel:
             _pairing_result(connect.skip_channel_password, channel)
         return ActionResult(ok=True, message="Password skipped.")
@@ -207,7 +208,7 @@ class MessagingPairingMutation:
         """Wipe released pairing material and restart with a fresh session."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.reset_channel_pairing"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.reset_channel_pairing"
         ) as channel:
             _pairing_result(connect.reset_channel_pairing, channel)
         return ActionResult(ok=True, message="Pairing reset; link the channel again.")
@@ -217,7 +218,7 @@ class MessagingPairingMutation:
         """Stop the live session while retaining reusable pairing material."""
 
         with action_target(
-            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.disconnect_channel"
+            Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.disconnect_channel"
         ) as channel:
             _pairing_result(connect.disconnect_channel, channel)
         return ActionResult(ok=True, message="Disconnected channel.")
@@ -247,7 +248,7 @@ class MessagingChannelMutation:
         """
 
         with transaction.atomic():
-            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel))
+            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel).of_concrete_type())
             preview = DeletePreview.from_counts(
                 channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
             )
@@ -428,10 +429,7 @@ class MessageType(AngeeNode):
     parent: "MessageType | None"
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None"
-    # The FK targets the Integration MTI parent (a messaging Channel or a posts
-    # Feed both produce messages), so the projection is the parent type — a
-    # ChannelType declaration would crash resolving a Feed-ingested row.
-    channel: IntegrationType | None
+    channel: ChannelType | None
     tracking_values: list[TrackingValueType]
     participants: list[ParticipantType]
     created_at: auto
@@ -620,8 +618,7 @@ class ThreadType(AngeeNode):
     title: FragmentType | None
     message_count: auto
     last_message_at: auto
-    # Integration parent, same reason as MessageType.channel.
-    channel: IntegrationType | None
+    channel: ChannelType | None
     messages: list[MessageType]
     participants: list[ParticipantType]
     created_at: auto
@@ -1766,7 +1763,7 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
 
         del info
         queryset = self.write_target_queryset()
-        channel = require_instance_for_id(Channel, str(pk), queryset=queryset)
+        channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
         Channel.objects.purge(channel)
         return channel
 
@@ -1775,6 +1772,7 @@ _CHANNEL_RESOURCE = hasura_model_resource(
     ChannelType,
     model=Channel,
     name="channels",
+    get_queryset=lambda info: Channel.objects.of_concrete_type(),
     filterable=[
         "id",
         "display_name",

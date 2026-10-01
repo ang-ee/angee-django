@@ -156,7 +156,7 @@ describe("FeedsPage", () => {
     expect(pageMocks.columnFields).toEqual(
       expect.arrayContaining([
         "display_name",
-        "backend_class",
+        "feed_backend_class",
         "handle.display_name",
         "lifecycle",
         "runtime_status",

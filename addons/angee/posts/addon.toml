@@ -7,3 +7,8 @@ keywords = ["posts", "feeds", "engagement", "timeline"]
 category = "Data"
 # Hashtags stay in message metadata; re-add angee.tags when vocabulary governance lands.
 depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.graphql"]
+
+[[migrations]]
+name = "feed_channel_parent"
+app_label = "posts"
+module = "runtime_migrations.feed_channel_parent"

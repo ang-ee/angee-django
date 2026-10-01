@@ -296,8 +296,8 @@ employment as one relationship kind rather than a separate identity model.
 per-user stay-in-touch intent; recomputable interaction evidence and personal
 intent remain separate facts.
 
-**posts** — the public-post and engagement overlay, dual to `messaging`'s
-private-message substrate.
+**posts** — the public-post and engagement overlay on `messaging`. A Feed is a
+Channel child, so posts use the same channel-scoped message identity and access.
 
 ## Frontend
 

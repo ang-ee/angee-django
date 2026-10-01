@@ -69,6 +69,7 @@ from tests import (  # noqa: F401 -- register shared FK targets before native da
     messaging_models,
 )
 from tests.integrate_models import Integration
+from tests.messaging_models import Channel
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
@@ -616,11 +617,11 @@ class AddonCatalog(AbstractAddonCatalog):
         rebac_resource_type = "platform_integrate_vcs/catalog"
 
 
-class Feed(AbstractFeed, Integration):
+class Feed(AbstractFeed, Channel):
     """Concrete public-content feed used by posts tests.
 
-    An ``integrate.Integration`` child + ``Bridge``, folded the way the composer emits
-    ``Feed(AbstractFeed, Integration)``. Lives in conftest (like ``VcsBridge``) because
+    A ``messaging.Channel`` child, folded the way the composer emits
+    ``Feed(AbstractFeed, Channel)``. Lives in conftest (like ``VcsBridge``) because
     ``angee.posts.schema`` binds its console types at import time via ``apps.get_model``.
     """
 

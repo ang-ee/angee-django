@@ -1273,7 +1273,7 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
             exposed_model_labels=_exposed_model_labels(info),
         )
 
-    @strawberry.field
+    @strawberry_django.field(only=["concrete_type_id"])
     def concrete_target(self, info: strawberry.Info) -> ConcreteIntegrationTarget:
         """Return this parent's one authorized concrete child without leaking denied rows."""
 
@@ -1741,7 +1741,7 @@ class IntegrationActionMutation:
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
             now = timezone.now()
             for model in models_with(base=Bridge):
-                for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
+                for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
                     queue_bridge_sync(bridge, now=now)
                     queued += 1
         if queued == 0:

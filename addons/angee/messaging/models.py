@@ -866,8 +866,8 @@ class Channel(Bridge):
     the ``messaging_integrate_*`` addons (``imap``, the chat bridges), and ``config``
     carries source settings. ``sync()`` fetches + parses, then maps each message onto
     the messaging managers; outbound tasks resolve the same backend and call its
-    ``deliver`` hook. Public feeds are not channel backends — ``posts.Feed`` owns the
-    public-content overlay.
+    ``deliver`` hook. Content sources may extend Channel while retaining their
+    own backend and overlay.
     """
 
     runtime = True
