@@ -43,11 +43,14 @@ describe("decision stories with native router, queries, and generated mutations"
     for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.getByText(label)).toBeTruthy();
   });
 
-  test("empty pending facts omit the overview group", async () => {
+  test("pending decisions show their core facts even without a requester or expiry", async () => {
     render(PendingWithoutFacts.render());
     await screen.findByRole("heading", { name: "Review" });
     expect(screen.queryByText("Requester")).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Decision" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Decision" })).toBeTruthy();
+    expect(screen.getByText("Kind")).toBeTruthy();
+    expect(screen.getByText("Status")).toBeTruthy();
+    expect(screen.getByText("Assignees")).toBeTruthy();
   });
 
   test("a sibling-settled seat shows its closed reason as its status", async () => {

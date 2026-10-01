@@ -43,7 +43,8 @@ export function RunsList({ baseFilter, embedded = false }: {
       emptyContent={t("runs.empty")}>
       <Facet field="version.workflow" label={t("run.workflow")} />
       <Facet field="origin" label={t("run.origin")} />
-      <Column field="version.workflow" header={t("run.workflow")}
+      <Column field="version.workflow" selectionPaths={["display_name"]}
+        header={t("run.workflow")}
         render={(row) => typeof row.display_name === "string" ? row.display_name : null} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
       <Column field="subject_id" header={t("run.subject")} render={(row) => typeof row.subject_id === "string" && typeof row.subject_model === "string"

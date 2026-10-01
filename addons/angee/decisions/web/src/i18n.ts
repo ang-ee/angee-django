@@ -19,6 +19,8 @@ export const enDecisionsMessages = {
   "decision.conflict": "This decision has changed. Close and reopen Decide to review the current question.",
   "decision.unavailable": "This decision is unavailable.",
   "decision.requester": "Requester",
+  "decision.assignees": "Assignees",
+  "decision.status": "Status",
   "decision.answer": "Answer",
   "decision.expiry": "Expires",
   "decision.resolver": "Resolved by",

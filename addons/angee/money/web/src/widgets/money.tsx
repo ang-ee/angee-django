@@ -87,11 +87,24 @@ function MoneyEdit({
   value,
   onChange,
   field,
+  row,
   readOnly,
 }: WidgetRenderProps<MoneyWidgetValue>): ReactElement {
+  const code = resolveCurrencyCode(row, (field as MoneyWidgetField | undefined)?.currencyField);
+  const stored = typeof value === "string" ? /^([-+]?\d+)\.(\d{6})$/.exec(value) : null;
+  const integer = stored?.[1] ?? "";
+  const fraction = stored?.[2] ?? "";
+  const currencyDigits = (() => {
+    if (!code) return 2;
+    try { return new Intl.NumberFormat(undefined, { style: "currency", currency: code }).resolvedOptions().maximumFractionDigits ?? 2; }
+    catch { return 2; }
+  })();
+  const displayValue = stored && /^0*$/.test(fraction.slice(currencyDigits))
+    ? `${integer}${currencyDigits ? `.${fraction.slice(0, currencyDigits)}` : ""}`
+    : value == null ? "" : String(value);
   return (
     <TextInput
-      value={value == null ? "" : String(value)}
+      value={displayValue}
       readOnly={readOnly}
       inputMode="decimal"
       aria-label={widgetLabel(field, "Amount")}

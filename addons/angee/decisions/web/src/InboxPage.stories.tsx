@@ -62,7 +62,8 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
           resolution: { action, ...variables.values }, resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
         return jsonResponse({ data: { decide: { ok: true, message: "Decision recorded.", id: current.id } } });
       }
-      if (query.includes("decisions_by_pk")) return jsonResponse({ data: { decisions_by_pk: { ...current, kind_label: "Review" } } });
+      if (query.includes("decisions_by_pk")) return jsonResponse({ data: { decisions_by_pk: { ...current, kind_label: "Review",
+        assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       return jsonResponse({ data: { decisions: [{ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] }], decisions_aggregate: { aggregate: { count: 1 } } } });
     }).public!;

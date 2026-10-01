@@ -150,6 +150,7 @@ describe("structured FormSpec widgets", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set value" }));
     const input = screen.getByRole("textbox", { name: "Limit" });
     expect(input).toBeTruthy();
+    expect((input as HTMLInputElement).value).toBe("0");
     fireEvent.change(input, { target: { value: "42" } });
     expect((input as HTMLInputElement).value).toBe("42");
     expect(structuredFieldErrorPaths(

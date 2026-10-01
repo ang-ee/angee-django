@@ -252,7 +252,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       ...column,
       ...(relationLabelField ? { field: relationLabelField } : {}),
       ...(relationRepresentation
-        ? { selectionPaths: relationRepresentation.selectionPaths }
+        ? { selectionPaths: [...new Set([...relationRepresentation.selectionPaths, ...(column.selectionPaths ?? [])])] }
         : {}),
       ...(relationRepresentation?.relationList
         ? { relationList: relationRepresentation.relationList, interactive: column.interactive ?? true }

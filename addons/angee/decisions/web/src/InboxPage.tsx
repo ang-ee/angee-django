@@ -56,8 +56,27 @@ export function InboxPage(): ReactElement {
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
       <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "subject_model", "subject_id"]}
-        formExtras={({ record }) => record?.is_open === false && record.verdict !== "PENDING" && record.resolution
-          ? <DecisionAnswer schema={record.form_schema} resolution={record.resolution} /> : null}
+        formExtras={({ record }) => {
+          const assignees = Array.isArray(record?.assignees)
+            ? record.assignees.map((value: unknown) => value && typeof value === "object" && "display_name" in value
+              ? String(value.display_name) : "").filter(Boolean) : [];
+          const statusOptions = record?.is_open === false && record.verdict === "PENDING" ? closedReasons : verdicts;
+          const statusValue = statusOptions === closedReasons ? record?.closed_reason : record?.verdict;
+          return <div className="space-y-4">
+            <h3 className="border-b border-border-subtle pb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+              {t("decision.title")}
+            </h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div><div className="text-xs text-fg-muted">{t("inbox.kind")}</div><div>{String(record?.kind_label ?? "")}</div></div>
+              <div><div className="text-xs text-fg-muted">{t("decision.status")}</div>
+                <div>{statusOptions.find((option) => option.value === statusValue)?.label ?? String(statusValue ?? "")}</div></div>
+              {assignees.length > 0 ? <div><div className="text-xs text-fg-muted">{t("decision.assignees")}</div>
+                <div>{assignees.join(", ")}</div></div> : null}
+            </div>
+            {record?.is_open === false && record.verdict !== "PENDING" && record.resolution
+              ? <DecisionAnswer schema={record.form_schema} resolution={record.resolution} /> : null}
+          </div>;
+        }}
         headerExtras={({ record }) => typeof record?.subject_model === "string" && typeof record.subject_id === "string"
           ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
         <Field name="is_open" hidden />
@@ -67,6 +86,7 @@ export function InboxPage(): ReactElement {
             ? { name: "verdict", options: closedReasons.filter((option) => option.value.toUpperCase() === row.closed_reason),
                 valueCodec: { toControl: () => row.closed_reason, fromControl: (value) => value } }
             : { name: "verdict", options: verdicts }} />
+        <Field name="assignees" hidden />
         <Group label={t("decision.title")} columns={2}>
           <Field name="requester.display_name" label={t("decision.requester")}
             showWhen={(row) => Boolean(rowValueAtPath(row, "requester.display_name"))} />

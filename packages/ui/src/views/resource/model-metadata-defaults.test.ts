@@ -734,6 +734,15 @@ describe("relation column read expansion", () => {
     expect(column?.header).toBe("Product");
   });
 
+  test("a relation column also selects its declared scalar paths", () => {
+    const [column] = columnsWithMetadataDefaults<Row>(
+      [{ field: "product", render: () => null, selectionPaths: ["title"] }],
+      metadata,
+      schema,
+    );
+    expect(column?.selectionPaths).toEqual(["product.id", "product.display_name", "title"]);
+  });
+
   test("finalized relation paths work without target resource metadata", () => {
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "product" }], metadata);
     expect(column?.field).toBe("product.display_name");

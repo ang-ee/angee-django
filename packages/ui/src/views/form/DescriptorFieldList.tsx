@@ -9,6 +9,7 @@ import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "../relation/RelationPicker";
+import { RecordReference } from "../relation/RecordReference";
 import { useRelationPickerOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
@@ -219,7 +220,7 @@ export function LabeledDescriptorField({
         <FieldLabel
           id={groupLabel ? labelId : undefined}
           htmlFor={isCompositeField || groupLabel ? undefined : controlId}
-          required={field.required}
+          required={field.required && !readOnly}
         >
           {field.label ?? field.name}
         </FieldLabel>
@@ -264,7 +265,7 @@ export function LabeledDescriptorField({
             "aria-invalid": invalid || undefined,
             ...(describedBy ? { "aria-describedby": describedBy } : {}),
             ...(groupLabel ? { "aria-labelledby": labelId } : {}),
-            ...(field.required ? { "aria-required": true } : {}),
+            ...(field.required && !readOnly ? { "aria-required": true } : {}),
           }}
           onChange={onChange}
           onCommit={onCommit}
@@ -310,6 +311,27 @@ function DescriptorRelationControl({
   relation: DescriptorFieldRelation;
   value: unknown;
   readOnly?: boolean;
+  onChange: (value: unknown) => void;
+  onCommit?: () => void;
+  controlRef?: (target: WidgetFocusTarget | null) => void;
+}): React.ReactElement {
+  if (readOnly) {
+    const id = relationValueId(value);
+    return id ? <RecordReference model={relation.resource} id={id} /> : <></>;
+  }
+  return <EditableDescriptorRelationControl
+    controlId={controlId} describedBy={describedBy} invalid={invalid} field={field}
+    relation={relation} value={value} onChange={onChange} onCommit={onCommit} controlRef={controlRef}
+  />;
+}
+
+function EditableDescriptorRelationControl({ controlId, describedBy, invalid, field, relation, value, onChange, onCommit, controlRef }: {
+  controlId: string;
+  describedBy?: string;
+  invalid: boolean;
+  field: DescriptorField;
+  relation: DescriptorFieldRelation;
+  value: unknown;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
   controlRef?: (target: WidgetFocusTarget | null) => void;
@@ -385,7 +407,6 @@ function DescriptorRelationControl({
       onChange={onChange}
       onCommit={onCommit}
       options={picker.options}
-      readOnly={readOnly}
       placeholder={field.placeholder}
       aria-label={typeof field.label === "string" ? field.label : field.name}
       aria-describedby={describedBy}
