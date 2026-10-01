@@ -162,6 +162,26 @@ class ProjectContract:
                 # spends seconds compiling them for millisecond queries.
                 options = database.setdefault("OPTIONS", {})
                 options.setdefault("options", "-c jit=off")
+                pool_default = environ.Env.parse_value(seed.get("ANGEE_DB_POOL", False), bool)
+                if self.env.bool("ANGEE_DB_POOL", default=pool_default):
+                    # Mirror Django's "Pooling doesn't support persistent connections"
+                    # check while loading settings, before the connection is opened.
+                    if database.get("CONN_MAX_AGE"):
+                        raise ImproperlyConfigured("ANGEE_DB_POOL cannot be used with DATABASE_URL CONN_MAX_AGE")
+                    # One thread-sensitive sync GraphQL call uses one connection
+                    # per worker; a second slot permits concurrent async/Channels
+                    # database work. Measure bursts with a live subscription.
+                    options["pool"] = {
+                        "min_size": self.env.int(
+                            "ANGEE_DB_POOL_MIN_SIZE", default=int(seed.get("ANGEE_DB_POOL_MIN_SIZE", 0))
+                        ),
+                        "max_size": self.env.int(
+                            "ANGEE_DB_POOL_MAX_SIZE", default=int(seed.get("ANGEE_DB_POOL_MAX_SIZE", 2))
+                        ),
+                        "timeout": self.env.float(
+                            "ANGEE_DB_POOL_TIMEOUT", default=float(seed.get("ANGEE_DB_POOL_TIMEOUT", 5))
+                        ),
+                    }
             seed.setdefault("DATABASES", {"default": database})
         if "CACHE_URL" in os.environ:
             seed.setdefault("CACHES", {"default": self.env.cache()})

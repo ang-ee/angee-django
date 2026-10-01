@@ -65,6 +65,31 @@ _angee:
       default: process
       choices: [process, docker]
       help: Run framework application services as local processes or Docker containers.
+    serve_mode:
+      type: str
+      default: development
+      choices: [development, production]
+      validator: '{% if serve_mode == "production" and runtime_mode == "process" %}Production serving requires runtime_mode: docker.{% endif %}'
+      help: Serve with live reload or with multiple Django workers and a built SPA.
+    serve_workers:
+      type: int
+      default: 0
+      validator: '{% if serve_workers != 0 and serve_workers < 2 %}Use 0 for CPU count or at least 2 workers.{% endif %}'
+      help: Django ASGI worker count in production mode; 0 uses CPU count (minimum 2).
+    db_pool_max_size:
+      type: int
+      default: 2
+      validator: '{% if db_pool_max_size < 1 %}Pool size must be positive.{% endif %}'
+      help: Maximum PostgreSQL connections per Django worker in production mode.
+    db_pool_timeout:
+      type: int
+      default: 5
+      validator: '{% if db_pool_timeout < 1 %}Pool wait timeout must be positive.{% endif %}'
+      help: Seconds a request waits for a free PostgreSQL connection.
+    caddy_image:
+      type: str
+      default: "caddy:2.9-alpine"
+      help: Image serving the built SPA in production mode.
     django_image:
       type: str
       default: "ghcr.io/ang-ee/django-angee-base:latest"
@@ -155,6 +180,36 @@ runtime_mode:
   default: process
   choices: [process, docker]
   help: Run framework application services as local processes or Docker containers.
+
+serve_mode:
+  type: str
+  default: development
+  choices: [development, production]
+  validator: '{% if serve_mode == "production" and runtime_mode == "process" %}Production serving requires runtime_mode: docker.{% endif %}'
+  help: Serve with live reload or with multiple Django workers and a built SPA.
+
+serve_workers:
+  type: int
+  default: 0
+  validator: '{% if serve_workers != 0 and serve_workers < 2 %}Use 0 for CPU count or at least 2 workers.{% endif %}'
+  help: Django ASGI worker count in production mode; 0 uses CPU count (minimum 2).
+
+db_pool_max_size:
+  type: int
+  default: 2
+  validator: '{% if db_pool_max_size < 1 %}Pool size must be positive.{% endif %}'
+  help: Maximum PostgreSQL connections per Django worker in production mode.
+
+db_pool_timeout:
+  type: int
+  default: 5
+  validator: '{% if db_pool_timeout < 1 %}Pool wait timeout must be positive.{% endif %}'
+  help: Seconds a request waits for a free PostgreSQL connection.
+
+caddy_image:
+  type: str
+  default: "caddy:2.9-alpine"
+  help: Image serving the built SPA in production mode.
 
 django_image:
   type: str
