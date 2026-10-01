@@ -1154,7 +1154,7 @@ def _hasura_query_axis(
             ),
         )
     field = _require_group_field(model, path)
-    key = _group_key_path(field, path)
+    key = group_by_alias(path, None, field)
     is_relation = is_to_one_relation(field)
     filter_metadata = _hasura_group_bucket_filter(
         field,
@@ -1341,21 +1341,6 @@ def _require_group_field(
         raise ImproperlyConfigured(
             f"hasura_model_resource({model._meta.label}) declares unknown groupable field path {path!r}."
         ) from None
-
-
-def _group_key_path(
-    field: models.Field[Any, Any],
-    path: str,
-) -> str:
-    """Return the typed ``<Model>GroupKey`` field for one group axis.
-
-    The FK-alias rule (many-to-one → ``<path>_id``) and dotted-path
-    normalization are owned upstream by ``group_by_alias``. Passing the
-    resolved terminal field keeps direct and nested relation paths on the
-    exact alias contract used by the aggregate builder's GroupKey emitter.
-    """
-
-    return group_by_alias(path, None, field)
 
 
 #: The aggregate ops Angee advertises on the data surface, in metadata order
