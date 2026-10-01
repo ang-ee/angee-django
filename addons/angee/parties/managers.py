@@ -1380,10 +1380,12 @@ class PartyQuerySet(AngeeQuerySet):
         handle_model = apps.get_model("parties", "Handle")
         merge_veto_model = apps.get_model("parties", "MergeVeto")
         visible_party_ids = self.canonical().scoped_for_aggregate().values("pk")
+        handles = handle_model.objects.all()
+        actor = self.actor() or current_actor()
+        if actor is not None:
+            handles = handles.with_actor(actor)
         handles = (
-            handle_model.objects.all()
-            .with_actor(self.actor() or current_actor())
-            .scoped_for_aggregate()
+            handles.scoped_for_aggregate()
             .filter(
                 party_id__in=Subquery(visible_party_ids),
             )
