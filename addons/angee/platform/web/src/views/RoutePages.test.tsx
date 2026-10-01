@@ -57,7 +57,14 @@ vi.mock("@angee/ui", async (importOriginal) => ({
             resource_type: "notes.note",
             depends_on: ["iam.User"],
           }
-        : { id: "example.notes", name: "example.notes", label: "example.notes" };
+        : {
+            id: "example.notes",
+            name: "example.notes",
+            label: "example.notes",
+            kind: "REQUIRED",
+            source: "LOCAL",
+            state: "ENABLED",
+          };
     return (
       <div
         data-testid={resource}

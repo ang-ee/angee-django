@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.middleware import SessionMiddleware
+from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
 from rebac import (
     ObjectRef,
@@ -1036,11 +1038,11 @@ def _execute(
 
 
 def _request(user: Any) -> Any:
-    """Return a request object with a minimal mutable session."""
+    """Return a request with the configured native Django session backend."""
 
     request = RequestFactory().post("/graphql/console/")
     request.user = user
-    request.session = _Session()
+    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     return request
 
 
@@ -1051,20 +1053,3 @@ def _type_block(sdl: str, type_name: str) -> str:
     start = sdl.index(marker)
     end = sdl.index("\n}", start) + 2
     return sdl[start:end]
-
-
-class _Session(dict[str, Any]):
-    """Minimal session object for direct GraphQL execution."""
-
-    modified = False
-
-    def cycle_key(self) -> None:
-        """Mark the fake session as cycled."""
-
-        self.modified = True
-
-    def flush(self) -> None:
-        """Clear the fake session."""
-
-        self.clear()
-        self.modified = True

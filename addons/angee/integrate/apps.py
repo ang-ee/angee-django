@@ -10,12 +10,3 @@ class IntegrateConfig(AppConfig):
 
     default = True
     name = "angee.integrate"
-
-    def ready(self) -> None:
-        """Wire integration-owned denormalization maintenance after app population."""
-
-        super().ready()
-        # Signals resolve concrete models after Django app population.
-        from angee.integrate import signals
-
-        signals.connect()

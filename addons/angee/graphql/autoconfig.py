@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -43,7 +42,5 @@ def _channel_redis_url(namespace: Mapping[str, Any]) -> str:
     return str(
         namespace.get("CHANNEL_REDIS_URL")
         or namespace.get("REDIS_URL")
-        or os.environ.get("CHANNEL_REDIS_URL")
-        or os.environ.get("REDIS_URL")
         or ""
     )

@@ -25,6 +25,7 @@ import {
   } from "@tanstack/react-router";
 import {
   AppRuntimeProvider,
+  createRouteHref,
   type AppRuntime,
   type FormOverrideMap,
   } from "../../runtime";
@@ -590,9 +591,8 @@ describe("FormView", () => {
     };
     const submit = vi.fn(
       async (data: Record<string, unknown>, context: FormSubmitContext) => ({
-        ...sdkMocks.record,
-        ...data,
-        id: context.id,
+        status: "ok" as const,
+        data: { ...sdkMocks.record, ...data, id: context.id },
       }),
     );
 
@@ -634,9 +634,8 @@ describe("FormView", () => {
     };
     const submit = vi.fn(
       async (data: Record<string, unknown>, context: FormSubmitContext) => ({
-        ...sdkMocks.record,
-        ...data,
-        id: context.id,
+        status: "ok" as const,
+        data: { ...sdkMocks.record, ...data, id: context.id },
       }),
     );
     const relationFields = [
@@ -934,6 +933,45 @@ describe("FormView", () => {
 
     expect(await screen.findByRole("heading", { name: "Daily briefing" })).toBeTruthy();
     expect(screen.queryByText("[object Object]")).toBeNull();
+  });
+
+  test("read-only relation fields render retained references rather than picker controls", async () => {
+    sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1", name: "Daily briefing" } };
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" readOnly
+      fields={[{ name: "workflow", label: "Workflow" }]} />, workflowRelationMetadata(), undefined, {
+      routeHref: createRouteHref([{ name: "workflows", path: "/workflows" }, { name: "workflow.record", path: "/workflows/$id" }]),
+      routesByResource: { "workflows.Workflow": { collection: "workflows", record: { name: "workflow.record", param: "id" } } },
+    });
+    expect((await screen.findByRole("link", { name: "Daily briefing" })).getAttribute("href")).toBe("/workflows/workflow-1");
+    expect(screen.queryByRole("button", { name: /Workflow/ })).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(sdkMocks.getList).not.toHaveBeenCalled();
+    expect(sdkMocks.getOne).toHaveBeenCalledOnce();
+  });
+
+  test("selects dotted scalar and relation fields from their owning model metadata", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "run-1", version: {
+      id: "version-1", number: 2, workflow: { id: "workflow-1", name: "Daily briefing" },
+    } };
+    const metadata = workflowRelationMetadata();
+    const run = metadata.types.RunType!;
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" fields={[
+      { name: "version.workflow", title: true }, { name: "version.number", label: "Version" },
+    ]} />, { types: { ...metadata.types,
+      RunType: { ...run, fields: { version: { name: "version", kind: "relation",
+        relationObject: true, relationModelLabel: "workflows.Version" } } },
+      VersionType: { ...defaultModel("VersionType", "workflows.Version"), fields: {
+        number: { name: "number", kind: "scalar", scalar: "Int" },
+        workflow: { ...run.fields.workflow!, relationObject: true },
+      } },
+    } });
+    expect(await screen.findByRole("heading", { name: "Daily briefing" })).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "version.workflow.id", "version.workflow.name", "version.number",
+    ]));
+    expect(screen.queryByRole("textbox", { name: "Version" })).toBeNull();
   });
 
   test("falls back from a missing relation label to identity, then Untitled", async () => {
@@ -1468,7 +1506,7 @@ describe("FormView", () => {
     }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
     renderWithProviders(<FormView resource="OAuthClient" fields={descriptors} />);
 
-    const retry = screen.getByText("Config Retry").closest('[data-layout="stack"]') as HTMLElement;
+    const retry = screen.getByText("Retry").closest('[data-layout="stack"]') as HTMLElement;
     expect(within(retry).getByText("Not set")).toBeTruthy();
     fireEvent.click(within(retry).getByRole("button", { name: "Set value" }));
     expect((await screen.findByLabelText("Max attempts") as HTMLInputElement).value).toBe("1");
@@ -2497,6 +2535,23 @@ describe("FormView", () => {
     expect(screen.queryByRole("tab")).toBeNull();
   });
 
+  test("read-only records retain declared lifecycle actions while generated edits stay hidden", async () => {
+    const run = vi.fn(async () => undefined);
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly>
+      <Field name="title" label="Title" title />
+      <Action id="review" label="Review" primary run={run} />
+      <Action id="rename" label="Rename" set={{ title: "Changed" }} />
+    </FormView>);
+    expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await waitFor(() => expect(run).toHaveBeenCalledOnce());
+  });
+
   test("document records honor overview tab placement without changing presentation", async () => {
     renderWithProviders(
       <FormView
@@ -2984,9 +3039,9 @@ describe("FormView", () => {
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     await screen.findByText("This field cannot be blank.");
-    // Only field errors → the banner names declared labels and raw server-only keys.
+    // Server-only issues retain both their field name and their actionable reason.
     expect(
-      screen.getByText("Please fix the highlighted fields: Title, environment."),
+      screen.getByText("Please fix the highlighted fields: Title. environment: This field cannot be blank."),
     ).toBeTruthy();
   });
 });

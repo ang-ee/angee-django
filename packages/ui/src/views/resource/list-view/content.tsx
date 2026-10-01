@@ -3,6 +3,7 @@ import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
 import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
+import { LoadingPanel } from "../../../fragments/LoadingPanel";
 import { BoardView } from "../BoardView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
@@ -10,7 +11,7 @@ import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewFilter, type ResourceViewGr
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
-import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
+import { FlatListBody, ListEmpty, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
 import type { CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
 import { createLabelForResource, mergeFilterFields, mergeFilterOptions } from "../resource-view-utils";
@@ -32,6 +33,7 @@ interface ListViewContentProps<TRow extends Row> {
   headerVisibility: ListViewProps<TRow>["headerVisibility"];
   selectable: ListViewProps<TRow>["selectable"];
   renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
+  renderItem?: ListViewProps<TRow>["renderItem"];
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
@@ -76,6 +78,7 @@ export function ListViewContent<TRow extends Row = Row>({
   headerVisibility = "visible",
   selectable = true,
   renderGroupLabel,
+  renderItem,
   surface,
   resource,
   resolvedColumns,
@@ -209,7 +212,7 @@ export function ListViewContent<TRow extends Row = Row>({
     createLabel: createLabel ?? createLabelForResource(resource),
     onCreate,
     resourceView,
-    groupingEnabled: !boardGroupingPinned,
+    groupingEnabled: !renderItem && !boardGroupingPinned,
     pagerSubject: serverGroupedMode ? t("pager.groups") : undefined,
     pagerTotalUnit: serverGroupedMode ? "groups" : undefined,
     pagerPageSizeOptions: clientRowModel ? undefined : PAGE_SIZE_OPTIONS,
@@ -257,7 +260,14 @@ export function ListViewContent<TRow extends Row = Row>({
         ) : null
       }
     >
-      {surface.kind === "grouped" && resourceView.state.view === "board" ? (
+      {renderItem ? (
+        surface.rowModels.length > 0 ? <ol
+          start={(surface.list.page - 1) * surface.list.pageSize + 1}
+          className="min-h-0 flex-1 list-decimal space-y-6 overflow-auto p-4 pl-10"
+        >{surface.rowModels.map((row) => <li key={row.id}>{renderItem(row.original)}</li>)}</ol>
+          : surface.list.fetching ? <LoadingPanel message={t("list.loading")} />
+            : <ListEmpty className="p-6">{emptyContent}</ListEmpty>
+      ) : surface.kind === "grouped" && resourceView.state.view === "board" ? (
         <GroupedBoardBody
           columns={resolvedColumns}
           modelMetadata={modelMetadata}

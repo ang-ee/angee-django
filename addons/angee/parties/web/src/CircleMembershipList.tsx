@@ -9,7 +9,7 @@ import {
   rowIdVariables,
   useAuthoredResourceMutation,
   type ListColumn,
-  type MutationDialogField,
+  type DescriptorField,
   type MutationDialogValues,
   type RowActionDeclaration,
   type StringIdRow,
@@ -48,7 +48,7 @@ function CircleMembershipList({
   });
   const busy = addState.fetching;
 
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       anchor === "person"
         ? {
@@ -144,12 +144,13 @@ function CircleMembershipList({
         submittingLabel={t("circle.membership.adding")}
         errorFallback={t("circle.membership.addError")}
         parseValues={parseMembershipValues}
-        onSubmit={(values) =>
-          add({
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await add({
             circle: anchor === "circle" ? anchorId : values.selection,
             party: anchor === "person" ? anchorId : values.selection,
-          })
-        }
+          }),
+        })}
       />
     </>
   );

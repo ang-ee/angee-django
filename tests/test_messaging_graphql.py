@@ -129,7 +129,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     } == {
         "thread": ("messaging.Thread", "thread__title__text"),
         "sender": ("parties.Handle", "sender__display_name"),
-        "channel": ("integrate.Integration", "channel__display_name"),
+        "channel": ("messaging.Channel", "channel__display_name"),
         "subtype": ("messaging.MessageSubtype", "subtype__key"),
     }
 
@@ -1116,7 +1116,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             """
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
-                input: {model_label: $model, record_id: $id, body: $body, kind: "note"}
+                input: {model_label: $model, record_id: $id, body: $body, kind: NOTE}
               ) {
                 error
                 error_code

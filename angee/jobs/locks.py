@@ -13,7 +13,8 @@ from typing import Protocol
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import DEFAULT_DB_ALIAS, connections
-from django.utils.module_loading import import_string
+
+from angee.base.impl import resolve_hook
 
 
 @dataclass(frozen=True)
@@ -224,11 +225,13 @@ def get_lock_backend() -> LockBackend:
 
     backend_path = getattr(settings, "ANGEE_TASK_LOCK_BACKEND", "")
     if backend_path:
-        backend = _CONFIGURED_BACKENDS.get(str(backend_path))
+        cache_key = str(backend_path)
+        backend = _CONFIGURED_BACKENDS.get(cache_key)
         if backend is None:
-            backend_factory = import_string(str(backend_path))
+            backend_factory = resolve_hook("ANGEE_TASK_LOCK_BACKEND")
+            assert backend_factory is not None
             backend = backend_factory()
-            _CONFIGURED_BACKENDS[str(backend_path)] = backend
+            _CONFIGURED_BACKENDS[cache_key] = backend
         if not hasattr(backend, "try_acquire"):
             raise ImproperlyConfigured(f"{backend_path} must implement try_acquire().")
         return backend

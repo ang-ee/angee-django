@@ -14,6 +14,7 @@ function BooleanEdit({
 }: WidgetRenderProps<boolean>): ReactElement {
   return (
     <Checkbox
+      {...field?.controlProps}
       ref={controlRef}
       checked={Boolean(value)}
       disabled={readOnly}
@@ -29,6 +30,7 @@ function BooleanRead({
 }: WidgetRenderProps<boolean>): ReactElement {
   return (
     <Checkbox
+      {...field?.controlProps}
       checked={Boolean(value)}
       disabled
       aria-label={widgetLabel(field, "Boolean")}

@@ -11,6 +11,50 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Workflow IO steps commit claims before their bodies, fence results, reap
+  deadlines and retain effect markers. Operator actions recover failed or
+  stalled work with explicit duplicate acknowledgement when required. Add
+  checkpoint paging, artifact references and reprocess provenance, plus native
+  read-only GraphQL execution resources. Cancel bounds its lock wait.
+  Failed runs preserve unfinished siblings; retry replans their joins from
+  retained rows, including IO results received after the failure.
+  Delete the frozen workflow migration compatibility modules and default
+  callable under the authorized history reset.
+- Project settings composition publishes only after success. App-config
+  discovery no longer evaluates money settings prematurely, preserving the
+  original dependency error during Django startup.
+- `AngeeModel.require_access(permission, actor)` resolves the explicit requester,
+  then ambient requester, then the instance's pinned actor, and returns the
+  authorized actor. Missing actors fail closed outside system scope.
+  `_require_record_access` remains a temporary alias for downstream callers;
+  remove it after those callers migrate. Workflow starters can read identities
+  and versions and operate their own runs; monitoring other runs and reading
+  unpublished drafts requires workflow monitoring access. Engine rows remain
+  admin-write only; synchronize workflows REBAC schema revision 13.
+- `RecordRefMixin` uses the model's single native generic foreign key;
+  `record_ref_field_prefix` is removed and rejected by Django system checks.
+  `ImplBase.parse_value(value, type_, path)` owns typed error paths;
+  `parse_config` returns the model and `normalize_config` serializes it.
+  Step callers use `parse_config` directly.
+- `AutoConfig.apply_installed` composes installed app declarations for bare
+  hosts, with environment selection at the owner. Resource managers expose
+  `load_xref` for one declared row through the native import pipeline.
+  Workers default to `CELERY_WORKER_PREFETCH_MULTIPLIER=1`.
+  The operator GraphQL endpoint keeps its same-origin `/operator/graphql`
+  default; explicitly configuring `None` enables daemon URL derivation.
+- Rebuild the workflows engine around immutable published definitions,
+  actor-scoped runs, database steps and durable attempts. Remove the workflows
+  web fragment and the five satellite addons `workflows_agents`,
+  `workflows_extraction`, `workflows_integrate`, `workflows_messaging` and
+  `workflows_parties` pending their ports. Remove
+  `ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT`, `ANGEE_WORKFLOW_SUBJECT_SETTLERS`,
+  `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES`, `ANGEE_EXTRACTION_PROFILE_CLASSES`,
+  `ANGEE_EXTRACTION_MAX_BYTES` and `ANGEE_EXTRACTION_TIMEOUT_SECONDS`.
+  Replace the beat entries `workflows.decisions`, `workflows.reap`,
+  `workflows.publish_dispatches`, `workflows.schedule_triggers` and
+  `workflows.sweep` with `workflows.tick`.
+  `angee.jobs.enqueue_task` sends on transaction commit, immediately when no
+  transaction is active, and no longer accepts `eta`.
 - Beat keeps its schedule in the database (django-celery-beat) through
   `angee.jobs.scheduler.DatabaseScheduler`: code-declared `CELERY_BEAT_SCHEDULE`
   entries are written at startup and rows no longer declared are pruned.
@@ -21,25 +65,6 @@ live in code docstrings.
   scheduler after the next provision migrates it); when upgrading, remove
   `celery-beat` and add `--beat` together, never one without the other, or
   re-render the stack passing back every non-default answer.
-- **Upgrade:** Decisions no longer grant temporary evidence read. The
-  `pending_decision` relations, `DecisionRecordAccess`, gate/`GateBinding`/
-  `DecisionSpec` `record_access`, `Decision.record_access`, and the
-  `DecisionReadable*` model contributions are removed. Admission now requires
-  the admitted run actor and every assignee and escalation subject to hold
-  ordinary `read` on each record returned by
-  `angee.workflows.decision_actions.decision_evidence_refs` (error code
-  `decision_evidence_unreadable`). `integrate/integration` gains a grantable
-  `reader` relation, and an extraction is readable by readers of its File or
-  Message `target`. Follow the
-  [standing reviewer access cutover](docs/backend/guidelines.md#rebac)
-  sequence: drain pending Decisions, deploy, build, migrate,
-  `purge_decision_record_access --apply`, `rebac sync --force-overwrite`,
-  `resync_extraction_targets`, then grant reviewers standing read.
-- `optional_states_nullable` applies on populated PostgreSQL databases: its
-  data rewrite makes constraints immediate so the following `ALTER TABLE`
-  no longer fails on pending trigger events. `compatible_source_sha256`
-  returns so stacks keep an already-materialized released body; see the
-  backend migration pitfalls for recovering an unapplied released copy.
 - Intake captures needs again: `Message.transport_channel()` owns resolving a
   message's concrete `messaging.Channel`, shared by delivery and intake.
 - Live authored reads coalesce subscription pushes: a change cancels matching
@@ -55,8 +80,8 @@ live in code docstrings.
   and validated retention batches use the public, framework-protected
   `owner_update` and `owner_bulk_create` paths that preserve downstream guards;
   hierarchy path maintenance uses the same `owner_update` contract. Fixture,
-  recovery, attempt, external-subscription and dispatch collections consistently
-  reject generic inserts. Implementation-field checks share registry resolution
+  recovery and dispatch collections consistently reject generic inserts.
+  Implementation-field checks share registry resolution
   and reject mismatched implementation keys.
 - Base autoconfig enables simple-history's native text change-reason setting,
   replacing the private field-factory override. This intentionally applies
@@ -76,15 +101,13 @@ live in code docstrings.
   table setup and cleanup with REBAC synchronization. Workflow drivers live in
   `angee.workflows.testing.drivers`; duplicated test models, table fixtures and
   suite-local driver forwarding imports are removed.
-- Runtime JSON Schema formats are now asserted everywhere, including workflow
-  inputs and outputs, emitted values, Decision payloads, and extraction evidence.
-- Declare core `jsonschema` and `referencing` dependencies. Workflows and
-  extraction addon manifests retain `format-nongpl` extras to assert `date-time`,
-  `uri`, `hostname`, and `duration` as well.
-- Workflow publisher checks query only explicitly requested databases; replay
-  declaration checks remain available without database access. Row-lock callers
-  consistently use `lock_if_supported`, which delegates write routing and backend
-  support to Django.
+- Workflow definition validation asserts JSON Schema formats for inputs and
+  binding literals.
+- Declare core `jsonschema[format-nongpl]` and `referencing` dependencies.
+  `angee.base.jsonschema` owns declaration checks, local-reference proof,
+  format validation and bounded schema algebra for core and addon callers.
+- Row-lock callers consistently use `lock_if_supported`, which delegates write
+  routing and backend support to Django.
 - Slack rate-limit retries use the SDK's shared attempt budget, explicit polling
   deadlines, and the existing sleep cap. Integration HTTP clients expose a
   transport factory for injected test transports.
@@ -92,10 +115,8 @@ live in code docstrings.
   locale-specific zero-count selection unless the fallback declares a zero form.
   Test fixtures use the shared initializer, and runtime translation types match
   i18next's language contract without instance casts.
-- Workflow resource lock planning resolves existing targets and retained ledgers
-  through `AngeeResource.resolve_existing` and the native import-export loader.
-  Row and batch target resolution share `angee.base.identity` and its field-owned
-  public-ID decoding with Django's `in_bulk`; row adoption and hash-skip state
+- Row and batch resource target resolution share `angee.base.identity` and its
+  field-owned public-ID decoding with Django's `in_bulk`; row adoption and hash-skip state
   stay on the resource and are reset before import.
 - `angee.base.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
   pointers and anchors through `referencing` for workflow structural proofs and
@@ -123,45 +144,15 @@ live in code docstrings.
   `runtime/*/migrations` on a stack whose database is carried forward. Stacks
   depending on the retired `workflows_ocr` label must remain at that upgrade floor
   until their migration graph has a supported transition.
-- Guarded addon runtime migrations convert the six optional workflow/storage
-  state columns from empty strings to NULL while preserving rows and replacing
-  affected constraints. Extraction migrations rename `engine` → `profile`,
-  `engine_config` → `profile_config`, and page `engine_metadata` →
-  `provider_metadata` before schema autodetection, avoiding rename/default prompts.
-- Replace `ANGEE_EXTRACTION_ENGINE_CLASSES` with
-  `ANGEE_EXTRACTION_PROFILE_CLASSES`; system check
-  `angee.workflows_extraction.E001` rejects the retired setting even when empty.
-  Consumer domain keys retain their spelling;
-  the disabled built-in `none` key carries forward unchanged, and the
-  transport-only built-in `inference` key maps to `none` regardless of current
-  settings. Reversing the migration preserves `none`; the original distinction
-  between disabled and inference rows cannot be recovered. Consumers that need
-  to retain `inference` must declare their own key migration. Retained JSON
-  evidence is preserved. Drain runs with old extraction input contracts before
-  upgrading; see the [migration guidance](docs/backend/guidelines.md#migrations-and-runtime).
-- Remove `angee.workflows_extraction_glm` from `INSTALLED_APPS`. Its adopted
-  `agents.InferenceModel` row and resource ledger remain in the database; removing
-  the addon neither deletes the row nor maintains its recognition capability.
-  Retain or retire that model through the inference catalogue owner, and keep
-  its provider addon installed if it is still used. Replace the old `glm` engine
-  with a consumer-owned `ExtractionProfile` registered in
-  `ANGEE_EXTRACTION_PROFILE_CLASSES`, then select it in publications; retained
-  `glm` profile values need that key registered or an explicit key migration.
-  Recognition and mapping now use the shared inference path with separately
-  selected models; the built-in `none` profile does not replace domain processing.
+- The guarded storage runtime migration converts the optional smart-kind
+  column from an empty string to NULL while preserving rows and replacing
+  affected constraints.
 - Run `rebac sync` after migrate for the new dashboards `shared` relation and
-  shared-reader reconciliation. Regenerate GraphQL SDL and clients; optional
-  workflow states are nullable enums, including `WaitingKind`.
-- Messaging bridge extractors can continue importing `ArchiveExtractor` and
-  `ArchiveExecutionReporter` from the public `angee.workflows_integrate.steps`
-  path; implementation remains in `archive_steps`.
+  shared-reader reconciliation. Regenerate GraphQL SDL and clients.
 - `StateField` `db_index=False` opt-outs now round-trip through migrations;
   schema autodetection can remove indexes previously retained by incorrect
   field serialization. Optional states must declare `null=True, blank=True`;
   concrete models with blank non-null states fail Django's field checks.
-- Remove the test-only `angee.workflows.engine.deliver_artifact_dispatch` and
-  `cancel_run_dispatch` forwarders. Call `WorkflowDispatch.objects.deliver(...)`
-  with `expected_kind` and, for cancellation, `expected_target_id`.
 - The integration ownership guard now belongs to its consumer addon. The
   framework no longer supplies `angee.integrate.ownership`; consumers own their
   ownership policy through the declared integration contract.
@@ -224,7 +215,7 @@ live in code docstrings.
   usage. `InferenceRequest`, `InferenceResponse`, `ChatAPI`, the runtime provider
   switch and separate vendor chat serializers are removed. See
   [inference migration](docs/howto/inference.md) for the new public API, credential
-  lifetime and versioned workflow journal boundary.
+  lifetime.
 - Imports retain native Tablib datasets through import-export's lifecycle,
   removing `ResourceRow` and its dataset reconstruction. Xref resolution and
   adoption coercion happen once through native fields/instance loading. Rows,

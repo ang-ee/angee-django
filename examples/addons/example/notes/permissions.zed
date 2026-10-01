@@ -1,12 +1,18 @@
 // Authorization schema for the notes addon.
 // @rebac_package: notes
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 6
+
+definition notes/role {
+    relation member: auth/user | angee/role:admin#member
+}
 
 definition notes/note {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    // Assignment is standing evidence access; the review step writes no grants.
+    relation reviewer: auth/user // rebac:field=reviewer
 
     // Universal-admin reach without a per-note grant. Every note points at the
     // platform admin role via a const-backed relation (synthetic — no stored
@@ -14,12 +20,13 @@ definition notes/note {
     // angee/role:admin. One role membership covers every note, the way GCP IAM's
     // admin-at-a-scope covers every resource under it.
     relation admin: angee/role // rebac:const=admin
+    relation trigger_editor: notes/role // rebac:const=trigger_editor
 
     // Any signed-in principal may create through normal app surfaces; agents act as
     // their service users, so the created_by user FK uses the ambient actor directly.
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
+    permission read   = owner + editor + reader + reviewer + trigger_editor->member + admin->member
+    permission write  = owner + editor + trigger_editor->member + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + admin->member
 
@@ -28,5 +35,5 @@ definition notes/note {
     permission read__reminder_at = owner
 
     // Status transitions are an editorial action.
-    permission write__status = owner + editor + admin->member
+    permission write__status = owner + editor + trigger_editor->member + admin->member
 }

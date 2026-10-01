@@ -30,12 +30,11 @@ from django.db import models
 from rebac import current_actor
 
 from angee.base.actors import actor_user_id
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeDataModel
 from angee.nexus.managers import CadenceManager, TieManager
 
 
-class Tie(SqidMixin, AngeeModel):
+class Tie(AngeeDataModel):
     """A fully derived interaction edge between two canonically ordered parties."""
 
     runtime = True
@@ -147,7 +146,7 @@ class Tie(SqidMixin, AngeeModel):
         super().save(*args, **kwargs)
 
 
-class Cadence(SqidMixin, AngeeModel):
+class Cadence(AngeeDataModel):
     """One user's human-authored stay-in-touch intent for one party."""
 
     runtime = True

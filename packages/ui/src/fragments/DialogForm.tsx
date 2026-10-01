@@ -45,6 +45,7 @@ export function DialogForm({
         <Dialog.Content
           placement={placement}
           size={size}
+          className="has-[table]:w-[80rem]"
           finalFocus={finalFocus}
         >
           {/* The form sits between the height-capped Content and the scrolling

@@ -14,7 +14,6 @@ export type IntegrationSyncFieldName =
   | "sync_error"
   | "sync_progress"
   | "last_sync_summary"
-  | "last_sync_status"
   | "last_sync_items"
   | "last_sync_completed_at";
 
@@ -33,7 +32,6 @@ const DEFAULT_SYNC_FIELDS: readonly IntegrationSyncFieldName[] = [
   "sync_error",
   "sync_progress",
   "last_sync_summary",
-  "last_sync_status",
   "last_sync_items",
   "last_sync_completed_at",
 ];
@@ -61,7 +59,7 @@ export function IntegrationSyncFields({
 
 /** Declarative integration runtime columns with the same status presentation. */
 export function IntegrationSyncColumns({
-  fields = ["sync_stage", "last_sync_status", "last_sync_items", "last_sync_completed_at"],
+  fields = ["sync_stage", "last_sync_items", "last_sync_completed_at"],
   labels,
 }: IntegrationSyncFragmentOptions = {}): readonly ReactElement[] {
   return fields.map((name) => (
@@ -69,7 +67,7 @@ export function IntegrationSyncColumns({
       key={name}
       field={name}
       header={labels?.[name]}
-      widget={name === "last_sync_status" ? "statusBadge" : undefined}
+      widget={name === "sync_stage" ? "statusBadge" : undefined}
     />
   ));
 }
@@ -85,7 +83,7 @@ export function useIntegrationSyncAction(
 
 function syncWidget(name: IntegrationSyncFieldName): string | undefined {
   if (name === "sync_progress" || name === "last_sync_summary") return "json";
-  if (name === "last_sync_status") return "statusBadge";
+  if (name === "sync_stage") return "statusBadge";
   if (name === "is_syncing") return "booleanBadge";
   return undefined;
 }

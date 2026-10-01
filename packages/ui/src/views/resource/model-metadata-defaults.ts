@@ -7,6 +7,7 @@ import {
   defaultWidgetForModelField,
   isToOneRelationField,
   modelMetadataForLabel,
+  modelFieldForPath,
   relationModelLabelForField,
   relationRepresentationForPath,
 } from "@angee/metadata";
@@ -17,7 +18,7 @@ import type { ModelFieldMetadata } from "@angee/metadata";
 import type { WidgetOption } from "../../widgets";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { titleCase } from "../../lib/titleCase";
-import { enumValueLabel, groupFieldLabel } from "./resource-view-list-body";
+import { enumValueLabel, groupFieldLabel } from "../../lib/labels";
 
 /** A form field's resolved relation target — which model the picker lists, its
  * display field, and whether the related model can be created inline. */
@@ -72,9 +73,9 @@ export function relationFieldInfo(
   modelMetadata: ModelMetadata | null,
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
-  const field = modelMetadata?.fields[fieldName];
-  if (!field || !isToOneRelationField(field, modelMetadata)) return null;
-  return resolveRelationTarget(field, modelMetadata, schemaMetadata);
+  const resolved = modelMetadata ? modelFieldForPath(fieldName, modelMetadata, schemaMetadata) : null;
+  if (!resolved || !isToOneRelationField(resolved.field, resolved.model)) return null;
+  return resolveRelationTarget(resolved.field, resolved.model, schemaMetadata);
 }
 
 /** Resolve a relation declared directly by an authored ResourceQuery. */
@@ -234,10 +235,9 @@ export function columnsWithMetadataDefaults<TRow extends object>(
   return columns.map((column) => {
     const field = metadata?.fields[column.field];
     const options = enumOptions(field);
-    // A relation-terminal column (`product` or `project.product`) names a GraphQL
-    // object, which cannot be selected as a leaf. The metadata owner resolves its
-    // id + record-representation leaves and the scalar display path, so the query
-    // selects `{ product { id name } }` and the cell reads `product.name`.
+    // A relation-terminal column names a GraphQL object or object list, neither
+    // selectable as a leaf. The metadata owner supplies identity and display
+    // paths; a to-one cell reads the label path and a to-many cell renders records.
     const relationRepresentation = metadata
       ? relationRepresentationForPath(
           column.field,
@@ -245,14 +245,17 @@ export function columnsWithMetadataDefaults<TRow extends object>(
           schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA,
         )
       : null;
-    const relationLabelField = column.render
+    const relationLabelField = column.render || relationRepresentation?.relationList
       ? null
       : relationRepresentation?.displayPath ?? null;
     return {
       ...column,
       ...(relationLabelField ? { field: relationLabelField } : {}),
       ...(relationRepresentation
-        ? { selectionPaths: relationRepresentation.selectionPaths }
+        ? { selectionPaths: [...new Set([...relationRepresentation.selectionPaths, ...(column.selectionPaths ?? [])])] }
+        : {}),
+      ...(relationRepresentation?.relationList
+        ? { relationList: relationRepresentation.relationList, interactive: column.interactive ?? true }
         : {}),
       header: fieldLabel(column.field, field, column.header),
       // A bare column inherits the backend's explicit widget (e.g. `"money"` over a
@@ -269,7 +272,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
         ? { currencyField: field.currencyField }
         : {}),
       ...(column.options === undefined &&
-      isEnumOptionWidget(column.widget) &&
+      isEnumOptionWidget(column.widget ?? (!relationLabelField ? field?.widget ?? undefined : undefined)) &&
       options.length > 0
         ? { options }
         : {}),
@@ -281,9 +284,11 @@ export function columnsWithMetadataDefaults<TRow extends object>(
 export function fieldsWithMetadataDefaults(
   fields: readonly FieldDescriptor[],
   metadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata = EMPTY_SCHEMA_FIELD_METADATA,
 ): readonly FieldDescriptor[] {
   return fields.map((field) => {
-    const fieldMetadata = metadata?.fields[field.name];
+    const resolved = metadata ? modelFieldForPath(field.name, metadata, schemaMetadata) : null;
+    const fieldMetadata = resolved?.field;
     // A declared field with no explicit widget inherits the metadata-derived default
     // for its kind/scalar: enum→select, relation→many2one (selecting `<field>.id`
     // for the picker), Boolean→switch, list→tagInput, etc. Without this every
@@ -295,6 +300,8 @@ export function fieldsWithMetadataDefaults(
     const options = enumOptions(fieldMetadata);
     return {
       ...field,
+      // A parent record's generated update cannot write another model's fields.
+      ...(resolved && field.name.includes(".") ? { readOnly: true } : {}),
       ...(widget !== field.widget ? { widget } : {}),
       label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.currencyField === undefined && fieldMetadata?.currencyField

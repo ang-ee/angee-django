@@ -13,15 +13,6 @@ from angee.compose.appgraph import AppGraph
 from angee.compose.autoconfig import AutoConfig
 from angee.paths import resolve_path
 
-COMPOSER_OWNED_SETTINGS = frozenset(
-    {
-        "ANGEE_RUNTIME_DIR",
-        "ASGI_APPLICATION",
-        "INSTALLED_APPS",
-        "ROOT_URLCONF",
-    }
-)
-
 
 class Composer:
     """Compose Angee's Django settings from project-declared apps."""
@@ -55,9 +46,7 @@ class Composer:
             sys.path.remove(runtime_parent)
         sys.path.insert(0, runtime_parent)
 
-        autoconfig = AutoConfig(self.namespace, reserved_settings=COMPOSER_OWNED_SETTINGS)
-        for app_config in app_configs:
-            autoconfig.update_app(app_config)
+        AutoConfig.apply_installed(self.namespace)
 
     @staticmethod
     def _app_entries(value: object) -> tuple[str | AppConfig, ...]:

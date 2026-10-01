@@ -29,6 +29,7 @@ FeedFollow = apps.get_model("posts", "FeedFollow")
 class FeedType(BridgeTypeMixin, AngeeNode):
     """GraphQL projection of a connected public-content feed."""
 
+    feed_backend_class: auto
     external_id: auto
     handle: HandleType | None
 
@@ -52,17 +53,16 @@ _FEED_RESOURCE = hasura_model_resource(
     filterable=[
         "id",
         "display_name",
-        "backend_class",
+        "feed_backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
     ],
     sortable=["display_name", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
+    groupable=["feed_backend_class", "lifecycle", "runtime_status", "sync_stage"],
     insert=False,
     update=False,
     delete=False,

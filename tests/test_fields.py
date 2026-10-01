@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from importlib import import_module
 from typing import Any
 
 import pytest
@@ -16,15 +17,45 @@ from django.db.models.functions import Concat
 from django.test.utils import isolate_apps
 
 from angee.base.fields import (
+    DiagnosticTextField,
     EncryptedField,
     FractionalRankExhausted,
     FractionalRankField,
+    ModelLabelField,
     SqidField,
     StateField,
     _derive_fernet,
 )
 from angee.base.mixins import SqidMixin
 from tests.tables import model_tables
+
+
+def test_diagnostic_text_requires_a_bound() -> None:
+    with pytest.raises(ValueError, match="positive max_length"):
+        DiagnosticTextField(max_length=None)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_diagnostic_and_model_label_fields_normalize_instance_and_queryset_writes() -> None:
+    """The fields own storage normalization, including QuerySet.update and filters."""
+
+    class FieldOwnedText(models.Model):
+        diagnostic = DiagnosticTextField(max_length=5)
+        model_label = ModelLabelField(max_length=200)
+
+        class Meta:
+            app_label = "auth"
+
+    with model_tables((FieldOwnedText,)):
+        row = FieldOwnedText.objects.create(diagnostic="ab\x00cdef", model_label="auth.user")
+        assert row.diagnostic == "abcde"
+        assert row.model_label == "auth.User"
+        FieldOwnedText.objects.filter(pk=row.pk).update(diagnostic="x\x00yz123", model_label="auth.user")
+        assert FieldOwnedText.objects.filter(model_label="auth.user").get(pk=row.pk).diagnostic == "xyz12"
+        assert FieldOwnedText.objects.filter(model_label__icontains="user").count() == 1
+        assert not FieldOwnedText.objects.filter(model_label="auth.Missing").exists()
+        with pytest.raises(ValidationError, match="Unknown model label"):
+            FieldOwnedText.objects.filter(pk=row.pk).update(model_label="auth.Missing")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -543,6 +574,32 @@ def test_sqid_field_deconstruct_preserves_public_id_contract() -> None:
     assert kwargs["prefix"] == "abc_"
     assert kwargs["real_field_name"] == "id"
     assert kwargs["min_length"] == 8
+
+
+@pytest.mark.parametrize(
+    ("module", "model_name", "prefix"),
+    [
+        *(('angee.parties.models', name, prefix) for name, prefix in (
+            ('Party', 'pty_'), ('Handle', 'hdl_'), ('PartyHandle', 'phl_'),
+            ('Address', 'adr_'), ('Folder', 'fol_'),
+        )),
+        *(('angee.messaging.models', name, prefix) for name, prefix in (
+            ('Thread', 'thr_'), ('Message', 'msg_'), ('Fragment', 'frg_'),
+            ('Part', 'prt_'), ('MessageEdge', 'mge_'), ('Participant', 'ptp_'),
+            ('Reaction', 'rxn_'), ('MessageStar', 'msr_'),
+        )),
+    ],
+)
+def test_declared_sqid_prefix_keeps_explicit_field_deconstruction(
+    module: str, model_name: str, prefix: str,
+) -> None:
+    """The removed redeclarations leave Django's field state unchanged."""
+
+    model = getattr(import_module(module), model_name)
+    explicit = SqidField(real_field_name="id", prefix=prefix, min_length=8)
+    explicit.set_attributes_from_name("sqid")
+
+    assert model._meta.get_field("sqid").deconstruct() == explicit.deconstruct()
 
 
 @pytest.mark.django_db(transaction=True)

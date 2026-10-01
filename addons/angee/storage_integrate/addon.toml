@@ -7,5 +7,10 @@ keywords = ["storage", "integrate", "mounts"]
 category = "Integration"
 depends_on = ["angee.storage", "angee.integrate"]
 
+[[migrations]]
+name = "mount_sync_status"
+app_label = "storage_integrate"
+module = "runtime_migrations.mount_sync_status"
+
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

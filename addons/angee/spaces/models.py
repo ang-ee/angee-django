@@ -23,13 +23,13 @@ from django.db import models, transaction
 from django.utils.text import slugify
 
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, HierarchyMixin
+from angee.base.models import AngeeDataModel
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
 
-class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
+class Group(ConditionalSharedReaderMixin, HierarchyMixin, AuditMixin, AngeeDataModel):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
     runtime = True
@@ -102,7 +102,7 @@ class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin,
         return candidate
 
 
-class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
+class Membership(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     """One party's role-bearing roster row in a shared group.
 
     Confirmation resolves live through the canonical ``Person.user`` identity

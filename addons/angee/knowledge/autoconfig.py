@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.knowledge.retrieval.RetrievalBackend"],
     # Vaults select their retrieval backend with a vault-owned ``retrieval_class``
     # field. ``lexical`` is the default title/body ``icontains`` search. A semantic
     # plugin (pgvector/graphrag) contributes its own key through autoconfig without

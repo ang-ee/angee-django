@@ -1,26 +1,28 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 11
 
 // Each messaging row is owned by the user that created it (sync writes set
 // created_by to the channel owner), with platform admins reaching every row via
 // the const-backed angee/role:admin membership. A Channel is a multi-table
-// inheritance child of integrate/integration, so its access derives from the
-// parent integration the way integrate_vcs/vcs_bridge and parties/directory do.
+// inheritance child of integrate/integration, so its owner access derives from
+// the parent integration. Direct channel readers can see its messages without
+// receiving access to the parent integration's other resources.
 
 definition messaging/channel {
     relation integration: integrate/integration // rebac:field=integration_ptr
+    relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read   = integration->read + admin->member
+    permission read   = integration->read + reader + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
 }
 
 definition messaging/thread {
-    relation channel: integrate/integration // rebac:field=channel
+    relation channel: messaging/channel // rebac:field=channel
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
@@ -35,7 +37,7 @@ definition messaging/thread {
 
 definition messaging/message {
     relation thread: messaging/thread // rebac:field=thread
-    relation channel: integrate/integration // rebac:field=channel
+    relation channel: messaging/channel // rebac:field=channel
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member

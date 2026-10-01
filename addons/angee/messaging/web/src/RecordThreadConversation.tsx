@@ -1,4 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import * as React from "react";
 import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
 import {
@@ -36,8 +37,6 @@ const FINISHED_UPLOAD_STATUSES = new Set<UploadTask["status"]>([
   "deduped",
   "failed",
 ]);
-
-type ChatterPostKind = "comment" | "note";
 
 interface RecipientOption {
   id: string;
@@ -140,7 +139,7 @@ export function RecordThreadConversation({
     errorFrom: (data) => data?.set_record_message_starred,
   });
 
-  const [postKind, setPostKind] = React.useState<ChatterPostKind>("comment");
+  const [postKind, setPostKind] = React.useState<RecordMessagePostKind>("COMMENT");
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -201,7 +200,7 @@ export function RecordThreadConversation({
     setError(null);
     setEditingMessageId(null);
     setReplyToMessage(message);
-    setPostKind(message.message_type === "NOTIFICATION" ? "note" : "comment");
+    setPostKind(message.message_type === "NOTIFICATION" ? "NOTE" : "COMMENT");
   }, []);
 
   const handleDeleteMessage = React.useCallback(
@@ -274,9 +273,9 @@ export function RecordThreadConversation({
           kind: postKind,
           parentMessageId: replyToMessage?.id ?? null,
           attachmentIds: [...args.attachmentIds],
-          recipientUserIds: postKind === "comment" ? [...args.recipientUserIds] : [],
+          recipientUserIds: postKind === "COMMENT" ? [...args.recipientUserIds] : [],
           autofollowRecipients:
-            postKind === "comment" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
+            postKind === "COMMENT" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
         });
         setReplyToMessage(null);
         return true;
@@ -284,7 +283,7 @@ export function RecordThreadConversation({
         setError(
           errorMessage(
             cause,
-            t(postKind === "note" ? "error.postNote" : "error.postComment"),
+            t(postKind === "NOTE" ? "error.postNote" : "error.postComment"),
           ),
         );
         return false;
@@ -429,8 +428,8 @@ function renderThreadError(errorCode: string | null, t: MessagingT): React.React
 
 interface ChatterComposerProps {
   t: MessagingT;
-  postKind: ChatterPostKind;
-  onPostKindChange: (kind: ChatterPostKind) => void;
+  postKind: RecordMessagePostKind;
+  onPostKindChange: (kind: RecordMessagePostKind) => void;
   replyToMessage: RecordMessageRow | null;
   onClearReply: () => void;
   recipientOptions: readonly RecipientOption[];
@@ -468,9 +467,9 @@ function ChatterComposer({
   const hasComposerAttachments = attachmentDrafts.length > 0 || taskRows.length > 0;
   const canSubmit = body.trim() !== "" || attachmentDrafts.length > 0;
 
-  function handleKindChange(next: ChatterPostKind): void {
+  function handleKindChange(next: RecordMessagePostKind): void {
     onPostKindChange(next);
-    if (next === "note") {
+    if (next === "NOTE") {
       setSelectedRecipientIds([]);
       setAutofollowRecipients(false);
     }
@@ -611,15 +610,15 @@ function ChatterComposer({
                   </Button>
                 </div>
               ) : null}
-              <SegmentedControl<ChatterPostKind>
+              <SegmentedControl<RecordMessagePostKind>
                 value={postKind}
                 onValueChange={handleKindChange}
                 options={[
-                  { value: "comment", label: t("composer.comment") },
-                  { value: "note", label: t("composer.note") },
+                  { value: "COMMENT", label: t("composer.comment") },
+                  { value: "NOTE", label: t("composer.note") },
                 ]}
               />
-              {postKind === "comment" ? (
+              {postKind === "COMMENT" ? (
                 <ComposerRecipients
                   t={t}
                   selected={selectedRecipients}
@@ -652,7 +651,7 @@ function ChatterComposer({
                 className={messageComposerInputClassName}
                 aria-label={t("composer.messageLabel")}
                 placeholder={
-                  postKind === "note"
+                  postKind === "NOTE"
                     ? t("composer.logNote")
                     : t("composer.writeComment")
                 }
@@ -679,7 +678,7 @@ function ChatterComposer({
                 disabled={posting || uploadBusy || !canSubmit}
               >
                 <Glyph name="send" />
-                {postKind === "note" ? t("composer.log") : t("composer.send")}
+                {postKind === "NOTE" ? t("composer.log") : t("composer.send")}
               </Button>
             </>
           }

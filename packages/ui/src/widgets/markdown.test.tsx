@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { markdownEditorWidget, markdownPreviewWidget } from "./markdown";
@@ -8,7 +9,7 @@ import { markdownEditorWidget, markdownPreviewWidget } from "./markdown";
 describe("markdown widgets", () => {
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   test("renders markdown preview with gfm content", () => {
@@ -29,18 +30,28 @@ describe("markdown widgets", () => {
     expect(screen.getByLabelText("Body")).toBeTruthy();
   });
 
-  test("defers editor change notifications outside CodeMirror transactions", () => {
-    vi.useFakeTimers();
+  test("publishes toolbar edits immediately and accepts controlled value feedback", () => {
     const onChange = vi.fn();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const Editor = markdownEditorWidget.edit;
-    render(<Editor value="" field={{ label: "Body" }} onChange={onChange} />);
+    function Harness() {
+      const [value, setValue] = useState("");
+      return <><Editor value={value} field={{ label: "Body" }} onChange={(next) => { onChange(next); setValue(next); }} />
+        <button onClick={() => setValue("Reset content")}>Reset</button></>;
+    }
+    render(<Harness />);
 
     fireEvent.click(screen.getByRole("button", { name: "Bold" }));
 
-    expect(onChange).not.toHaveBeenCalled();
-    act(() => {
-      vi.advanceTimersByTime(16);
-    });
     expect(onChange).toHaveBeenCalledWith("**bold text**");
+    expect(screen.getByRole("textbox", { name: "Body" }).textContent).toBe("**bold text**");
+    const reset = screen.getByRole("button", { name: "Reset" });
+    // fireEvent.click omits the native focus transfer. Keeping CodeMirror
+    // focused makes happy-dom's synchronous selectionchange re-enter its update.
+    reset.focus();
+    fireEvent.click(reset);
+    expect(screen.getByRole("textbox", { name: "Body" }).textContent).toBe("Reset content");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(errors).not.toHaveBeenCalled();
   });
 });

@@ -36,6 +36,7 @@ class RetrievalBackend(ImplBase):
     (lexical + semantic, fused) is a drop-in subclass — it resolves its arms
     through ``vault.retrieval_for(key)`` and blends their results in :meth:`search`.
     """
+    registry_setting = "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES"
 
     category = "retrieval"
     label = "Retrieval"

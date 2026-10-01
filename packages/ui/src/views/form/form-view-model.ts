@@ -213,7 +213,8 @@ export function addFieldSelection(
     return;
   }
   if (metadata?.kind === "object") {
-    for (const path of queryField?.row?.paths ?? []) paths.add(path);
+    const prefix = field.name.slice(0, -metadata.name.length);
+    for (const path of queryField?.row?.paths ?? []) paths.add(`${prefix}${path}`);
     return;
   }
   paths.add(field.name);

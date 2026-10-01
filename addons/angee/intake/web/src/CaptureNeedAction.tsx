@@ -3,10 +3,11 @@ import {
   Button,
   Glyph,
   MutationDialog,
+  actionFormSubmitResult,
   mutationDialogValueCodecs,
   useAuthoredResourceMutation,
   useEnumOptions,
-  type MutationDialogField,
+  type DescriptorField,
   type MutationDialogValues,
 } from "@angee/ui";
 import * as React from "react";
@@ -36,13 +37,9 @@ export function CaptureNeedAction({
   const importanceOptions = useEnumOptions(NEED_MODEL, "importance", { casing: "upper" });
   const [capture] = useAuthoredResourceMutation(CaptureNeedDocument, {
     invalidateModels: [NEED_MODEL],
-    errorFrom: (data) => {
-      const outcome = data?.capture_need;
-      return outcome && !outcome.ok ? outcome.message : null;
-    },
     shouldInvalidate: (data) => data?.capture_need.ok === true,
   });
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "body",
@@ -83,14 +80,14 @@ export function CaptureNeedAction({
         submittingLabel={t("capture.submitting")}
         errorFallback={t("capture.error")}
         parseValues={parseCaptureNeedValues}
-        onSubmit={(values) =>
-          capture({
+        onSubmit={async (values) =>
+          actionFormSubmitResult(await capture({
             target: {
               model_label: targetModel,
               record_id: targetId,
             },
             ...values,
-          })
+          }), "capture_need")
         }
       />
     </>

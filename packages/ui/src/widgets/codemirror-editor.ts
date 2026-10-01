@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -10,7 +9,7 @@ import {
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import type { WidgetFocusTarget } from "./types";
+import type { WidgetControlProps, WidgetFocusTarget } from "./types";
 
 /** Editor chrome shared by the CodeMirror-backed widgets (markdown, json). */
 export const CODEMIRROR_THEME = EditorView.theme({
@@ -44,7 +43,7 @@ export const CODEMIRROR_THEME = EditorView.theme({
 export interface CodeMirrorEditorOptions {
   /** The editor's text. Owned by the caller; the view syncs its document to it. */
   value: string;
-  /** Called (coalesced per frame) with the new text on every edit. */
+  /** Called synchronously for each edit so a following submit sees the current draft. */
   onChange?: (value: string) => void;
   onBlur?: () => void;
   readOnly?: boolean;
@@ -53,11 +52,13 @@ export interface CodeMirrorEditorOptions {
   /** Language + key bindings + per-widget extensions (e.g. `markdown()`, `json()`). */
   extensions: readonly Extension[];
   controlRef?: Ref<WidgetFocusTarget>;
+  /** Label and error associations belong on CodeMirror's editable content. */
+  controlProps?: WidgetControlProps;
 }
 
 /**
  * Own a CodeMirror `EditorView`'s lifecycle for a value-controlled widget: create
- * it once into `host`, sync the document to `value`, coalesce edits to `onChange`,
+ * it once into `host`, sync the document to `value`, publish edits to `onChange`,
  * and reconfigure read-only/placeholder in place. Returns the view ref so a caller
  * can run commands against it (e.g. a markdown toolbar). The language and any key
  * bindings are passed as `extensions`; the common chrome (basic setup, theme,
@@ -68,46 +69,36 @@ export function useCodeMirrorEditor(
   host: RefObject<HTMLDivElement | null>,
   options: CodeMirrorEditorOptions,
 ): RefObject<EditorView | null> {
-  const { value, onChange, onBlur, readOnly, placeholder: placeholderText, extensions, controlRef } =
+  const { value, onChange, onBlur, readOnly, placeholder: placeholderText, extensions, controlRef, controlProps } =
     options;
+  const controlId = controlProps?.id;
+  const describedBy = controlProps?.["aria-describedby"];
+  const labelledBy = controlProps?.["aria-labelledby"];
+  const invalid = controlProps?.["aria-invalid"];
+  const required = controlProps?.["aria-required"];
+  const contentAttributes = useMemo(() => Object.fromEntries(Object.entries({
+    id: controlId, "aria-label": labelledBy ? undefined : placeholderText,
+    "aria-labelledby": labelledBy, "aria-describedby": describedBy,
+    "aria-invalid": invalid, "aria-required": required,
+  }).filter(([, entry]) => entry !== undefined).map(([key, entry]) => [key, String(entry)])),
+  [controlId, describedBy, labelledBy, invalid, required, placeholderText]);
   const viewRef = useRef<EditorView | null>(null);
   useImperativeHandle(controlRef, () => ({ focus: () => viewRef.current?.focus() }), []);
   const onChangeRef = useRef(onChange);
   const onBlurRef = useRef(onBlur);
-  const pendingRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncingRef = useRef(false);
   // Capture the create-time config so the editor is built exactly once; live
   // updates flow through the value-sync and reconfigure effects below.
-  const initRef = useRef({ value, readOnly, placeholderText, extensions });
+  const initRef = useRef({ value, readOnly, placeholderText, extensions, contentAttributes });
   const readOnlyCompartment = useMemo(() => new Compartment(), []);
   const editableCompartment = useMemo(() => new Compartment(), []);
   const placeholderCompartment = useMemo(() => new Compartment(), []);
+  const attributesCompartment = useMemo(() => new Compartment(), []);
 
   useEffect(() => {
     onChangeRef.current = onChange;
     onBlurRef.current = onBlur;
   }, [onBlur, onChange]);
-
-  const flushPendingChange = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (!pendingRef.current) return;
-    pendingRef.current = false;
-    const view = viewRef.current;
-    if (view) onChangeRef.current?.(view.state.doc.toString());
-  }, []);
-
-  const scheduleChange = useCallback(
-    () => {
-      pendingRef.current = true;
-      if (timerRef.current !== null) return;
-      timerRef.current = setTimeout(flushPendingChange, 16);
-    },
-    [flushPendingChange],
-  );
 
   useEffect(() => {
     const parent = host.current;
@@ -115,9 +106,9 @@ export function useCodeMirrorEditor(
     const init = initRef.current;
     const updateListener = EditorView.updateListener.of((update) => {
       if (!update.docChanged || syncingRef.current) return;
-      scheduleChange();
+      onChangeRef.current?.(update.state.doc.toString());
     });
-    const blurHandler = EditorView.domEventHandlers({ blur: () => { flushPendingChange(); onBlurRef.current?.(); } });
+    const blurHandler = EditorView.domEventHandlers({ blur: () => { onBlurRef.current?.(); } });
     const state = EditorState.create({
       doc: init.value,
       extensions: [
@@ -129,22 +120,21 @@ export function useCodeMirrorEditor(
         readOnlyCompartment.of(EditorState.readOnly.of(Boolean(init.readOnly))),
         editableCompartment.of(EditorView.editable.of(!init.readOnly)),
         placeholderCompartment.of(placeholder(init.placeholderText)),
+        attributesCompartment.of(EditorView.contentAttributes.of(init.contentAttributes)),
       ] satisfies Extension[],
     });
     const view = new EditorView({ parent, state });
     viewRef.current = view;
     return () => {
-      flushPendingChange();
       view.destroy();
       viewRef.current = null;
     };
   }, [
     host,
-    flushPendingChange,
-    scheduleChange,
     readOnlyCompartment,
     editableCompartment,
     placeholderCompartment,
+    attributesCompartment,
   ]);
 
   useEffect(() => {
@@ -167,6 +157,7 @@ export function useCodeMirrorEditor(
         ),
         editableCompartment.reconfigure(EditorView.editable.of(!readOnly)),
         placeholderCompartment.reconfigure(placeholder(placeholderText)),
+        attributesCompartment.reconfigure(EditorView.contentAttributes.of(contentAttributes)),
       ],
     });
   }, [
@@ -175,6 +166,8 @@ export function useCodeMirrorEditor(
     readOnlyCompartment,
     editableCompartment,
     placeholderCompartment,
+    attributesCompartment,
+    contentAttributes,
   ]);
 
   return viewRef;

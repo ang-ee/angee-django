@@ -40,6 +40,14 @@ export function useEnumOptions(
   );
 }
 
+/** Display a read-side enum value through its resource metadata. */
+export function useEnumValueLabel(resource: string): (field: string, value: string | null | undefined) => string {
+  const metadata = useModelMetadata(resource);
+  return React.useCallback((field, value) => value
+    ? enumValueLabel(metadata?.fields[field]?.values?.find((entry) => entry.value === value) ?? { value })
+    : "", [metadata]);
+}
+
 export function useImplChoices(
   resource: string,
   field: string,

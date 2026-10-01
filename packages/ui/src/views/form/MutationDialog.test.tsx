@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render as testingRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 
+import type { ReactElement } from "react";
+import { ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import {
@@ -13,12 +15,16 @@ import {
   mutationDialogValueCodecs,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
+import type { FormSubmitResult } from "./validation-errors";
 import { createUiTestProviders } from "../../testing";
 
 const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false } } },
 });
 
+const render = (ui: ReactElement) => testingRender(ui, { wrapper: ToastProvider });
+
+const ok = { status: "ok", data: undefined } as const;
 const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 
 describe("MutationDialog", () => {
@@ -54,9 +60,9 @@ describe("MutationDialog", () => {
   });
 
   test("a dismissed trigger session ignores its pending submission", async () => {
-    let resolve!: (value: string) => void;
+    let resolve!: (value: FormSubmitResult<string>) => void;
     const onSubmitted = vi.fn();
-    const submit = vi.fn(() => new Promise<string>((done) => { resolve = done; }));
+    const submit = vi.fn(() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; }));
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog
         trigger={<button type="button">Open request</button>}
@@ -77,14 +83,14 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     fireEvent.click(trigger);
     expect(await screen.findByRole("dialog")).toBeTruthy();
-    resolve("old result");
+    resolve({ status: "ok", data: "old result" });
     await Promise.resolve();
     expect(onSubmitted).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   test("allows an optional-only dialog to submit its initial omitted value", async () => {
-    const submit = vi.fn().mockResolvedValue({ ok: true });
+    const submit = vi.fn().mockResolvedValue(ok);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Optional" fields={[{ name: "input", label: "Input", widget: "json", omittable: true, nullable: true }]}
         submitLabel="Start" parseValues={(values) => values} onSubmit={submit} />
@@ -96,7 +102,7 @@ describe("MutationDialog", () => {
   });
 
   test("a domain readiness gate blocks buttons and form submission until ready", async () => {
-    const submit = vi.fn();
+    const submit = vi.fn().mockResolvedValue(ok);
     const view = render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={[]}
         submitLabel="Start" parseValues={(values) => values} onSubmit={submit}
@@ -118,7 +124,7 @@ describe("MutationDialog", () => {
   });
 
   test("a transport failure permits retry without changing valid dialog values", async () => {
-    const submit = vi.fn().mockRejectedValueOnce(new Error("Try again")).mockResolvedValueOnce({ ok: true });
+    const submit = vi.fn().mockRejectedValueOnce(new Error("Try again")).mockResolvedValueOnce(ok);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Connect" fields={[{ name: "name", label: "Name", required: true }]}
         initialValues={{ name: "Ada" }} submitLabel="Connect" parseValues={(values) => values} onSubmit={submit} />
@@ -132,8 +138,129 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
   });
 
+  test("an invalid submit result keeps field issues and values until corrected", async () => {
+    const submit = vi.fn().mockResolvedValueOnce({
+      status: "invalid", issues: { fieldErrors: { name: ["Choose a different name"] }, formErrors: [] },
+    }).mockResolvedValueOnce({ status: "ok", data: "saved" });
+    const submitted = vi.fn();
+    const close = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={close} title="Edit" fields={[{ name: "name", label: "Name", required: true }]}
+        initialValues={{ name: "Initial" }} submitLabel="Save" parseValues={parseRawValues}
+        onSubmit={submit} onSubmitted={submitted} />
+    </AppRuntimeProvider>);
+    const button = () => screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    expect(await screen.findByText("Choose a different name")).toBeTruthy();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    const input = screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    expect(input.value).toBe("Initial");
+    fireEvent.change(input, { target: { value: "Corrected" } });
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    await waitFor(() => expect(submitted).toHaveBeenCalledWith("saved", { name: "Corrected" }));
+    expect(close).toHaveBeenCalledWith(false);
+  });
+
+  test("a conflict stays open and permits retrying unchanged values", async () => {
+    const submit = vi.fn().mockResolvedValueOnce({ status: "conflict", message: "The entry changed" })
+      .mockResolvedValueOnce({ status: "ok", data: "saved" });
+    const submitted = vi.fn();
+    const close = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={close} title="Edit" fields={[{ name: "name", label: "Name", required: true }]}
+        initialValues={{ name: "Initial" }} submitLabel="Save" parseValues={parseRawValues}
+        onSubmit={submit} onSubmitted={submitted} />
+    </AppRuntimeProvider>);
+    const button = () => screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    expect(await screen.findByText("The entry changed")).toBeTruthy();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    await waitFor(() => expect(submitted).toHaveBeenCalledWith("saved", { name: "Initial" }));
+    expect(close).toHaveBeenCalledWith(false);
+  });
+
+  test("issues outside rendered controls permit retrying unchanged values", async () => {
+    const submit = vi.fn().mockResolvedValueOnce({ status: "invalid", issues: {
+      fieldErrors: { missing: ["The entry changed"], token: ["Refresh the entry"] }, formErrors: [],
+    } }).mockResolvedValueOnce({ status: "ok", data: "saved" });
+    const submitted = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Edit" fields={[
+        { name: "name", label: "Name", required: true }, { name: "token", hidden: true },
+      ]} initialValues={{ name: "Initial", token: "retained" }} submitLabel="Save" parseValues={parseRawValues}
+        onSubmit={submit} onSubmitted={submitted} />
+    </AppRuntimeProvider>);
+    const button = () => screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    expect(await screen.findByText(/The entry changed/)).toBeTruthy();
+    expect(screen.getByText(/Refresh the entry/)).toBeTruthy();
+    expect(submitted).not.toHaveBeenCalled();
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    await waitFor(() => expect(submitted).toHaveBeenCalledWith("saved", { name: "Initial", token: "retained" }));
+  });
+
+  test("binds validation issues to nested fields and keeps unmatched issues visible", async () => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    const fields = deserializeFormSpec({ type: "object", properties: {
+      details: { type: "object", widget: "object", properties: {
+        title: { type: "string", label: "Title" },
+      } },
+    } }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Edit details" fields={[...fields, { name: "token", hidden: true }]}
+        initialValues={{ details: { title: "Initial" } }} submitLabel="Save"
+        parseValues={parseRawValues} onSubmit={submit}
+        validate={() => ({
+          fieldErrors: {
+            "details.title": ["Choose a title", "Use a unique value"],
+            missing: ["The entry changed"],
+            token: ["Refresh the entry"],
+          },
+          formErrors: ["Review the values"],
+        })} />
+    </AppRuntimeProvider>);
+
+    await screen.findByRole("textbox", { name: "Title" });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const message = await screen.findByText("Choose a title Use a unique value");
+    const input = screen.getByRole("textbox", { name: "Title" });
+    expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(message.id);
+    expect(screen.getByText(/The entry changed/)).toBeTruthy();
+    expect(screen.getByText(/Review the values/)).toBeTruthy();
+    expect(screen.getByText(/Refresh the entry/)).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a dismissed session ignores pending validation before firing the mutation", async () => {
+    let finish!: (value: null) => void;
+    const submit = vi.fn().mockResolvedValue(ok);
+    const validate = vi.fn(() => new Promise<null>((resolve) => { finish = resolve; }));
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">Open request</button>} title="Request"
+        fields={[]} submitLabel="Send" parseValues={parseRawValues} onSubmit={submit} validate={validate} />
+    </AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open request" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(validate).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    finish(null);
+    await Promise.resolve();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   test("resolves dependent descriptor options from current values without replacing an unknown value", async () => {
-    const submit = vi.fn();
+    const submit = vi.fn().mockResolvedValue(ok);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog
         open
@@ -177,7 +304,7 @@ describe("MutationDialog", () => {
   });
 
   test("revalidates resolved required and read-only state while retaining declared field identity", async () => {
-    const submit = vi.fn();
+    const submit = vi.fn().mockResolvedValue(ok);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog
         open
@@ -217,7 +344,7 @@ describe("MutationDialog", () => {
   });
 
   test("a required nullable FormSpec value accepts explicit null", async () => {
-    const submit = vi.fn();
+    const submit = vi.fn().mockResolvedValue(ok);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Nullable" fields={[
         { name: "note", label: "Note", required: true, nullable: true, presenceRequired: true },
@@ -348,13 +475,13 @@ describe("MutationDialog", () => {
       (screen.getByRole("button", { name: "Owner" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(/mutation dialog relation.*missing\.Person/),
+      expect.stringMatching(/descriptor relation.*missing\.Person/),
     );
     warn.mockRestore();
   });
 
   test("decodes raw controls before submitting typed values", async () => {
-    const onSubmit = vi.fn();
+    const onSubmit = vi.fn().mockResolvedValue(ok);
     render(
       <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         <MutationDialog
@@ -444,7 +571,7 @@ describe("MutationDialog", () => {
           submitLabel="Connect"
           submittingLabel="Connecting…"
           parseValues={parseRawValues}
-          onSubmit={() => pendingSubmit}
+          onSubmit={async () => { await pendingSubmit; return ok; }}
         />
       </AppRuntimeProvider>,
     );
@@ -470,4 +597,17 @@ describe("MutationDialog", () => {
     finishSubmit?.();
     await pendingSubmit;
   });
+});
+
+test("the dialog submission owner displays the successful result's message once", async () => {
+  const onSubmitted = vi.fn();
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <MutationDialog open onOpenChange={() => undefined} title="Send request" fields={[]}
+      submitLabel="Send" parseValues={parseRawValues} closeOnSubmit={false}
+      onSubmit={() => ({ status: "ok", data: "accepted", message: "Request accepted" })}
+      onSubmitted={onSubmitted} />
+  </AppRuntimeProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(await screen.findAllByText("Request accepted")).toHaveLength(1);
+  expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("accepted", {});
 });

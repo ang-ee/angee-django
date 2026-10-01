@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-import tests.test_workflows_extraction_service  # noqa: F401 -- register the fixture model graph before database setup
-from angee.base.refs import canonical_record_target
-from angee.base.serialization import canonical_json_sha256
-from tests.extraction_models import Extraction, ExtractionLineage
 from tests.test_messaging import Address, Handle, Party, PartyHandle
 
 
@@ -79,43 +73,6 @@ def test_primary_address_save_demotes_previous_primary(composed_tables: None, mo
         selected.refresh_from_db()
     assert selected.is_primary is True
     assert previous.is_primary is False
-
-
-@pytest.mark.django_db(transaction=True)
-def test_extraction_retention_reuses_and_advances_lineage(
-    transactional_db: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Extraction retention reuses and advances lineage."""
-    del transactional_db
-    schema = {"$id": "tests.routing.v1", "type": "object"}
-    with system_context(reason="retained evidence fixture"):
-        party = Party._base_manager.create(display_name="Evidence target")
-        target = canonical_record_target(party)
-        values: dict[str, Any] = {
-            "lineage_key": "routing-lineage",
-            "reuse_key": "routing-first",
-            "status": "succeeded",
-            "error_code": "",
-            "schema_id": schema["$id"],
-            "schema": schema,
-            "schema_digest": canonical_json_sha256(schema),
-            "profile": "fake_document",
-            "result": {},
-            "profile_config": {},
-            "provenance": {"claims": {}},
-            "content_type_id": target.content_type.pk,
-            "object_id": str(target.object_id),
-        }
-        manager = Extraction.objects
-        first = manager.create_revision(sources=(), pages=(), page_results=(), parts=(), **values)
-        replay = manager.create_revision(sources=(), pages=(), page_results=(), parts=(), **values)
-        second = manager.create_revision_from_evidence(
-            first, **{**values, "reuse_key": "routing-second", "expected_base_id": first.pk}
-        )
-        lineage = ExtractionLineage._base_manager.get(pk="routing-lineage")
-    assert replay.pk == first.pk
-    assert second.revision == first.revision + 1
-    assert lineage.head_id == second.pk
 
 
 @pytest.mark.django_db(transaction=True)

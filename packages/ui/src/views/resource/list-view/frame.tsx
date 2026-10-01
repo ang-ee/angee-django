@@ -79,6 +79,9 @@ function ValidatedListViewBody<TRow extends Row>(
   const query =
     props.source?.query ?? (metadata ? ResourceQuery.from(metadata) : null);
   let error = props.resourceView.state.queryError;
+  if (!error && props.renderItem && props.resourceView.state.view !== "list") {
+    error = new Error("Ordered item lists support only the flat list view.");
+  }
   if (!error && query) {
     try {
       error = validateResourceViewState(
@@ -112,6 +115,9 @@ function ValidatedListViewBody<TRow extends Row>(
             : group
               ? [group]
               : [];
+      if (props.renderItem && effectiveGroups.length > 0) {
+        throw new Error("Ordered item lists do not support grouping.");
+      }
       if (effectiveGroups.length > 0) {
         if (
           !isClientRowModel(metadata?.resource) &&
@@ -129,7 +135,10 @@ function ValidatedListViewBody<TRow extends Row>(
     }
   }
   return error ? (
-    <ResourceQueryError error={error} onReset={props.resourceView.resetQuery} />
+    <ResourceQueryError error={error} onReset={() => {
+      if (props.renderItem) props.resourceView.setView("list");
+      props.resourceView.resetQuery();
+    }} />
   ) : (
     <ListViewBody {...props} />
   );
@@ -146,6 +155,7 @@ function ListViewBody<TRow extends Row = Row>({
   headerVisibility,
   selectable,
   renderGroupLabel,
+  renderItem,
   columns,
   fields,
   baseFilter,
@@ -207,9 +217,9 @@ function ListViewBody<TRow extends Row = Row>({
   const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
   const availableViews = React.useMemo(
     () =>
-      declaredViews ??
+      renderItem ? ["list"] as const : declaredViews ??
       availableResourceViewKinds({ calendar: calendarAvailable, dashboard: dashboardAvailable }),
-    [declaredViews, calendarAvailable, dashboardAvailable],
+    [renderItem, declaredViews, calendarAvailable, dashboardAvailable],
   );
   const schemaMetadata = useSchemaFieldMetadata();
   const resolvedLaneSource =
@@ -336,12 +346,13 @@ function ListViewBody<TRow extends Row = Row>({
       resource={resource}
       source={source}
       textFilterField={textFilterField}
-      maxGroupDepth={maxGroupDepth}
+      maxGroupDepth={renderItem ? 0 : maxGroupDepth}
       toolbarWrap={toolbarWrap}
       tableLayout={tableLayout}
       headerVisibility={headerVisibility}
-      selectable={selectable}
+      selectable={renderItem ? false : selectable}
       renderGroupLabel={renderGroupLabel}
+      renderItem={renderItem}
       resolvedColumns={resolvedColumns}
       modelMetadata={modelMetadata}
       resourceView={resourceView}

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { QueryField } from "@angee/metadata";
+import type { QueryField, RelationRepresentationSelection } from "@angee/metadata";
 import type { Tone } from "../../lib/tones";
 import type { WidgetOption } from "../../widgets/types";
 
@@ -30,6 +30,8 @@ export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
   interactive?: boolean;
   render?: (row: TRow) => ReactNode;
+  /** Render this cell only when the row predicate matches; the column remains aligned. */
+  showWhen?: (row: TRow) => boolean;
   tone?: Record<string, Tone>;
 }
 
@@ -39,8 +41,10 @@ export interface ColumnDescriptor<
   field: string;
   /** Native query metadata for a resolved column's projected values. */
   queryField?: QueryField;
-  /** Concrete GraphQL leaf paths selected when `field` names an object relation. */
+  /** Concrete GraphQL leaf paths selected when `field` names an object relation or list. */
   selectionPaths?: readonly string[];
+  /** Related record presentation resolved from resource metadata for an object list. */
+  relationList?: NonNullable<RelationRepresentationSelection["relationList"]>;
   header?: ReactNode;
   /** Keep an accessible table header while visually hiding its label. */
   headerVisuallyHidden?: boolean;
@@ -53,6 +57,8 @@ export interface ColumnDescriptor<
   /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
   interactive?: boolean;
   render?: (row: TRow) => ReactNode;
+  /** Render this cell only when the row predicate matches; the column remains aligned. */
+  showWhen?: (row: TRow) => boolean;
   tone?: Record<string, Tone>;
   /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
   currencyField?: string;

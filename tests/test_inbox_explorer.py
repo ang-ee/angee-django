@@ -16,7 +16,7 @@ from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import execute_schema, make_integration, result_data
-from tests.test_messaging import Fragment, Handle, Message, Part, Participant, Party, Thread
+from tests.test_messaging import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
 from tests.test_nexus import _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -325,10 +325,10 @@ def test_accounts_require_readable_account_and_include_channel_readable_messages
     other = User.objects.create_user(username="explorer-account-other")
     with system_context(reason="seed source account eligibility"):
         accounts = {
-            name: make_integration(f"explorer-{name}", owner=owner, created_by=owner)
+            name: make_integration(f"explorer-{name}", model=Channel, owner=owner, created_by=owner)
             for name in ("eligible", "draft", "public", "owned-channel-other-author", "empty")
         }
-        hidden = make_integration("explorer-hidden", owner=other, created_by=other)
+        hidden = make_integration("explorer-hidden", model=Channel, owner=other, created_by=other)
         public = Thread._base_manager.create(created_by=owner, modality="public_thread")
         for name, account in accounts.items():
             if name != "empty":

@@ -42,6 +42,18 @@ def test_agent_error_classifier_loads_nullable_deferred_model(composed_tables: N
     assert seen == (["default"] if has_model else [])
 
 
+@pytest.mark.parametrize("error,transient", [(TimeoutError(), True), (ValueError("timeout"), False)])
+def test_inference_model_classifies_through_a_deferred_provider(composed_tables: None, error, transient):
+    """Consumers can classify failures without reading provider infrastructure."""
+
+    provider = _provider("model-error", backend_class="anthropic")
+    with system_context(reason="test.agents.model_error.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="model")
+        model = InferenceModel.objects.only("pk").get(pk=model.pk)
+
+    assert model.is_transient_error(error) is transient
+
+
 @pytest.mark.parametrize("has_credential", [False, True])
 def test_provision_inputs_and_readiness_load_uncached_relations(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch, has_credential: bool

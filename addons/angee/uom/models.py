@@ -69,6 +69,8 @@ class UomCategory(ConditionalSharedReaderMixin, AngeeDataModel):
 
         abstract = True
         ordering = ("name",)
+        verbose_name = "unit of measure category"
+        verbose_name_plural = "unit of measure categories"
         rebac_resource_type = "uom/category"
 
     def __str__(self) -> str:
@@ -129,6 +131,8 @@ class Uom(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
 
         abstract = True
         ordering = ("category", "name")
+        verbose_name = "unit of measure"
+        verbose_name_plural = "units of measure"
         rebac_resource_type = "uom/uom"
         constraints = (
             models.UniqueConstraint(

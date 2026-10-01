@@ -1,0 +1,10 @@
+_meta:
+  model: workflows.Trigger
+rows:
+  - xref: note_review_trigger
+    fields:
+      workflow: example.notes.note_publish
+      source: record_changed
+      model_label: notes.note
+      condition:
+        status: {_eq: in_review}

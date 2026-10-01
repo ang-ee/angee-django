@@ -1,0 +1,7 @@
+[addon]
+name = "angee.extraction"
+description = "Immutable document evidence, profiles, and inference"
+keywords = ["extraction", "documents", "evidence"]
+category = "Data"
+depends_on = ["angee.decisions", "angee.agents", "angee.storage", "angee.messaging", "angee.graphql", "django.contrib.contenttypes"]
+dependencies = ["jsonpointer>=3.1", "pypdfium2>=4.30", "pillow>=11.0"]

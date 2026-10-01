@@ -1,4 +1,4 @@
-import type { ResourceToolbarCustomFilter, ResourceToolbarCustomFilterChip, ResourceToolbarFilterField, ResourceToolbarFilterOption } from "../../../toolbars";
+import type { FilterClause, ResourceToolbarCustomFilterChip, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
 import { customFilterChipLabel, customFilterId, isFacetFilter, isLookup, mergeById, parseCustomFilterId } from "./labels";
@@ -44,7 +44,7 @@ export function nextTextFilter(
 export function customFilterChipsFor(
   filter: ResourceViewFilter,
   filterOptions: readonly ResourceToolbarFilterOption[],
-  fields: readonly ResourceToolbarFilterField[],
+  fields: readonly FilterClauseField[],
   textField: string | null = DEFAULT_TEXT_FILTER_FIELD,
 ): readonly ResourceToolbarCustomFilterChip[] {
   const chips: ResourceToolbarCustomFilterChip[] = [];
@@ -76,7 +76,7 @@ export function customFilterChipsFor(
 
 export function addCustomFilter(
   filter: ResourceViewFilter,
-  customFilter: ResourceToolbarCustomFilter,
+  customFilter: FilterClause,
 ): ResourceViewFilter {
   const next = { ...filter };
   const current = isLookup(next[customFilter.field])
@@ -117,9 +117,9 @@ export function mergeFilterOptions(
 }
 
 export function mergeFilterFields(
-  explicit: readonly ResourceToolbarFilterField[] | undefined,
-  inferred: readonly ResourceToolbarFilterField[],
-): readonly ResourceToolbarFilterField[] {
+  explicit: readonly FilterClauseField[] | undefined,
+  inferred: readonly FilterClauseField[],
+): readonly FilterClauseField[] {
   const inherited = new Map(inferred.map((field) => [field.field ?? field.id, field]));
   return mergeById(explicit, inferred).flatMap((field) => {
     const base = inherited.get(field.field ?? field.id);

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.parties.backends.DirectoryBackend"],
     "CELERY_BEAT_SCHEDULE:append": {
         "parties.refresh_handle_suggestions": {
             "task": "parties.refresh_handle_suggestions",

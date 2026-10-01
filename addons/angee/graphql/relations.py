@@ -2,34 +2,96 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+import strawberry
 import strawberry_django
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
+from django.db.models.functions import Cast
 from rebac import current_actor
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
+from strawberry import Info
+from strawberry_django.optimizer import optimize
+from strawberry_django.queryset import run_type_get_queryset
+from strawberry_django.utils.typing import get_django_definition, unwrap_type
 
+from angee.base.refs import RecordRefMixin
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
+from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
+from angee.graphql.node import AngeeNode
 
 _UNCACHED = object()
 
 
-def actor_scoped_relation_group_expression(
+def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Annotate ``_angee_record_readable`` from the referenced records' read policy.
+
+    Generic references need a typed membership guard for every represented model.
+    Read content types once, then use native scoped subqueries without loading
+    target rows. Projection and resource filter axes share this annotation, so
+    a hidden reference cannot be recovered through filtering or aggregate counts.
+    """
+    if not issubclass(queryset.model, RecordRefMixin):
+        raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
+    reference = queryset.model.record_ref_field()
+    key_field = queryset.model._meta.get_field(reference.fk_field)
+    content_types = ContentType.objects.filter(pk__in=aggregate_scoped_queryset(queryset).order_by().values(
+        reference.ct_field,
+    )).order_by("app_label", "model")
+    actor = relation_actor(queryset)
+    readable = models.Q(pk__in=[])
+    for content_type in content_types:
+        model = content_type.model_class()
+        if model is None:
+            continue
+        targets = read_scoped_queryset(model, actor)
+        if targets is not None:
+            keys = aggregate_scoped_queryset(targets).order_by().annotate(
+                _angee_reference_key=Cast("pk", output_field=key_field),
+            ).values("_angee_reference_key")
+            readable |= models.Q(**{
+                reference.ct_field_attname: content_type.pk,
+                f"{reference.fk_field}__in": keys,
+            })
+    return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
+        readable, output_field=models.BooleanField(),
+    ))
+
+
+@strawberry.type
+class RecordReferenceNode(AngeeNode):
+    """Project a generic record reference only while its current target is readable."""
+
+    @classmethod
+    def get_queryset(cls, queryset: models.QuerySet[Any], info: Info) -> models.QuerySet[Any]:
+        return with_record_reference_access(queryset)
+
+    def reference_model(self) -> str | None:
+        row = cast(Any, self)
+        return (row.record_model_label or None) if row._angee_record_readable else None
+
+    def reference_id(self) -> PublicID | None:
+        row = cast(Any, self)
+        return optional_public_id(row.record_public_id or None) if row._angee_record_readable else None
+
+
+def actor_scoped_relation_expression(
     queryset: models.QuerySet[Any],
     field_path: str,
 ) -> Combinable | None:
-    """Return a read-safe scalar expression for one related group axis.
+    """Return a read-safe scalar expression for one related query axis.
 
     Every protected target crossed by the selected to-one path contributes an
     uncorrelated membership guard. The related scalar is projected only when
     all guarded rows are readable by the source queryset's actor; otherwise it
-    becomes SQL ``NULL`` while the parent row and relation identity stay in the
-    group. Paths with no protected target need no override and return ``None``.
+    becomes SQL ``NULL`` while the parent row remains visible. Paths with no
+    protected target need no override and return ``None``.
     """
 
     try:
@@ -93,25 +155,38 @@ def actor_scoped_relation_group_expression(
     )
 
 
-def actor_scoped_to_one(field_name: str) -> Any:
-    """Return a nullable to-one field that redacts targets unreadable by the actor.
+def actor_scoped_to_one(field_name: str, *, reverse: bool = False) -> Any:
+    """Return a nullable forward/reverse to-one field redacting unreadable targets.
 
     The parent may be actor-scoped or sudo-loaded: a cached related object is used
     only when REBAC stamped it for the current actor; otherwise the stored FK value
     is re-gated through the target model's actor-scoped manager. Missing access
-    returns ``None`` rather than raising. Strawberry-Django's native prefetch hint
-    batches a selected relation once per parent list, while ``only`` keeps the
-    parent projection to the FK id this resolver reads.
+    returns ``None`` rather than raising. Strawberry-Django's native relation
+    projection and typed prefetch batch a selected relation once per parent list,
+    including the target type's queryset hook and selected annotations.
+    ``reverse=True`` selects a reverse one-to-one, which has no local FK column
+    to include in the parent's optimized projection.
     """
 
-    def resolve(root: models.Model) -> Any:
+    def prefetch(info: Info) -> models.Prefetch:
+        related_type = unwrap_type(info.return_type)
+        related_model = get_django_definition(related_type, strict=True).model
+        queryset = read_scoped_queryset(related_model, current_actor())
+        if queryset is None:
+            queryset = related_model._default_manager.none()
+        queryset = run_type_get_queryset(queryset, related_type, info)
+        return models.Prefetch(field_name, queryset=optimize(queryset, info))
+
+    def resolve(root: models.Model, info: Info) -> Any:
         field = root._meta.get_field(field_name)
-        if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+        if not is_to_one_relation(field):
             raise ImproperlyConfigured(
-                f"{root._meta.label}.{field_name} must be a forward to-one relation"
+                f"{root._meta.label}.{field_name} must be a to-one relation"
             )
 
-        fk_id = field.value_from_object(root)
+        if reverse != isinstance(field, models.OneToOneRel):
+            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} has an incorrect relation direction")
+        fk_id = field.field.target_field.value_from_object(root) if reverse else field.value_from_object(root)
         if fk_id is None:
             return None
 
@@ -133,14 +208,15 @@ def actor_scoped_to_one(field_name: str) -> Any:
                 f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
                 "whose default manager is not actor-scoped"
             )
-        target_field = field.target_field
-        return with_actor(actor).filter(**{target_field.attname: fk_id}).first()
+        target_field = field.field if reverse else field.target_field
+        queryset = with_actor(actor).filter(**{target_field.attname: fk_id})
+        return run_type_get_queryset(queryset, unwrap_type(info.return_type), info).first()
 
     return strawberry_django.field(
         resolver=resolve,
         field_name=field_name,
-        only=[f"{field_name}_id"],
-        prefetch_related=[field_name],
+        only=[] if reverse else [f"{field_name}_id"],
+        prefetch_related=[prefetch],
     )
 
 
@@ -150,7 +226,7 @@ def actor_scoped_to_many(field_name: str) -> Any:
     The parent may be actor-scoped through one relation while the selected
     to-many relation contains other protected rows. Resolve the relation through
     the target model's actor-scoped queryset instead of exposing the raw related
-    manager.
+    manager. Both cached and queried rows retain their model's native ordering.
     """
 
     def resolve(root: models.Model) -> Any:
@@ -172,17 +248,14 @@ def actor_scoped_to_many(field_name: str) -> Any:
             getattr(row, "_rebac_actor", None) == actor for row in cached
         ):
             return cached
-
         related_queryset = getattr(root, field_name).all()
         with_actor = getattr(related_queryset, "with_actor", None)
-        if callable(with_actor):
-            return with_actor(actor)
-
-        related_model = field.related_model
-        raise ImproperlyConfigured(
-            f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
-            "whose related manager is not actor-scoped"
-        )
+        if not callable(with_actor):
+            raise ImproperlyConfigured(
+                f"{root._meta.label}.{field_name} targets {field.related_model._meta.label}, "
+                "whose related manager is not actor-scoped"
+            )
+        return with_actor(actor)
 
     return strawberry_django.field(
         resolver=resolve,

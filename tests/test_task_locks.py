@@ -8,6 +8,7 @@ from multiprocessing.connection import Connection
 
 import psycopg
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from psycopg import sql
 
@@ -191,3 +192,9 @@ def test_task_lock_reports_held_state(settings) -> None:
         assert acquired is True
         assert task_lock_is_held(key) is True
     assert task_lock_is_held(key) is False
+
+
+def test_task_lock_backend_requires_callable_factory(settings) -> None:
+    settings.ANGEE_TASK_LOCK_BACKEND = "builtins.Ellipsis"
+    with pytest.raises(ImproperlyConfigured, match="not callable"):
+        locks.get_lock_backend()

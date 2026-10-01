@@ -155,7 +155,7 @@ export function createMutationDialogTestDouble({
             ...rawValues,
           });
           void Promise.resolve(props.onSubmit(parsed)).then((result) => {
-            props.onSubmitted?.(result, parsed);
+            if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
           });
         }}
       >

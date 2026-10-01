@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import socket
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -12,6 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import transaction
+from django.test.utils import isolate_apps
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
@@ -26,38 +28,46 @@ from tests.conftest import (
 )
 
 
-class DispatchBridge(Bridge, AngeeModel):
-    """Concrete bridge fixture used only for inbound dispatch tests."""
+@pytest.fixture
+def dispatch_bridge() -> Iterator[Bridge]:
+    """Keep the in-memory dispatch fixture out of installed bridge discovery."""
 
-    class Meta(Bridge.Meta):
-        """Django model options for the inbound dispatch bridge fixture."""
+    with isolate_apps():
 
-        abstract = False
-        app_label = "tests"
-        db_table = "test_integrate_webhook_dispatch_bridge"
-        rebac_resource_type = "tests/webhook_dispatch_bridge"
+        class DispatchBridge(Bridge, AngeeModel):
+            """Concrete bridge fixture used only for inbound dispatch tests."""
 
-    def sync(self) -> None:
-        """No-op sync implementation for the fixture."""
+            class Meta(Bridge.Meta):
+                """Django model options for the inbound dispatch bridge fixture."""
 
-    def handle_webhook(self, payload: Any) -> None:
-        """Record that the verified payload was handled."""
+                abstract = False
+                app_label = "tests"
+                db_table = "test_integrate_webhook_dispatch_bridge"
+                rebac_resource_type = "tests/webhook_dispatch_bridge"
 
-        self.calls.append(("handle", payload))
+            def sync(self) -> None:
+                """No-op sync implementation for the fixture."""
 
-    def verify_webhook(self, request: Any) -> bool:
-        """Record verification and return the fixture's configured result."""
+            def handle_webhook(self, payload: Any) -> None:
+                """Record that the verified payload was handled."""
 
-        self.calls.append(("verify", request))
-        if hasattr(self, "verify_error"):
-            raise self.verify_error
-        return self.accepts
+                self.calls.append(("handle", payload))
 
-    def start_live(self) -> None:
-        """No-op live subscription start for the fixture."""
+            def verify_webhook(self, request: Any) -> bool:
+                """Record verification and return the fixture's configured result."""
 
-    def stop_live(self) -> None:
-        """No-op live subscription stop for the fixture."""
+                self.calls.append(("verify", request))
+                if hasattr(self, "verify_error"):
+                    raise self.verify_error
+                return self.accepts
+
+            def start_live(self) -> None:
+                """No-op live subscription start for the fixture."""
+
+            def stop_live(self) -> None:
+                """No-op live subscription stop for the fixture."""
+
+        yield DispatchBridge()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -439,11 +449,11 @@ def test_deliver_event_redirect_response_fails_without_following(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_dispatch_inbound_verifies_then_handles_fixture_bridge() -> None:
+def test_dispatch_inbound_verifies_then_handles_fixture_bridge(dispatch_bridge: Bridge) -> None:
     """Inbound dispatch calls verify_webhook before handle_webhook."""
 
     payload = {"event": "vendor.changed"}
-    bridge = DispatchBridge()
+    bridge = dispatch_bridge
     bridge.calls = []
     bridge.accepts = True
 
@@ -454,11 +464,11 @@ def test_dispatch_inbound_verifies_then_handles_fixture_bridge() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_dispatch_inbound_rejects_without_handling_when_verify_returns_false() -> None:
+def test_dispatch_inbound_rejects_without_handling_when_verify_returns_false(dispatch_bridge: Bridge) -> None:
     """Inbound dispatch does not handle a payload rejected by verify_webhook."""
 
     payload = {"event": "vendor.changed"}
-    bridge = DispatchBridge()
+    bridge = dispatch_bridge
     bridge.calls = []
     bridge.accepts = False
 
@@ -469,11 +479,11 @@ def test_dispatch_inbound_rejects_without_handling_when_verify_returns_false() -
 
 
 @pytest.mark.django_db(transaction=True)
-def test_dispatch_inbound_does_not_handle_when_verify_raises() -> None:
+def test_dispatch_inbound_does_not_handle_when_verify_raises(dispatch_bridge: Bridge) -> None:
     """Inbound dispatch does not handle a payload when verification raises."""
 
     payload = {"event": "vendor.changed"}
-    bridge = DispatchBridge()
+    bridge = dispatch_bridge
     bridge.calls = []
     bridge.accepts = True
     bridge.verify_error = RuntimeError("bad signature")

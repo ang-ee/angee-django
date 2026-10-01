@@ -13,9 +13,9 @@ export function PartyRecordRedirect(): React.ReactElement {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const party = query.data?.parties_by_pk;
-  const route = party?.concrete_kind === "person"
+  const route = party?.concrete_kind === "PERSON"
     ? "parties.people.record"
-    : party?.concrete_kind === "organization"
+    : party?.concrete_kind === "ORGANIZATION"
       ? "parties.organizations.record"
       : null;
   React.useEffect(() => {

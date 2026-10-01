@@ -43,12 +43,12 @@ Dependency changes must update this file in the same change.
 | strawberry-django-aggregates >= 0.13.0 | Aggregation, JSON-path grouping, canonical group naming/type helpers, caller-owned to-one group expressions and to-one relation-key overrides (unreadable parents merge into one exact null bucket), group key encoders and exact grouped cardinality | Declarative dimensions/measures, public-ID key encoding and actor-scoped related-axis expressions |
 | strawberry-django-hasura >= 0.13.0 | Hasura's full `order_by` enum with explicit, engine-independent null placement (`asc` nulls last, `desc` nulls first, `*_nulls_first`/`*_nulls_last`); caller-declared insert and update root arguments and input-extension fields forwarded in the write envelope; expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-one filter paths, nested to-many `NestedInsert`), resource-local lookup types, declared queryset sort aliases with lazy expression preparation from resolved ordering and stable paging ties, named generated resource members, request-bound grouped-expression providers, exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. actor-safe related grouping and `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`); finalizes one `DataResourceQuery` from the composed schema and executable capabilities, consumed by `@angee/metadata`'s `ResourceQuery` |
 | pydantic >= 2.13 | Typed declaration defaults, validation/parsing and JSON serialization; a core wheel dependency | `ImplBase` derives config defaults and FormSpec from one typed declaration; `angee.data.metadata` declares the resource envelope's aliases and exclusions; computed (non-model) Hasura node and filter scalars derive from the Pydantic model (`hasura_pydantic_resource`) |
-| jsonschema >= 4.26 + referencing >= 0.37 | Native Draft 2020-12 validation and reference-registry traversal; workflows and extraction addon manifests own the `format-nongpl` extras for date-time, uri, hostname, and duration | `angee.base.jsonschema.LocalSchemaReferences` owns root-local scope for `ImplBase` config projections and workflow structural proofs. Workflows and extraction share the format-asserting validator in `workflows.data_contracts` for runtime values and declared/merged evidence; Decision actions, branches, and typed context supply native validator extensions and reference registries |
+| jsonschema[format-nongpl] >= 4.26 + referencing >= 0.37 | Native Draft 2020-12 validation, format assertions and reference-registry traversal; core wheel dependencies | `angee.base.jsonschema` owns declaration checks, root-local reference proof, format-aware value validation, Django error conversion and bounded schema algebra. Config projections, workflow graph policy, and [`decisions.forms`](../addons/angee/decisions/forms.py) compose that owner; decisions adds frozen action schemas, submitted values, and relation permissions |
 | defusedxml | Hardened XML parsing | `angee.parties_integrate_carddav` parses WebDAV/CardDAV XML responses |
-| pypdfium2 + Pillow | Native PDF text extraction, bounded PDF rasterization, and image normalization | `workflows_extraction` retains text layers directly and turns only scanned pages/images into ordered, capped JPEG recognition inputs |
-| pydantic-ai-slim >= 2.13 | Native model/message/usage protocols, structured and multimodal one-shot requests, agent loops and MCP toolsets | `agents.InferenceModel.infer` owns the direct-request envelope, structured-output decoding and normalized usage while preserving native response types; `InferenceModel.require_usable` owns actor read access, deployment approval and declared model capability; `InferenceBackend` owns the shared endpoint and typed transient-error classification; vendor addons own SDK and transport policy. Ollama is loopback-only with environment proxies disabled, maps provider `keep_alive` and `generation_limit` through its OpenAI-compatible SDK request, and keeps `num_ctx` in the deployed Modelfile. `agents_runtime_pydantic` adds only the MCP extra and bounded sessions; `workflows_agents.inference.call_inference` owns workflow authorization, invocation and one budget debit; extraction composes it through plain recognition/mapping functions and keeps domain processing in the `ExtractionProfile` registry. Workflows own durability, journals and approvals |
-| Celery + Redis + django-celery-beat | Task transport, worker execution, retries, queue routing, and periodic dispatch; beat's schedule lives in the database (`PeriodicTask` rows) instead of a per-host schedule file | hosted by the `angee.jobs` framework app; the host/stack supplies broker topology and runs beat embedded in its one shared worker (`worker --beat`, which must not be scaled: one scheduler per stack). Code owns the schedule: addons declare entries in `CELERY_BEAT_SCHEDULE`, and `angee.jobs.scheduler.DatabaseScheduler` writes them at startup and prunes rows no longer declared; rows hold run state and the enabled flag, and a failed database re-read keeps the last schedule. User-authored schedules are `angee.workflows` Triggers, not `PeriodicTask` rows; task bodies acquire Angee locks and delegate state changes to model/manager owners. `angee.workflows_integrate` composes `angee.workflows`, `angee.integrate` and `angee.storage` for bounded record pages, archive imports, native workflow retries and durable subject settlement |
-| croniter | Cron-expression schedule parsing | schedule triggers compute `next_fire_at` (workflows) |
+| jsonpointer >= 3.1 | RFC 6901 parsing, resolution and updates | `extraction.pointers` restricts traversal to JSON objects and arrays for retained evidence |
+| pypdfium2 >= 4.30 + Pillow >= 11 | PDF text/raster acquisition and image decoding | `extraction` prepares bounded document carriers once for recognition |
+| pydantic-ai-slim >= 2.13 | Native model/message/usage protocols, structured and multimodal one-shot requests, agent loops and MCP toolsets | `agents.InferenceModel.infer` owns the direct-request envelope, structured-output decoding and normalized usage while preserving native response types; `InferenceModel.require_usable` owns actor read access, deployment approval and declared model capability; `InferenceBackend` owns the shared endpoint and typed transient-error classification; vendor addons own SDK and transport policy. Ollama is loopback-only with environment proxies disabled, maps provider `keep_alive` and `generation_limit` through its OpenAI-compatible SDK request, and keeps `num_ctx` in the deployed Modelfile. `agents_runtime_pydantic` adds only the MCP extra and bounded sessions |
+| Celery + Redis + django-celery-beat | Task transport, worker execution, retries, queue routing, and periodic dispatch; beat's schedule lives in the database (`PeriodicTask` rows) instead of a per-host schedule file | hosted by the `angee.jobs` framework app; the host/stack supplies broker topology and runs beat embedded in its one shared worker (`worker --beat`, which must not be scaled: one scheduler per stack). Core pins `billiard>=4.2.1,<4.3`: 4.3.0 switched macOS to `spawn`, whose Django layout hook fails on the `angee` namespace package's `__file__ = None`. Lift the pin when billiard tolerates namespace packages and embedded beat works under `spawn`. Code owns the schedule: addons declare entries in `CELERY_BEAT_SCHEDULE`, and `angee.jobs.scheduler.DatabaseScheduler` writes them at startup and prunes rows no longer declared; rows hold run state and the enabled flag, and a failed database re-read keeps the last schedule. `angee.jobs.enqueue_task` sends on transaction commit, or immediately outside a transaction. Jobs defaults `CELERY_WORKER_PREFETCH_MULTIPLIER` to `1`. Task bodies acquire Angee locks and delegate state changes to model/manager owners |
 | python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | phonenumbers | Region-aware telephone parsing, validation, matching, and E.164 formatting | `parties.Handle.normalize_value` parses phone/WhatsApp values with `region=None`, so canonical E.164 input requires a leading `+country` code; invalid, impossible, or region-unknown values use the digit-only comparison fallback, and signature evidence mines through the same owner |
 | channels + channels-redis + uvicorn | ASGI/WebSocket transport and serving; Redis-backed channel layer for production fanout | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) in every worker; in-memory channel layer remains dev/test only; change-group membership is a lease each live subscriber renews, so members orphaned by a restart expire (`angee.graphql.constants`) |
@@ -59,7 +59,7 @@ Dependency changes must update this file in the same change.
 | django.contrib.postgres | Postgres full-text search (`SearchVectorField`, `GinIndex`, `SearchQuery`) | `messaging.Fragment.search` — stamped once at fragment creation (content-addressed rows are immutable, so no trigger/queue); dedup indexes each unique text exactly once. Postgres-only: the SQLite test backend leaves the vector NULL |
 | django-reversion | Versioned field snapshots and revert | `RevisionMixin` convenience API, composer-emitted model registration |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
-| django-import-export >= 4.4 + tablib | Native Dataset parsing, model field coercion, instance loading, import lifecycle, row results and transactions | Source grouping/diagnostic indexes, tier/xref/adoption policy and canonical ledger/grant hooks; models select native resource subclasses for domain manager persistence. Workflows declares its resources dependency and owns only ordered graph locks and facet reconciliation; the default-only resource transaction surrounds the complete load. The bounded declaration-constraint evaluator remains because Django Q.check fails open on database errors |
+| django-import-export >= 4.4 + tablib | Native Dataset parsing, model field coercion, instance loading, import lifecycle, row results and transactions | Source grouping/diagnostic indexes, tier/xref/adoption policy and canonical ledger/grant hooks; models select native resource subclasses for domain manager persistence. `WorkflowDefinitionResource` delegates each row to `WorkflowManager.install_definition`; the default-only resource transaction surrounds the complete load. The bounded declaration-constraint evaluator remains because Django Q.check fails open on database errors |
 | pyyaml | YAML parsing substrate | Resource loader reads `.yaml`/`.yml` resource files; django-yamlconf consumes project settings YAML |
 | ruamel.yaml | Comment/format-preserving round-trip YAML editing | The `AddonInstaller`'s `settings.yaml` `INSTALLED_APPS` install/disable edit — the one writer that must preserve operator comments and layout (pyyaml round-trips lose them); not used at boot |
 | django-yamlconf | Django settings YAML overlays | `angee.compose.settings` loads `settings.yaml` beside `manage.py`; `Composer` applies addon `autoconfig.py` fragments |
@@ -107,10 +107,24 @@ because the indexed path-prefix subtree test composes into the Hasura
 `_bool_exp` filter dialect and REBAC subtree scoping as a plain column predicate;
 recursive CTE ownership does not.
 
-Implementation-registry choice: the settings-keyed `ImplClassField` registry is
-Angee's declared composition contract. Python entry points were evaluated and
-rejected because composition facts belong to project settings, not package
-metadata.
+Implementation-registry choice: [`angee.base.impl`](../angee/base/impl.py) owns
+Angee's settings-keyed composition contract, shared by `ImplClassField` and
+rowless selectors. Each base names its setting, and owning addons append the base
+to `ANGEE_IMPL_REGISTRIES` so one startup check covers every catalogue. Checks,
+choices and native enums project that same registry;
+GraphQL adaptation stays in `angee.graphql.impl`. Python entry points were
+evaluated and rejected because composition facts belong to project settings,
+not package metadata.
+Declared function hooks use the same owner: addons append setting names to
+`ANGEE_HOOKS`, and callers use `resolve_hook` or `resolve_hooks` after the startup
+check. Resource sources and trigger sources are implementation class registries,
+not caller-maintained loaders.
+
+**REBAC adoption debt.** The current locked floor remains 0.18.2. Version 0.23
+discards a model's declared `Meta.base_manager_name`, which defeats the
+append-only model's guarded base manager. The required fix is in
+`django-zed-rebac`: preserve Django's declared base manager. Adoption is blocked
+until that library fix and the guarded-manager test both pass.
 
 Audit-history exclusions: `django-easy-audit` was evaluated and rejected because
 GPL code is incompatible with a framework composed into commercial consumers.
@@ -176,7 +190,7 @@ template test.
 | React 19 | View library | Component conventions |
 | TypeScript >= 6 | Language and type system | Branded boundary types |
 | valibot | Runtime schemas, parsing and inferred wire types for generated metadata, supported recursive form specs and opaque GraphQL JSON values | Domain owners declare supported contracts and preserve the permitted extension keys |
-| Ajv 8 (Draft 2020-12) + ajv-formats 3 | Full browser JSON Schema branch and format validation | The workflows addon binds frozen native Decision schemas to the generic FormSpec projection, action-specific input scopes, and supported presentation annotations; no coercion, default insertion, or field removal |
+| ajv >= 8.20 + ajv-formats >= 3.0 | Draft 2020-12 JSON Schema validation, discriminated unions and format assertions | `@angee/ui/views/json-schema` composes the FormSpec annotation vocabulary and maps validation issues into React Hook Form; the optional subpath keeps Ajv out of the main UI entry |
 | @refinedev/core | Resource registry, standard data hooks, react-query cache/invalidation, auth/i18n/live provider contracts | Angee projects emitted `angee.resources` metadata to refine resources and mounts one composed `<Refine>` root with named providers and the TanStack Router binding. The pnpm workspace supplies core's omitted `graphql` package metadata so its public `DocumentNode` types resolve against Angee's GraphQL 16 transport instead of a provider-private copy. |
 | @refinedev/hasura + graphql-request 5 + graphql 16 | Hasura GraphQL data provider (`_bool_exp`, `order_by`, `_aggregate`, `_by_pk`, `_set`) and authored `meta.gqlQuery` / `meta.gqlMutation` execution | Angee pins `idType: "String"` and `namingConvention: "hasura-default"`, uses refine-compatible GraphQL document ASTs, and applies session/CSRF or service auth at the transport boundary |
 | graphql-ws 6 + 5 | GraphQL WebSocket lifecycle for the Hasura live provider and daemon-owned operator transport | Endpoint derivation, connection params, retry policy, and the operator daemon subscription + raw log socket transport — request/response now rides a Refine `operator` data provider, leaving only the intrinsically streaming surfaces on this ws transport. Two majors resolve honestly: the Hasura live provider pulls `graphql-ws@6` (the peer of `@refinedev/hasura@7`), while the operator daemon transport pins `^5.16.2` |
@@ -207,9 +221,7 @@ template test.
 Chat-UI library choice: `@assistant-ui/react` owns the chat-UX surface (composed
 over ACP); CopilotKit and `@headlessui/react` were evaluated and rejected, and
 TanStack AI is a watch item.
-The agents fragment owns shared chat presentation and ACP transport; the optional
-`workflows_agents` fragment binds the same presentation to its persisted-session
-operations through the agents implementation slot.
+The agents fragment owns shared chat presentation and ACP transport.
 
 ## Hasura Dialect Rule
 
@@ -233,6 +245,13 @@ owners together: the Django adapter, operator SDL, emitted resource metadata,
 and the refine authored-operation helpers. Do not add frontend-only group
 semantics or local provider dialects.
 
+Named upstream gap: `strawberry-django-hasura` needs native `filter_expressions`
+for model resources with Django-owned computed predicates. Until that API exists,
+[`hasura_model_resource`](../addons/angee/graphql/data/hasura.py) bridges native
+input extensions into the dependency's dataclass filter visitor and scalar
+comparison types. That bridge relies on upstream internals; move it upstream
+and delete the local adapter when the dependency owns computed model filters.
+
 ## Rendered Binding
 
 Angee's frontend is Refine-native: the app composes one `<Refine>` root, resource
@@ -253,8 +272,8 @@ resource transport/auth/live integration. The active frontend owners are
 | react-day-picker | Calendar | Date widgets |
 | react-resizable-panels | Split panes | Layout and inspector panes |
 | CodeMirror 6 (+ @codemirror/lang-json) | Text / Markdown / JSON editor | Markdown and JSON widget editors (shared `useCodeMirrorEditor`) |
-| @xyflow/react | node/edge graph canvas | `@angee/ui` `GraphView` canvas |
-| @dagrejs/dagre | directed-graph layout | `@angee/ui` `GraphView` node placement |
+| @xyflow/react | node/edge graph canvas | `@angee/ui` [GraphView](../packages/ui/src/views/GraphView.tsx) canvas and [GraphEditor](../packages/ui/src/views/GraphEditor.tsx) editing controls |
+| @dagrejs/dagre | directed-graph layout | `@angee/ui` [layoutGraph and placeGraphNodeBeside](../packages/ui/src/views/graph-layout.ts) placement helpers |
 | FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/interaction`) | Month/week/day event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | Native browser drag/drop | File drag enter/leave/drop events and `DataTransfer.files` | `@angee/ui` upload drop target primitive |
@@ -277,7 +296,7 @@ calendar.
 | hatchling | Python wheel build | Package metadata conventions |
 | ruff | Python lint and format | Repo checks |
 | mypy | Python type checking | Strict backend checks |
-| pytest + pytest-django + pytest-xdist + pytest-randomly | Backend tests, native test-database setup and transactional flush, worker isolation, and opt-in randomized ordering | Synthetic projects and addon-owned [`workflows`](../addons/angee/workflows/testing/__init__.py) / [`integrate`](../addons/angee/integrate/testing/__init__.py) test compositions; generic [`composed_tables`](../angee/testing/fixtures.py) permission synchronization; CI schedules SQLite tests by file |
+| pytest + pytest-django + pytest-xdist + pytest-randomly | Backend tests, native test-database setup and transactional flush, worker isolation, and opt-in randomized ordering | Synthetic projects, addon-owned [`workflows`](../addons/angee/workflows/testing/__init__.py) and [`integrate`](../addons/angee/integrate/testing/__init__.py) test compositions, central [`decisions`](../tests/decisions_models.py) model registration; generic [`composed_tables`](../angee/testing/fixtures.py) permission synchronization; CI schedules SQLite tests by file |
 | Faker | Test and seed data generation | Bulk lorem fixtures (e.g. `seed_lorem_notes`) |
 | Vitest | TypeScript and React tests | Frontend unit checks; optional peer for `@angee/refine/testing`, which owns provider spies, and the `@angee/app/vitest` config entry. Tests declare direct workspace dependencies for fixture owners such as `@angee/metadata/testing`. |
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
@@ -287,6 +306,12 @@ calendar.
 | Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |
+
+**Typing stack decision pending.** Mypy cannot type Django `TextChoices` members
+in `integrate` and `parties` without `django-stubs`; eight errors are known
+there. Decide whether to add and configure `django-stubs` in the
+tooling manifest and lock, then resolve the eight errors. The dependency
+decision blocks a code-only workaround or a claim that the type check is clean.
 
 ## Proposed, Not Locked
 

@@ -387,13 +387,13 @@ def test_knowledge_config_owns_handbook_demo_seed() -> None:
     ]
     assert manifest["demo"][0]["adopt"] == ("owner", "name")
     assert manifest["demo"][1]["adopt"] == ("vault", "title")
-    assert manifest["demo"][2]["adopt"] == "page"
+    assert manifest["demo"][2]["adopt"] == ("vault", "title")
     vault_rows = _resource_rows(config, "demo", "resources/demo/010_knowledge.vault.yaml")
     page_rows = _resource_rows(config, "demo", "resources/demo/020_knowledge.page.yaml")
     markdown_rows = _resource_rows(config, "demo", "resources/demo/030_knowledge.markdown_page.yaml")
     assert vault_rows["vault_handbook"]["owner"] == "iam.user_admin"
-    assert page_rows["page_getting_started"]["vault"] == "knowledge.vault_handbook"
-    assert markdown_rows["md_getting_started"]["page"] == "knowledge.page_getting_started"
+    assert page_rows["page_guides"]["vault"] == "knowledge.vault_handbook"
+    assert markdown_rows["page_getting_started"]["parent"] == "knowledge.page_guides"
 
 
 def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None:

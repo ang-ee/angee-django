@@ -1,752 +1,269 @@
-"""Workflow step implementations for the parties dedupe flow.
+"""Typed human reviews that delegate identity and duplicate writes to parties."""
 
-Three implementations compose one graph:
-``parties_dedupe_scan`` proposes deterministic duplicate pairs,
-``parties_dedupe_gate`` suspends one rows-table Decision the human edits in the
-workflows inbox, and ``parties_dedupe_execute`` (``mode=prepare`` then the
-stock ``map`` fan-out into ``mode=unit``) applies the approved verbs through
-the parties manager owners. Steps run detached under ``system_context`` — the
-Decision is the authorization gate (assigned to the run creator), and the
-apply step performs only what its resolution approved.
-"""
-
-from __future__ import annotations
-
-from collections.abc import Mapping
-from datetime import datetime
-from typing import Annotated, Any, TypedDict
+from dataclasses import replace
+from typing import Any, Literal
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
-from pydantic import BaseModel, ConfigDict, Field, RootModel
-from rebac import system_context
+from pydantic import BaseModel, ConfigDict, Field
 
-from angee.base.identity import canonical_subject_ref
-from angee.workflows import engine
-from angee.workflows.attempts import (
-    DecisionGateOutput,
-    RecoveryCapability,
-    RecoveryMode,
-)
-from angee.workflows.configs import NonBlankString, WorkflowStepConfig
-from angee.workflows.decision_actions import (
-    ReviewAction,
-    ReviewFact,
-    ReviewRecordReference,
-    build_decision_action,
-)
-from angee.workflows.steps import (
-    DecisionApplyStep,
-    GateStep,
-    StepEffect,
-    StepExecutionMode,
-    StepImpl,
-    StepOutcome,
-    StepResult,
-    positive_int,
-)
-
-_EXECUTE_MODES = frozenset({"prepare", "unit"})
-_ACTIONS = ("merge", "skip", "keep_separate")
-_SURVIVORS = ("left", "right")
-_IDENTITY_KEYS = ("left", "right", "left_name", "right_name", "evidence")
+from angee.base.identity import public_id_of
+from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionRecordReference, DecisionRequest
+from angee.decisions.forms import Action
+from angee.decisions.managers import ResolvedDecision
+from angee.decisions.states import Verdict
+from angee.parties.backends import ParsedAddress
+from angee.workflows.reviews import ReviewStep
+from angee.workflows.steps import Settlement, Step
 
 
-class IdentityReviewConfig(WorkflowStepConfig):
-    """Consumer presentation vocabulary for the shared identity-review actions.
+class ProposedHandle(BaseModel):
+    """An existing association whose confirmation is being reviewed."""
 
-    ``party_label`` names the reviewed party verbatim in labels and descriptions;
-    ``default_address_label`` labels proposed addresses that have no label.
-    Action and choice identifiers remain the shared identity contract.
-    """
+    model_config = ConfigDict(extra="forbid")
+    party_handle_id: str = ""
+    evidence: str = ""
 
-    action: str = "review-party-identity"
+
+class IdentityProposal(BaseModel):
+    """Proposed native identity values; address coercion belongs to parties."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = ""
+    address: ParsedAddress = Field(default_factory=ParsedAddress)
+    handle: ProposedHandle = Field(default_factory=ProposedHandle)
+
+
+class IdentityInput(BaseModel):
+    """One identity proposal, optional reviewer and caller-owned continuation facts."""
+
+    model_config = ConfigDict(extra="forbid")
+    party_id: str = Field(min_length=1)
+    proposed: IdentityProposal
     assignee: str = ""
-    max_attempts: int = Field(default=3, ge=1)
-    party_label: NonBlankString = "Party"
-    default_address_label: Annotated[NonBlankString, Field(max_length=64)] = "Primary"
+    context: dict[str, Any] = {}
+    evidence: tuple[DecisionRecordReference, ...] = ()
 
 
-class IdentityReviewPassThrough(BaseModel):
-    """Frozen identity facts emitted when no human Decision is required.
+class IdentityReviewConfig(BaseModel):
+    """Presentation for a shared identity review, independent of its consumer."""
 
-    ``current`` is the workflow actor's visible projection; ``facts_hash`` is the
-    parties-owned actor-independent digest of the complete identity basis.
-    """
+    model_config = ConfigDict(extra="forbid")
+    party_label: str = Field(default="Party", min_length=1)
+    default_address_label: str = Field(default="Primary", min_length=1, max_length=64)
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
 
+class IdentityBasis(BaseModel):
+    """Actor-visible identity facts with the parties owner's complete-state digest."""
+
+    model_config = ConfigDict(extra="forbid")
     party_id: str
-    context: dict[str, Any]
+    proposed: IdentityProposal
     current: dict[str, Any]
-    proposed: dict[str, Any]
     facts_hash: str
-    selection_decision_id: str = ""
+    context: dict[str, Any] = {}
 
 
-class IdentityReviewOutput(RootModel[IdentityReviewPassThrough | DecisionGateOutput]):
-    """Typed no-change handoff or retained terminal Decision evidence."""
+class IdentityOutput(BaseModel):
+    """The retained party and the result of each requested domain operation."""
 
-
-class IdentityApplyInput(
-    RootModel[
-        IdentityReviewPassThrough | DecisionGateOutput | dict[str, IdentityReviewPassThrough | DecisionGateOutput]
-    ]
-):
-    """Direct or one-predecessor-envelope identity review input."""
-
-
-class DedupeUnitInput(BaseModel):
-    """One approved duplicate-pair verb consumed by the stock Map body."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    decision_id: int
-    pair_index: int
-
-
-class DedupeUnitOutput(BaseModel):
-    """Journal result of applying one duplicate-pair verb."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    action: str
-    result: str
-
-
-class DedupeExecuteInput(RootModel[DecisionGateOutput | DedupeUnitInput]):
-    """Typed prepare-gate or mapped-unit input variants."""
-
-
-class DedupeExecuteOutput(RootModel[list[DedupeUnitInput] | DedupeUnitOutput]):
-    """Typed prepared batch or mapped-unit result variants."""
-
-
-class IdentityApplyOutput(BaseModel):
-    """Party identity application result returned by the domain verbs."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+    model_config = ConfigDict(extra="forbid")
     party_id: str
-    context: dict[str, Any]
+    context: dict[str, Any] = {}
     name_result: str | None = None
     address_result: str | None = None
     handle_result: str | None = None
 
 
-class DedupeScanStepImpl(StepImpl):
-    """Propose the deterministic duplicate-party pairs for one review batch.
+class ApplyIdentity(Action, key="apply_identity", label="Apply identity choices",
+                    verdict=Verdict.COMPLETED, outcome="applied"):
+    """Explicit field choices, leaving every unselected fact unchanged."""
 
-    Delegates entirely to ``PartyQuerySet.duplicate_candidates`` (bounded,
-    veto-filtered, deterministic order) and adds only the review projection:
-    display names, the shared-handle evidence line, and a proposed survivor per
-    pair — a real name beats a numeric one, then the richer handle set, then
-    the older row.
-    """
-
-    key = "parties_dedupe_scan"
-    label = "Scan for duplicate contacts"
-    category = "Activity"
-    deterministic = False
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate the optional pair limit."""
-
-        super().validate_config(config)
-        positive_int(config.get("limit", 50), "Dedupe scan limit")
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Emit the proposed pair rows, routing ``found`` or ``empty``."""
-        step = step_run.step
-        if step is None:
-            raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
-
-        del now
-        limit = positive_int(step_run.step.config.get("limit", 50), "Dedupe scan limit")
-        party_model = apps.get_model("parties", "Party")
-        with system_context(reason="workflows_parties.dedupe_scan"):
-            candidates = party_model.objects.duplicate_candidates(limit=limit)
-            pairs = [_pair_row(candidate) for candidate in candidates]
-        if not pairs:
-            return StepResult.done(output={"pairs": []}, outcome="empty")
-        return StepResult.done(output={"pairs": pairs}, outcome="found")
+    name_action: Literal["keep", "replace"] = Field(default="keep", title="Name")
+    address_action: Literal["keep", "add", "replace"] = Field(default="keep", title="Address")
+    handle_action: Literal["keep", "confirm", "dismiss"] = Field(default="keep", title="Contact")
 
 
-class DedupeGateStepImpl(GateStep):
-    """Suspend one rows-table Decision over the scanned pair batch.
+class RejectIdentity(Action, key="reject_identity", label="Reject identity change",
+                     verdict=Verdict.REJECTED, outcome="rejected"):
+    """Retain the reason for leaving the current identity unchanged."""
 
-    The human edits the batch in the workflows inbox: per pair a survivor
-    (left/right) and a verb — ``merge``, ``skip`` (decide later; the pair
-    resurfaces on the next scan), or ``keep_separate`` (a durable
-    ``MergeVeto``; never suggested again). Identity cells are read-only and
-    verified again at prepare time, so a tampered resolution never applies.
-    """
-
-    key = "parties_dedupe_gate"
-    label = "Review duplicate pairs"
-    category = "Control"
-    config_model = None
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate optional decision action, assignee, and attempt settings."""
-
-        super().validate_config(config)
-        if "action" in config and not str(config.get("action") or "").strip():
-            raise ValidationError({"config": "Dedupe gate action must be a non-empty string."})
-        if "assignee" in config and not str(config.get("assignee") or "").strip():
-            raise ValidationError({"config": "Dedupe gate assignee must be a non-empty subject ref."})
-        positive_int(config.get("max_attempts", 3), "Dedupe gate max_attempts")
-
-    @classmethod
-    def gate_config(cls, step_run: Any) -> Mapping[str, Any]:
-        """Author one built-in gate config from the admitted scan output."""
-
-        pairs = _input_pairs(step_run.input)
-        config = dict(step_run.step.config)
-        review = build_decision_action(
-            actions=(
-                ReviewAction(
-                    value="apply_pairs",
-                    label="Apply pair decisions",
-                    verdict="COMPLETE",
-                    fields=("pairs",),
-                    required=("pairs",),
-                ),
-            ),
-            properties={"pairs": _dedupe_pairs_schema()},
-            payload={"pairs": pairs},
-        )
-        assignee = str(engine.resolve_workflow_actor(config.get("assignee") or step_run.run).subject)
-        return {
-            "policy": "one_done",
-            "action": str(config.get("action") or "dedupe-parties"),
-            "slots": [{"assignees": [assignee]}],
-            "payload": review.payload,
-            "max_attempts": positive_int(config.get("max_attempts", 3), "Dedupe gate max_attempts"),
-            "decision_schema": review.decision_schema,
-        }
+    note: str = Field(min_length=1, json_schema_extra={"widget": "textarea"})
 
 
-class DedupeExecuteStepImpl(DecisionApplyStep):
-    """Prepare a confirmed pair batch or execute one stock-map unit.
+class EscalateIdentity(Action, key="escalate_identity", label="Escalate identity review",
+                       verdict=Verdict.ESCALATED, outcome="escalated"):
+    """Route a proposal requiring another review with its explanation."""
 
-    ``mode=prepare`` follows the gate and turns its completed decision into a
-    plain verb list (skips dropped); the built-in ``map`` step consumes that
-    list and targets a second step with ``mode=unit``, which performs one
-    idempotent verb: ``merge`` through ``PartyManager.merge`` (already-merged
-    pairs report ``already_merged`` on retry) or ``keep_separate`` through
-    ``MergeVetoManager.veto`` (idempotent by construction).
-    """
-
-    key = "parties_dedupe_execute"
-    label = "Apply duplicate decisions"
-    category = "Activity"
-    deterministic = False
-    input_model = DedupeExecuteInput
-    output_model = DedupeExecuteOutput
-    outcomes = (
-        StepOutcome("prepared", "Prepared"),
-        StepOutcome("completed", "Completed"),
-    )
-    effect = StepEffect.WRITE
-    execution_mode = StepExecutionMode.DATABASE_COMMAND
-    effect_description = "Applies approved Party merge and separation verbs."
-    idempotent = True
-    gate_step_class = DedupeGateStepImpl
-
-    @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        """Allow fresh replay only for the idempotent per-pair Map body."""
-
-        config = getattr(getattr(getattr(attempt, "step_run", None), "step", None), "config", None)
-        if isinstance(config, Mapping) and config.get("mode") == "unit":
-            return RecoveryCapability(RecoveryMode.FRESH)
-        return RecoveryCapability(None, "Only an individual duplicate-decision item can be recovered.")
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Require an explicit prepare/unit execution mode."""
-
-        super().validate_config(config)
-        mode = str(config.get("mode") or "")
-        if mode not in _EXECUTE_MODES:
-            expected = ", ".join(sorted(_EXECUTE_MODES))
-            raise ValidationError({"config": f"Dedupe execute mode must be one of {expected}."})
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Prepare the confirmed verb list or apply one pair verb."""
-        step = step_run.step
-        if step is None:
-            raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
-
-        mode = str(step_run.step.config.get("mode") or "")
-        if mode == "prepare":
-            return super().run(step_run, now=now)
-        return StepResult.done(
-            output=_apply_unit(step_run),
-            outcome="completed",
-        )
-
-    def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: datetime) -> StepResult:
-        """Prepare plain pair values from a locked, validated workflow resolution."""
-
-        del now
-        with (
-            apps.get_model("workflows", "Decision")
-            .objects
-            .locked_resolution(
-                decision_id,
-                actor=actor,
-                consumer_step_run_id=step_run.pk,
-            ) as decision
-        ):
-            rows = (
-                apps.get_model("parties", "Party")
-                .objects
-                .prepare_duplicate_pairs(
-                    decision.payload.get("pairs"),
-                    decision.resolution.get("pairs"),
-                )
-            )
-            return StepResult.done(
-                output=[{"decision_id": decision.pk, "pair_index": index} for index, _row in enumerate(rows)],
-                outcome="prepared",
-            )
+    note: str = Field(min_length=1, json_schema_extra={"widget": "textarea"})
 
 
-class IdentityReviewStepImpl(GateStep):
-    """Freeze one Party identity proposal and request explicit human choices.
-
-    The Decision shows only facts the workflow actor can read; its
-    ``facts_hash`` covers the complete basis so any reviewer applies against
-    the same expected state.
-    """
+class IdentityReview(ReviewStep[IdentityInput, IdentityOutput, IdentityReviewConfig, IdentityBasis]):
+    """Ask and apply one proposal; stale complete identity state routes to conflict."""
 
     key = "parties_identity_review"
     label = "Review party identity"
-    category = "Control"
-    outcomes = (
-        StepOutcome("unchanged", "No identity change"),
-        StepOutcome("completed", "Review completed"),
-        StepOutcome("rejected", "Review rejected"),
-        StepOutcome("escalated", "Review escalated"),
-        StepOutcome("expired", "Review expired"),
-    )
-    effect = StepEffect.READ
-    output_model = IdentityReviewOutput
-    effect_description = "Reads Party identity facts and may create a workflow Decision."
-    idempotent = True
-    config_model = IdentityReviewConfig
+    actions = (ApplyIdentity, RejectIdentity, EscalateIdentity)
+    outcomes = {"unchanged": "Identity unchanged", "conflict": "Identity changed during review"}
 
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        step = step_run.step
-        if step is None:
-            raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
-        run: Any = step_run.run
-        del now
-        config = type(self).normalize_config(step_run.step.config)
-        proposal = _identity_input(step_run.input, default_address_label=config["default_address_label"])
-        actor = engine.resolve_workflow_actor(run).subject
-        basis = apps.get_model("parties", "Party").objects.identity_basis(proposal["party_id"], actor=actor)
-        party, current = basis.party, basis.current
-        facts = (
-            ReviewFact(
-                pointer="/current",
-                label="Current Party identity",
-                value=current,
-                authority="source",
-                subject=ReviewRecordReference(
-                    model=party._meta.label,
-                    id=str(party.sqid),
-                    label="Current Party",
-                ),
-            ),
-            ReviewFact(
-                pointer="/proposed",
-                label="Proposed Party identity",
-                value=proposal["proposed"],
-                authority="unverified",
-                evidence=tuple(
-                    ReviewRecordReference(
-                        model=item["source_model"],
-                        id=item["source_id"],
-                        label=item["label"],
-                    )
-                    for item in proposal["evidence"]
-                    if item.get("source_model") and item.get("source_id")
-                ),
-            ),
+    def ask(self, ctx: Any) -> Settlement:
+        """Freeze readable facts; self-service directory review explicitly allows the requester."""
+        proposal = ctx.input.proposed
+        proposal = proposal.model_copy(update={"address": replace(
+            proposal.address, label=proposal.address.label or ctx.config.default_address_label,
+        )})
+        owner = apps.get_model("parties", "Party").objects
+        identity = owner.identity_basis(ctx.input.party_id, actor=ctx.actor)
+        basis = IdentityBasis(
+            party_id=ctx.input.party_id, proposed=proposal, current=identity.current,
+            facts_hash=identity.facts_hash, context=ctx.input.context,
         )
-        payload = {
-            **proposal,
-            "current": current,
-            "facts_hash": basis.facts_hash,
-        }
-        if not party.identity_differs(current, proposal["proposed"]):
-            return StepResult.done(
-                output={
-                    "party_id": proposal["party_id"],
-                    "context": proposal["context"],
-                    "current": current,
-                    "proposed": proposal["proposed"],
-                    "facts_hash": payload["facts_hash"],
-                    "selection_decision_id": proposal["selection_decision_id"],
-                },
-                outcome="unchanged",
-            )
-        assignee = str(
-            engine.resolve_workflow_actor(
-                proposal.get("assignee") or config.get("assignee") or run
-            ).subject
+        if not identity.party.identity_differs(identity.current, proposal.model_dump()):
+            return ctx.done(IdentityOutput(party_id=basis.party_id, context=basis.context), outcome="unchanged")
+        reference = DecisionRecordReference(
+            model="parties.Party", id=basis.party_id, label=ctx.config.party_label, tab="identity",
         )
-        review = _identity_review_action(payload=payload, facts=facts, party_label=config["party_label"])
-        return type(self).gate_result(
-            step_run,
-            config={
-                "policy": "one_done",
-                "action": config["action"],
-                "slots": [{"assignees": [assignee]}],
-                "payload": review.payload,
-                "max_attempts": config["max_attempts"],
-                "decision_schema": review.decision_schema,
-                "targets": [
-                    {
-                        "model": party._meta.label,
-                        "id": str(party.sqid),
-                        "tab": "identity",
-                    }
-                ],
-            },
+        references = tuple(
+            DecisionRecordReference(model=model, id=row["id"])
+            for key, model in (("addresses", "parties.Address"), ("handles", "parties.PartyHandle"))
+            for row in identity.current[key]
+        ) + tuple(DecisionRecordReference(model="parties.Handle", id=row["handle_id"])
+                  for row in identity.current["handles"])
+        assignee = ctx.load(apps.get_model("iam", "User"), ctx.input.assignee) if ctx.input.assignee else ctx.actor
+        return ctx.ask(DecisionRequest(
+            kind="review-party-identity", subject=identity.party, assignees=(assignee,),
+            requester=None, actions=self.actions, basis=basis,
+            context=DecisionContext(references=references, facts=(
+                DecisionFact(pointer="/current", label=f"Current {ctx.config.party_label} identity",
+                             value=identity.current, subject=reference, authority="source"),
+                DecisionFact(pointer="/proposed", label=f"Proposed {ctx.config.party_label} identity",
+                             value=proposal.model_dump(mode="json"), authority="unverified",
+                             evidence=ctx.input.evidence),
+            )),
+        ))
+
+    def apply(self, ctx: Any, settled: list[ResolvedDecision]) -> Settlement:
+        """Apply as the recorded resolver through the complete-basis domain fence."""
+        answer = settled[0]
+        basis, action = answer.basis, answer.action
+        assert action is not None  # This review has one seat; unanswered closures never call apply.
+        output = {"party_id": basis.party_id, "context": basis.context}
+        if not isinstance(action, ApplyIdentity):
+            return ctx.done(output, outcome=action.outcome)
+        outcome, results = apps.get_model("parties", "Party").objects.apply_identity(
+            party_id=basis.party_id, expected_facts_hash=basis.facts_hash,
+            proposed=basis.proposed.model_dump(), choices=action.model_dump(), actor=answer.resolver,
         )
+        return ctx.done({**output, **results}, outcome=outcome)
 
 
-class IdentityApplyStepImpl(DecisionApplyStep):
-    """Apply a completed Party identity Decision through native Party owners."""
+class DuplicatePair(BaseModel):
+    """Immutable identities and scan evidence for one mapped review."""
 
-    key = "parties_identity_apply"
-    label = "Apply party identity review"
-    category = "Activity"
-    deterministic = False
-    input_model = IdentityApplyInput
-    output_model = IdentityApplyOutput
-    outcomes = (
-        StepOutcome("applied", "Identity applied"),
-        StepOutcome("unchanged", "Identity unchanged"),
-        StepOutcome("conflict", "Identity changed during review"),
-    )
-    effect = StepEffect.WRITE
-    execution_mode = StepExecutionMode.DATABASE_COMMAND
-    replay_mode = RecoveryMode.FRESH
-    effect_description = "Applies approved Party, Address, and PartyHandle facts."
-    idempotent = True
-    gate_step_class = IdentityReviewStepImpl
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        run: Any = step_run.run
-        value = _identity_apply_input(step_run.input)
-        passthrough = _unchanged_identity_input(value)
-        if passthrough is not None:
-            basis = (
-                apps.get_model("parties", "Party")
-                .objects
-                .identity_basis(
-                    passthrough["party_id"],
-                    actor=engine.resolve_workflow_actor(run).subject,
-                )
-            )
-            if basis.facts_hash != passthrough["facts_hash"]:
-                return StepResult.done(
-                    output={"party_id": passthrough["party_id"], "context": passthrough["context"]},
-                    outcome="conflict",
-                )
-            return StepResult.done(
-                output={
-                    "party_id": passthrough["party_id"],
-                    "context": passthrough["context"],
-                    "name_result": "kept",
-                    "address_result": "kept",
-                    "handle_result": "kept",
-                },
-                outcome="unchanged",
-            )
-        return super().run(step_run, now=now)
-
-    def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: datetime) -> StepResult:
-        """Compose workflow validation with the parties-owned identity operation."""
-
-        del now
-        with (
-            apps.get_model("workflows", "Decision")
-            .objects
-            .locked_resolution(
-                decision_id,
-                actor=actor,
-                consumer_step_run_id=step_run.pk,
-            ) as decision
-        ):
-            payload = decision.payload
-            if decision.target_model.lower() != "parties.party" or decision.target_id != payload.get("party_id"):
-                raise ValidationError({"party_id": "Identity review does not target its retained Party."})
-            outcome, results = (
-                apps.get_model("parties", "Party")
-                .objects
-                .apply_identity(
-                    party_id=decision.target_id,
-                    expected_facts_hash=payload["facts_hash"],
-                    proposed=payload["proposed"],
-                    choices={name: decision.resolution.get(name, "") for name in _IDENTITY_ACTIONS},
-                    actor=actor,
-                )
-            )
-            return StepResult.done(
-                output={"party_id": decision.target_id, "context": payload["context"], **results},
-                outcome=outcome,
-            )
+    model_config = ConfigDict(extra="forbid")
+    left: str
+    right: str
+    left_name: str
+    right_name: str
+    evidence: str
+    evidence_refs: tuple[DecisionRecordReference, ...]
 
 
-_ADDRESS_FIELDS = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
+class DedupeInput(BaseModel):
+    """A reviewer for every candidate in a bounded duplicate scan."""
+
+    model_config = ConfigDict(extra="forbid")
+    assignee: str = Field(min_length=1)
 
 
-class _IdentityAction(TypedDict):
-    label: str
-    description: str
-    choices: dict[str, str]
+class DedupeConfig(BaseModel):
+    """The parties owner's existing bounded batch size."""
+
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=50, ge=1, le=100)
 
 
-_IDENTITY_ACTIONS: dict[str, _IdentityAction] = {
-    "name_action": {
-        "label": "{party} name",
-        "description": "Keep the current canonical name or use the proposed name from this source.",
-        "choices": {
-            "keep": "Keep current {party} name",
-            "replace": "Use proposed {party} name",
-        },
-    },
-    "address_action": {
-        "label": "{party} address",
-        "description": "Keep current addresses, add the proposed address, or replace the primary address.",
-        "choices": {
-            "keep": "Keep current {party} addresses",
-            "add": "Add proposed {party} address",
-            "replace": "Replace primary {party} address",
-        },
-    },
-    "handle_action": {
-        "label": "{party} contact",
-        "description": (
-            "Keep the email or phone at its current confirmation status, confirm it for this {party}, or dismiss it."
-        ),
-        "choices": {
-            "keep": "Keep current contact status",
-            "confirm": "Confirm proposed {party} contact",
-            "dismiss": "Dismiss proposed {party} contact",
-        },
-    },
-}
+class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
+    """Read deterministic actor-visible candidates; map owns fan-out and collection."""
 
+    key = "parties_dedupe_scan"
+    label = "Find duplicate parties"
 
-def _identity_apply_input(value: Any) -> Any:
-    """Unwrap the native one-predecessor join envelope used by alternative edges."""
-
-    if isinstance(value, Mapping) and len(value) == 1:
-        nested = next(iter(value.values()))
-        if isinstance(nested, Mapping) and ("resolutions" in nested or "party_id" in nested):
-            return nested
-    return value
-
-
-def _unchanged_identity_input(value: Any) -> dict[str, Any] | None:
-    """Accept only the review step's no-change pass-through envelope."""
-
-    expected = {"party_id", "context", "current", "proposed", "selection_decision_id", "facts_hash"}
-    if not isinstance(value, Mapping) or set(value) != expected:
-        return None
-    party_id, context = str(value.get("party_id") or ""), value.get("context")
-    if (
-        not party_id
-        or not isinstance(context, Mapping)
-        or not isinstance(value.get("current"), Mapping)
-        or not isinstance(value.get("proposed"), Mapping)
-        or not str(value.get("facts_hash") or "")
-    ):
-        raise ValidationError({"input": "Identity pass-through carries invalid frozen facts."})
-    return dict(value)
-
-
-def _identity_input(value: Any, *, default_address_label: str) -> dict[str, Any]:
-    """Normalize the JSON-safe identity proposal while leaving context opaque."""
-
-    if not isinstance(value, Mapping) or not str(value.get("party_id") or ""):
-        raise ValidationError({"input": "Identity review requires party_id."})
-    proposed = value.get("proposed")
-    if not isinstance(proposed, Mapping):
-        raise ValidationError({"input": "Identity review requires proposed facts."})
-    address = proposed.get("address") or {}
-    handle = proposed.get("handle") or {}
-    evidence = value.get("evidence") or []
-    context = value.get("context") or {}
-    assignee = str(value.get("assignee") or "")
-    selection_decision_id = str(value.get("selection_decision_id") or "")
-    if not isinstance(address, Mapping) or not isinstance(handle, Mapping):
-        raise ValidationError({"input": "Proposed address and handle must be objects."})
-    if not isinstance(evidence, list) or not all(isinstance(item, Mapping) for item in evidence):
-        raise ValidationError({"input": "Identity evidence must be a list of objects."})
-    if not isinstance(context, Mapping):
-        raise ValidationError({"input": "Identity context must be an object."})
-    if assignee:
-        try:
-            canonical_subject_ref(assignee)
-        except (TypeError, ValueError) as error:
-            raise ValidationError({"input": "Identity assignee must be a subject reference."}) from error
-    normalized = {
-        "name": " ".join(str(proposed.get("name") or "").split()),
-        "address": {
-            "label": " ".join(str(address.get("label") or default_address_label).split())[:64],
-            **{field: " ".join(str(address.get(field) or "").split()) for field in _ADDRESS_FIELDS},
-        },
-        "handle": {
-            "party_handle_id": str(handle.get("party_handle_id") or ""),
-            "evidence": str(handle.get("evidence") or ""),
-        },
-    }
-    return {
-        "party_id": str(value["party_id"]),
-        "proposed": normalized,
-        "evidence": [
-            {key: str(item.get(key) or "") for key in ("label", "value", "source_model", "source_id")}
-            for item in evidence
-        ],
-        "context": dict(context),
-        "assignee": assignee,
-        "selection_decision_id": selection_decision_id,
-    }
-
-
-def _identity_review_action(*, payload: Mapping[str, Any], facts: Any, party_label: str) -> Any:
-    """Build the tagged identity actions and typed frozen fact context."""
-
-    labels = {"party": party_label}
-    editable = {
-        name: {
-            "type": "string",
-            "enum": list(field["choices"]),
-            "default": "keep",
-            "label": field["label"].format(**labels),
-            "description": field["description"].format(**labels),
-            "options": [{"value": value, "label": label.format(**labels)} for value, label in field["choices"].items()],
-        }
-        for name, field in _IDENTITY_ACTIONS.items()
-    }
-    return build_decision_action(
-        actions=(
-            ReviewAction(
-                value="apply_identity",
-                label="Apply identity choices",
-                verdict="COMPLETE",
-                fields=tuple(editable),
-                required=tuple(editable),
-            ),
-            ReviewAction(
-                value="reject_identity",
-                label="Reject identity change",
-                verdict="REJECT",
-                fields=("note",),
-                required=("note",),
-            ),
-            ReviewAction(
-                value="escalate_identity",
-                label="Escalate identity review",
-                verdict="ESCALATE",
-                fields=("note",),
-                required=("note",),
-            ),
-        ),
-        properties={
-            **editable,
-            "note": {"type": "string", "minLength": 1, "widget": "textarea"},
-        },
-        payload=payload,
-        facts=facts,
-    )
-
-
-def _pair_row(candidate: Any) -> dict[str, str]:
-    """Project one duplicate candidate into an editable review row."""
-
-    left, right = candidate.left, candidate.right
-    survivor = "left" if _survivor_score(left) >= _survivor_score(right) else "right"
-    return {
-        "left": str(left.sqid),
-        "right": str(right.sqid),
-        "left_name": left.display_name,
-        "right_name": right.display_name,
-        "evidence": f"shared handle {candidate.normalized_value}",
-        "survivor": survivor,
-        "action": "merge",
-    }
-
-
-def _survivor_score(party: Any) -> tuple[bool, int, int]:
-    """Rank a merge survivor: real name, then handle richness, then age."""
-
-    return (party.has_real_name, party.handle_count, -party.pk)
-
-
-def _dedupe_pairs_schema() -> dict[str, Any]:
-    """Return the editable fixed-row property used by the action builder."""
-
-    return {
-        "type": "array",
-        "widget": "rows",
-        "label": "Duplicate pairs",
-        "items": {
-            "type": "object",
-            "required": list(_IDENTITY_KEYS) + ["survivor", "action"],
-            "properties": {
-                "left": {"type": "string", "label": "Left id", "readOnly": True},
-                "right": {"type": "string", "label": "Right id", "readOnly": True},
-                "left_name": {"type": "string", "label": "Left", "readOnly": True},
-                "right_name": {"type": "string", "label": "Right", "readOnly": True},
-                "evidence": {"type": "string", "label": "Evidence", "readOnly": True},
-                "survivor": {"type": "string", "label": "Keep", "enum": list(_SURVIVORS)},
-                "action": {"type": "string", "label": "Pair action", "enum": list(_ACTIONS)},
-            },
-        },
-    }
-
-
-def _input_pairs(value: Any) -> list[dict[str, str]]:
-    """Return the scan step's pair rows from this step's input."""
-
-    if not isinstance(value, Mapping) or not isinstance(value.get("pairs"), list):
-        raise ValidationError({"input": "Dedupe gate input must contain scanned pairs."})
-    pairs = [row for row in value["pairs"] if isinstance(row, Mapping)]
-    if len(pairs) != len(value["pairs"]) or not pairs:
-        raise ValidationError({"input": "Dedupe gate input pairs must be non-empty mappings."})
-    return [dict(row) for row in pairs]
-
-
-def _apply_unit(step_run: Any) -> dict[str, str]:
-    """Revalidate the retained pair resolution before calling the domain command."""
-
-    unit = DedupeUnitInput.model_validate(step_run.input)
-    decisions = apps.get_model("workflows", "Decision").objects
-    with system_context(reason="workflows_parties.dedupe_resolver"):
-        decision = decisions.get(pk=unit.decision_id)
-    actor = decision.resolution_actor_subject()
-    with decisions.locked_resolution(unit.decision_id, actor=actor, consumer_step_run_id=step_run.pk) as decision:
-        parties = apps.get_model("parties", "Party").objects
-        pairs = parties.prepare_duplicate_pairs(decision.payload.get("pairs"), decision.resolution.get("pairs"))
-        if unit.pair_index < 0 or unit.pair_index >= len(pairs):
-            raise ValidationError({"pair_index": "The reviewed pair is unavailable."})
-        pair = pairs[unit.pair_index]
-        result = parties.apply_duplicate_pair(
-            left_id=pair["left"],
-            right_id=pair["right"],
-            survivor=pair["survivor"],
-            action=pair["action"],
-            actor=actor,
+    def run(self, ctx: Any) -> Settlement:
+        """Use the parties owner for shared handles, duplicate suppression and vetoes."""
+        candidates = apps.get_model("parties", "Party").objects.with_actor(ctx.actor).duplicate_candidates(
+            limit=ctx.config.limit,
         )
-        return {"action": pair["action"], "result": result}
+        return ctx.done([DuplicatePair(
+            left=public_id_of(pair.left), right=public_id_of(pair.right),
+            left_name=pair.left.display_name, right_name=pair.right.display_name,
+            evidence=f"Shared handle: {pair.normalized_value}",
+            evidence_refs=tuple(DecisionRecordReference(model="parties.Handle", id=public_id_of(handle))
+                                for handle in pair.handles),
+        ) for pair in candidates])
+
+
+class DuplicateReviewInput(DedupeInput):
+    """One scan candidate with its reviewer, supplied by the map binding."""
+
+    pair: DuplicatePair
+
+
+class DuplicateOutput(BaseModel):
+    """The parties-owned merge or separation result, or the reviewer's skip."""
+
+    model_config = ConfigDict(extra="forbid")
+    result: str
+
+
+class MergeParties(Action, key="merge_parties", label="Merge parties",
+                   verdict=Verdict.COMPLETED, outcome="merged"):
+    """Choose the party to retain; both identities remain on the frozen basis."""
+
+    survivor: Literal["left", "right"] = "left"
+
+
+class KeepPartiesSeparate(Action, key="keep_parties_separate", label="Keep separate",
+                          verdict=Verdict.COMPLETED, outcome="kept_separate"):
+    """Remember a durable veto through the parties owner."""
+
+
+class SkipDuplicatePair(Action, key="skip_duplicate_pair", label="Decide later",
+                       verdict=Verdict.COMPLETED, outcome="skipped"):
+    """Leave the pair eligible for a later scan."""
+
+
+class DedupeReview(ReviewStep[DuplicateReviewInput, DuplicateOutput, None, DuplicatePair]):
+    """Review each mapped pair independently and apply only its retained answer."""
+
+    key = "parties_dedupe_review"
+    label = "Review duplicate parties"
+    actions = (MergeParties, KeepPartiesSeparate, SkipDuplicatePair)
+
+    def ask(self, ctx: Any) -> Settlement:
+        """Check both records through standing access before admitting the pair."""
+        pair = ctx.input.pair
+        left = ctx.load(apps.get_model("parties", "Party"), pair.left)
+        return ctx.ask(DecisionRequest(
+            kind="review-dupe-party", subject=left,
+            assignees=(ctx.load(apps.get_model("iam", "User"), ctx.input.assignee),), requester=None,
+            actions=self.actions, basis=pair,
+            context=DecisionContext(references=(
+                DecisionRecordReference(model="parties.Party", id=pair.left, label=pair.left_name),
+                DecisionRecordReference(model="parties.Party", id=pair.right, label=pair.right_name),
+            ), facts=(DecisionFact(pointer="/evidence", label="Shared identity evidence",
+                                   value=pair.evidence, evidence=pair.evidence_refs, authority="source"),)),
+        ))
+
+    def apply(self, ctx: Any, settled: list[ResolvedDecision]) -> Settlement:
+        """Delegate merge and veto authorization and atomic writes to the parties owner."""
+        answer = settled[0]
+        pair, action = answer.basis, answer.action
+        assert action is not None  # This review has one seat; unanswered closures never call apply.
+        if isinstance(action, SkipDuplicatePair):
+            return ctx.done(DuplicateOutput(result="skipped"), outcome=action.outcome)
+        result = apps.get_model("parties", "Party").objects.apply_duplicate_pair(
+            left_id=pair.left, right_id=pair.right,
+            survivor=action.survivor if isinstance(action, MergeParties) else "left",
+            action="merge" if isinstance(action, MergeParties) else "keep_separate", actor=answer.resolver,
+        )
+        return ctx.done(DuplicateOutput(result=result), outcome=action.outcome)

@@ -29,6 +29,7 @@ from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscr
 from tests.conftest import make_integration
 from tests.integrate_models import Integration
 from tests.messaging_models import Channel
+from tests.mtidemo.models import MtiChild, MtiParent
 
 
 @pytest.fixture
@@ -69,6 +70,15 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
             queryset = manager.filter(pk=row.pk).lock_if_supported()
             assert isinstance(queryset, AngeeQuerySet)
             assert list(queryset) == [row]
+
+
+def test_record_link_keys_mti_target_on_canonical_parent(replica: Any) -> None:
+    """The link target shares the canonical parent identity used by other edges."""
+
+    child = MtiChild.objects.create(title="Target")
+    link = RecordLink.objects.observe(replica, "mti-target", target=child)
+    assert link.target_content_type.model_class() is MtiParent
+    assert link.target_object_id == str(child.pk)
 
 
 def test_epoch_retains_links_revisions_and_quarantine(replica: Any) -> None:
@@ -259,13 +269,13 @@ def test_explicit_target_withdrawal_differs_from_omitted_target(replica: Any, op
     else:
         RecordLink.objects.promote(link, **evidence)
     link.refresh_from_db()
-    assert link.target_id == str(replica.pk)
+    assert link.target_object_id == str(replica.pk)
     if operation == "observe":
         RecordLink.objects.observe(replica, link.external_key, target=None)
     else:
         RecordLink.objects.promote(link, target=None, **evidence)
     link.refresh_from_db()
-    assert (link.target_ct_id, link.target_id, link.status) == (None, None, LinkStatus.WITHDRAWN)
+    assert (link.target_content_type_id, link.target_object_id, link.status) == (None, None, LinkStatus.WITHDRAWN)
 
 
 def test_child_absence_requires_parent_absence_evidence(replica: Any) -> None:
@@ -309,10 +319,10 @@ def test_revision_numbering_and_all_mutation_paths_refuse_edits(replica: Any) ->
     second = RecordRevision.objects.append(link, source_payload={"v": 2}, source_hash="two", mapping_version=1)
     assert (first.number, second.number, second.prior_id) == (1, 2, first.pk)
     first.source_hash = "edited"
-    for mutate in (first.save, first.delete):
+    for mutate, action in ((first.save, "edited"), (first.delete, "deleted")):
         with pytest.raises(ValidationError) as rejected:
             mutate()
-        assert rejected.value.messages == ["Record revisions are immutable."]
+        assert rejected.value.messages == [f"integrate.RecordRevision rows cannot be {action}."]
     collection_mutations = (
         (lambda: RecordRevision.objects.filter(pk=first.pk).update(source_hash="edited"), "edited"),
         (lambda: RecordRevision.objects.bulk_update([first], ["source_hash"]), "edited"),

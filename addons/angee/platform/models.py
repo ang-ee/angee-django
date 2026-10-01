@@ -359,8 +359,10 @@ class AddonManager(AngeeManager):
         rows = self.all()
         with transaction.atomic():
             pending_by_name = dict(rows.values_list("name", "pending")) if canonical_desired is None else {}
-            rows.filter(source__in=(Addon.Source.INSTALLED, Addon.Source.LOCAL)).exclude(name__in=manifests).update(
-                state=Addon.State.REMOVED,
+            rows.filter(source__in=(Addon.AddonSource.INSTALLED, Addon.AddonSource.LOCAL)).exclude(
+                name__in=manifests
+            ).update(
+                state=Addon.AddonState.REMOVED,
                 **self.model.reset_runtime_facts(),
             )
             for name, manifest in sorted(manifests.items()):
@@ -393,9 +395,11 @@ class AddonManager(AngeeManager):
                         "description": manifest.description,
                         "keywords": list(manifest.keywords),
                         "category": manifest.category or "",
-                        "kind": Addon.Kind.CONSUMER if root else Addon.Kind.REQUIRED,
-                        "source": Addon.Source.INSTALLED if isinstance(origin, EntryPoint) else Addon.Source.LOCAL,
-                        "state": Addon.State.ENABLED if enabled else Addon.State.DISABLED,
+                        "kind": Addon.AddonKind.CONSUMER if root else Addon.AddonKind.REQUIRED,
+                        "source": (
+                            Addon.AddonSource.INSTALLED if isinstance(origin, EntryPoint) else Addon.AddonSource.LOCAL
+                        ),
+                        "state": Addon.AddonState.ENABLED if enabled else Addon.AddonState.DISABLED,
                         "pending": pending,
                         "depends_on": list(manifest.depends_on),
                         "depended_by": depended_by.get(name, []),
@@ -458,20 +462,20 @@ class Addon(AngeeModel):
 
     objects = AddonManager()
 
-    class Kind(models.TextChoices):
+    class AddonKind(models.TextChoices):
         """Whether the project chose this addon (root) or it came in as a dependency."""
 
         CONSUMER = "consumer", "Consumer"
         REQUIRED = "required", "Required"
 
-    class Source(models.TextChoices):
+    class AddonSource(models.TextChoices):
         """Where the available addon resolved from."""
 
         INSTALLED = "installed", "Installed"  # an installed bundle's entry point (uv.lock)
         LOCAL = "local", "Local"  # an addon.toml under ANGEE_ADDON_DIRS
         REMOTE = "remote", "Remote"  # known from a VCS source, not materialised (platform_integrate_vcs)
 
-    class State(models.TextChoices):
+    class AddonState(models.TextChoices):
         """The addon's lifecycle in this project — reconciled, never deleted."""
 
         ENABLED = "enabled", "Enabled"  # composed into the app graph
@@ -487,9 +491,9 @@ class Addon(AngeeModel):
     description = models.TextField(blank=True, default="")
     keywords = models.JSONField(default=list, blank=True)
     category = models.CharField(max_length=100, blank=True, default="", db_index=True)
-    kind = StateField(choices_enum=Kind, default=Kind.REQUIRED)
-    source = StateField(choices_enum=Source, default=Source.INSTALLED)
-    state = StateField(choices_enum=State, default=State.DISABLED, db_index=True)
+    kind = StateField(choices_enum=AddonKind, default=AddonKind.REQUIRED)
+    source = StateField(choices_enum=AddonSource, default=AddonSource.INSTALLED)
+    state = StateField(choices_enum=AddonState, default=AddonState.DISABLED, db_index=True)
     # Snapshot of the loaded AppGraph's required-dependency annotation for display.
     # Commands consult that live annotation in AddonManager.change_preview.
     forced = models.BooleanField(default=False, db_index=True)
