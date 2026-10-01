@@ -2278,7 +2278,7 @@ class Part(AuditMixin, AngeeDataModel):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="+",
+        related_name="message_parts",
     )
 
     objects = PartManager()

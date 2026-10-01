@@ -22,7 +22,8 @@ from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Trigger, TriggerEvent
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
-from tests.conftest import Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.conftest import Vault, Vendor, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.integrate_models import Integration
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.workflow_steps import document
 
@@ -115,7 +116,7 @@ def test_enable_preview_discloses_grants_and_run_readers_only_to_enablers(trigge
     preview = result_data(execute_schema(schema, query, variables, user=editor))[
         "trigger_by_pk"
     ]["enable_preview"]
-    assert preview["grants"] == ["member on vault viewer (knowledge role)"]
+    assert preview["grants"] == ["Member on vault viewer (knowledge role)"]
     assert f"User: {editor.username}" in preview["run_readers"]
     assert f"User: {viewer.username}" in preview["run_readers"]
     assert "Group: Reviewers" in preview["run_readers"]
@@ -152,7 +153,7 @@ def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(
     query = """query($id: String!) {
       trigger_by_pk(id: $id) {
         id can_edit enabled disabled_reason
-        grants { resource_type resource_id relation target_kind target_label }
+        grants { resource_type resource_id relation relation_label target_kind target_label }
       }
     }"""
     for actor, can_edit in ((editor, True), (viewer, False)):
@@ -160,7 +161,7 @@ def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(
         assert data["can_edit"] is can_edit
         assert data["grants"] == [{
             "resource_type": "knowledge/role", "resource_id": "vault_viewer",
-            "relation": "member", "target_kind": "knowledge role", "target_label": None,
+            "relation": "member", "relation_label": "Member", "target_kind": "knowledge role", "target_label": None,
         }]
     revoke = """mutation($id: ID!) {
       revoke_workflow_trigger_grant(
@@ -189,15 +190,56 @@ def test_grant_target_label_requires_target_read_access(trigger_surface, monkeyp
     trigger = Trigger.objects.with_actor(editor).create(
         workflow=workflow, source="record_changed", model_label="knowledge.vault",
     )
-    Trigger.objects.enable(trigger, actor=editor)
-    query = "query($id: String!) { trigger_by_pk(id: $id) { grants { target_kind target_label } } }"
+    preview_query = "query($id: String!) { trigger_by_pk(id: $id) { enable_preview { grants } } }"
     variables = {"id": trigger.sqid}
+    assert result_data(execute_schema(schema, preview_query, variables, user=editor))["trigger_by_pk"] == {
+        "enable_preview": {"grants": ["Viewer on Readable grant target"]},
+    }
+    Trigger.objects.enable(trigger, actor=editor)
+    query = "query($id: String!) { trigger_by_pk(id: $id) { grants { relation_label target_kind target_label } } }"
     assert result_data(execute_schema(schema, query, variables, user=editor))["trigger_by_pk"]["grants"] == [
-        {"target_kind": "vault", "target_label": "Readable grant target"},
+        {"relation_label": "Viewer", "target_kind": "vault", "target_label": "Readable grant target"},
     ]
     assert result_data(execute_schema(schema, query, variables, user=viewer))["trigger_by_pk"]["grants"] == [
-        {"target_kind": "vault", "target_label": None},
+        {"relation_label": "Viewer", "target_kind": "vault", "target_label": None},
     ]
+
+
+def test_integration_grant_uses_record_label_in_preview_and_listing(trigger_surface, monkeypatch):
+    """An integration's public record label replaces its vendor-qualified debug ID."""
+
+    schema, workflow, editor, viewer, _starter = trigger_surface
+    with system_context(reason="test.workflow integration grant target"):
+        vendor = Vendor.objects.create(slug="ap", display_name="Accounts payable")
+        integration = Integration.objects.create(vendor=vendor, owner=editor, display_name="AP mailbox")
+
+    def grants(cls, trigger):
+        return (TriggerGrantTarget(to_object_ref(integration), "reader", "write"),)
+
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(grants))
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    query = """query($id: String!) {
+      trigger_by_pk(id: $id) {
+        enable_preview { grants }
+        grants { relation relation_label target_label }
+      }
+    }"""
+    variables = {"id": trigger.sqid}
+    before = result_data(execute_schema(schema, query, variables, user=editor))["trigger_by_pk"]
+    assert before["enable_preview"]["grants"] == ["Reader on AP mailbox"]
+    Trigger.objects.enable(trigger, actor=editor)
+    for actor, label in ((editor, "AP mailbox"), (viewer, None)):
+        listed = result_data(execute_schema(schema, query, variables, user=actor))["trigger_by_pk"]["grants"]
+        assert listed == [{"relation": "reader", "relation_label": "Reader", "target_label": label}]
+
+
+def test_relation_label_humanizes_an_undeclared_display_name() -> None:
+    """A relation without a native label still has a readable grant caption."""
+
+    target = TriggerGrantTarget(to_object_ref(Vault(pk=1)), "ap_reviewer")
+    assert target.relation_label() == "Ap reviewer"
 
 
 @pytest.mark.parametrize("source_path,model_label,label", [

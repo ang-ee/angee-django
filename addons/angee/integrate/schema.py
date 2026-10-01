@@ -1177,7 +1177,7 @@ class IntegrationLabelMixin:
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 
-        return cast(Any, self).display_label
+        return cast(Any, self).record_display_label
 
     @strawberry_django.field(only=["concrete_type_id"])
     def kind(self) -> str:
