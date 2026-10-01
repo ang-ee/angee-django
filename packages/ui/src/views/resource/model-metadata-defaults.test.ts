@@ -769,11 +769,12 @@ describe("relation column read expansion", () => {
       .toEqual(["id", { assignees: ["id", "display_name"] }]);
   });
 
-  test("an object-list column without a related resource fails at declaration", () => {
-    const seat = canonicalModel({ assignees: { name: "assignees", kind: "list", scalar: null } },
-      testDataResource("decisions.Seat"));
-    expect(() => columnsWithMetadataDefaults<Row>([{ field: "assignees" }], seat))
-      .toThrow(RelationRepresentationError);
+  test("an object-list column without a related resource stays a value column", () => {
+    const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
+      testDataResource("parties.PartyHandle"));
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "evidence_refs" }], handle);
+    expect(column?.field).toBe("evidence_refs");
+    expect(column && "relationList" in column).toBe(false);
   });
 
   test("a to-one FK projected as a public-id scalar stays a leaf (not sub-selected)", () => {

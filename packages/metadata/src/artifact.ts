@@ -196,9 +196,8 @@ export function relationRepresentationForPath(
   if (!resolved) return null;
   if (resolved.field.kind === "list" && resolved.field.scalar == null) {
     const targetLabel = relationModelLabelForField(resolved.field, resolved.model);
-    if (!targetLabel) {
-      throw new RelationRepresentationError(`Relation list field "${path}" has no finalized selectable representation.`);
-    }
+    // An object list without a relation target is a plain value list, not a relation.
+    if (!targetLabel) return null;
     const target = requiredRelationTarget(targetLabel, path, metadata);
     const selection = representationSelection(path, target, metadata, new Set());
     return {

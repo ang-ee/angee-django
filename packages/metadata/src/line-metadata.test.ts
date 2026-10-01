@@ -216,6 +216,14 @@ describe("relationRepresentationForPath", () => {
     expect(resourceReadSelectionPaths(model, resources)).toEqual(["id"]);
   });
 
+  test("treats an object list without a relation target as a plain value list", () => {
+    const handle = testDataResource("parties.PartyHandle", {
+      fields: [field("evidence_refs", "list", { scalar: null })],
+    });
+    const resources = schemaFieldMetadataFromDataResources([handle]);
+    expect(relationRepresentationForPath("evidence_refs", resources.labels["parties.PartyHandle"]!, resources)).toBeNull();
+  });
+
 });
 
 describe("resourceReadSelectionPaths", () => {
