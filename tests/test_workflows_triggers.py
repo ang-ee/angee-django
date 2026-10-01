@@ -264,6 +264,27 @@ def test_enabler_losing_record_read_does_not_change_principal_admission(trigger_
     assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
 
 
+def test_condition_cannot_observe_records_hidden_from_the_principal(trigger_setup, monkeypatch):
+    """An elevated drain filters records through the principal's source grant."""
+    admin, workflow, visible, trigger = trigger_setup
+    hidden = vault_for(create_user("hidden-vault-owner"), name="Ready")
+
+    def targets(cls, candidate):
+        return (triggers.TriggerGrantTarget(to_object_ref(visible), "viewer", "write"),)
+
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(targets))
+    Trigger.objects.enable(trigger, actor=admin)
+    capture(hidden)
+    capture(visible)
+    with system_context(reason="test principal scoped condition"):
+        assert Trigger.objects.drain() == 1
+    denied = system_queryset(TriggerEvent).get(record_object_id=hidden.pk)
+    admitted = system_queryset(TriggerEvent).get(record_object_id=visible.pk)
+    assert denied.evaluated_at and denied.admitted_at is None and "inaccessible" in denied.rejection
+    assert admitted.admitted_at and admitted.rejection == ""
+    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+
+
 def test_editor_publication_cannot_use_principal_grants(trigger_setup, monkeypatch):
     admin, workflow, record, trigger = trigger_setup
     editor = create_user("trigger-publisher")
@@ -528,10 +549,11 @@ def test_resource_condition_reuses_expression_extensions_and_public_id_decoders(
 
 
 @pytest.mark.parametrize("field", ["condition", "source", "model_label"])
-def test_configuration_edits_disable_the_previous_enablers_authority(
-    execution, trigger_resource_schema, monkeypatch, settings, field,
+@pytest.mark.parametrize("partial", [False, True])
+def test_enabled_configuration_edits_require_disable(
+    execution, trigger_resource_schema, monkeypatch, settings, field, partial,
 ):
-    """A co-editor's native partial save must require a new enabling actor."""
+    """A co-editor cannot change a live rule or scope using its standing grants."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="source-stability", actor=actor)
     editor = create_user("trigger-co-editor")
@@ -550,11 +572,19 @@ def test_configuration_edits_disable_the_previous_enablers_authority(
         replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
                        "model_label": "knowledge.page"}[field]
         setattr(trigger, field, replacement)
-        with actor_context(editor):
-            trigger.save(update_fields=(field,))
+        with actor_context(editor), pytest.raises(ValidationError, match="Disable the trigger before editing"):
+            trigger.save(**({"update_fields": (field,)} if partial else {}))
         trigger.refresh_from_db()
-        assert not trigger.enabled
-        assert "changed" in trigger.disabled_reason
+        assert trigger.enabled and trigger.workflow.user_id != actor.pk
+        assert getattr(trigger, field) != replacement
+        trigger = Trigger.objects.disable(trigger, actor=editor)
+        trigger.with_actor(editor)
+        setattr(trigger, field, replacement)
+        with actor_context(editor):
+            trigger.save(**({"update_fields": (field,)} if partial else {}))
+        trigger.refresh_from_db()
+        expected = Page._meta.label if field == "model_label" else replacement
+        assert not trigger.enabled and getattr(trigger, field) == expected
 
 
 class OtherChanged(triggers.RecordChanged):

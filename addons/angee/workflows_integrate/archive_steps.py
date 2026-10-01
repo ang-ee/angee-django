@@ -239,7 +239,7 @@ class ArchiveGate(ReviewStep[ArchiveProbeOutput, list[ArchiveMappingUnit], Archi
 
 
 class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
-    """Invoke one reviewed extractor at a fenced external-effect boundary."""
+    """Authorize the target for writing before a fenced extractor effect."""
 
     key = "archive_execute"
     label = "Import archive unit"
@@ -253,12 +253,13 @@ class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
         extractor = ArchiveExtractor.resolve_class(unit.extractor)
         if extractor.subject_resource != subject._meta.label:
             raise ValidationError("Archive extractor does not accept this storage container.")
-        target = ctx.load(apps.get_model(extractor.target_resource), unit.target)
+        target = ctx.load(apps.get_model(extractor.target_resource), unit.target, permission="write")
+        target_id = public_id_of(target)
         ctx.heartbeat()
         ctx.begin_effect()
-        result = extractor().execute(subject, unit.target, ArchiveExecutionReporter(ctx))
+        result = extractor().execute(subject, target_id, ArchiveExecutionReporter(ctx))
         ctx.artifact(target, "Imported archive target")
-        return ctx.done(ArchiveExecutionOutput(extractor=unit.extractor, target=unit.target, result=result),
+        return ctx.done(ArchiveExecutionOutput(extractor=unit.extractor, target=target_id, result=result),
                         outcome="completed")
 
 
