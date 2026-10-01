@@ -12,4 +12,6 @@ class ProjectsConfig(AppConfig):
     def ready(self) -> None:
         """Register native deletion dispatch without querying models or data."""
 
-        from angee.projects import signals  # noqa: F401
+        from angee.projects import signals
+
+        signals.connect()

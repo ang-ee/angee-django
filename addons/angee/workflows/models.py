@@ -32,7 +32,6 @@ from django.core.exceptions import (
 from django.db import OperationalError, ProgrammingError, connection, models, transaction
 from django.db.models.functions import Coalesce
 from django.db.models.signals import pre_delete
-from django.dispatch import receiver
 from django.utils import timezone
 from rebac import resolve_subjects, system_context
 
@@ -43,6 +42,7 @@ from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeUnscopedManager
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
+from angee.base.signals import connect_for_models
 from angee.base.transitions import (
     StateTransitions,
     TransitionNotAllowed,
@@ -3106,14 +3106,19 @@ class Decision(AuditMixin, AngeeDataModel):
         return super().delete(*args, **kwargs)
 
 
-@receiver(pre_delete)
-def _protect_retained_decision_delete(sender: type[models.Model], instance: models.Model, **kwargs: Any) -> None:
+def connect_retained_decision_protection() -> None:
+    """Bind the retained-Decision delete guard to the Decision models only."""
+
+    connect_for_models(pre_delete, _protect_retained_decision_delete,
+                       applies=lambda model: issubclass(model, Decision),
+                       dispatch_uid="workflows.decision.retained_delete")
+
+
+def _protect_retained_decision_delete(sender: type[models.Model], instance: Decision, **kwargs: Any) -> None:
     """Close collector and deliberately bypassed queryset deletion of retained Decisions."""
 
     del sender, kwargs
-    if isinstance(instance, Decision) and (
-        instance.suspension_attempt_id is not None or instance.declaration_index is not None
-    ):
+    if instance.suspension_attempt_id is not None or instance.declaration_index is not None:
         raise TypeError("Retained workflow Decisions cannot be deleted.")
 
 

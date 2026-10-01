@@ -113,6 +113,21 @@ def canonical_record_model(model: type[models.Model]) -> type[models.Model]:
     return typed[-1] if typed else concrete
 
 
+def is_record_target_model(model: type[models.Model]) -> bool:
+    """Whether rows of ``model`` can be targets of a polymorphic record edge.
+
+    Edges that name a record by canonical target (knowledge bindings, decision
+    evidence) admit only records with a REBAC type, so only such models — and their
+    MTI children and proxies — need delete-time care for those edges. A model with
+    several concrete MTI parents has no canonical target, so it carries none.
+    """
+
+    try:
+        return model_resource_type(canonical_record_model(model)) is not None
+    except ValueError:
+        return False
+
+
 def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]]:
     """Yield ``model`` then each concrete MTI ancestor it shares its primary key with.
 

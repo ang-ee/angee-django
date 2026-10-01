@@ -19,9 +19,10 @@ from typing import Any
 
 from django.apps import apps
 from django.db import transaction
-from django.db.models.signals import class_prepared, post_delete
+from django.db.models.signals import post_delete
 from rebac import system_context
 
+from angee.base.signals import connect_for_models
 from angee.iam.events import person_created
 from angee.parties.models import Handle, PartyHandle
 
@@ -33,11 +34,10 @@ def connect() -> None:
     """Wire person creation and concrete Handle/PartyHandle counter receivers."""
 
     person_created.connect(_link_person, dispatch_uid="parties.person_created")
-    for model in apps.get_models():
-        _bind(model)
-    # Models prepared after app population — e.g. test-defined concrete models — bind
-    # as their class finalizes, so the receivers cover them too.
-    class_prepared.connect(_on_class_prepared, dispatch_uid=f"{_DISPATCH_PREFIX}.class_prepared")
+    connect_for_models(post_delete, _resolve_from_link, applies=lambda model: issubclass(model, PartyHandle),
+                       dispatch_uid=f"{_DISPATCH_PREFIX}.phdel")
+    connect_for_models(post_delete, _recount_handle_party, applies=lambda model: issubclass(model, Handle),
+                       dispatch_uid=f"{_DISPATCH_PREFIX}.hdel")
 
 
 def _link_person(sender: Any, instance: Any, **kwargs: Any) -> None:
@@ -46,25 +46,6 @@ def _link_person(sender: Any, instance: Any, **kwargs: Any) -> None:
     del sender, kwargs
     with system_context(reason="parties.person_created"):
         apps.get_model("parties", "Party").objects.for_user(instance)
-
-
-def _on_class_prepared(sender: Any, **kwargs: Any) -> None:
-    """Bind receivers onto a newly prepared concrete Handle/PartyHandle model."""
-
-    del kwargs
-    _bind(sender)
-
-
-def _bind(model: Any) -> None:
-    """Connect the counter receivers to one concrete Handle or PartyHandle model."""
-
-    if model._meta.abstract:
-        return
-    label = model._meta.label_lower
-    if issubclass(model, PartyHandle):
-        post_delete.connect(_resolve_from_link, sender=model, dispatch_uid=f"{_DISPATCH_PREFIX}.phdel.{label}")
-    elif issubclass(model, Handle):
-        post_delete.connect(_recount_handle_party, sender=model, dispatch_uid=f"{_DISPATCH_PREFIX}.hdel.{label}")
 
 
 def _resolve_from_link(sender: Any, instance: Any, **kwargs: Any) -> None:

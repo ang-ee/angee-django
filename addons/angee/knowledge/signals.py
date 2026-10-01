@@ -2,10 +2,10 @@
 
 A page's outgoing wikilinks are rebuilt from its markdown body on every
 body save, so the backlinks panel is a SQL query over rows, not a body scan.
-Record bindings point to arbitrary models through a ``GenericForeignKey``. For
-targets that do not declare a reverse generic relation, the global ``pre_delete``
-receiver removes any canonical-target bindings before primary-key reuse can
-resolve them onto another row.
+Record bindings point to REBAC-typed records through a ``GenericForeignKey``. For
+targets that do not declare a reverse generic relation, a ``pre_delete`` receiver
+bound to every such record model removes the canonical-target bindings before
+primary-key reuse can resolve them onto another row.
 """
 
 from __future__ import annotations
@@ -17,6 +17,9 @@ from typing import Any
 from django.apps import apps
 from django.db.models.signals import post_save, pre_delete
 
+from angee.base.refs import is_record_target_model
+from angee.base.signals import connect_for_models
+
 _MARKDOWN_LABEL = "knowledge.markdownpage"
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,8 @@ def connect() -> None:
     """Wire knowledge-owned receivers after app population."""
 
     post_save.connect(rebuild_backlinks, dispatch_uid="angee.knowledge.backlinks")
-    pre_delete.connect(teardown_record_bindings, dispatch_uid="angee.knowledge.record_binding.teardown")
+    connect_for_models(pre_delete, teardown_record_bindings, applies=is_record_target_model,
+                       dispatch_uid="angee.knowledge.record_binding.teardown")
 
 
 def rebuild_backlinks(
@@ -47,8 +51,6 @@ def rebuild_backlinks(
 
 
 def teardown_record_bindings(sender: type[Any], instance: Any, **kwargs: Any) -> None:
-    """Delete bindings to the canonical target before any model row is deleted."""
+    """Delete bindings to the canonical target before a bindable record row is deleted."""
 
-    if sender._meta.apps is not apps:
-        return
     apps.get_model("knowledge", "RecordBinding").objects.teardown_for_record(instance)
