@@ -3,6 +3,9 @@ import * as React from "react";
 import {
   Background,
   Controls,
+  MiniMap,
+  getIncomers,
+  getViewportForBounds,
   MarkerType,
   Position,
   ReactFlow,
@@ -130,6 +133,15 @@ export interface GraphViewConnection {
   targetHandle?: string | null;
 }
 
+export interface GraphViewInitialView {
+  /** Defer the initial viewport while an asynchronous graph projection is incomplete. */
+  ready?: boolean;
+  /** Center this node along the flow axis; defaults to a source node, then the first node. */
+  anchorNodeId?: string;
+  /** Readable initial zoom floor. Does not restrict subsequent whole-graph fits. Defaults to 0.65. */
+  minZoom?: number;
+}
+
 export interface GraphViewProps<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -146,6 +158,10 @@ export interface GraphViewProps<
   fitViewOptions?: FitViewOptions;
   /** Change this token to request another fit after the initial measured fit. */
   fitViewRequest?: number;
+  /** Initially fit the graph's cross-axis and anchor its flow-axis, using measured native bounds. */
+  initialView?: GraphViewInitialView;
+  /** Native overview with pan and zoom navigation. */
+  miniMap?: boolean;
   /** Accessible name for the focusable graph surface. */
   ariaLabel?: string;
   className?: string;
@@ -234,6 +250,8 @@ function GraphCanvas<
   status,
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
   fitViewRequest = 0,
+  initialView,
+  miniMap = false,
   ariaLabel,
   className,
   onNodeClick,
@@ -379,13 +397,41 @@ function GraphCanvas<
       && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null)) ? "1" : "0";
   }).join(""));
   const initialized = useNodesInitialized();
-  const { fitView, getNode, getEdge } = useReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>();
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
+  const { fitView, getNode, getEdge, getNodes, getNodesBounds, setViewport, viewportInitialized } = useReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>();
   const fittedRequest = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
     if (!initialized || fittedRequest.current === fitViewRequest) return;
+    if (fittedRequest.current === undefined && initialView) {
+      if (initialView.ready === false || !viewportInitialized || width <= 0 || height <= 0) return;
+      const measuredNodes = getNodes();
+      const anchor = measuredNodes.find((node) => node.id === initialView.anchorNodeId)
+        ?? measuredNodes.find((node) => getIncomers(node, measuredNodes, renderEdges).length === 0)
+        ?? measuredNodes[0];
+      if (!anchor) return;
+      const bounds = getNodesBounds(measuredNodes);
+      const anchorBounds = getNodesBounds([anchor]);
+      const horizontal = rankdir === "LR" || rankdir === "RL";
+      // Zero extent on the flow axis lets the native fitter consider only the
+      // cross-axis. Its center on that axis remains the chosen node's center.
+      const crossAxisBounds = horizontal
+        ? { ...bounds, x: anchorBounds.x + anchorBounds.width / 2, width: 0 }
+        : { ...bounds, y: anchorBounds.y + anchorBounds.height / 2, height: 0 };
+      const padding = fitViewOptions.padding ?? 0.18;
+      const viewport = getViewportForBounds(crossAxisBounds, width, height,
+        initialView.minZoom ?? 0.65, fitViewOptions.maxZoom ?? 1, padding);
+      // If the readable floor crops even the cross-axis, keep the anchor in
+      // view rather than centering a large branch extent away from its entry.
+      const cropped = horizontal ? bounds.height * viewport.zoom > height : bounds.width * viewport.zoom > width;
+      void setViewport(cropped
+        ? getViewportForBounds(anchorBounds, width, height, viewport.zoom, viewport.zoom, padding)
+        : viewport);
+    } else {
+      void fitView({ ...DEFAULT_FIT_VIEW_OPTIONS, ...fitViewOptions });
+    }
     fittedRequest.current = fitViewRequest;
-    void fitView({ ...DEFAULT_FIT_VIEW_OPTIONS, ...fitViewOptions });
-  }, [initialized, fitViewRequest, fitView, fitViewOptions]);
+  }, [initialized, viewportInitialized, width, height, fitViewRequest, fitView, fitViewOptions, initialView, getNodes, getNodesBounds, setViewport, rankdir, renderEdges]);
   // React Flow re-emits selection state whenever its store adopts replaced
   // nodes. Consumers set state from these callbacks, so re-emitting an
   // unchanged selection loops: setState → re-render → store resync → re-emit
@@ -530,6 +576,7 @@ function GraphCanvas<
         >
           <Background color="var(--border-subtle)" gap={20} />
           <Controls showInteractive={false} />
+          {miniMap ? <MiniMap pannable zoomable /> : null}
         </ReactFlow>
       </div>
       <div role="status" className="sr-only">

@@ -29,8 +29,10 @@ function canvas(): GraphViewProps {
 
 describe("GraphEditor", () => {
   test("horizontal automatic layout and explicit auto-layout fit use the same options", () => {
-    const { props } = setup({ layout: {}, layoutOptions: { rankdir: "LR" } });
+    const { props } = setup({ layout: {}, layoutOptions: { rankdir: "LR" }, initialView: { anchorNodeId: "a", minZoom: 0.7 }, miniMap: true });
     expect(canvas().layout).toEqual({ rankdir: "LR" });
+    expect(canvas().initialView).toEqual({ anchorNodeId: "a", minZoom: 0.7 });
+    expect(canvas().miniMap).toBe(true);
     const [alpha, beta] = canvas().nodes;
     expect(beta!.position!.x).toBeGreaterThan(alpha!.position!.x);
     expect(beta!.position!.y).toBe(alpha!.position!.y);
@@ -43,6 +45,8 @@ describe("GraphEditor", () => {
     const resolved = vi.fn();
     const { props } = setup({ layout: {}, onLayoutResolved: resolved });
     expect(canvas().className).toContain("flex-[3]");
+    expect(canvas().className).toContain("min-h-0");
+    expect(screen.getByRole("heading", { name: "Connections" }).parentElement?.className).toContain("max-h-36");
     expect(screen.getByRole("heading", { name: "Connections" }).parentElement?.className).toContain("overflow-auto");
     expect(resolved).toHaveBeenCalledExactlyOnceWith(Object.fromEntries(canvas().nodes.map((node) => [node.id, node.position])));
     expect(props.onLayoutChange).not.toHaveBeenCalled();

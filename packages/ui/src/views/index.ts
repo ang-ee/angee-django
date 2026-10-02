@@ -163,6 +163,7 @@ export {
   type GraphViewEdge,
   type GraphViewEdgeStyle,
   type GraphViewLayout,
+  type GraphViewInitialView,
   type GraphViewNode,
   type GraphViewNodeStyle,
   type GraphViewProps,

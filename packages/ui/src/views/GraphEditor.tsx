@@ -11,6 +11,7 @@ import {
   type GraphViewConnection,
   type GraphViewNode,
   type GraphViewLayout,
+  type GraphViewInitialView,
   type GraphViewNodeStyle,
   type GraphViewPort,
   type GraphViewPosition,
@@ -50,6 +51,8 @@ export interface GraphEditorProps {
   layout: GraphEditorLayout;
   /** Automatic layout and handle direction; display consumers default to top-to-bottom. */
   layoutOptions?: GraphViewLayout;
+  initialView?: GraphViewInitialView;
+  miniMap?: boolean;
   readOnly?: boolean;
   selected?: GraphEditorSelection;
   onSelectionChange?: (selected: GraphEditorSelection) => void;
@@ -76,7 +79,7 @@ const EMPTY_SELECTION: GraphEditorSelection = { nodes: [], link: null };
 /** Controlled graph editing. Connection policy and every data mutation belong to the caller. */
 export function GraphEditor({
   nodes, links, layout, layoutOptions, canLink, onLink, onUnlink, onDelete, onLayoutChange, onLayoutResolved,
-  onInsertOnLink, onAddFromPort, nodeActions, status, nodeStyles, ariaLabel, className,
+  onInsertOnLink, onAddFromPort, nodeActions, status, nodeStyles, ariaLabel, className, initialView, miniMap,
   readOnly = false, selected: controlledSelection, onSelectionChange,
 }: GraphEditorProps): React.ReactElement {
   const t = useUiT();
@@ -186,8 +189,10 @@ export function GraphEditor({
         </Button>
       </div>
       <GraphView
-        className="min-h-64 flex-[3]"
+        className="min-h-0 flex-[3]"
         layout={resolvedLayoutOptions}
+        initialView={initialView}
+        miniMap={miniMap}
         fitViewRequest={fitViewRequest}
         nodes={renderedNodes}
         edges={renderedEdges}
@@ -201,7 +206,7 @@ export function GraphEditor({
         isValidConnection={(connection) => allowed(connectionLink(connection))}
         onReconnect={readOnly ? undefined : (edge, connection) => connect(connectionLink(connection), edge.meta?.link)}
       />
-      <div className="min-h-0 max-h-36 shrink overflow-auto border-t border-border-subtle p-3">
+      <div className="min-h-0 max-h-36 flex-1 overflow-auto border-t border-border-subtle p-3">
         <h3 className="mb-2 text-13 font-semibold">{t("graph.connections")}</h3>
         <div className="mb-3 flex flex-wrap gap-2">
           {nodes.map((node) => (
