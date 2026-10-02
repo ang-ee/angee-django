@@ -355,121 +355,126 @@ export function GraphView<
       tabIndex={-1}
       role={ariaLabel ? "region" : undefined}
       aria-label={ariaLabel}
-      className={cn("min-h-0 outline-none", className)}
+      className={cn("relative min-h-0 outline-none", className)}
     >
-      <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
-        onInit={(instance) => { instanceRef.current = instance; }}
-        nodeTypes={NODE_TYPES}
-        deleteKeyCode={null}
-        nodes={renderNodes}
-        edges={renderEdges}
-        onKeyDown={(event) => {
-          if (!isGraphActivationKey(event.key)) return;
-          if (!(event.target instanceof Element)) return;
-          const nodeId = event.target.getAttribute("data-graph-node-id");
-          const edgeId = event.target.getAttribute("data-graph-edge-id");
-          if (nodeId) {
-            const node = instanceRef.current?.getNode(nodeId);
-            if (node) {
-              event.preventDefault();
-              onNodeClick?.(node.data.node, { source: "keyboard" });
-            }
-          } else if (edgeId) {
-            const edge = instanceRef.current?.getEdge(edgeId);
-            if (edge?.data?.edge) {
-              event.preventDefault();
-              onEdgeClick?.(edge.data.edge, { source: "keyboard" });
-            }
-          }
-        }}
-        onNodesChange={(changes) => {
-          const positions: Record<string, GraphViewPosition> = {};
-          const nextSelection = new Map(renderNodes.map((node) => [node.id, node.selected]));
-          let selectionChanged = false;
-          for (const change of changes) {
-            if (change.type === "select") {
-              setSelection((current) => ({ ...current, [change.id]: change.selected }));
-              nextSelection.set(change.id, change.selected);
-              selectionChanged = true;
-            }
-            if (change.type === "position" && change.position) {
-              if (!change.dragging) positions[change.id] = change.position;
-              setDragging((current) => {
-                const next = { ...current };
-                if (change.dragging) next[change.id] = change.position!;
-                else delete next[change.id];
-                return next;
-              });
-            }
-            if (change.type === "dimensions" && change.dimensions) {
-              const dimensions = change.dimensions;
-              setMeasured((current) => current[change.id]?.width === dimensions.width
-                && current[change.id]?.height === dimensions.height
-                ? current : { ...current, [change.id]: dimensions });
-            }
-          }
-          if (Object.keys(positions).length) onNodesPositionChange?.(positions);
-          if (selectionChanged && controlledNodeSelection) emitNodeSelection(nodes.filter((node) => nextSelection.get(node.id)));
-        }}
-        onEdgesChange={(changes) => {
-          const nextSelection = new Map(renderEdges.map((edge) => [edge.id, edge.selected]));
-          let selectionChanged = false;
-          for (const change of changes) {
-            if (change.type === "select") {
-              setEdgeSelection((current) => ({ ...current, [change.id]: change.selected }));
-              nextSelection.set(change.id, change.selected);
-              selectionChanged = true;
-            }
-          }
-          if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
-        }}
-        fitView
-        fitViewOptions={fitViewOptions}
-        nodesDraggable={nodesDraggable}
-        nodesConnectable={Boolean(onConnect)}
-        elementsSelectable={Boolean(onNodesSelect || onEdgeSelect)}
-        onNodeClick={
-          onNodeClick
-            ? (event, node) => onNodeClick(node.data.node, graphActivation(event))
-            : undefined
-        }
-        onEdgeClick={
-          onEdgeClick
-            ? (event, edge) => {
-                if (edge.data?.edge) onEdgeClick(edge.data.edge, graphActivation(event));
+      {/* React Flow sizes its root to 100% of its parent, which collapses to
+          zero under a min-height or flexed wrapper; an absolutely filled box
+          gives it a definite size however the caller sizes the wrapper. */}
+      <div className="absolute inset-0">
+        <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
+          onInit={(instance) => { instanceRef.current = instance; }}
+          nodeTypes={NODE_TYPES}
+          deleteKeyCode={null}
+          nodes={renderNodes}
+          edges={renderEdges}
+          onKeyDown={(event) => {
+            if (!isGraphActivationKey(event.key)) return;
+            if (!(event.target instanceof Element)) return;
+            const nodeId = event.target.getAttribute("data-graph-node-id");
+            const edgeId = event.target.getAttribute("data-graph-edge-id");
+            if (nodeId) {
+              const node = instanceRef.current?.getNode(nodeId);
+              if (node) {
+                event.preventDefault();
+                onNodeClick?.(node.data.node, { source: "keyboard" });
               }
-            : undefined
-        }
-        isValidConnection={isValidConnection}
-        edgesReconnectable={Boolean(onReconnect)}
-        onReconnect={onReconnect ? (edge, connection) => {
-          if (edge.data?.edge && (!isValidConnection || isValidConnection(connection))) onReconnect(edge.data.edge, connection);
-        } : undefined}
-        onConnect={
-          onConnect
-            ? (connection) => {
-                if (!connection.source || !connection.target || (isValidConnection && !isValidConnection(connection))) return;
-                onConnect({
-                  source: connection.source,
-                  target: connection.target,
-                  sourceHandle: connection.sourceHandle,
-                  targetHandle: connection.targetHandle,
+            } else if (edgeId) {
+              const edge = instanceRef.current?.getEdge(edgeId);
+              if (edge?.data?.edge) {
+                event.preventDefault();
+                onEdgeClick?.(edge.data.edge, { source: "keyboard" });
+              }
+            }
+          }}
+          onNodesChange={(changes) => {
+            const positions: Record<string, GraphViewPosition> = {};
+            const nextSelection = new Map(renderNodes.map((node) => [node.id, node.selected]));
+            let selectionChanged = false;
+            for (const change of changes) {
+              if (change.type === "select") {
+                setSelection((current) => ({ ...current, [change.id]: change.selected }));
+                nextSelection.set(change.id, change.selected);
+                selectionChanged = true;
+              }
+              if (change.type === "position" && change.position) {
+                if (!change.dragging) positions[change.id] = change.position;
+                setDragging((current) => {
+                  const next = { ...current };
+                  if (change.dragging) next[change.id] = change.position!;
+                  else delete next[change.id];
+                  return next;
                 });
               }
-            : undefined
-        }
-        onSelectionChange={
-          onNodesSelect || onEdgeSelect
-            ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
-                if (!controlledNodeSelection) emitNodeSelection(selectedNodes.map((node) => node.data.node));
-                if (!controlledEdgeSelection) emitEdgeSelection(selectedEdges.flatMap((edge) => edge.data ? [edge.data.edge] : []));
+              if (change.type === "dimensions" && change.dimensions) {
+                const dimensions = change.dimensions;
+                setMeasured((current) => current[change.id]?.width === dimensions.width
+                  && current[change.id]?.height === dimensions.height
+                  ? current : { ...current, [change.id]: dimensions });
               }
-            : undefined
-        }
-      >
-        <Background color="var(--border-subtle)" gap={20} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+            }
+            if (Object.keys(positions).length) onNodesPositionChange?.(positions);
+            if (selectionChanged && controlledNodeSelection) emitNodeSelection(nodes.filter((node) => nextSelection.get(node.id)));
+          }}
+          onEdgesChange={(changes) => {
+            const nextSelection = new Map(renderEdges.map((edge) => [edge.id, edge.selected]));
+            let selectionChanged = false;
+            for (const change of changes) {
+              if (change.type === "select") {
+                setEdgeSelection((current) => ({ ...current, [change.id]: change.selected }));
+                nextSelection.set(change.id, change.selected);
+                selectionChanged = true;
+              }
+            }
+            if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
+          }}
+          fitView
+          fitViewOptions={fitViewOptions}
+          nodesDraggable={nodesDraggable}
+          nodesConnectable={Boolean(onConnect)}
+          elementsSelectable={Boolean(onNodesSelect || onEdgeSelect)}
+          onNodeClick={
+            onNodeClick
+              ? (event, node) => onNodeClick(node.data.node, graphActivation(event))
+              : undefined
+          }
+          onEdgeClick={
+            onEdgeClick
+              ? (event, edge) => {
+                  if (edge.data?.edge) onEdgeClick(edge.data.edge, graphActivation(event));
+                }
+              : undefined
+          }
+          isValidConnection={isValidConnection}
+          edgesReconnectable={Boolean(onReconnect)}
+          onReconnect={onReconnect ? (edge, connection) => {
+            if (edge.data?.edge && (!isValidConnection || isValidConnection(connection))) onReconnect(edge.data.edge, connection);
+          } : undefined}
+          onConnect={
+            onConnect
+              ? (connection) => {
+                  if (!connection.source || !connection.target || (isValidConnection && !isValidConnection(connection))) return;
+                  onConnect({
+                    source: connection.source,
+                    target: connection.target,
+                    sourceHandle: connection.sourceHandle,
+                    targetHandle: connection.targetHandle,
+                  });
+                }
+              : undefined
+          }
+          onSelectionChange={
+            onNodesSelect || onEdgeSelect
+              ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
+                  if (!controlledNodeSelection) emitNodeSelection(selectedNodes.map((node) => node.data.node));
+                  if (!controlledEdgeSelection) emitEdgeSelection(selectedEdges.flatMap((edge) => edge.data ? [edge.data.edge] : []));
+                }
+              : undefined
+          }
+        >
+          <Background color="var(--border-subtle)" gap={20} />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+      </div>
       <div role="status" className="sr-only">
         {nodes.filter((node) => status?.[node.id]).map((node) => (
           <span key={node.id}>{node.ariaLabel ?? (typeof node.title === "string" ? node.title : node.id)}: {status?.[node.id]?.label}. </span>
