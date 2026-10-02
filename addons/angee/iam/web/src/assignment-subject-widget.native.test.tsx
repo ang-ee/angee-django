@@ -19,7 +19,7 @@ afterEach(() => { cleanup(); providers.clearClients(); });
 test("native subject chips resolve display names, narrow kinds, retain item messages and become read-only during submit", async () => {
   let finish: (() => void) | undefined;
   function Form() {
-    const action = useActionForm({ defaultValues: { reviewers: ["auth/user:13"] }, submit: () => new Promise<{ status: "ok"; data: true }>((resolve) => {
+    const action = useActionForm({ defaultValues: { reviewers: ["auth/user:13", "auth/group:7#member"] }, submit: () => new Promise<{ status: "ok"; data: true }>((resolve) => {
       finish = () => resolve({ status: "ok", data: true });
     }) });
     const fields = useFormSpecFields({ type: "object", properties: { reviewers: {
@@ -33,6 +33,8 @@ test("native subject chips resolve display names, narrow kinds, retain item mess
     <AppRuntimeProvider runtime={{ widgets }}><ToastProvider><Form /></ToastProvider></AppRuntimeProvider>
   </providers.Provider>);
   expect(await screen.findByText("Sam Reviewer")).toBeTruthy();
+  expect(await screen.findByText("Reviewer team")).toBeTruthy();
+  expect(screen.queryByText("auth/group:7#member")).toBeNull();
   expect(screen.queryByText("auth/user:13")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Issue" }));
   expect(await screen.findByText("Bad reviewer.")).toBeTruthy();
@@ -43,5 +45,6 @@ test("native subject chips resolve display names, narrow kinds, retain item mess
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(screen.queryByRole("combobox", { name: "Reviewers" })).toBeNull());
   expect(screen.getByText("Sam Reviewer")).toBeTruthy();
+  expect(screen.getByText("Reviewer team")).toBeTruthy();
   await act(async () => { finish?.(); });
 });

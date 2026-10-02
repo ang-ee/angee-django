@@ -112,6 +112,8 @@ export function optionTextLabel(
 
 /** Presentation facts shared by page descriptors and rendered widget fields. */
 export interface FieldPresentation {
+  /** IAM assignment-subject controls offer these native subject kinds. */
+  assignmentSubjectKinds?: readonly AssignmentSubjectKind[];
   /** Statusbar layout; the form slot may supply measured width at render time. */
   fill?: boolean;
   containerWidth?: number;
@@ -126,9 +128,10 @@ export interface FieldPresentation {
   currencyField?: string;
 }
 
+export const ASSIGNMENT_SUBJECT_KINDS = ["user", "group"] as const;
+export type AssignmentSubjectKind = typeof ASSIGNMENT_SUBJECT_KINDS[number];
+
 export interface WidgetField extends FieldPresentation {
-  /** IAM assignment-subject controls offer these native subject kinds. */
-  assignmentSubjectKinds?: readonly ("user" | "group")[];
   name?: string;
   fill?: boolean;
   containerWidth?: number;

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { get } from "react-hook-form";
 import { stableSerialize } from "@angee/refine";
 
 import { useAppRuntime, type WidgetMap } from "../../runtime";
@@ -12,6 +13,7 @@ import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { statusLabel } from "../../lib/labels";
 import { titleCase } from "../../lib/titleCase";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
+import { isFieldControlVisible, type FormValues } from "./form-view-model";
 export type { FormSpecFieldType } from "./form-spec-schema";
 
 export type FormSpecRelationCreate = Pick<
@@ -88,21 +90,24 @@ export function useFormSpecFields(
 }
 
 /** Whether the projected descriptors render a control that can display this issue. */
-export function formSpecHasControlForPath(fields: readonly FormSpecFieldDescriptor[], path: string): boolean {
+export function formSpecHasControlForPath(fields: readonly FormSpecFieldDescriptor[], path: string, values: FormValues = {}): boolean {
   const field = fields.find((field) => path === field.name || path.startsWith(`${field.name}.`));
-  return field !== undefined && fieldHasControlForPath(field, path.slice(field.name.length).replace(/^\./, ""));
+  return field !== undefined && isFieldControlVisible(field, values)
+    && fieldHasControlForPath(field, path.slice(field.name.length).replace(/^\./, ""), get(values, field.name));
 }
 
-function fieldHasControlForPath(field: FormSpecFieldDescriptor, path: string): boolean {
+function fieldHasControlForPath(field: FormSpecFieldDescriptor, path: string, value: unknown): boolean {
   if (field.hidden) return false;
   if (!path) return true;
-  if (field.objectTemplate) return formSpecHasControlForPath(field.objectTemplate, path);
+  if (field.objectTemplate) return formSpecHasControlForPath(field.objectTemplate, path, parseFormSpecPayload(value));
   if (field.itemTemplate || field.rowTemplate) {
     const item = /^(\d+)(?:\.(.*))?$/.exec(path);
     if (!item) return false;
+    if (!Array.isArray(value) || !Object.hasOwn(value, Number(item[1]))) return false;
     const childPath = item[2] ?? "";
-    if (field.itemTemplate) return fieldHasControlForPath(field.itemTemplate, childPath);
-    return !childPath || formSpecHasControlForPath(field.rowTemplate ?? [], childPath);
+    const child = value[Number(item[1])];
+    if (field.itemTemplate) return fieldHasControlForPath(field.itemTemplate, childPath, child);
+    return Boolean(childPath) && formSpecHasControlForPath(field.rowTemplate ?? [], childPath, parseFormSpecPayload(child));
   }
   // Atomic widgets (including JSON and subject arrays) display descendant messages themselves.
   return true;

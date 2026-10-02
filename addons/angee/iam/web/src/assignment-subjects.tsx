@@ -15,7 +15,7 @@ export interface AssignmentSubjectOption extends SelectChoice {
   value: string;
   label: string;
   group: string;
-  kind: "user" | "group";
+  kind: NonNullable<WidgetField["assignmentSubjectKinds"]>[number];
   id: string;
 }
 
@@ -27,6 +27,7 @@ export interface UseAssignmentSubjectsOptions {
 
 export interface AssignmentSubjectsResult {
   options: readonly AssignmentSubjectOption[];
+  labels: ReadonlyMap<string, string>;
   isFetching: boolean;
   error: unknown;
   truncated: boolean;
@@ -63,17 +64,18 @@ export function useAssignmentSubjects(
   const t = useIamT();
   const variables = useMemo<IAMAssignmentSubjectsVariables>(() => ({ limit }), [limit]);
   const query = useAuthoredQuery(IamAssignmentSubjects, variables);
-  const options = useMemo(
-    () => assignmentSubjectOptions(query.data, {
+  const groupLabels = useMemo(() => ({
       users: t("assignmentSubjects.users"),
       groups: t("assignmentSubjects.groups"),
-    }, kinds),
-    [query.data, kinds, t],
-  );
+  }), [t]);
+  const options = useMemo(() => assignmentSubjectOptions(query.data, groupLabels, kinds), [query.data, groupLabels, kinds]);
+  const labels = useMemo(() => new Map(assignmentSubjectOptions(query.data, groupLabels)
+    .map((option) => [option.value, option.label])), [query.data, groupLabels]);
   const userCount = query.data?.users_aggregate.aggregate?.count ?? 0;
   const groupCount = query.data?.groups_aggregate.aggregate?.count ?? 0;
   return {
     options,
+    labels,
     isFetching: query.isFetching,
     error: query.error,
     truncated: userCount > limit || groupCount > limit,

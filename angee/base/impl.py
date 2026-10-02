@@ -212,18 +212,36 @@ def materialize_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _nullable_form_schema(schema: dict[str, Any]) -> dict[str, Any] | None:
+    """The one concrete branch of the bounded nullable FormSpec union."""
+    choices = schema.get("anyOf")
+    if isinstance(choices, list) and len(choices) == 2 and all(isinstance(choice, dict) for choice in choices):
+        concrete = [choice for choice in choices if choice != {"type": "null"}]
+        if len(concrete) == 1:
+            return concrete[0]
+    return None
+
+
 def check_form_annotations(schema: dict[str, Any]) -> None:
     """Validate shared form annotations and their declared field values."""
     for name in ("title", "description", "widget"):
         if name in schema and not isinstance(schema[name], str):
             raise ValidationError(f"Form annotation {name} must be a string.")
+    if "widget" in schema and not schema["widget"]:
+        raise ValidationError("Form annotation widget must not be empty.")
+    if "assignmentSubjectKinds" in schema:
+        kinds = schema["assignmentSubjectKinds"]
+        if not isinstance(kinds, list) or not kinds or any(kind not in ("user", "group") for kind in kinds):
+            raise ValidationError("Form annotation assignmentSubjectKinds requires user/group kinds.")
     if "readOnly" in schema and not isinstance(schema["readOnly"], bool):
         raise ValidationError("Form annotation readOnly must be a boolean.")
-    if "relation" in schema and (
-        not FORM_SPEC_RELATION_VALIDATOR.is_valid(schema["relation"])
-        or schema.get("type") != "string"
-    ):
-        raise ValidationError("Relation fields require a string value and a valid FormSpec relation.")
+    if "relation" in schema:
+        if (_nullable_form_schema(schema) or schema).get("type") != "string":
+            raise ValidationError("relation on a non-string field")
+        if schema.get("widget", "many2one") != "many2one":
+            raise ValidationError("relation with a non-relation widget")
+        if not FORM_SPEC_RELATION_VALIDATOR.is_valid(schema["relation"]):
+            raise ValidationError("invalid relation: requires a valid FormSpec relation.")
     if "options" in schema:
         options = schema["options"]
         if not isinstance(options, list) or not options or any(
@@ -279,9 +297,18 @@ class _ConfigFormSpecProjector:
         self.json_fields = json_fields
         _validate_config_aliases(model, owner=owner)
         schema = model.model_json_schema(by_alias=True)
+        self.references = LocalSchemaReferences(schema)
+        for node in schema_nodes(schema):
+            if "relation" in node and "$ref" in node:
+                target = self.references.resolve(node["$ref"])
+                if isinstance(target, dict):
+                    node = {**target, **node}
+            try:
+                check_form_annotations(node)
+            except ValidationError as error:
+                raise ImproperlyConfigured(f"{owner}: invalid form annotation: {error}") from error
         if not isinstance(schema.get("$defs", {}), dict):
             self._unsupported("config", "$defs")
-        self.references = LocalSchemaReferences(schema)
         self.schema = {key: value for key, value in schema.items() if key != "$defs"}
 
     def form_spec(self) -> dict[str, Any]:
@@ -323,13 +350,10 @@ class _ConfigFormSpecProjector:
 
         if "anyOf" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"anyOf"}, path)
-            choices = schema["anyOf"]
-            if not isinstance(choices, list) or len(choices) != 2:
+            concrete = _nullable_form_schema(schema)
+            if concrete is None:
                 self._unsupported(path, "union")
-            concrete = [choice for choice in choices if choice != {"type": "null"}]
-            if len(concrete) != 1:
-                self._unsupported(path, "union")
-            projected = self._project(concrete[0], path=path, refs=refs)
+            projected = self._project(concrete, path=path, refs=refs)
             projected["nullable"] = True
             return self._metadata(projected, schema)
 
@@ -441,17 +465,14 @@ class _ConfigFormSpecProjector:
         if "default" in schema:
             result["defaultValue"] = copy.deepcopy(schema["default"])
         if "widget" in schema:
-            widget = schema["widget"]
-            if not isinstance(widget, str) or not widget:
-                self._unsupported("config", "non-string widget")
-            result["widget"] = widget
+            result["widget"] = schema["widget"]
         if "assignmentSubjectKinds" in schema:
             result["assignmentSubjectKinds"] = copy.deepcopy(schema["assignmentSubjectKinds"])
         if "relation" in schema:
             if projected.get("type") != "string":
-                self._unsupported("config", "relation on a non-string field")
+                raise ImproperlyConfigured(f"{self.owner}: relation on a non-string field")
             if result.get("widget", "many2one") != "many2one":
-                self._unsupported("config", "relation with a non-relation widget")
+                raise ImproperlyConfigured(f"{self.owner}: relation with a non-relation widget")
             result["relation"] = self._relation(schema["relation"])
         return result
 
@@ -459,8 +480,7 @@ class _ConfigFormSpecProjector:
         error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
         if error is not None:
             location = ".".join(str(part) for part in error.absolute_path)
-            self._unsupported(
-                "config",
+            raise ImproperlyConfigured(
                 f"invalid relation{f' at {location}' if location else ''}: {error.message}",
             )
         return copy.deepcopy(value)

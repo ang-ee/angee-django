@@ -6,8 +6,12 @@ import {
   MarkerType,
   Position,
   ReactFlow,
+  ReactFlowProvider,
   Handle,
   useUpdateNodeInternals,
+  useNodesInitialized,
+  useReactFlow,
+  useStore,
   type Edge,
   type FitViewOptions,
   type Node,
@@ -204,6 +208,15 @@ export function GraphView<
   TEdgeKind extends string = string,
   TNodeMeta extends Record<string, unknown> = Record<string, unknown>,
   TEdgeMeta extends Record<string, unknown> = Record<string, unknown>,
+>(props: GraphViewProps<TNodeKind, TEdgeKind, TNodeMeta, TEdgeMeta>): React.ReactElement {
+  return <ReactFlowProvider><GraphCanvas {...props} /></ReactFlowProvider>;
+}
+
+function GraphCanvas<
+  TNodeKind extends string = string,
+  TEdgeKind extends string = string,
+  TNodeMeta extends Record<string, unknown> = Record<string, unknown>,
+  TEdgeMeta extends Record<string, unknown> = Record<string, unknown>,
 >({
   nodes,
   edges,
@@ -328,6 +341,20 @@ export function GraphView<
       ...toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle),
       selected: edge.selected ?? edgeSelection[edge.id] ?? false,
     })), [edges, geometryLayout, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
+  const initialized = useNodesInitialized();
+  // Configured ports can arrive after the first measurement. Wait for React Flow's
+  // updated handle bounds too, rather than mounting edges against old handles.
+  const handlesReady = useStore((state) => renderEdges.every((edge) => {
+    const source = state.nodeLookup.get(edge.source)?.internals.handleBounds?.source;
+    const target = state.nodeLookup.get(edge.target)?.internals.handleBounds?.target;
+    return source?.some((handle) => (handle.id ?? null) === (edge.sourceHandle ?? null))
+      && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null));
+  }));
+  const { fitView } = useReactFlow();
+  const fitSignature = JSON.stringify([geometryNodes, geometryEdges, resolvedLayout]);
+  React.useEffect(() => {
+    if (initialized && handlesReady) void fitView(fitViewOptions);
+  }, [initialized, handlesReady, fitSignature, fitView, fitViewOptions]);
   const instanceRef = React.useRef<ReactFlowInstance<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>> | null>(null);
   // React Flow re-emits selection state whenever its store adopts replaced
   // nodes. Consumers set state from these callbacks, so re-emitting an
@@ -366,7 +393,7 @@ export function GraphView<
           nodeTypes={NODE_TYPES}
           deleteKeyCode={null}
           nodes={renderNodes}
-          edges={renderEdges}
+          edges={initialized && handlesReady ? renderEdges : []}
           onKeyDown={(event) => {
             if (!isGraphActivationKey(event.key)) return;
             if (!(event.target instanceof Element)) return;
@@ -427,7 +454,7 @@ export function GraphView<
             }
             if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
           }}
-          fitView
+          fitView={false}
           fitViewOptions={fitViewOptions}
           nodesDraggable={nodesDraggable}
           nodesConnectable={Boolean(onConnect)}

@@ -8,6 +8,9 @@ import { GraphView, graphNodeStyle } from "./GraphView";
 
 const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
+  initialized: true,
+  handlesReady: true,
+  fitView: vi.fn(),
 }));
 const dagreMock = vi.hoisted(() => ({ layouts: 0 }));
 
@@ -42,6 +45,12 @@ vi.mock("@xyflow/react", async () => {
         props.children,
       );
     },
+    ReactFlowProvider: ({ children }: { children: ReactNode }) => children,
+    useNodesInitialized: () => reactFlowMock.initialized,
+    useReactFlow: () => ({ fitView: reactFlowMock.fitView }),
+    useStore: (selector: (state: unknown) => unknown) => selector({ nodeLookup: { get: () => ({ internals: {
+      handleBounds: reactFlowMock.handlesReady ? { source: [{ id: null }, { id: "done" }], target: [{ id: null }] } : undefined,
+    } }) } }),
   };
 });
 
@@ -49,6 +58,27 @@ afterEach(() => {
   cleanup();
   reactFlowMock.lastProps = undefined;
   dagreMock.layouts = 0;
+  reactFlowMock.initialized = true;
+  reactFlowMock.handlesReady = true;
+  reactFlowMock.fitView.mockClear();
+});
+
+test("edges and initial fit wait for native initialization and current handle bounds", () => {
+  reactFlowMock.initialized = false;
+  const graph = () => <GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />;
+  const view = render(graph());
+  expect(reactFlowMock.lastProps?.edges).toEqual([]);
+  expect(reactFlowMock.lastProps?.fitView).toBe(false);
+  expect(reactFlowMock.fitView).not.toHaveBeenCalled();
+  reactFlowMock.initialized = true;
+  reactFlowMock.handlesReady = false;
+  view.rerender(graph());
+  expect(reactFlowMock.lastProps?.edges).toEqual([]);
+  expect(reactFlowMock.fitView).not.toHaveBeenCalled();
+  reactFlowMock.handlesReady = true;
+  view.rerender(graph());
+  expect(reactFlowMock.lastProps?.edges).toHaveLength(1);
+  expect(reactFlowMock.fitView).toHaveBeenCalledOnce();
 });
 
 const nodes = [

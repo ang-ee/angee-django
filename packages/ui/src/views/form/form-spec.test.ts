@@ -16,6 +16,25 @@ test("FormSpec registers only its presentation annotations with JSON Schema vali
   ]);
 });
 
+test("control-path checks reject row errors and apply the renderer's per-row visibility rule", () => {
+  const fields = [{ name: "rows", widget: "rows", rowTemplate: [
+    { name: "target", showWhen: (row: Record<string, unknown>) => row.enabled === true },
+    { name: "hidden", hidden: true },
+  ] }];
+  const values = { rows: [{ enabled: false }, { enabled: true }] };
+  expect(formSpecHasControlForPath(fields, "rows.0", values)).toBe(false);
+  expect(formSpecHasControlForPath(fields, "rows.0.target", values)).toBe(false);
+  expect(formSpecHasControlForPath(fields, "rows.1.target", values)).toBe(true);
+  expect(formSpecHasControlForPath(fields, "rows.1.hidden", values)).toBe(false);
+  expect(formSpecHasControlForPath(fields, "rows.2.target", values)).toBe(false);
+});
+
+test("invalid subject-kind annotations fail at the wire owner", () => {
+  expect(() => deserializeFormSpec({ properties: { people: {
+    type: "array", widget: "json", assignmentSubjectKinds: ["uesr"], items: { type: "string" },
+  } } }, defaultWidgets)).toThrow("assignmentSubjectKinds");
+});
+
 describe("deserializeFormSpec", () => {
   test("only rendered controls claim nested issue paths while atomic widgets retain child messages", () => {
     const fields = deserializeFormSpec({ type: "object", properties: {
@@ -25,9 +44,9 @@ describe("deserializeFormSpec", () => {
       raw: { type: "object", widget: "json" },
     } }, defaultWidgets);
     for (const path of ["visible", "details.title", "rows.0.title", "raw.anything"])
-      expect(formSpecHasControlForPath(fields, path), path).toBe(true);
+      expect(formSpecHasControlForPath(fields, path, { rows: [{ title: "" }] }), path).toBe(true);
     for (const path of ["hidden", "unknown", "details.unknown", "rows.0.unknown"])
-      expect(formSpecHasControlForPath(fields, path), path).toBe(false);
+      expect(formSpecHasControlForPath(fields, path, { rows: [{ title: "" }] }), path).toBe(false);
   });
 
   test("custom subject arrays carry typed widget options without becoming composite fields", () => {

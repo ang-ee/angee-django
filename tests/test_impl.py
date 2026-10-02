@@ -1205,3 +1205,49 @@ def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_sha
         JsonImpl.parse_config({"patterned": "INVALID"})
     with pytest.raises(ImproperlyConfigured, match="pattern"):
         model_config_form_spec(Config, owner="Config")
+
+
+@pytest.mark.parametrize("kinds", ["user", [], ["uesr"], [1], ["user", "other"]])
+def test_assignment_subject_annotation_is_validated_by_the_form_owner(kinds):
+    from angee.base.impl import check_form_annotations
+
+    with pytest.raises(ValidationError, match="assignmentSubjectKinds"):
+        check_form_annotations({"assignmentSubjectKinds": kinds})
+    check_form_annotations({"assignmentSubjectKinds": ["user", "group"]})
+
+
+def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
+    class Target(str, Enum):
+        first = "first"
+
+    class Config(BaseModel):
+        nullable: str | None = Field(default=None, json_schema_extra={"relation": {"resource": "demo.Target"}})
+        referenced: Target = Field(json_schema_extra={"relation": {"resource": "demo.Target"}})
+
+    fields = model_config_form_spec(Config, owner="Config", json_fields=True)["properties"]
+    assert fields["nullable"]["nullable"] and fields["nullable"]["relation"]["resource"] == "demo.Target"
+    assert fields["referenced"]["enum"] == ["first"] and fields["referenced"]["relation"]["resource"] == "demo.Target"
+
+
+@pytest.mark.parametrize("annotation", [
+    {"widget": ""}, {"widget": 1}, {"relation": {"resource": ""}},
+    {"relation": {"resource": "iam.User"}, "widget": "text"},
+    {"assignmentSubjectKinds": ["uesr"]},
+])
+def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, monkeypatch):
+    class Nested(BaseModel):
+        value: str = Field(default="", json_schema_extra=annotation)
+
+    class Config(BaseModel):
+        nested: Nested
+        mapping: dict[str, Nested]
+
+    with pytest.raises(ImproperlyConfigured, match="form annotation"):
+        model_config_form_spec(Config, owner="Config", json_fields=True)
+    class BadAnnotation(_BaseImpl):
+        key = "bad_annotation"
+        config_model = Config
+        config_form_spec_json_fields = True
+    monkeypatch.setattr(importlib.import_module(__name__), "BadAnnotation", BadAnnotation, raising=False)
+    with override_settings(ANGEE_TEST_IMPLS={BadAnnotation.key: "tests.test_impl.BadAnnotation"}):
+        assert [error.id for error in check_impl_registry(_BaseImpl)] == ["angee.E005"]

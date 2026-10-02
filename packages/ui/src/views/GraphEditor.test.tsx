@@ -28,6 +28,15 @@ function canvas(): GraphViewProps {
 }
 
 describe("GraphEditor", () => {
+  test("the flow gets priority height and automatic display layout does not author a change", () => {
+    const resolved = vi.fn();
+    const { props } = setup({ layout: {}, onLayoutResolved: resolved });
+    expect(canvas().className).toContain("flex-[3]");
+    expect(screen.getByRole("heading", { name: "Connections" }).parentElement?.className).toContain("overflow-auto");
+    expect(resolved).toHaveBeenCalledExactlyOnceWith(Object.fromEntries(canvas().nodes.map((node) => [node.id, node.position])));
+    expect(props.onLayoutChange).not.toHaveBeenCalled();
+    expect(new Set(canvas().nodes.map((node) => node.position?.x)).size).toBeGreaterThan(1);
+  });
   test("rejects duplicate links through the canvas and accessible connection list", async () => {
     const { props } = setup();
     const duplicate = { source: "a", sourceHandle: "one", target: "b" };

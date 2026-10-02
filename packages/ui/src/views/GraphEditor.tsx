@@ -56,6 +56,8 @@ export interface GraphEditorProps {
   onUnlink: (link: GraphEditorLink) => void;
   onDelete: (nodeIds: readonly string[]) => void;
   onLayoutChange: (layout: GraphEditorLayout) => void;
+  /** Observe display positions, including automatic layout, without authoring a change. */
+  onLayoutResolved?: (layout: GraphEditorLayout) => void;
   onInsertOnLink: (link: GraphEditorLink, position: GraphViewPosition) => void;
   onAddFromPort: (from: string, port: string, position: GraphViewPosition) => void;
   nodeActions?: (node: GraphEditorNode) => readonly GraphEditorNodeAction[];
@@ -70,7 +72,7 @@ const EMPTY_SELECTION: GraphEditorSelection = { nodes: [], link: null };
 
 /** Controlled graph editing. Connection policy and every data mutation belong to the caller. */
 export function GraphEditor({
-  nodes, links, layout, canLink, onLink, onUnlink, onDelete, onLayoutChange,
+  nodes, links, layout, canLink, onLink, onUnlink, onDelete, onLayoutChange, onLayoutResolved,
   onInsertOnLink, onAddFromPort, nodeActions, status, nodeStyles, ariaLabel, className,
   readOnly = false, selected: controlledSelection, onSelectionChange,
 }: GraphEditorProps): React.ReactElement {
@@ -113,7 +115,9 @@ export function GraphEditor({
   }));
   const topology = useValueStable(renderedEdges.map(({ id, source, target, kind }) => ({ id, source, target, kind })));
   const automatic = React.useMemo(() => layoutGraph({ nodes: dimensions, edges: topology }), [dimensions, topology]);
-  const resolvedLayout = Object.fromEntries(nodes.map((node) => [node.id, layout[node.id] ?? automatic.positions.get(node.id)!]));
+  const resolvedLayout = React.useMemo(() => Object.fromEntries(dimensions.map((node) =>
+    [node.id, layout[node.id] ?? automatic.positions.get(node.id)!])), [dimensions, layout, automatic]);
+  React.useEffect(() => { onLayoutResolved?.(resolvedLayout); }, [onLayoutResolved, resolvedLayout]);
   const renderedNodes = nodes.map((node) => ({
     ...node, position: resolvedLayout[node.id], selected: selection.nodes.includes(node.id),
   }));
@@ -165,7 +169,7 @@ export function GraphEditor({
         deleteSelection();
       }}
     >
-      <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle p-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle p-2">
         <Button type="button" size="sm" onClick={autoLayout} disabled={readOnly || !nodes.length}>
           {t("graph.autoLayout")}
         </Button>
@@ -174,7 +178,7 @@ export function GraphEditor({
         </Button>
       </div>
       <GraphView
-        className="min-h-64 flex-1"
+        className="min-h-64 flex-[3]"
         nodes={renderedNodes}
         edges={renderedEdges}
         nodeStyles={styles}
@@ -187,7 +191,7 @@ export function GraphEditor({
         isValidConnection={(connection) => allowed(connectionLink(connection))}
         onReconnect={readOnly ? undefined : (edge, connection) => connect(connectionLink(connection), edge.meta?.link)}
       />
-      <div className="max-h-72 overflow-auto border-t border-border-subtle p-3">
+      <div className="min-h-0 max-h-36 shrink overflow-auto border-t border-border-subtle p-3">
         <h3 className="mb-2 text-13 font-semibold">{t("graph.connections")}</h3>
         <div className="mb-3 flex flex-wrap gap-2">
           {nodes.map((node) => (

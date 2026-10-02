@@ -15,7 +15,7 @@ function AssignmentSubjectsEdit({
   const subjects = useAssignmentSubjects({ kinds: field?.assignmentSubjectKinds });
   const t = useIamT();
   const selected = normaliseSubjects(value);
-  const labels = new Map(subjects.options.map((option) => [option.value, option.label]));
+  const labels = subjects.labels;
   const available = subjects.options.filter((option) => !selected.includes(option.value));
   const label = typeof field?.label === "string" ? field.label : t("assignmentSubjects.label");
 
@@ -69,7 +69,7 @@ function AssignmentSubjectsRead({
   value, field,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
   const subjects = useAssignmentSubjects({ kinds: field?.assignmentSubjectKinds });
-  const labels = new Map(subjects.options.map((option) => [option.value, option.label]));
+  const labels = subjects.labels;
   const selected = normaliseSubjects(value);
   if (selected.length === 0) return <span className={textRoleVariants({ role: "meta" })} />;
   return (
