@@ -1,8 +1,8 @@
 """Canonical concrete tags models for the bare-Django test runtime.
 
-The permission index resolves the tag assignment backings whenever it is built,
-so register the models from conftest, before Django creates the test database,
-rather than from the tags test module. One concrete model per resource type.
+Permission queries resolve the tag assignment backings, so register the models
+from conftest before Django creates the test database. One concrete model per
+resource type.
 """
 
 from django.db import models

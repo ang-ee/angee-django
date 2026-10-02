@@ -30,9 +30,9 @@ def user_label(user: Any) -> str:
 def user_label_queryset() -> QuerySet[Any]:
     """Keep scalar-label source rows narrow and explicitly elevated inside IAM."""
 
-    reason = "iam.identity.user_label"
-    with system_context(reason=reason):
-        return get_user_model().objects.system_context(reason=reason).only("first_name", "last_name", "username")
+    return get_user_model().objects.system_context(reason="iam.identity.user_label").only(
+        "first_name", "last_name", "username",
+    )
 
 
 def user_label_expression(prefix: str = "") -> Coalesce:

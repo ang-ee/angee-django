@@ -1,0 +1,76 @@
+"""Consumer query shape for the largest composed permission plans."""
+
+from __future__ import annotations
+
+import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+from rebac import system_context
+from rebac.resources import model_for_resource_type
+
+from tests import test_messaging as _messaging_models  # noqa: F401 -- register source model
+from tests import test_productivity_deferred_save as _task_relation_models  # noqa: F401 -- register source model
+from tests.conftest import Backend, Drive, Folder, Page, Vault, create_user
+from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- register source model
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "permission", "expected_queries"),
+    (
+        ("messaging/message_edge", "read", 9),
+        ("projects/task_relation", "read", 7),
+        ("knowledge/record_binding", "read", 4),
+        ("projects/task", "comment", 6),
+        ("decisions/decision", "act", 6),
+        ("extraction/extraction", "read", 13),
+        ("storage/file", "read", 8),
+        ("storage/file_attachment", "read", 9),
+        ("projects/link", "read", 7),
+        ("messaging/thread", "read", 7),
+    ),
+)
+def test_large_permission_reads_keep_one_application_statement(
+    composed_tables: None, resource_type: str, permission: str, expected_queries: int,
+) -> None:
+    """A compiled scope adds bounded policy reads around one application query."""
+
+    del composed_tables
+    model = model_for_resource_type(resource_type)
+    assert model is not None, resource_type
+    actor = create_user(f"query-{resource_type.replace('/', '-')}")
+    queryset = model.objects.with_actor(actor).with_action(permission).scoped()
+    with CaptureQueriesContext(connection) as queries:
+        list(queryset.values_list("pk", flat=True)[:1])
+    # Three schema-revision witnesses and one consumer-row query, plus the
+    # compiler's role/constant facts, arrow-target IDs, and recursive seed reads.
+    assert len(queries) == expected_queries, (resource_type, permission, queries.captured_queries)
+    table = connection.ops.quote_name(model._meta.db_table)
+    assert sum(item["sql"].startswith(f"SELECT {table}.") for item in queries) == 1
+
+
+@pytest.mark.parametrize("resource_type", ("storage/folder", "knowledge/page"))
+def test_recursive_read_sql_is_constant_across_fifty_levels(composed_tables: None, resource_type: str) -> None:
+    """A deeper hierarchy changes application rows, never the actor-scope SQL shape."""
+
+    del composed_tables
+    actor = create_user(f"depth-{resource_type.replace('/', '-')}")
+    model = model_for_resource_type(resource_type)
+    assert model is not None
+
+    def scope_sql() -> str:
+        return str(model.objects.with_actor(actor).with_action("read").scoped().query)
+
+    shallow = scope_sql()
+    with system_context(reason="tests.rebac.query.depth"):
+        if resource_type == "storage/folder":
+            storage = Backend.objects.create(slug="depth", label="Depth", backend_class="local")
+            drive = Drive.objects.create(slug="depth", name="Depth", prefix="depth", backend=storage, owner=actor)
+            parent = None
+            for level in range(50):
+                parent = Folder.objects.create(drive=drive, parent=parent, name=f"level-{level}")
+        elif resource_type == "knowledge/page":
+            vault = Vault.objects.create(name="Depth", owner=actor)
+            parent = None
+            for level in range(50):
+                parent = Page.objects.create(vault=vault, parent=parent, title=f"level-{level}")
+    assert scope_sql() == shallow

@@ -21,7 +21,7 @@ from typing import Any
 import environ
 
 COMPOSED_TEST_TIMEOUT = 600
-"""Bound native test groups including per-test permission-index rebuilds."""
+"""Bound native test groups including composition and schema setup."""
 
 
 def run_composed_tests(

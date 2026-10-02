@@ -28,7 +28,6 @@ from angee.graphql.data import hasura_model_resource
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.intake.models import Need as AbstractNeed
 from angee.projects.models import Task as AbstractTask
 from angee.testing.permissions import install_permission_schema
 from angee.work.models import TaskWork
@@ -133,30 +132,10 @@ class CreateTask(TaskWork, AuditMixin, AngeeDataModel):
         rebac_resource_type = "tests/create_task"
 
 
-class CreateNeed(AbstractNeed):
-    """Production target exclusivity with explicit test-graph relations."""
-
-    task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.CASCADE)
-    project = models.ForeignKey(CreateProject, null=True, blank=True, on_delete=models.CASCADE)
-    original_task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    party = models.ForeignKey("parties.Party", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    source_message = None
-
-    class Meta:
-        app_label = "scopedemo"
-        rebac_resource_type = "tests/create_need"
-        constraints = AbstractNeed.Meta.constraints[:1]
-
-
 @strawberry_django.type(CreateTask)
 class CreateTaskType(AngeeNode):
     title: auto
     status: auto
-
-
-@strawberry_django.type(CreateNeed)
-class CreateNeedType(AngeeNode):
-    body: auto
 
 
 @strawberry_django.type(Stage)
@@ -191,12 +170,6 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
             permission read = authenticated
             permission write = authenticated
         }
-        definition tests/create_need {
-            relation task: tests/create_task // rebac:field=task
-            relation project: tests/create_project // rebac:field=project
-            permission create = task->write + project->write
-            permission read = task->read + project->read
-        }
         """)
     install_permission_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
@@ -227,7 +200,6 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
                     ["title", "project", "queue", "stage"],
                     ("project", "queue", "stage"),
                 ),
-                (CreateNeedType, CreateNeed, "create_needs", ["body", "task", "project"], ("task", "project")),
                 (CreateStageType, Stage, "create_stages", ["queue", "name", "category"], ("queue",)),
             )
         ]
@@ -240,7 +212,6 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
                             "mutation": [resource.mutation for resource in resources],
                             "types": [
                                 CreateTaskType,
-                                CreateNeedType,
                                 CreateStageType,
                                 *(item for resource in resources for item in resource.types),
                             ],
@@ -277,29 +248,6 @@ def test_graphql_task_create_preserves_stage_projected_status(productivity_creat
     assert task.status == AbstractTask.TaskStatus.DONE
     assert task.done_at is not None
     assert task.number == 1
-
-
-def test_graphql_need_create_preserves_task_target_provenance(productivity_create_case: tuple[Any, Any, Queue]) -> None:
-    """Graphql need create preserves task target provenance."""
-    schema, actor, queue = productivity_create_case
-    with system_context(reason="tests.productivity.create.need_target"):
-        project = CreateProject.objects.create()
-        task = CreateTask.objects.create(title="Target", queue=queue, project=project)
-    created = result_data(
-        execute_schema(
-            schema,
-            """
-            mutation CreateNeed($task: ID!) {
-              insert_create_needs_one(object: {task: $task, body: "Task request"}) { id }
-            }
-            """,
-            {"task": task.sqid},
-            user=actor,
-        )
-    )["insert_create_needs_one"]
-    need = CreateNeed.objects.as_user(actor).get(sqid=created["id"])
-    assert need.task_id == task.pk
-    assert need.project_id is None
 
 
 @pytest.mark.parametrize("category", ("TRIAGE", "DUPLICATE"))

@@ -1,6 +1,6 @@
 """Canonical concrete uom models for the bare-Django test runtime.
 
-The permission index and the REBAC checks resolve every installed uom type,
+Permission queries and the REBAC checks resolve every installed uom type,
 so register the models from conftest rather than from the uom test module.
 """
 

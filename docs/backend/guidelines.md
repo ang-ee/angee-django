@@ -629,13 +629,11 @@ data through REBAC, never a queryset bypass.
 - **Always-shared reference data reads through `authenticated`.** A resource
   every signed-in subject reads unions the library's `authenticated` builtin into
   `read` and stores no wildcard tuple; [`tags/tag`](../../addons/angee/tags/permissions.zed)
-  is the reference. `authenticated` also admits non-user subjects. The local
-  backend resolves these reads through its permission index.
+  is the reference. `authenticated` also admits non-user subjects.
 - **Caveated relations are refused in framework fragments.**
   [`angee.E024`](../../angee/base/checks.py) rejects caveated subjects in every
-  effective schema. The 0.23 permission index supports caveated point checks and
-  context-bearing enumeration, but actor-scoped querysets carry no caveat
-  context. Express row-dependent conditions as live field-backed relations.
+  effective schema. Actor-scoped querysets carry no caveat context. Express
+  row-dependent conditions as live field-backed relations.
 - Bracket every server-side read/write in `system_context`/`asystem_context` and
   resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
   an actor is denied.
@@ -716,12 +714,9 @@ data through REBAC, never a queryset bypass.
   gate every subcommand on that persisted state — so editing the zed can deadlock
   the sync. Unstick with `rebac --skip-checks sync --force-overwrite --yes` then
   `rebac sync`; never smoke-test a zed against the shared example DB.
-- The local permission index must be ready for actor-scoped reads. Provision
-  runs `check --database default` after sync; CI runs `rebac index verify` after
-  provision. The base `post_migrate` receiver rebuilds an already-ready index
-  after migrations containing `RunPython` or `RunSQL`. Other bypass writes,
-  including raw saves and direct SQL, must rebuild and verify the index before
-  readers resume. Initial sync builds an unready index.
+- The local backend compiles permissions into queries over application tables;
+  it maintains no permission index. Run `migrate` and `rebac sync` to prepare
+  the database and store the schema. There is nothing to rebuild or verify.
 - If a removed or renamed definition in an otherwise composed package fails
   `rebac.E009`, run the check-free `reconcile_permissions` first; it prunes stale
   package-managed schema rows before `makemigrations` / `rebac sync` can run.

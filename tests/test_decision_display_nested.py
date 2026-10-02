@@ -3,10 +3,11 @@
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
+from angee.graphql.data.hasura import with_filter_aliases
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
@@ -92,6 +93,21 @@ def test_superseded_by_nested_decision_projects_the_replacement(schema, nested_r
         "workflow_name": workflow.name if viewer_index == 1 else None,
         "node_key": "review" if viewer_index != 3 else None,
     }}]}
+
+
+@pytest.mark.parametrize("viewer_index,ambient_index", [(1, 3), (3, 1)])
+def test_alias_projection_uses_the_queryset_actor(nested_reviews, viewer_index, ambient_index):
+    """A pinned row actor also owns related scalar visibility under another ambient actor."""
+
+    workflow, _owner, _operator, _assignee, admit = nested_reviews
+    decision = admit()
+    with actor_context(nested_reviews[ambient_index]):
+        rows = with_filter_aliases(Decision.objects.with_actor(nested_reviews[viewer_index]))
+        projected = rows.values("workflow_name", "node_key").get(pk=decision.pk)
+    assert projected == {
+        "workflow_name": workflow.name if viewer_index == 1 else None,
+        "node_key": "review" if viewer_index == 1 else None,
+    }
 
 
 def test_nested_decision_display_does_not_add_queries_per_row(schema, nested_reviews):

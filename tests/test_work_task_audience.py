@@ -33,7 +33,9 @@ class TaskAudienceTests(WorkCase):
         self.assertEqual(self.recipients(self.post(task)), {self.manager.pk})
         with CaptureQueriesContext(connection) as queries:
             list(task.thread_team().thread_audience())
-        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(queries), 2, queries.captured_queries)
+        self.assertIn('INSERT INTO "rebac_permissionauditevent"', queries[0]["sql"])
+        self.assertIn('FROM "spaces_membership"', queries[1]["sql"])
 
     def test_live_queue_changes_restriction_and_queue_free_followers(self):
         task = self.task()

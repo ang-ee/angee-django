@@ -70,4 +70,3 @@ def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
     assert not RelationshipRegistry._base_manager.exists()
     assert not RebacResource._base_manager.exists()
     assert not backend.check_access(subject=actor, action="read", resource=document).allowed
-    call_command("rebac", "index", "verify", verbosity=0)

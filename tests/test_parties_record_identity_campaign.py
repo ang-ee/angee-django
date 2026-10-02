@@ -51,7 +51,7 @@ def test_record_arm_exposes_accountless_follower_identity_and_no_private_fields(
             assert readable.display_name == "Accountless follower" and readable.notes is None
 
 
-def test_record_follower_sql_is_one_query_and_unfollow_revokes_parent_and_child(record_identity, monkeypatch):
+def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(record_identity, monkeypatch):
     record, person, _, reader, _ = record_identity
     local = backend()
     monkeypatch.setattr(type(local), "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
@@ -62,7 +62,11 @@ def test_record_follower_sql_is_one_query_and_unfollow_revokes_parent_and_child(
         str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
-        assert len(queries) == 1
+        # Three revision reads, actor-set expansion, 13 arrow sources, row SELECT.
+        assert len(queries) == 18, queries.captured_queries
+        assert sum(
+            query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
+        ) == 1
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):
         record.message_unsubscribe(party=person)

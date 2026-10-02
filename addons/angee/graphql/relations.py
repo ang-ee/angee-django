@@ -20,7 +20,6 @@ from strawberry import Info
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
-from strawberry_django.utils.typing import get_django_definition, unwrap_type
 
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
@@ -216,16 +215,7 @@ def actor_scoped_public_id(field_name: str) -> Any:
 def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], Any]:
     """Build the shared cached-target resolver with an actor-scoped fallback."""
 
-    def prefetch(info: Info) -> models.Prefetch:
-        related_type = unwrap_type(info.return_type)
-        related_model = get_django_definition(related_type, strict=True).model
-        queryset = read_scoped_queryset(related_model, current_actor())
-        if queryset is None:
-            queryset = related_model._default_manager.none()
-        queryset = run_type_get_queryset(queryset, related_type, info)
-        return models.Prefetch(field_name, queryset=optimize(queryset, info))
-
-    def resolve(root: models.Model, info: Info) -> Any:
+    def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
         if isinstance(field, models.OneToOneRel):
             fk_id = field.field.target_field.value_from_object(root)
@@ -288,6 +278,7 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         queryset = read_scoped_queryset(related_model, current_actor())
         if queryset is None:
             queryset = related_model._default_manager.none()
+        queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)
         store = OptimizerStore()

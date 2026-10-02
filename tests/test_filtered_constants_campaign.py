@@ -41,7 +41,7 @@ def test_non_user_public_read_scopes_filter_aggregates_without_enumeration(
 
 
 @pytest.mark.parametrize("private_column", ("context_content_type_id", "context_object_id", "reference_currency_id"))
-def test_partial_currency_context_is_refused_and_complete_context_revokes_global_read(public_policy, private_column):
+def test_partial_currency_context_is_refused_and_complete_context_is_private(public_policy, private_column):
     with system_context(reason="tests.t3.currency_columns"):
         currency = Currency.objects.create(code="USD", name="Dollar")
         reference = Currency.objects.create(code="EUR", name="Euro")
@@ -54,16 +54,22 @@ def test_partial_currency_context_is_refused_and_complete_context_revokes_global
         "context_object_id": str(reference.pk),
         "reference_currency_id": reference.pk,
     }
-    # Each partial context is invalid at the native database constraint.
-    with pytest.raises(IntegrityError, match="money_rate_context_complete"), transaction.atomic():
-        CurrencyRate._base_manager.filter(pk=row.pk).update(**{private_column: values[private_column]})
-    assert CurrencyRate.objects.with_actor(subject).filter(pk=row.pk).exists()
-    CurrencyRate._base_manager.filter(pk=row.pk).update(**values)
-    assert not CurrencyRate.objects.with_actor(subject).filter(pk=row.pk).exists()
-    CurrencyRate._base_manager.filter(pk=row.pk).update(
-        context_content_type_id=None,
-        context_object_id="",
-        reference_currency_id=None,
+    # Rate identity is immutable. Exercise the database constraint on a new
+    # candidate, then create a separate complete contextual identity.
+    partial = CurrencyRate(
+        currency=currency, date=date(2026, 9, 2), rate=Decimal("1.2"),
+        **{private_column: values[private_column]},
     )
+    with (
+        system_context(reason="tests.t3.currency_partial_constraint"),
+        pytest.raises(IntegrityError, match="money_rate_context_complete"),
+        transaction.atomic(),
+    ):
+        CurrencyRate._base_manager.bulk_create([partial])
+    with system_context(reason="tests.t3.currency_context"):
+        contextual = CurrencyRate.objects.create(
+            currency=currency, date=row.date, rate=row.rate, **values,
+        )
     assert CurrencyRate.objects.with_actor(subject).filter(pk=row.pk).exists()
+    assert not CurrencyRate.objects.with_actor(subject).filter(pk=contextual.pk).exists()
     assert relationship_snapshot() == before

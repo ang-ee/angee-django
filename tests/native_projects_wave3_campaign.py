@@ -30,7 +30,7 @@ class ProjectSurfaceCampaign(WorkCase):
         task = self.task()
         self.share(task, self.reader)
         with system_context(reason="tests.t3.phase_requester"):
-            apps.get_model("intake", "Need").objects.create(
+            need = apps.get_model("intake", "Need").objects.create(
                 task=task,
                 party=self.Person._base_manager.get(user=self.reader),
                 body="Request",
@@ -38,6 +38,7 @@ class ProjectSurfaceCampaign(WorkCase):
             project = self.Project.objects.create(title="Private project", owner=self.owner, converted_from=task)
             phase = self.Milestone.objects.create(project=project, name="Selected phase")
             project.set_current_milestone(phase)
+        need.with_actor(self.owner).decide_access("approve")
         query = "{ project_tasks { id promoted_phase project { id } milestone { id } } projects { id } }"
         before = self.graphql(query, {}, user=self.reader)
         self.assertIsNone(before["project_tasks"][0]["promoted_phase"])

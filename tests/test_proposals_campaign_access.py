@@ -232,6 +232,45 @@ def test_answer_audience_at_insert_and_after_opening_for_six_seats(
             assert_read(answer, c.person(seat), allowed)
 
 
+@pytest.mark.parametrize("verb", ("submit", "create_track"))
+@pytest.mark.parametrize("ambient_seat", ("responder", "facilitator"))
+def test_write_verbs_recheck_retirement_after_preflight_with_the_pinned_actor(
+    campaign: ProposalCampaign,
+    monkeypatch: pytest.MonkeyPatch,
+    ambient_seat: str,
+    verb: str,
+) -> None:
+    c = campaign
+    round = c.round()
+    proposal = c.admit(round, "responder")
+    responder, manager = c.person("responder"), c.person("facilitator")
+    before = Project._base_manager.count()
+    has_access = Proposal.has_access
+    retired = False
+
+    def retire_after_preflight(instance: Proposal, action: str, **kwargs: Any) -> bool:
+        nonlocal retired
+        allowed = has_access(instance, action, **kwargs)
+        if instance.pk == proposal.pk and action == "write" and not retired:
+            assert allowed
+            retired = True
+            with actor_context(manager):
+                as_actor(round, manager).remove_responder(responder)
+        return allowed
+
+    monkeypatch.setattr(Proposal, "has_access", retire_after_preflight)
+    with actor_context(c.person(ambient_seat)), pytest.raises(PermissionDenied, match="Proposal write access"):
+        getattr(as_actor(proposal, responder), verb)()
+    stored = Proposal._base_manager.get(pk=proposal.pk)
+    assert retired
+    assert stored.retired_at == c.now
+    assert stored.state == "draft"
+    assert stored.submitted_at is None
+    assert stored.submitted_by_id is None
+    assert stored.track_id is None
+    assert Project._base_manager.count() == before
+
+
 @pytest.mark.parametrize("seat", ("facilitator", "responder", "peer", "requester", "evaluator", "outsider"))
 @pytest.mark.parametrize("visibility", ("round", "responder", "sealed"))
 def test_only_managers_and_own_responders_can_change_answer_audience(
@@ -292,10 +331,10 @@ def test_answer_insert_authorizes_the_seat_before_creating_an_already_narrowed_r
     with actor_context(actor):
         if seat not in {"facilitator", "responder"}:
             with pytest.raises(PermissionDenied):
-                Answer.objects.check_create({"proposal": (proposal,), "topic": (topic,)})
+                Answer.objects.check_create({"proposal": (proposal,)})
             assert not Answer._base_manager.filter(proposal=proposal).exists()
             return
-        Answer.objects.check_create({"proposal": (proposal,), "topic": (topic,)})
+        Answer.objects.check_create({"proposal": (proposal,)})
         # The existing manual factory convention preflights under the caller,
         # then performs the authorized insert with the native system binding.
         answer = Answer(proposal=proposal, topic=topic, body="Answer", visibility=visibility)

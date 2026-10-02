@@ -175,7 +175,7 @@ def test_scoped_queryset_agrees_with_checks_for_every_follower_audience(follower
                 assert scoped == checked == expected, (model.__name__, actor, action)
 
 
-def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_in_one_query(
+def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fixed_cost(
     followers: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -202,6 +202,10 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_in_one
             assert resource_type is not None
             for action in ("read", "read_private") if model != Tie else ("read",):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
+                # Read prepares 13 arrow sources; Tie prepares one Party source.
+                # Private reads need only the final row SELECT.
+                expected_queries = 2 if model == Tie else 14 if action == "read" else 1
+                counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
                     query = scoped.filter(pk__in=ids).values_list("pk", flat=True)
@@ -213,8 +217,14 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_in_one
                     )
                     with CaptureQueriesContext(connection) as captured:
                         result = set(query)
-                    assert len(captured) == 1, captured.captured_queries
+                    counts.append(len(captured))
+                    assert len(captured) == expected_queries, captured.captured_queries
+                    assert sum(
+                        query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
+                        for query in captured.captured_queries
+                    ) == 1
                     assert result == (set(ids) if action == "read" and model != Tie else set())
+                assert counts[0] == counts[1]
         for model in (Party, Person):
             # Also exercise the native public queryset, with enumeration forbidden.
             assert set(model.objects.filter(pk__in=[row.pk for row in rows]).values_list("pk", flat=True)) == {

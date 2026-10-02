@@ -443,7 +443,7 @@ class FolderManager(AngeeManager):
                 return tuple(reversed(names))
 
             pruned = 0
-            for pk in sorted(parents, key=lambda folder_pk: len(path_of(folder_pk))):
+            for pk in sorted(parents, key=lambda folder_pk: len(path_of(folder_pk)), reverse=True):
                 parent_id, _name = parents[pk]
                 if path_of(pk) in present_paths:
                     continue

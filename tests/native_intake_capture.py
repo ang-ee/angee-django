@@ -160,7 +160,7 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         need = self.Need._base_manager.get()
         with system_context(reason="test.intake.requester_role"):
             requester = get_user_model().objects.create_user(username="requester-role-person", kind="person")
-            need.admit_requester(requester)
+            need.with_actor(self.actor).admit_requester(requester)
             self.assertTrue(need.task.thread_reader_allowed(requester))
             self.assertTrue(need.task.message_is_follower(user=requester))
             need.remove_requester()

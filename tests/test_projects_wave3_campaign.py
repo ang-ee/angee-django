@@ -125,7 +125,8 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
             with CaptureQueriesContext(connection) as queries:
                 values = list(query.filter(pk=task.pk).values_list("_promoted_phase", flat=True))
             assert values == [phase.name]
-            assert len(queries) == 1
+            # Actor-set expansion, six arrow sources, then the projected row SELECT.
+            assert len(queries) == 8, queries.captured_queries
     finally:
         install_permission_schema(original, active=active)
 

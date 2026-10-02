@@ -35,12 +35,12 @@ def test_content_edit_validation_reads_tracking(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
-def test_content_edit_validation_reuses_prefetched_tracking(
+def test_content_edit_validation_rechecks_tracking_after_prefetch(
     composed_tables: None,
     django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
     prefetched: bool,
 ) -> None:
-    """Native prefetch avoids another query; uncached validation reads tracking."""
+    """Stale or actor-scoped prefetches cannot hide immutable tracking values."""
     with system_context(reason="messaging prefetched tracking setup"), mute_changes():
         message = Message.objects.create(
             direction=Message.Direction.INTERNAL,
@@ -50,10 +50,9 @@ def test_content_edit_validation_reuses_prefetched_tracking(
             message = Message.objects.prefetch_related("tracking_values").get(pk=message.pk)
         TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
     with system_context(reason="messaging prefetched tracking validation"):
-        with django_assert_num_queries(0 if prefetched else 1):
-            assert message.content_edit_error() == (
-                None if prefetched else "Messages with tracking values cannot be edited."
-            )
+        # The system queryset audits its use, then checks the authoritative rows.
+        with django_assert_num_queries(2):
+            assert message.content_edit_error() == "Messages with tracking values cannot be edited."
 
 
 @pytest.mark.django_db(transaction=True)

@@ -43,7 +43,14 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, CreationKeyQuerySet, HistoryMixin, OwnerMixin, RevisionMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target, concrete_child, concrete_child_models
+from angee.base.refs import (
+    RecordRef,
+    RecordRefMixin,
+    canonical_record_target,
+    concrete_child,
+    concrete_child_accessor,
+    concrete_child_models,
+)
 from angee.knowledge.retrieval import RetrievalBackend
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -123,7 +130,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
 
         Requires vault create and, for a new clone, template read. New identities and attribution
         belong to the actor; grants and record bindings are never copied. Unknown
-        sidecar kinds are refused rather than copied without their content.
+        page kinds are refused rather than copied without their content.
         ``owned=False`` inserts the clone without an owner. A replay
         key belongs to the creating actor, even after ownership is transferred or
         cleared; changing template, name or ownership intent conflicts. Template
@@ -145,7 +152,17 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
             markdown_model = apps.get_model("knowledge", "MarkdownPage")
             pages = {
                 page.pk: page
-                for page in page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk")
+                for page in (
+                    page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk").prefetch_related(
+                        *(
+                            models.Prefetch(
+                                concrete_child_accessor(page_model, child_model),
+                                queryset=child_model._base_manager.all(),
+                            )
+                            for child_model in concrete_child_models(page_model)
+                        )
+                    )
+                )
             }
             for page in pages.values():
                 if page.kind not in (Page.PageKind.NOTE, Page.PageKind.TEMPLATE, Page.PageKind.FOLDER):
@@ -731,20 +748,25 @@ class MarkdownPageManager(AngeeManager):
     ) -> None:
         """Insert child bodies for pages admitted by the vault clone preflight."""
 
-        for source in bodies:
-            page = pages[source.pk]
-            body = self.model(
-                page_ptr=page,
-                kind=source.kind,
-                body=source.body,
-                body_hash=source.body_hash,
-                word_count=source.word_count,
-            )
-            with system_context(reason="knowledge.vault.clone.markdown"):
+        copies = []
+        with system_context(reason="knowledge.vault.clone.markdown"):
+            for source in bodies:
+                page = pages[source.pk]
+                body = self.model(
+                    **{field.attname: getattr(page, field.attname) for field in page._meta.concrete_fields},
+                    page_ptr=page,
+                    kind=source.kind,
+                    body=source.body,
+                    body_hash=source.body_hash,
+                    word_count=source.word_count,
+                )
                 body.save_base(raw=True, force_insert=True, using=self.db)
+                copies.append(body.with_actor(actor))
+        apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
+        for body in copies:
             post_save.send(
-                sender=self.model, instance=body.with_actor(actor), created=True,
-                raw=False, using=self.db, update_fields=None,
+                sender=self.model, instance=body, created=True,
+                raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
             )
 
     def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:

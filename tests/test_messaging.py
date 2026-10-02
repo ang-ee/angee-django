@@ -585,20 +585,21 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
 
     del composed_tables
     user_model = get_user_model()
-    with system_context(reason="test threaded model unlink setup"):
-        user = user_model.objects.create_user(username="unlinker", email="unlinker@example.com")
+    user = user_model.objects.create_user(username="unlinker", email="unlinker@example.com")
+    with actor_context(user), system_context(reason="test threaded model unlink setup"):
         ticket = ThreadedTicket.objects.create(title="Unlink case")
         first = ticket.message_post("First message.")
         second = ticket.message_post("Second message.")
         ticket.message_reaction(first, reaction="👍", user=user)
         other = ThreadedTicket.objects.create(title="Other unlink case")
         other_message = other.message_post("Different thread.")
+        before_count = Message._base_manager.filter(thread=first.thread).count()
 
-    with system_context(reason="test threaded model unlink"):
+    with actor_context(user), system_context(reason="test threaded model unlink"):
         thread = ticket.message_unlink(first)
 
     thread.refresh_from_db()
-    assert thread.message_count == 2
+    assert thread.message_count == before_count - 1
     assert thread.last_message_at == second.sent_at
     assert not Message._base_manager.filter(pk=first.pk).exists()
     assert not Part._base_manager.filter(message_id=first.pk).exists()
@@ -2432,7 +2433,7 @@ def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> N
 def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> None:
     """A thread-less message re-homed on re-sync still bumps the winning thread (H1).
 
-    Deleting a thread ``SET_NULL``s its messages, leaving a live message with no thread.
+    An explicitly detached message can survive without its former thread.
     A later re-sync that resolves that message onto thread B must bump B's ``message_count``
     even though the prior thread was NULL — the winner gains the message whenever the
     resolved thread differs from the prior one, and there is simply no losing thread to
@@ -2443,8 +2444,9 @@ def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> No
     b_sent = _AT + timedelta(days=1)
     _ingest([_parsed("b", subject="Beta topic", references=("a",), sent_at=b_sent)], channel=channel)
     orphan_thread = Message._base_manager.get(external_id="b").thread
-    # Delete the message's thread; its FK SET_NULLs, leaving the message thread-less.
+    # Detach first: thread deletion owns and cascades every message still attached.
     with system_context(reason="test null-thread re-home setup"):
+        Message._base_manager.filter(external_id="b").update(thread=None)
         Thread._base_manager.filter(pk=orphan_thread.pk).delete()
     assert Message._base_manager.get(external_id="b").thread_id is None
 

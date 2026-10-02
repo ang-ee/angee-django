@@ -34,13 +34,17 @@ def record_access_target(composed_tables: None) -> tuple[Project, Any, Any]:
     return Project._base_manager.get(pk=project.pk), owner, outsider
 
 
-def test_require_access_returns_and_binds_ambient_actor(record_access_target: tuple[Project, Any, Any]) -> None:
+def test_require_access_binds_ambient_actor_until_explicitly_rebound(
+    record_access_target: tuple[Project, Any, Any],
+) -> None:
     project, owner, outsider = record_access_target
 
     with actor_context(owner):
         assert project.require_access("write") == to_subject_ref(owner)
-    with actor_context(outsider), pytest.raises(PermissionDenied, match="'write'"):
-        project.require_access("write")
+    with actor_context(outsider):
+        assert project.require_access("write") == to_subject_ref(owner)
+        with pytest.raises(PermissionDenied, match="'write'"):
+            project.require_access("write", outsider)
     assert project.actor() == to_subject_ref(outsider)
 
 

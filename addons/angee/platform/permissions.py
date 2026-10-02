@@ -48,10 +48,8 @@ def reconcile_permission_schema() -> int:
 
     Idempotent and best-effort: returns the number of stale managed rows pruned,
     and is a no-op on a fresh/unmigrated database (no ``Schema*`` tables yet). Runs
-    under ``system_context`` in one transaction and one permission-index owner:
-    each schema-row delete would otherwise rebuild the index of its types by
-    itself. Schema rows go first; with their change pending, the relationship
-    deletes that follow join the same rebuild.
+    under ``system_context`` in the library's policy-write transaction, which
+    serializes schema changes and validates the resulting policy once.
     """
 
     from rebac import system_context
