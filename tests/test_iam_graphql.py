@@ -33,6 +33,7 @@ from rebac.middleware import ActorMiddleware
 from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
+from angee.agents.testing.models import Agent
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
@@ -831,6 +832,26 @@ def test_reveal_credential_returns_the_secret_and_is_admin_only(
 
     # A non-admin cannot reveal another principal's secret.
     assert _execute(console_schema, reveal, {"id": credential_id}, user=plain).errors is not None
+
+
+def test_user_hasura_delete_reports_related_blockers(iam_connection_tables: None) -> None:
+    """IAM's authored write backend shares the readable relationship error."""
+
+    admin = _platform_admin("user-delete-blocker-admin")
+    with system_context(reason="test.iam.delete_blocker.seed"):
+        agent = Agent.objects.create(name="Retained agent", owner=admin)
+        user = agent.user
+    result = _execute(
+        _schema("console"),
+        "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }",
+        {"id": _user_public_id(user)},
+        user=admin,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert "agents (1)" in result.errors[0].message
+    with system_context(reason="test.iam.delete_blocker.verify"):
+        assert User.objects.filter(pk=user.pk).exists()
 
 
 def test_user_crud_create_update_delete_are_admin_only(

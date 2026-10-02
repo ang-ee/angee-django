@@ -587,8 +587,7 @@ def _delete_instance(instance: Any) -> Any | None:
     """Delete ``instance`` in Hasura ``delete_<res>_by_pk`` form."""
 
     preview = DeletePreview.from_instance(instance)
-    if preview.has_blockers:
-        return None
+    preview.require_no_blockers()
     pk = instance.pk
     instance.delete()
     instance.pk = pk

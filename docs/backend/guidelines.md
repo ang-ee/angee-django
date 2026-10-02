@@ -639,13 +639,16 @@ data through REBAC, never a queryset bypass.
   [`angee.E024`](../../angee/base/checks.py) rejects caveated subjects in every
   effective schema. Actor-scoped querysets carry no caveat context. Express
   row-dependent conditions as live field-backed relations.
-- Bracket every server-side read/write in `system_context`/`asystem_context` and
-  resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
-  an actor is denied.
-- A per-row `create` permission cannot gate an insert (the unsaved row has no id →
-  deny). Gate explicitly with a preflight (`has_access("write")` /
-  `rebac.check_new`), then insert via `row.sudo()` + `save()`; `.sudo()` never
-  auto-clears, so follow with `.with_actor(actor)`.
+- User-requested reads and writes retain their actor scope. Reserve
+  `system_context`/`asystem_context` for named system-owned work; do not elevate
+  a user factory merely because it inserts a row.
+- Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
+  const-backed relationships, so per-row `create` gates remain authoritative.
+  Compose that path for ordinary factories, as
+  [`AgentSessionManager.start`](../../addons/angee/agents/models.py) does.
+  Manual factories needing an explicit relationship preflight use
+  [`AngeeManager.check_create`](../../angee/base/models.py); restore the
+  authorized actor after any required per-instance elevated insert.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource

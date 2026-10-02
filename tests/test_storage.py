@@ -21,7 +21,7 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import RequestFactory
-from rebac import actor_context, system_context
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
 from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
@@ -636,6 +636,40 @@ def test_storage_console_schema_exposes_file_and_folder_changes() -> None:
 
     assert "fileChanged" in sdl
     assert "folderChanged" in sdl
+
+
+@pytest.mark.parametrize("resource", ["file", "folder"])
+@pytest.mark.parametrize("confirm", [False, True])
+def test_storage_delete_preview_requires_delete_permission(drive: Any, resource: str, confirm: bool) -> None:
+    """A storage reader cannot preview or confirm another owner's deletion."""
+
+    reader = get_user_model().objects.create_user(username="storage-delete-reader")
+    with actor_context(drive.alice):
+        target = (
+            File.objects.draft(filename="retained.txt", drive_id=str(drive.sqid))
+            if resource == "file"
+            else Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Retained folder")
+        )
+    with system_context(reason="test.storage.delete_permission"):
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(drive), relation="viewer", subject=to_subject_ref(reader)),
+        ])
+    with actor_context(reader):
+        readable = type(target).objects.get(pk=target.pk)
+        assert readable.has_access("read")
+        assert not readable.has_access("delete")
+    result = execute_schema(
+        addon_schema(storage_schema.schemas, "public"),
+        f"""mutation Delete($id: ID!, $confirm: Boolean!) {{
+          delete_{resource}(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
+        }}""",
+        {"id": str(target.sqid), "confirm": confirm},
+        user=reader,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    assert result.data is None
+    assert type(target).objects.as_user(drive.alice).filter(pk=target.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)

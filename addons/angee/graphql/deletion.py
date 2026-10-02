@@ -14,10 +14,10 @@ from django.db.models.deletion import (
     ProtectedError,
     RestrictedError,
 )
-from rebac import current_actor, system_context
+from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
 from angee.base.identity import public_id_of
-from angee.base.scoping import read_scoped_queryset
+from angee.base.scoping import lock_if_supported, read_scoped_queryset
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
@@ -28,6 +28,7 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
 )
 from angee.graphql.ids import require_instance_for_id
+from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
 _PREVIEW_PK_CHUNK_SIZE = 500
@@ -147,6 +148,16 @@ class DeletePreview:
 
     deleted_instance: strawberry.Private[models.Model | None] = None
     """Deleted row returned internally to mutation envelopes, never exposed in SDL."""
+
+    def require_no_blockers(self) -> None:
+        """Raise a readable mutation error when related rows prevent deletion."""
+
+        if self.has_blockers:
+            blockers = ", ".join(f"{group.label} ({group.count})" for group in self.blocked)
+            raise GraphQLError(
+                f"Deletion is blocked by related records: {blockers}.",
+                extensions={"code": "BAD_USER_INPUT"},
+            )
 
     @classmethod
     def from_instance(
@@ -302,18 +313,24 @@ def delete_by_public_id(
 ) -> DeletePreview:
     """Preview, then optionally delete, one public-id-addressed model row.
 
-    The caller owns authorization. Passing ``reason`` elevates the lookup/delete
-    under ``system_context`` for admin/action surfaces whose permission class has
-    already gated the request actor.
+    REBAC delete permission is checked before collecting or disclosing related
+    rows and before locking a confirmed delete. ``queryset`` retains the caller's
+    target restrictions and must be unlocked. Passing ``reason`` elevates the
+    lookup/delete for admin/action surfaces that already authorized the request.
     """
 
     context = system_context(reason=reason) if reason is not None else nullcontext()
     with context, transaction.atomic():
+        targets = queryset if queryset is not None else model._default_manager.all()
         instance = require_instance_for_id(
             model,
             public_id,
-            queryset=(queryset if queryset is not None else model._default_manager.all()),
+            queryset=targets,
         )
+        if isinstance(instance, RebacMixin) and not instance.has_access("delete"):
+            raise PermissionDenied("You are not allowed to delete this record.")
+        if confirm:
+            instance = require_instance_for_id(model, public_id, queryset=lock_if_supported(targets))
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
             if before_delete is not None:

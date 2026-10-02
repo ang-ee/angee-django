@@ -1,10 +1,9 @@
 """GraphQL schema contributions for the agents addon.
 
-Admin console surface for the agent catalogue: agents (and their templates), the
+Console surface for the agent catalogue: agents (and their templates), the
 skills they mount, the MCP servers/tools they reach, and the inference
-provider/model catalogue they run on. Platform-admin gated like the integrate
-console, so the REBAC-guarded relations these types expose (integration, credential,
-source, template) are safe — the const-admin reaches every related row. Skill
+provider/model catalogue they run on. Catalogue operations retain their platform
+admin gates; persisted chat uses the caller's row permissions. Skill
 *sources* are managed in the integrate VCS console (a ``kind="skill"`` source);
 this addon owns only the discovered :class:`Skill` rows.
 """
@@ -31,12 +30,14 @@ from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.base.actors import actor_user_id
 from angee.base.identity import public_subject_ref
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.permissions import session_user
 from angee.iam.schema import UserType
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
@@ -171,6 +172,7 @@ class AgentType(AngeeNode):
     """Admin projection of an agent (or, when ``is_template``, an agent template)."""
 
     owner: UserType
+    permissions = permissions_field(("call",))
 
     @strawberry.field
     def assignment_subject(self) -> str:
@@ -199,6 +201,7 @@ class AgentType(AngeeNode):
     conflict_kind: auto
     conflict_name: auto
     expects_service: bool = strawberry_django.field(only=["runtime_class"])
+    runs_in_process: bool = strawberry_django.field(only=["runtime_class"])
     can_chat: bool = strawberry_django.field(only=["runtime_status", "runtime_class", "service"])
     can_provision: bool = strawberry_django.field(
         only=["lifecycle", "runtime_status", "workspace", "conflict_kind", "conflict_name"]
@@ -209,7 +212,10 @@ class AgentType(AngeeNode):
         only=["lifecycle", "workspace", "conflict_kind", "conflict_name", "runtime_class"]
     )
     can_deprovision: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
-    can_delete: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
+    can_delete: bool = strawberry_django.field(
+        only=["lifecycle", "workspace", "service", "conflict_kind"],
+        annotate={"_has_sessions": lambda info: Agent.has_sessions_expression()},
+    )
     created_at: auto
     updated_at: auto
 
@@ -273,6 +279,7 @@ class AgentChatTarget:
     status: str
     model_handle: str
     runtime_class: AgentRuntimeImpl  # type: ignore[valid-type]
+    runs_in_process: bool
     session_id: PublicID | None = None
 
 
@@ -386,7 +393,10 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     groupable=["agent", "owner", "status"],
     insert=False,
     update=False,
-    delete=False,
+    write_backend=AngeeHasuraWriteBackend(
+        AgentSessionModel,
+        delete_guard=lambda session: session.delete_blocker(),
+    ),
     field_id_decode={
         "agent": public_pk_decoder(Agent),
         "owner": public_pk_decoder(User),
@@ -680,7 +690,7 @@ class AgentSessionQuery:
 
         The chatter knows the *view*, not the agent: this picks the actor's running agent
         (``view["type"]`` is the routing seam for a later view-specialised agent) so the
-        client can mint its chat endpoint (``agentChatEndpoint``). Returns ``None`` when the
+        client can select its chat surface. Returns ``None`` when the
         user has no running agent, so the chatter shows a call-to-action instead of erroring.
         """
 
@@ -695,7 +705,7 @@ class AgentSessionQuery:
                 .exclude(status=SessionStatus.CLOSED)
                 .order_by("-updated_at")
                 .first()
-                if agent.runtime_backend.runs_in_process
+                if agent.runs_in_process
                 else None
             )
         return AgentChatTarget(
@@ -704,8 +714,61 @@ class AgentSessionQuery:
             status=str(agent.runtime_status),
             model_handle=str(agent.service_model_handle()) if model is not None else "",
             runtime_class=agent.runtime_class,
+            runs_in_process=agent.runs_in_process,
             session_id=PublicID(str(session.sqid)) if session is not None else None,
         )
+
+
+@strawberry.type
+class AgentSessionMutation:
+    """Authenticated, row-authorized persisted chat mutations."""
+
+    @strawberry.mutation
+    def start_agent_session(
+        self,
+        info: strawberry.Info,
+        agent: PublicID,
+        context: JSON | None = strawberry.UNSET,
+    ) -> AgentSessionType:
+        """Start an in-process session for an agent the caller may call."""
+
+        if context is strawberry.UNSET:
+            context_data: dict[str, Any] = {}
+        elif isinstance(context, dict):
+            context_data = context
+        else:
+            raise GraphQLError("Session context must be an object.", extensions={"code": "BAD_USER_INPUT"})
+        owner = session_user(info)
+        target = authorized_permission_target(info, Agent, agent, "call")
+        session = AgentSessionModel.objects.start(
+            target,
+            owner=owner,
+            context=context_data,
+        )
+        return cast(AgentSessionType, session)
+
+    @strawberry.mutation
+    def post_agent_message(self, info: strawberry.Info, session: PublicID, text: str) -> AgentTurnType:
+        """Append a user turn to a session the caller may post to."""
+
+        target = authorized_permission_target(info, AgentSessionModel, session, "post")
+        return cast(AgentTurnType, target.post(text))
+
+    @strawberry.mutation
+    def close_agent_session(self, info: strawberry.Info, session: PublicID) -> AgentSessionType:
+        """Cancel open turns and close an authorized session."""
+
+        target = authorized_permission_target(info, AgentSessionModel, session, "write")
+        target.close()
+        return cast(AgentSessionType, target)
+
+    @strawberry.mutation
+    def cancel_agent_turn(self, info: strawberry.Info, turn: PublicID) -> AgentTurnType:
+        """Stop one authorized turn, allowing pending turns to continue."""
+
+        target = authorized_permission_target(info, AgentTurn, turn, "write")
+        target.session.cancel_turn(target)
+        return cast(AgentTurnType, target)
 
 
 @strawberry.type
@@ -854,6 +917,7 @@ schemas = {
             _INFERENCE_MODEL_RESOURCE.mutation,
             InferenceActionMutation,
             AgentActionMutation,
+            AgentSessionMutation,
         ],
         "subscription": [
             changes(Agent, field="agentChanged"),

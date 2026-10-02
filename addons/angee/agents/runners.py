@@ -14,9 +14,6 @@ from typing import Any, Literal
 SessionUpdateSink = Callable[[dict[str, Any]], None]
 """Sink for one ACP ``session/update`` payload."""
 
-SessionHeartbeat = Callable[[], None]
-"""Synchronous callback refreshing the workflow-owned execution lease."""
-
 
 @dataclass(frozen=True, slots=True)
 class TurnOutcome:
@@ -26,6 +23,7 @@ class TurnOutcome:
     usage: dict[str, int] = field(default_factory=dict)
     approval_requests: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
+    """Public refusal composed by the runtime; never raw provider exception text."""
     text: str = ""
     replay_state: Any = field(default_factory=list)
 
@@ -40,8 +38,8 @@ class SessionRunner:
         *,
         deferred_results: list[Mapping[str, Any]],
         emit: SessionUpdateSink,
-        heartbeat: SessionHeartbeat,
+        deadline: float,
     ) -> TurnOutcome:
-        """Run one turn and return its neutral outcome."""
+        """Run one turn before the absolute monotonic deadline and return its outcome."""
 
         raise NotImplementedError
