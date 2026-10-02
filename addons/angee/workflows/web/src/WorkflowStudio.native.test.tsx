@@ -2,10 +2,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { StudioStory } from "./WorkflowStudio.stories";
+import type { GraphEditorProps } from "@angee/ui";
 const guards = vi.hoisted(() => ({ callbacks: [] as unknown[] }));
+const graph = vi.hoisted(() => ({ props: undefined as GraphEditorProps | undefined }));
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
-  return { ...actual, useUnsavedChangesNavigationGuard: (options: Parameters<typeof actual.useUnsavedChangesNavigationGuard>[0]) => {
+  return { ...actual, GraphEditor: (props: GraphEditorProps) => {
+    graph.props = props;
+    return <actual.GraphEditor {...props} />;
+  }, useUnsavedChangesNavigationGuard: (options: Parameters<typeof actual.useUnsavedChangesNavigationGuard>[0]) => {
     guards.callbacks.push(options.isDirtyNow);
     return actual.useUnsavedChangesNavigationGuard(options);
   } };
@@ -15,7 +20,18 @@ beforeAll(() => {
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
-afterEach(() => { cleanup(); guards.callbacks = []; });
+afterEach(() => { cleanup(); guards.callbacks = []; graph.props = undefined; });
+
+test("Studio composes the native readable initial view and navigable MiniMap in a filling canvas", async () => {
+  render(<StudioStory linked />);
+  await screen.findByRole("button", { name: "Delete link from Entry (entry), Done, to Second (second)" });
+  expect(graph.props).toMatchObject({ layoutOptions: { rankdir: "LR" }, initialView: { minZoom: 0.65, ready: true }, miniMap: true });
+  expect(document.querySelector(".react-flow__minimap")).toBeTruthy();
+  const canvas = screen.getByTestId("workflow-studio-canvas");
+  expect(canvas.className).toContain("flex-1");
+  expect(canvas.className).toContain("min-h-0");
+  expect(canvas.className).not.toMatch(/vh|rem/);
+});
 
 async function selectEntry() {
   const node = await screen.findByTestId("rf__node-entry");
@@ -288,7 +304,9 @@ test("a hidden retained Studio keeps its navigation guard and selection opens th
   fireEvent.click(screen.getByRole("button", { name: "Stay" }));
   fireEvent.click(screen.getByRole("button", { name: "Show studio" }));
   expect((await screen.findByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("retained");
-  expect(screen.getByTestId("workflow-studio-canvas").className).toContain("h-[65vh]");
+  expect(screen.getByTestId("workflow-studio-canvas").className).toContain("flex-1");
+  expect(screen.getByTestId("workflow-studio-canvas").className).toContain("min-h-0");
+  expect(document.querySelector(".react-flow__minimap")).toBeTruthy();
 });
 
 test("links wait for their declared source handles on the first outcomes load", async () => {

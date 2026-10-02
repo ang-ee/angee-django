@@ -76,9 +76,15 @@ test("writers default to Studio while readers retain Overview without authoring 
   const studio = await screen.findByRole("tab", { name: "Studio" });
   await waitFor(() => expect(studio.getAttribute("aria-selected")).toBe("true"));
   expect(await screen.findByRole("button", { name: "Save draft" })).toBeTruthy();
+  const studioPanel = screen.getByRole("tabpanel", { name: "Studio" });
+  expect(studioPanel.className).toContain("flex-1");
+  expect(studioPanel.className).toContain("overflow-hidden");
+  expect(studioPanel.className).not.toContain("max-w-[1100px]");
+  expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-base");
   fireEvent.click(await screen.findByTestId("rf__node-entry"));
   fireEvent.change(await screen.findByRole("textbox", { name: "Key" }), { target: { value: "retained" } });
   fireEvent.click(screen.getByRole("tab", { name: "Versions" }));
+  expect(await screen.findByRole("tabpanel", { name: "Versions" })).toHaveProperty("className", expect.stringContaining("max-w-[1100px]"));
   await waitFor(() => expect(screen.queryByRole("tab", { name: "Node inspector" })).toBeNull());
   fireEvent.click(screen.getByRole("tab", { name: "Studio" }));
   expect((await screen.findByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("retained");
