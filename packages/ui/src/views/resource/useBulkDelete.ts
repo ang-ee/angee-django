@@ -252,6 +252,7 @@ function aggregatePreviews(
     deleted: aggregateGroups(entries.flatMap((entry) => entry.preview.deleted)),
     updated: aggregateGroups(entries.flatMap((entry) => entry.preview.updated)),
     blocked: aggregateGroups(entries.flatMap((entry) => entry.preview.blocked)),
+    refusals: [...new Set(entries.flatMap((entry) => entry.preview.refusals))],
     hasBlockers: entries.some((entry) => entry.preview.hasBlockers),
     root: aggregateRoot(roots, overflowCount, t),
   };

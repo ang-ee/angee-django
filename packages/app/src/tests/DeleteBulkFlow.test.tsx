@@ -170,6 +170,64 @@ describe("bulk delete flow", () => {
     expect(within(dialog).getByText("Line 1")).toBeTruthy();
   });
 
+  test("bulk previews show a shared refusal once and prevent confirmation", async () => {
+    sdkMocks.mutate.mockImplementation(async ({ id }: { id: string }) => ({
+      ...previewFor(id, id),
+      has_blockers: true,
+      refusals: ["Stop active work first."],
+    }));
+
+    render(
+      <TestUrlState>
+        <ListView resource="example.Record" columns={columns} />
+      </TestUrlState>,
+    );
+
+    for (const checkbox of await screen.findAllByRole("checkbox", { name: "Select row" })) {
+      fireEvent.click(checkbox);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText("Stop active work first.")).toHaveLength(1);
+    expect(within(dialog).queryByText("2 Stop active work first.")).toBeNull();
+    const button = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Delete" });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(sdkMocks.mutate).not.toHaveBeenCalledWith(expect.objectContaining({ confirm: true }));
+  });
+
+  test("partial refusals keep the blocked count and delete only allowed records", async () => {
+    sdkMocks.mutate.mockImplementation(async ({ id }: { id: string }) => ({
+      ...previewFor(id, id),
+      has_blockers: id === "record-1",
+      refusals: id === "record-1" ? ["Stop active work first."] : [],
+    }));
+
+    render(
+      <TestUrlState>
+        <ListView resource="example.Record" columns={columns} />
+      </TestUrlState>,
+    );
+
+    for (const checkbox of await screen.findAllByRole("checkbox", { name: "Select row" })) {
+      fireEvent.click(checkbox);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Stop active work first.")).toBeTruthy();
+    expect(within(dialog).getByText("1 selected records have deletion blockers.")).toBeTruthy();
+    const button = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Delete" });
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-2", confirm: true });
+    expect(sdkMocks.mutate).not.toHaveBeenCalledWith({ id: "record-1", confirm: true });
+    expect(screen.queryByText("2 selected")).toBeNull();
+  });
+
   test("confirming deletes and clears selection", async () => {
     sdkMocks.mutate.mockResolvedValue(previewFor("record-1", "First record"));
 
@@ -223,6 +281,7 @@ function previewFor(id: string, objectLabel: string) {
   return {
     total_deleted_count: 3,
     has_blockers: false,
+    refusals: [],
     deleted: [
       { label: "records", count: 1 },
       { label: "line items", count: 2 },

@@ -99,7 +99,6 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from graphql import GraphQLError
 
 
 @dataclass(frozen=True)
@@ -170,12 +169,10 @@ class AngeeHasuraWriteBackend:
         model: type[models.Model],
         *,
         public_id_fields: Iterable[str] | None = None,
-        delete_guard: Callable[[models.Model], str | None] | None = None,
         lines: HasuraLines | None = None,
     ) -> None:
         self.model = model
         self.public_id_fields = _public_id_field_models(model, public_id_fields or ())
-        self.delete_guard = delete_guard
         self.lines = lines
         if lines is not None:
             self._line_back_fk = _child_back_fk(model, lines.field)
@@ -416,19 +413,11 @@ class AngeeHasuraWriteBackend:
 
         del info
 
-        def guard(instance: models.Model) -> None:
-            if self.delete_guard is None:
-                return
-            message = self.delete_guard(instance)
-            if message:
-                raise GraphQLError(message, extensions={"code": "BAD_USER_INPUT"})
-
         preview = delete_by_public_id(
             self.model,
             str(pk),
             confirm=True,
             queryset=self.write_target_queryset(),
-            before_delete=guard,
         )
         preview.require_no_blockers()
         return preview.deleted_instance

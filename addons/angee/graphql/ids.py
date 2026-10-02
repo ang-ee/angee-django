@@ -19,6 +19,9 @@ from angee.base.identity import (
 PublicID = strawberry.ID
 """GraphQL ID scalar carrying an Angee public id, usually a model sqid."""
 
+RECORD_NOT_FOUND_MESSAGE = "The requested record was not found."
+"""Public-safe refusal shared by target lookup and confirm-time disappearance."""
+
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
@@ -84,7 +87,7 @@ def require_instance_for_id(
 
     instance = instance_for_id(model, value, queryset=queryset)
     if instance is None:
-        raise ValidationError(not_found or "The requested record was not found.", code="not_found")
+        raise ValidationError(not_found or RECORD_NOT_FOUND_MESSAGE, code="not_found")
     return instance
 
 

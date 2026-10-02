@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 from django.contrib.auth.models import Group
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.deletion import Collector
+from django.db.models.signals import pre_delete
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from graphql import GraphQLError
-from rebac import RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
+from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
 import angee.graphql.deletion as deletion_module
+from angee.base.models import AngeeModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -22,7 +25,61 @@ from angee.graphql.deletion import (
     DeletePreviewNode,
     delete_by_public_id,
 )
+from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from tests.tables import model_tables
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
+@pytest.mark.parametrize("outcome", ("preview", "denied", "vanished", "scope_changed", "allowed"))
+def test_confirm_delete_composes_model_locks_after_permission_with_caller_scope(
+    monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    """Confirmation retains authorization, availability and surface membership at lock time."""
+
+    locked: list[int] = []
+
+    class ScopedDeleteTarget(AngeeModel):
+        """Target whose eligibility can change while a domain lock is acquired."""
+
+        eligible = models.BooleanField(default=True)
+
+        class Meta:
+            """Register the isolated lock target."""
+
+            app_label = "auth"
+
+        def lock_for_delete(self, *, queryset: models.QuerySet[Self] | None = None) -> Self | None:
+            """Simulate a target disappearing or leaving the caller's scope."""
+
+            locked.append(self.pk)
+            if outcome == "vanished":
+                return None
+            if outcome == "scope_changed":
+                type(self).system_queryset().filter(pk=self.pk).update(eligible=False)
+            return super().lock_for_delete(queryset=queryset)
+
+    monkeypatch.setattr(ScopedDeleteTarget, "has_access", lambda self, action: outcome != "denied")
+    with model_tables((ScopedDeleteTarget,)), system_context(reason="tests.deletion.lock_contract"):
+        target = ScopedDeleteTarget.objects.create()
+        targets = ScopedDeleteTarget.objects.filter(eligible=True)
+        if outcome == "denied":
+            with pytest.raises(PermissionDenied, match="not allowed to delete"):
+                delete_by_public_id(ScopedDeleteTarget, str(target.pk), confirm=True, queryset=targets)
+        elif outcome in ("vanished", "scope_changed"):
+            with pytest.raises(ValidationError) as caught:
+                delete_by_public_id(ScopedDeleteTarget, str(target.pk), confirm=True, queryset=targets)
+            assert caught.value.messages == [RECORD_NOT_FOUND_MESSAGE]
+            assert caught.value.code == "not_found"
+        else:
+            preview = delete_by_public_id(
+                ScopedDeleteTarget, str(target.pk), confirm=outcome == "allowed", queryset=targets,
+            )
+            assert not preview.has_blockers
+            assert (preview.deleted_instance is not None) is (outcome == "allowed")
+
+        assert locked == ([] if outcome in ("preview", "denied") else [target.pk])
+        assert ScopedDeleteTarget.objects.filter(pk=target.pk).exists() is (outcome != "allowed")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -47,6 +104,128 @@ def test_deletion_preview_counts_deleted_rows() -> None:
         assert preview.total_deleted_count == 1
         assert preview.deleted[0].count == 1
         assert not preview.has_blockers
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
+@pytest.mark.parametrize("blocked_target", ["root", "collected"])
+def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
+    blocked_target: str,
+) -> None:
+    """Model refusals are distinct messages, including collected cascade children."""
+
+    class PolicyParent(AngeeModel):
+        """Deletion target with an optional model-owned refusal."""
+
+        blocked = models.BooleanField(default=False)
+
+        class Meta:
+            """Django model options for the test target."""
+
+            app_label = "auth"
+
+        def delete_blocker(self) -> str | None:
+            """Return the target's public-safe deletion refusal."""
+
+            return "Release the parent first." if self.blocked else None
+
+    class PolicyChild(AngeeModel):
+        """Cascade row with an optional model-owned refusal."""
+
+        parent = models.ForeignKey(PolicyParent, on_delete=models.CASCADE)
+        blocked = models.BooleanField(default=False)
+
+        class Meta:
+            """Django model options for the test child."""
+
+            app_label = "auth"
+
+        def delete_blocker(self) -> str | None:
+            """Return the child's public-safe deletion refusal."""
+
+            return "Release the children first." if self.blocked else None
+
+    def refuse_delete(sender: Any, instance: AngeeModel, **kwargs: Any) -> None:
+        """Enforce each test model's refusal on every deletion path."""
+
+        if message := instance.delete_blocker():
+            raise ValidationError(message)
+
+    for model in (PolicyParent, PolicyChild):
+        pre_delete.connect(refuse_delete, sender=model)
+    try:
+        with model_tables((PolicyParent, PolicyChild)), system_context(reason="tests.deletion.policy"):
+            parent = PolicyParent.objects.create(blocked=blocked_target == "root")
+            for _ in range(2):
+                PolicyChild.objects.create(parent=parent, blocked=blocked_target != "root")
+
+            preview = delete_by_public_id(PolicyParent, str(parent.pk), confirm=True)
+
+            message = "Release the parent first." if blocked_target == "root" else "Release the children first."
+            assert preview.has_blockers
+            assert preview.refusals == [message]
+            assert preview.blocked == []
+            with pytest.raises(GraphQLError) as caught:
+                preview.require_no_blockers()
+            assert caught.value.message == message
+            assert caught.value.extensions == {"code": "BAD_USER_INPUT"}
+            assert PolicyParent.objects.filter(pk=parent.pk).exists()
+            assert PolicyChild.objects.filter(parent=parent).count() == 2
+    finally:
+        for model in (PolicyParent, PolicyChild):
+            pre_delete.disconnect(refuse_delete, sender=model)
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
+def test_deletion_preview_error_includes_model_refusals_and_fk_blockers() -> None:
+    """Neither a model refusal nor a protected relation hides the other in errors."""
+
+    class PolicyParent(AngeeModel):
+        """Deletion target refused independently of its protected child."""
+
+        class Meta:
+            """Register the isolated target."""
+
+            app_label = "auth"
+
+        def delete_blocker(self) -> str | None:
+            """Return the model's readable refusal."""
+
+            return "Release the parent first."
+
+    class PolicyChild(models.Model):
+        """Protected relation reported alongside the target's refusal."""
+
+        parent = models.ForeignKey(PolicyParent, on_delete=models.PROTECT)
+
+        class Meta:
+            """Register the isolated child."""
+
+            app_label = "auth"
+
+    def refuse_delete(sender: Any, instance: PolicyParent, **kwargs: Any) -> None:
+        """Enforce the target's rule through Django's deletion lifecycle."""
+
+        raise ValidationError(instance.delete_blocker())
+
+    pre_delete.connect(refuse_delete, sender=PolicyParent)
+    try:
+        with model_tables((PolicyParent, PolicyChild)), system_context(reason="tests.deletion.mixed"):
+            parent = PolicyParent.objects.create()
+            PolicyChild.objects.create(parent=parent)
+            preview = DeletePreview.from_instance(parent)
+            assert preview.refusals == ["Release the parent first."]
+            assert [(group.label, group.count) for group in preview.blocked] == [("policy childs", 1)]
+            with pytest.raises(GraphQLError) as caught:
+                AngeeHasuraWriteBackend(PolicyParent).delete(cast(Any, None), str(parent.pk))
+            assert caught.value.message == (
+                "Release the parent first. Deletion is blocked by related records: policy childs (1)."
+            )
+            assert caught.value.extensions == {"code": "BAD_USER_INPUT"}
+            assert PolicyParent.objects.filter(pk=parent.pk).exists()
+    finally:
+        pre_delete.disconnect(refuse_delete, sender=PolicyParent)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -531,7 +710,9 @@ def test_delete_by_public_id_skips_hook_when_blocked(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_by_public_id_returns_blocked_preview_for_late_protected_relation() -> None:
+def test_delete_by_public_id_returns_blocked_preview_for_late_protected_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A blocker appearing after preview returns the same blocked-preview shape."""
 
     class DeleteRaceParent(models.Model):
@@ -556,14 +737,99 @@ def test_delete_by_public_id_returns_blocked_preview_for_late_protected_relation
 
     with model_tables((DeleteRaceParent, DeleteRaceChild)):
         parent = DeleteRaceParent.objects.create(name="race")
+        from_instance = DeletePreview.from_instance
+        first_preview = True
+
+        def preview_then_insert(cls: type[DeletePreview], instance: models.Model) -> DeletePreview:
+            """Simulate a concurrent committed FK insertion outside the delete savepoint."""
+
+            nonlocal first_preview
+            preview = from_instance(instance)
+            if first_preview:
+                first_preview = False
+                DeleteRaceChild.objects.create(parent=cast(DeleteRaceParent, instance))
+            return preview
+
+        monkeypatch.setattr(DeletePreview, "from_instance", classmethod(preview_then_insert))
 
         preview = delete_by_public_id(
             DeleteRaceParent,
             str(parent.pk),
             confirm=True,
-            before_delete=lambda row: DeleteRaceChild.objects.create(parent=cast(DeleteRaceParent, row)),
         )
 
         assert preview.has_blockers
         assert preview.blocked[0].count == 1
         assert DeleteRaceParent.objects.filter(pk=parent.pk).exists()
+        assert DeleteRaceChild.objects.filter(parent=parent).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("refused", (False, True))
+def test_delete_receiver_refusal_rolls_back_before_delete_writes_and_on_commit(refused: bool) -> None:
+    """Confirm hooks commit only when Django's authoritative receiver allows deletion."""
+
+    group = Group.objects.create(name="hook-target")
+    committed: list[str] = []
+
+    def before_delete(instance: models.Model) -> None:
+        Group.objects.create(name="hook-side-effect")
+        transaction.on_commit(lambda: committed.append("committed"))
+
+    def refuse_delete(sender: Any, instance: Group, **kwargs: Any) -> None:
+        if refused:
+            raise ValidationError("Release the group first.")
+
+    pre_delete.connect(refuse_delete, sender=Group)
+    try:
+        preview = delete_by_public_id(Group, str(group.pk), confirm=True, before_delete=before_delete)
+    finally:
+        pre_delete.disconnect(refuse_delete, sender=Group)
+
+    assert preview.has_blockers is refused
+    assert preview.refusals == (["Release the group first."] if refused else [])
+    assert Group.objects.filter(pk=group.pk).exists() is refused
+    assert Group.objects.filter(name="hook-side-effect").exists() is not refused
+    assert committed == ([] if refused else ["committed"])
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
+@pytest.mark.parametrize("retaining_rows", (False, True))
+def test_delete_preview_from_counts_reports_target_refusal_with_or_without_fk_blockers(
+    retaining_rows: bool,
+) -> None:
+    """Count-based purges project the target's rule alongside retaining-row groups."""
+
+    class PurgeTarget(AngeeModel):
+        """Counted purge root with a model-owned refusal."""
+
+        class Meta:
+            """Register the isolated target."""
+
+            app_label = "auth"
+
+        def delete_blocker(self) -> str | None:
+            """Expose the purge root's public-safe refusal."""
+
+            return "Disconnect the target first."
+
+    def refuse_delete(sender: Any, instance: PurgeTarget, **kwargs: Any) -> None:
+        raise ValidationError(instance.delete_blocker())
+
+    pre_delete.connect(refuse_delete, sender=PurgeTarget)
+    try:
+        with model_tables((PurgeTarget,)), system_context(reason="tests.deletion.purge"):
+            target = PurgeTarget.objects.create()
+            retaining_group = Group.objects.create(name="retaining-group")
+            preview = DeletePreview.from_counts(
+                target, {Group: 3}, blockers=[retaining_group] if retaining_rows else [],
+            )
+    finally:
+        pre_delete.disconnect(refuse_delete, sender=PurgeTarget)
+
+    assert preview.has_blockers
+    assert preview.refusals == ["Disconnect the target first."]
+    assert [(group.label, group.count) for group in preview.blocked] == ([("groups", 1)] if retaining_rows else [])
+    with pytest.raises(GraphQLError, match="Disconnect the target first"):
+        preview.require_no_blockers()

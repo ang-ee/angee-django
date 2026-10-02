@@ -209,6 +209,7 @@ describe("Hasura custom operations", () => {
           delete_note: {
             total_deleted_count: 2,
             has_blockers: false,
+            refusals: [],
             deleted: [{ label: "notes", count: 1 }],
             updated: [],
             blocked: [],
@@ -232,6 +233,7 @@ describe("Hasura custom operations", () => {
     ).toEqual({
       totalDeletedCount: 2,
       hasBlockers: false,
+      refusals: [],
       deleted: [{ label: "notes", count: 1 }],
       updated: [],
       blocked: [],
@@ -248,6 +250,24 @@ describe("Hasura custom operations", () => {
           },
         ],
       },
+    });
+  });
+
+  test("preserves the server's refusal list and blocker flag", () => {
+    expect(extractDeletePreview({
+      delete_note: {
+        total_deleted_count: 2,
+        has_blockers: false,
+        refusals: ["Stop active work first.", "Stop active work first.", "Release the note first.", 3],
+        deleted: [],
+        updated: [],
+        blocked: [{ label: "comments", count: 1 }],
+        root: { label: "note", object_label: "Draft", object_id: "note_123", children: [] },
+      },
+    }, "delete_note")).toMatchObject({
+      hasBlockers: false,
+      refusals: ["Stop active work first.", "Stop active work first.", "Release the note first."],
+      blocked: [{ label: "comments", count: 1 }],
     });
   });
 

@@ -2,8 +2,8 @@
 
 Console surface for the agent catalogue: agents (and their templates), the
 skills they mount, the MCP servers/tools they reach, and the inference
-provider/model catalogue they run on. Catalogue operations retain their platform
-admin gates; persisted chat uses the caller's row permissions. Skill
+provider/model catalogue they run on. Catalogue operations retain their declared
+permission gates; persisted chat uses the caller's row permissions. Skill
 *sources* are managed in the integrate VCS console (a ``kind="skill"`` source);
 this addon owns only the discovered :class:`Skill` rows.
 """
@@ -31,9 +31,11 @@ from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import PlatformAdminPermission, request_from_info
 from angee.iam.schema import UserType
@@ -378,7 +380,6 @@ _AGENT_RESOURCE = hasura_model_resource(
             "mcp_tools",
             "workspace_template",
         ),
-        delete_guard=lambda agent: agent.delete_blocker(),
     ),
 )
 _AGENT_SESSION_RESOURCE = hasura_model_resource(
@@ -391,10 +392,7 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     groupable=["agent", "owner", "status"],
     insert=False,
     update=False,
-    write_backend=AngeeHasuraWriteBackend(
-        AgentSessionModel,
-        delete_guard=lambda session: session.delete_blocker(),
-    ),
+    write_backend=AngeeHasuraWriteBackend(AgentSessionModel),
     field_id_decode={
         "agent": public_pk_decoder(Agent),
         "owner": public_pk_decoder(User),
@@ -714,6 +712,25 @@ class AgentChatEndpointPermission(BasePermission):
 
 
 @strawberry.type
+class AgentDeletePreviewMutation:
+    """Authored cascade delete preview for agents under the caller's permissions."""
+
+    @strawberry.mutation(name="delete_agent")
+    def delete_agent(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deletion of one agent by public id."""
+
+        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=write_queryset(Agent))
+
+
+attach_delete_preview_metadata(
+    AgentDeletePreviewMutation,
+    model=Agent,
+    node=AgentType,
+    field="delete_agent",
+)
+
+
+@strawberry.type
 class AgentActionMutation:
     """GraphQL action bridge for agent runtime operations."""
 
@@ -806,6 +823,7 @@ schemas = {
         ],
         "mutation": [
             _AGENT_RESOURCE.mutation,
+            AgentDeletePreviewMutation,
             _AGENT_SESSION_RESOURCE.mutation,
             _AGENT_TURN_RESOURCE.mutation,
             InferenceProviderCreateMutation,

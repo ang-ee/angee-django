@@ -10,8 +10,8 @@ import { useUiT } from "../../i18n";
 import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import { Dialog } from "../../ui/dialog";
-import { DeletePreviewTree } from "./DeletePreviewTree";
 import { useRuntimeViewAs } from "../../runtime";
+import { DeletePreviewTree } from "./DeletePreviewTree";
 
 export interface DeletePreviewDialogProps {
   preview: DeletePreview;
@@ -53,6 +53,9 @@ export function DeletePreviewDialog({
           </Dialog.Header>
           <Dialog.Body className="space-y-4">
             <DeleteSummary preview={preview} overflowCount={overflowCount} />
+            {preview.refusals.map((message) => (
+              <Alert key={message} tone="danger">{message}</Alert>
+            ))}
             {preview.hasBlockers ? (
               <Alert tone="danger">
                 {blockedRecordCount > 0
@@ -76,7 +79,7 @@ export function DeletePreviewDialog({
               variant="danger"
               pending={isPending}
               disabled={fullyBlocked || isPending || previewBlocked}
-              onClick={() => { if (!previewBlocked) onConfirm(); }}
+              onClick={() => { if (!fullyBlocked && !previewBlocked) onConfirm(); }}
             >
               <Glyph name="trash" />
               {t("deletePreview.delete")}

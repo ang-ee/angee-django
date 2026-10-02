@@ -36,6 +36,7 @@ from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import _AngeeQuerySetMixin
+from angee.base.scoping import lock_if_supported
 from angee.base.tiers import ResourceTier
 from angee.base.transitions import StateTransitions
 
@@ -297,6 +298,29 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+
+    def delete_blocker(self) -> str | None:
+        """Return a public-safe deletion refusal, or ``None`` when allowed.
+
+        Overrides require a ``pre_delete`` receiver enforcing the same rule on
+        instance, queryset, and cascade deletes; previews only project it.
+        """
+
+        return None
+
+    def lock_for_delete(self, *, queryset: models.QuerySet[Self] | None = None) -> Self | None:
+        """Lock and reload this target for deletion in the model's domain order.
+
+        Call inside a transaction, after any caller-owned permission preflight.
+        The default locks only this row (including its concrete parents) through
+        ``lock_if_supported``; overrides acquire domain locks before delegating.
+        Confirmed-delete callers and ``pre_delete`` receivers must share this hook.
+        A supplied ``queryset`` preserves the caller's scope and actor binding;
+        receivers omit it to use system rows. Return ``None`` if unavailable.
+        """
+
+        targets = queryset if queryset is not None else type(self).system_queryset()
+        return lock_if_supported(targets).filter(pk=self.pk).first()
 
     def refresh_from_db(
         self,

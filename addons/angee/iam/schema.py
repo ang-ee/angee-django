@@ -36,7 +36,7 @@ from angee.base.models import AngeeModel
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import authorized_permission_target
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
-from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
@@ -583,28 +583,6 @@ def _group_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
     return instance
 
 
-def _delete_instance(instance: Any) -> Any | None:
-    """Delete ``instance`` in Hasura ``delete_<res>_by_pk`` form."""
-
-    preview = DeletePreview.from_instance(instance)
-    preview.require_no_blockers()
-    pk = instance.pk
-    instance.delete()
-    instance.pk = pk
-    return instance
-
-
-def _delete_user_preview(value: str, *, confirm: bool) -> DeletePreview:
-    """Return or apply the authored user cascade delete preview."""
-
-    with transaction.atomic():
-        instance = _user_for_resource_id(str(value), write_queryset(User))
-        preview = DeletePreview.from_instance(instance)
-        if confirm and not preview.has_blockers:
-            instance.delete()
-        return preview
-
-
 class IAMUserWriteBackend:
     """Person creation and administrator updates for the Hasura user resource."""
 
@@ -641,8 +619,9 @@ class IAMUserWriteBackend:
 
         require_platform_admin(info)
 
-        with transaction.atomic():
-            return _delete_instance(_user_for_resource_id(pk, write_queryset(User)))
+        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=write_queryset(User))
+        preview.require_no_blockers()
+        return preview.deleted_instance
 
 
 class IAMGroupWriteBackend:
@@ -679,8 +658,9 @@ class IAMGroupWriteBackend:
 
         require_platform_admin(info)
 
-        with transaction.atomic():
-            return _delete_instance(_group_for_resource_id(pk, write_queryset(Group)))
+        preview = delete_by_public_id(Group, str(pk), confirm=True, queryset=write_queryset(Group))
+        preview.require_no_blockers()
+        return preview.deleted_instance
 
 
 def _admin_actor(info: strawberry.Info) -> bool:
@@ -1007,7 +987,7 @@ class IAMUserDeletePreviewMutation:
         """Preview or confirm deletion of one user by public id."""
 
         require_platform_admin(info)
-        return _delete_user_preview(str(id), confirm=confirm)
+        return delete_by_public_id(User, str(id), confirm=confirm, queryset=write_queryset(User))
 
 
 attach_delete_preview_metadata(

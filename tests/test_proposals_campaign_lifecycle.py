@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, current_actor, sudo, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
+from strawberry import Schema
 
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.graphql.deletion import DeletePreview
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.conftest import Drive
@@ -18,6 +21,35 @@ from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_models import Proposal, Round, Topic
 
 pytest_plugins = ("tests.proposals_campaign",)
+
+
+@pytest.mark.parametrize("touched", (False, True))
+def test_hasura_proposal_delete_preserves_domain_refusals(
+    campaign: ProposalCampaign, proposal_delete_schema: Schema, touched: bool,
+) -> None:
+    """The real confirmed-delete envelope allows drafts and reports retained work."""
+
+    proposal = campaign.admit(campaign.round(), "responder")
+    manager = campaign.person("facilitator")
+    if touched:
+        with actor_context(manager):
+            row = as_actor(proposal, manager)
+            row.statement = "Retained commitment"
+            row.save(update_fields=("statement",))
+    with actor_context(manager):
+        result = proposal_delete_schema.execute_sync(
+            "mutation($id: String!) { delete_proposals_by_pk(id: $id) { id } }",
+            variable_values={"id": proposal.public_id},
+            context_value=SimpleNamespace(request=SimpleNamespace(user=manager)),
+        )
+    if touched:
+        assert result.errors is not None and len(result.errors) == 1
+        assert result.errors[0].message == "Only an untouched draft proposal can be deleted."
+        assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    else:
+        assert result.errors is None
+        assert result.data == {"delete_proposals_by_pk": {"id": proposal.public_id}}
+    assert Proposal._base_manager.filter(pk=proposal.pk).exists() is touched
 
 
 @pytest.mark.parametrize("verb", ("submit", "create_track"))
@@ -512,14 +544,104 @@ def test_statement_alone_makes_a_draft_non_deletable(campaign: ProposalCampaign)
     c = campaign
     round = c.round()
     proposal = c.admit(round, "responder")
-    assert proposal.deletion_error() is None
+    assert proposal.delete_blocker() is None
     with actor_context(c.person("responder")):
         row = as_actor(proposal, c.person("responder"))
         row.statement = "A retained commitment"
         row.save(update_fields=("statement",))
         with pytest.raises(ValidationError, match="untouched"):
             row.delete()
-    assert Round._base_manager.get(pk=round.pk).deletion_error() is not None
+    round = Round._base_manager.get(pk=round.pk)
+    assert round.delete_blocker() is None
+    preview = DeletePreview.from_instance(round)
+    assert preview.has_blockers
+    assert preview.refusals == ["Only an untouched draft proposal can be deleted."]
+
+
+@pytest.mark.parametrize("path", ("instance", "queryset", "round_cascade", "task_cascade", "project_cascade"))
+def test_proposal_delete_receiver_retains_touched_drafts_on_every_path(
+    campaign: ProposalCampaign, path: str,
+) -> None:
+    """A retained draft cannot escape its model rule through a collector cascade."""
+
+    c = campaign
+    round = c.round(target_kind="task" if path == "task_cascade" else "project")
+    if path == "project_cascade":
+        with system_context(reason="tests.proposals.delete_receiver.target"):
+            round.clarifications_shared_until = None
+            round.save(update_fields=("clarifications_shared_until",))
+    proposal = c.admit(round, "responder")
+    stale = Proposal._base_manager.get(pk=proposal.pk)
+    with actor_context(c.person("responder")):
+        row = as_actor(proposal, c.person("responder"))
+        row.statement = "A retained commitment"
+        row.save(update_fields=("statement",))
+    with system_context(reason="tests.proposals.delete_receiver"):
+        with pytest.raises(ValidationError, match="untouched"):
+            if path == "instance":
+                stale.delete()
+            elif path == "queryset":
+                Proposal.objects.filter(pk=proposal.pk).delete()
+            elif path == "round_cascade":
+                Round.objects.filter(pk=round.pk).delete()
+            elif path == "task_cascade":
+                Task.objects.filter(pk=round.task_id).delete()
+            else:
+                Project.objects.filter(pk=round.project_id).delete()
+    assert Proposal._base_manager.filter(pk=proposal.pk).exists()
+    assert Round._base_manager.filter(pk=round.pk).exists()
+
+
+@pytest.mark.parametrize("path", ("instance", "queryset"))
+def test_proposal_delete_receiver_allows_untouched_drafts(campaign: ProposalCampaign, path: str) -> None:
+    """Moving enforcement to receivers preserves deletion of untouched drafts."""
+
+    c = campaign
+    round = c.round()
+    proposal = c.admit(round, "responder")
+    proposal_pk = proposal.pk
+    with system_context(reason="tests.proposals.delete_receiver.allowed"):
+        if path == "instance":
+            proposal.delete()
+        else:
+            Proposal.objects.filter(pk=proposal.pk).delete()
+    assert not Proposal._base_manager.filter(pk=proposal_pk).exists()
+    assert Round._base_manager.filter(pk=round.pk).exists()
+
+
+@pytest.mark.parametrize("path", ("instance", "queryset", "task_cascade"))
+def test_round_delete_receiver_retains_terminal_rounds(campaign: ProposalCampaign, path: str) -> None:
+    """Even an empty round retains its lifecycle rule through stale and cascade deletes."""
+
+    c = campaign
+    round = c.round(target_kind="task")
+    stale = Round._base_manager.get(pk=round.pk)
+    manager = c.person("facilitator")
+    with actor_context(manager):
+        as_actor(round, manager).cancel()
+    with system_context(reason="tests.proposals.round_delete_receiver"):
+        with pytest.raises(ValidationError, match="Only a collecting round can be deleted"):
+            if path == "instance":
+                stale.delete()
+            elif path == "queryset":
+                Round.objects.filter(pk=round.pk).delete()
+            else:
+                Task.objects.filter(pk=round.task_id).delete()
+    assert Round._base_manager.filter(pk=round.pk, status="canceled").exists()
+    assert Task._base_manager.filter(pk=round.task_id).exists()
+
+
+def test_round_delete_receiver_allows_untouched_proposal_cascades(campaign: ProposalCampaign) -> None:
+    """A collecting round still deletes its untouched proposal shells."""
+
+    c = campaign
+    round = c.round()
+    proposal = c.admit(round, "responder")
+    round_pk, proposal_pk = round.pk, proposal.pk
+    with system_context(reason="tests.proposals.round_delete_receiver.allowed"):
+        round.delete()
+    assert not Round._base_manager.filter(pk=round_pk).exists()
+    assert not Proposal._base_manager.filter(pk=proposal_pk).exists()
 
 
 def test_hidden_asker_message_prevents_widening_and_default_pass_at_the_model_owner(campaign: ProposalCampaign) -> None:

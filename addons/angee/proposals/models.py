@@ -1010,26 +1010,12 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 self.allow_immutable_save("opening_policy")
         super().save(*args, **kwargs)
 
-    def deletion_error(self) -> str | None:
-        """Return why this Round cannot be deleted under the untouched-draft rule."""
+    def delete_blocker(self) -> str | None:
+        """Return why this Round's own lifecycle prevents deletion."""
 
         if self.status != RoundStatus.COLLECTING or self.outcome is not None:
             return "Only a collecting round can be deleted."
-        with system_context(reason="proposals.round.delete_guard"):
-            proposals = list(
-                apps.get_model("proposals", "Proposal")._base_manager.filter(round_id=self.pk).order_by("pk")
-            )
-        if any(proposal.deletion_error() is not None for proposal in proposals):
-            return "A round can be deleted only while every proposal is an untouched draft."
         return None
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Delete only a collecting Round whose proposals are untouched drafts."""
-
-        error = self.deletion_error()
-        if error:
-            raise ValidationError(error)
-        return super().delete(*args, **kwargs)
 
     def open(self, expected_revision: int | None = None) -> Self:
         """Lift disclosure once, preserving a canceled round's terminal state."""
@@ -1845,7 +1831,13 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             .get()
         )
 
-    def deletion_error(self) -> str | None:
+    def lock_for_delete(self, *, queryset: models.QuerySet[Self] | None = None) -> Self | None:
+        """Serialize confirmed and native deletes with round-first submission."""
+
+        apps.get_model("proposals", "Round").system_queryset(lock=("self",)).filter(pk=self.round_id).first()
+        return super().lock_for_delete(queryset=queryset)
+
+    def delete_blocker(self) -> str | None:
         """Return why this Proposal is no longer an untouched draft."""
 
         if self.state != ProposalState.DRAFT or any(
@@ -1871,20 +1863,12 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         ):
             return "Only an untouched draft proposal can be deleted."
         if self.pk is not None:
-            with system_context(reason="proposals.proposal.delete_guard"):
+            with system_context(reason="proposals.proposal.delete_blocker"):
                 if apps.get_model("proposals", "Answer")._base_manager.filter(proposal_id=self.pk).exists():
                     return "A proposal with answers cannot be deleted."
                 if apps.get_model("proposals", "Review")._base_manager.filter(proposal_id=self.pk).exists():
                     return "A proposal with reviews cannot be deleted."
         return None
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Delete only an untouched draft shell."""
-
-        error = self.deletion_error()
-        if error:
-            raise ValidationError(error)
-        return super().delete(*args, **kwargs)
 
     def submit(self, expected_revision: int | None = None) -> Self:
         """Submit under the round-first lock, freezing draft writes by state."""

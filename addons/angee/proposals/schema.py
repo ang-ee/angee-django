@@ -925,7 +925,6 @@ _ROUND_RESOURCE = hasura_model_resource(
             "clarifications_shared_until",
             *declared_hasura_write_relation_fields(Round),
         ),
-        delete_guard=lambda instance: instance.deletion_error(),
     ),
 )
 
@@ -1012,7 +1011,6 @@ def _proposal_resource(node_type: type) -> Any:
         write_backend=AngeeHasuraWriteBackend(
             Proposal,
             public_id_fields=("round", "responder", "party", "source_message", "currency"),
-            delete_guard=lambda instance: instance.deletion_error(),
         ),
     )
 

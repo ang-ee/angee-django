@@ -17,15 +17,15 @@ def connect() -> None:
 
     connect_for_models(
         pre_delete, refuse_agent_delete, applies=lambda model: issubclass(model, Agent),
-        dispatch_uid="angee.agents.agent.delete_guard",
+        dispatch_uid="angee.agents.agent.delete_blocker",
     )
     connect_for_models(
         pre_delete, refuse_session_delete, applies=lambda model: issubclass(model, AgentSession),
-        dispatch_uid="angee.agents.session.delete_guard",
+        dispatch_uid="angee.agents.session.delete_blocker",
     )
     connect_for_models(
         pre_delete, refuse_active_turn_delete, applies=lambda model: issubclass(model, AgentTurn),
-        dispatch_uid="angee.agents.turn.delete_guard",
+        dispatch_uid="angee.agents.turn.delete_blocker",
     )
     connect_for_models(
         post_delete, deactivate_agent_service_user, applies=lambda model: issubclass(model, Agent),

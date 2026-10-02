@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Any, TypeVar
 
 import strawberry
+from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
 from django.db.models.deletion import (
     Collector,
@@ -17,6 +19,7 @@ from django.db.models.deletion import (
 from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
 from angee.base.identity import public_id_of
+from angee.base.models import AngeeModel
 from angee.base.scoping import lock_if_supported, read_scoped_queryset
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -27,7 +30,7 @@ from angee.graphql.data.metadata import (
     resource_type_name,
     resource_wire_field_name,
 )
-from angee.graphql.ids import require_instance_for_id
+from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE, require_instance_for_id
 from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
@@ -38,7 +41,7 @@ type _FastDelete = tuple[models.QuerySet[models.Model], int]
 
 @strawberry.type
 class DeletePreviewGroup:
-    """A count of affected rows for one Django model."""
+    """A count of affected rows for one model."""
 
     label: str
     """Human-readable plural model label."""
@@ -135,10 +138,13 @@ class DeletePreview:
     """Rows Django would update because of ``on_delete`` behavior."""
 
     blocked: list[DeletePreviewGroup]
-    """Rows whose ``on_delete`` behavior blocks deletion."""
+    """Rows whose foreign-key policy blocks deletion."""
 
     has_blockers: bool
-    """Whether any related rows block deletion (i.e. ``blocked`` is non-empty)."""
+    """Whether foreign-key blockers or model refusals prevent deletion."""
+
+    refusals: list[str] = strawberry.field(default_factory=list)
+    """Distinct public-safe model refusals, without per-row cardinality."""
 
     root: DeletePreviewNode = strawberry.field(
         default_factory=lambda: DeletePreviewNode(label="", object_label="", object_id=None, children=[]),
@@ -150,12 +156,15 @@ class DeletePreview:
     """Deleted row returned internally to mutation envelopes, never exposed in SDL."""
 
     def require_no_blockers(self) -> None:
-        """Raise a readable mutation error when related rows prevent deletion."""
+        """Raise a readable mutation error when a model or related row prevents deletion."""
 
         if self.has_blockers:
-            blockers = ", ".join(f"{group.label} ({group.count})" for group in self.blocked)
+            messages = list(self.refusals)
+            if self.blocked:
+                blockers = ", ".join(f"{group.label} ({group.count})" for group in self.blocked)
+                messages.append(f"Deletion is blocked by related records: {blockers}.")
             raise GraphQLError(
-                f"Deletion is blocked by related records: {blockers}.",
+                " ".join(messages),
                 extensions={"code": "BAD_USER_INPUT"},
             )
 
@@ -163,7 +172,7 @@ class DeletePreview:
     def from_instance(
         cls, instance: models.Model, actor: Any | None = None,
     ) -> DeletePreview:
-        """Return Django's cascade forecast for ``instance``.
+        """Return Django's cascade forecast and model-owned deletion refusals.
 
         Callers should run previews inside the same transaction as the eventual
         delete so fast-delete counts and visible rows share one database snapshot.
@@ -181,6 +190,19 @@ class DeletePreview:
         fast_deletes: tuple[_FastDelete, ...] = tuple(
             (queryset, queryset.count()) for queryset in collector.fast_deletes
         )
+        refusals = list(dict.fromkeys(
+            message
+            for row in chain(
+                [instance],
+                (
+                    row
+                    for model, rows in sorted(collector.data.items(), key=lambda item: item[0]._meta.label_lower)
+                    for row in sorted(rows, key=lambda row: row.pk)
+                    if not _is_root(instance, row)
+                ),
+            )
+            if isinstance(row, AngeeModel) and (message := row.delete_blocker())
+        ))
         groups = _PreviewRows.by_model(
             instance,
             collector,
@@ -199,7 +221,8 @@ class DeletePreview:
             deleted=_groups(deleted_counts),
             updated=_groups(updated_counts),
             blocked=blocked,
-            has_blockers=bool(blocked),
+            refusals=refusals,
+            has_blockers=bool(blocked or refusals),
             root=root,
         )
 
@@ -238,30 +261,36 @@ class DeletePreview:
         purge owner computes it elevated, so the preview reflects the true scope
         regardless of the actor's REBAC row visibility. A purge owner can supply
         its retaining ``blockers`` without collecting its large deletion subtree.
+        The target's model-owned refusal is projected from its loaded state too.
         Blocker names remain actor-scoped; native FK protection still checks the
         actual delete, whose owner handles races through :meth:`blocked_from_error`.
         """
 
         if protected := tuple(blockers):
-            return cls.from_blockers(target, protected)
-        root_model = type(target)
-        merged: dict[type[models.Model], int] = {}
-        for model, count in counts.items():
-            if model is root_model or count <= 0:
-                continue
-            merged[model] = merged.get(model, 0) + count
-        groups = {model: _PreviewRows(total_count=count) for model, count in merged.items()}
-        deleted_counts = _deleted_counts(target, groups)
-        for parent_model in target._meta.parents:
-            deleted_counts[parent_model] = deleted_counts.get(parent_model, 0) + 1
-        return cls(
-            total_deleted_count=sum(deleted_counts.values()),
-            deleted=_groups(deleted_counts),
-            updated=[],
-            blocked=[],
-            has_blockers=False,
-            root=DeletePreviewNode.from_target(target, groups),
-        )
+            preview = cls.from_blockers(target, protected)
+        else:
+            root_model = type(target)
+            merged: dict[type[models.Model], int] = {}
+            for model, count in counts.items():
+                if model is root_model or count <= 0:
+                    continue
+                merged[model] = merged.get(model, 0) + count
+            groups = {model: _PreviewRows(total_count=count) for model, count in merged.items()}
+            deleted_counts = _deleted_counts(target, groups)
+            for parent_model in target._meta.parents:
+                deleted_counts[parent_model] = deleted_counts.get(parent_model, 0) + 1
+            preview = cls(
+                total_deleted_count=sum(deleted_counts.values()),
+                deleted=_groups(deleted_counts),
+                updated=[],
+                blocked=[],
+                has_blockers=False,
+                root=DeletePreviewNode.from_target(target, groups),
+            )
+        if isinstance(target, AngeeModel) and (message := target.delete_blocker()):
+            preview.refusals = [message]
+            preview.has_blockers = True
+        return preview
 
     @classmethod
     def blocked_from_error(
@@ -314,9 +343,12 @@ def delete_by_public_id(
     """Preview, then optionally delete, one public-id-addressed model row.
 
     REBAC delete permission is checked before collecting or disclosing related
-    rows and before locking a confirmed delete. ``queryset`` retains the caller's
-    target restrictions and must be unlocked. Passing ``reason`` elevates the
+    rows and before the model-owned confirmed-delete locks. ``queryset`` retains
+    the caller's target restrictions and must be unlocked. Passing ``reason`` elevates the
     lookup/delete for admin/action surfaces that already authorized the request.
+    A receiver's late ``ValidationError`` rolls back deletion, before-delete writes
+    and commit callbacks, and becomes a readable refusal in the same preview;
+    FK races refresh the collector forecast.
     """
 
     context = system_context(reason=reason) if reason is not None else nullcontext()
@@ -330,16 +362,26 @@ def delete_by_public_id(
         if isinstance(instance, RebacMixin) and not instance.has_access("delete"):
             raise PermissionDenied("You are not allowed to delete this record.")
         if confirm:
-            instance = require_instance_for_id(model, public_id, queryset=lock_if_supported(targets))
+            if isinstance(instance, AngeeModel):
+                locked = instance.lock_for_delete(queryset=targets)
+                if locked is None:
+                    raise ValidationError(RECORD_NOT_FOUND_MESSAGE, code="not_found")
+                instance = locked
+            else:
+                instance = require_instance_for_id(model, public_id, queryset=lock_if_supported(targets))
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
-            if before_delete is not None:
-                before_delete(instance)
             deleted_pk = instance.pk
             try:
-                instance.delete()
+                with transaction.atomic():
+                    if before_delete is not None:
+                        before_delete(instance)
+                    instance.delete()
             except (ProtectedError, RestrictedError):
                 preview = DeletePreview.from_instance(instance)
+            except ValidationError as error:
+                preview.refusals = list(dict.fromkeys([*preview.refusals, *error.messages]))
+                preview.has_blockers = True
             else:
                 instance.pk = deleted_pk
                 preview.deleted_instance = instance
