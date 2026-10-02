@@ -996,8 +996,10 @@ and current contracts before applying a historical example to a new deployment.
   `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
   free.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
-  Lifecycle side effects that must survive those paths belong on Django signals; Agent's
-  service-user deactivation is a `post_delete` receiver for this reason.
+  Lifecycle guards and side effects that must survive those paths belong on Django
+  signals calling the owning model rules. Agents' teardown and active-turn guards
+  use `pre_delete`; service-user deactivation uses `post_delete`. See the
+  [agents receivers](../../addons/angee/agents/signals.py).
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with

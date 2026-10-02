@@ -12,6 +12,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.db.models.deletion import Collector
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, current_actor, system_context
 from rebac.models import PermissionAuditEvent
@@ -169,6 +170,40 @@ def test_running_turn_is_never_reclaimed(session: AgentSession, runner: FakeRunn
     assert first.updates == [_chunk("Retain this")]
     assert second.status == TurnStatus.PENDING
     assert runner.prompts == []
+
+
+def test_stale_turn_delete_refuses_a_claim_by_another_session_instance(session: AgentSession) -> None:
+    stale = session.post("Claim before deletion")
+    claimed = AgentSession.objects.get(pk=session.pk).claim_turn()
+    assert claimed is not None and claimed.pk == stale.pk
+    assert stale.status == TurnStatus.PENDING
+    with pytest.raises(ValidationError) as refused:
+        stale.delete()
+    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    stale.refresh_from_db()
+    assert stale.status == TurnStatus.RUNNING
+
+
+def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: AgentSession) -> None:
+    """A collected pending turn may become active before the session delete guard runs."""
+
+    pending = session.post("Claim after collection")
+    other = get_user_model().objects.create_user(username="hidden-claim-session-owner")
+    with system_context(reason="test.agents.hidden_claim.owner"):
+        session.owner = other
+        session.save(update_fields=["owner"])
+    target = AgentSession.objects.with_action("delete").get(pk=session.pk)
+    assert not target.turns.exists()
+    collector = Collector(using=connection.alias, origin=target)
+    collector.collect([target])
+    claimed = AgentSession.system_queryset().get(pk=session.pk).claim_turn()
+    assert claimed is not None and claimed.pk == pending.pk
+    with pytest.raises(ValidationError) as refused:
+        collector.delete()
+    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    with system_context(reason="test.agents.hidden_claim.verify"):
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=pending.pk, status=TurnStatus.RUNNING).exists()
 
 
 def test_stop_idles_active_turn_and_dispatches_pending(
@@ -767,7 +802,7 @@ def test_provider_exception_detail_is_logged_without_being_shown_to_readers(
 
 
 def _delete_session_as(user: Any, session_id: int) -> None:
-    """Delete a session as ``user``; session deletion is admin-only."""
+    """Delete a session through its agent's owner/admin authority."""
 
     with actor_context(user):
         AgentSession.objects.get(pk=session_id).delete()
@@ -780,9 +815,7 @@ def test_delivery_after_session_deletion_is_a_quiet_noop(
 ) -> None:
     session.post("Deleted before the worker starts")
     session_id = session.pk
-    with pytest.raises(PermissionDenied):
-        _delete_session_as(session.owner, session_id)
-    _delete_session_as(create_platform_admin("session-admin"), session_id)
+    _delete_session_as(session.owner, session_id)
 
     run_session.run(session_id)
 

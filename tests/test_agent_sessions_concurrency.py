@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from rebac import actor_context
@@ -13,6 +14,7 @@ from angee.agents.models import SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from angee.base.scoping import system_queryset
+from tests.conftest import create_platform_admin
 from tests.test_agent_sessions import session as session
 from tests.test_decisions_concurrency import submit, wait_for_lock
 
@@ -57,6 +59,37 @@ def test_post_blocked_behind_settlement_sends_exactly_one_wakeup(
         posted = contender.result(timeout=10)
     assert posted.status == TurnStatus.PENDING
     assert [name for name, _options in capture_tasks] == ["agents.run_session"]
+
+
+def test_claim_prevents_a_user_delete_that_collected_a_pending_turn(session: AgentSession) -> None:
+    """User deletion rechecks active work after waiting for the claimant's session lock."""
+
+    queued = session.post("Claim while user deletion waits")
+    agent_owner_id = session.agent.owner_id
+    session_owner = get_user_model().objects.create_user(username="claim-delete-session-owner")
+    admin = create_platform_admin("claim-delete-admin")
+    with actor_context(admin):
+        session.owner = session_owner
+        session.save(update_fields=["owner"])
+
+    def delete_session_owner() -> Any:
+        with actor_context(admin):
+            return get_user_model().objects.get(pk=session_owner.pk).delete()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            system_queryset(AgentSession, lock=("self",)).get(pk=session.pk)
+            contender, pid = submit(pool, delete_session_owner)
+            wait_for_lock(pid, contender)
+            claimed = session.claim_turn()
+            assert claimed is not None and claimed.pk == queued.pk
+        with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
+            contender.result(timeout=10)
+    queued.refresh_from_db()
+    session.refresh_from_db()
+    assert queued.status == TurnStatus.RUNNING
+    assert session.status == SessionStatus.RUNNING
+    assert system_queryset(get_user_model()).filter(pk__in=[agent_owner_id, session_owner.pk]).count() == 2
 
 
 @pytest.mark.parametrize("winner", ["start", "deprovision"])
