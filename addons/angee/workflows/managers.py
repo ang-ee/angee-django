@@ -9,16 +9,17 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from uuid import uuid4
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Exists, F, Max, OuterRef, Q, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
+from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, system_context, to_subject_ref
 
@@ -26,7 +27,6 @@ from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
-from angee.base.impl import impl_registry, resolve_impl_class
 from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
@@ -34,7 +34,7 @@ from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_q
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
-from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, DefinitionInvalid, Issue
+from angee.workflows.definition import MAP_BODY_SUFFIX, Body, Definition, DefinitionInvalid, Issue
 from angee.workflows.states import (
     CANCELED_OUTCOME,
     AttemptResult,
@@ -44,7 +44,7 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Step, StepMode, Superseded, io_timeout_budget
+from angee.workflows.steps import StepMode, Superseded, io_timeout_budget
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
@@ -115,6 +115,17 @@ class Cancellation:
         return "; ".join(["Run canceled" if self.canceled else "Run already finished", *changes]) + "."
 
 
+class StepConfiguration(Body):
+    """A client identity and typed declaration for rowless outcome authoring."""
+
+    node: str
+
+
+_CONFIGURATIONS: TypeAdapter[list[StepConfiguration]] = TypeAdapter(
+    Annotated[list[StepConfiguration], Field(max_length=100)]
+)
+
+
 class WorkflowManager(AngeeManager):
     """Own the editable document and the immutable publication sequence."""
 
@@ -124,80 +135,60 @@ class WorkflowManager(AngeeManager):
             definition = Definition.model_validate(draft)
         except PydanticValidationError:
             return draft, []
-        document = definition.model_dump(mode="json", by_alias=True)
+        issues = self._resolve_awaits(list(definition.declarations()), actor)
+        return definition.model_dump(mode="json", by_alias=True), issues
+
+    def _resolve_awaits(self, declarations: list[tuple[str, Body, list[str | int]]], actor: Any) -> list[Issue]:
+        """Resolve all awaited contracts in one read-scoped query, with per-node failures."""
         issues: list[Issue] = []
         readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
-        for key, node, path in definition.declarations():
-            if node.step != "await_run":
-                continue
-            config = document["nodes"][key.partition(".")[0]]
-            if key.endswith(MAP_BODY_SUFFIX):
-                config = config["body"]
-            config = config["config"]
+        awaited = [(key, node, path) for key, node, path in declarations if node.step == "await_run"]
+        expects_keys = {
+            expects for _, node, _ in awaited
+            if isinstance(expects := node.config.get("expects"), str) and expects
+        }
+        expected_by_key = {
+            expected.key: expected for expected in
+            readable.select_related("published").filter(key__in=expects_keys, published__isnull=False)
+        } if expects_keys else {}
+        for key, node, path in awaited:
+            config = node.config
             expects = config.get("expects")
             config.pop("outcomes", None)
             if not isinstance(expects, str) or not expects:
                 continue
-            expected = readable.select_related("published").filter(key=expects, published__isnull=False).first()
+            expected = expected_by_key.get(expects)
             if expected is None:
                 issues.append(Issue(
                     node=key, path=[*path, "config", "expects"], code="expected_workflow",
                     message=f"Expected workflow {expects!r} must be readable and published.",
                 ))
                 continue
-            config["outcomes"] = expected.published.definition.output_schemas
-        return document, issues
+            try:
+                config["outcomes"] = expected.published.definition.output_schemas
+            except (ImproperlyConfigured, ValidationError):
+                issues.append(Issue(
+                    node=key, path=[*path, "config", "expects"], code="expected_workflow",
+                    message=f"Expected workflow {expects!r} has an invalid published contract.",
+                ))
+        return issues
 
     def authoring_outcomes(
-        self, configurations: list[Any], *, actor: Any
+        self, configurations: list[StepConfiguration], *, actor: Any
     ) -> list[tuple[str, dict[str, str], list[Issue]]]:
         """Resolve each unfinished node independently under the viewer's read scope."""
-        registry = impl_registry(Step.registry_setting)
-        projected: list[tuple[str, dict[str, str], list[Issue]]] = []
-        for entry in configurations:
-            path: list[str | int] = ["nodes", entry.node]
-            if entry.step not in registry:
-                projected.append(
-                    (
-                        entry.node,
-                        {},
-                        [
-                            Issue(
-                                node=entry.node,
-                                path=[*path, "step"],
-                                code="unknown_step",
-                                message=f"Unknown step {entry.step!r}.",
-                            )
-                        ],
-                    )
-                )
-                continue
-            step = resolve_impl_class(Step, entry.step)
-            document, issues = self._resolved_document(
-                {
-                    "nodes": {
-                        "entry": {"step": entry.step, "config": entry.config},
-                    }
-                },
-                actor,
-            )
-            for issue in issues:
-                issue.node = entry.node
-                issue.path = [*path, *issue.path[2:]]
-            outcomes, error = step.authoring_outcomes(document["nodes"]["entry"]["config"])
-            if error is not None:
-                if hasattr(error, "message_dict"):
-                    for field, messages in error.message_dict.items():
-                        issues.extend(
-                            Issue(node=entry.node, path=[*path, *field.split(".")], code="config", message=message)
-                            for message in messages
-                        )
-                else:
-                    issues.extend(
-                        Issue(node=entry.node, path=[*path, "config"], code="config", message=message)
-                        for message in error.messages
-                    )
-            projected.append((entry.node, outcomes, issues))
+        try:
+            entries = _CONFIGURATIONS.validate_python(configurations)
+        except PydanticValidationError as error:
+            raise ValidationError("At most 100 typed step configurations are supported.") from error
+        declarations: list[tuple[str, Body, list[str | int]]] = [
+            (entry.node, entry, ["nodes", entry.node]) for entry in entries
+        ]
+        resolved_issues = self._resolve_awaits(declarations, actor)
+        projected = []
+        for key, node, path in declarations:
+            outcomes, issues = Definition.node_outcomes(key, node, path)
+            projected.append((key, outcomes, [issue for issue in resolved_issues if issue.node == key] + issues))
         return projected
 
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:

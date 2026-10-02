@@ -11,7 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
@@ -588,7 +588,7 @@ def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(sc
     draft = document("renamed")
     query = """mutation($id: ID!, $draft: JSON!, $layout: JSON!, $revision: Int!) {
       save_workflow_draft(id: $id, draft: $draft, layout: $layout, expected_revision: $revision) {
-        revision diagnostics
+        revision diagnostics { node path code message }
       }
     }"""
     variables = {"id": workflow.sqid, "draft": draft, "layout": {"renamed": [120, 80]}, "revision": revision}
@@ -642,12 +642,19 @@ def test_studio_outcomes_resolve_await_contracts_and_isolate_bad_nodes(schema, c
         key="studio_child",
         actor=admin,
     )
+    hidden = load_workflow(
+        {"nodes": {"entry": {"step": "echo"}}, "results": [{"from": "entry", "as": "secret_outcome"}]},
+        key="hidden", actor=admin,
+    )
+    assert not read_scoped_queryset(Workflow, reader).filter(pk=hidden.pk).exists()
     workflow = load_workflow(document("entry"), actor=admin)
     workflow.with_actor(admin).grant_record_access("viewer", reader)
     child.with_actor(admin).grant_record_access("viewer", reader)
     query = """query($id: ID!, $configuration: [WorkflowStepConfiguration!]!) {
       workflow_step_choices(id: $id) { key internal config_schema }
-      workflow_step_outcomes(id: $id, configurations: $configuration) { node outcomes issues }
+      workflow_step_outcomes(id: $id, configurations: $configuration) {
+        node outcomes issues { node path code message }
+      }
     }"""
     configurations = [
         {"node": "await-client", "step": "await_run", "config": {"expects": child.key}},
@@ -656,6 +663,7 @@ def test_studio_outcomes_resolve_await_contracts_and_isolate_bad_nodes(schema, c
         {"node": "bad-outcome", "step": ConfiguredStep.key, "config": {"outcome": "INVALID"}},
         {"node": "retired", "step": "retired", "config": {}},
         {"node": "hidden-child", "step": "await_run", "config": {"expects": "hidden"}},
+        {"node": "missing-child", "step": "await_run", "config": {"expects": "missing"}},
     ]
     data = result_data(
         execute_schema(schema, query, {"id": workflow.sqid, "configuration": configurations}, user=reader)
@@ -668,6 +676,18 @@ def test_studio_outcomes_resolve_await_contracts_and_isolate_bad_nodes(schema, c
     for key in ("bad-config", "bad-outcome", "hidden-child"):
         assert by_id[key]["outcomes"]["error"] == "Error"
         assert by_id[key]["issues"] and by_id[key]["issues"][0]["node"] == key
+    assert by_id["bad-outcome"]["issues"][0]["path"] == ["nodes", "bad-outcome", "step"]
+    assert by_id["bad-outcome"]["issues"][0]["code"] == "outcome"
+    saved = Workflow.objects.save_draft(workflow, draft={"nodes": {
+        "bad_outcome": {"step": ConfiguredStep.key, "config": {"outcome": "INVALID"}},
+    }}, expected_revision=workflow.draft_revision, actor=admin)
+    outcome_issue = next(issue for issue in saved.issues if issue.code == "outcome")
+    assert outcome_issue.path == ["nodes", "bad_outcome", "step"]
+    assert outcome_issue.message == by_id["bad-outcome"]["issues"][0]["message"]
+    assert by_id["hidden-child"]["outcomes"] == by_id["missing-child"]["outcomes"]
+    assert "secret_outcome" not in str(by_id["hidden-child"])
+    hidden_message = by_id["hidden-child"]["issues"][0]["message"].replace("hidden", "missing")
+    assert hidden_message == by_id["missing-child"]["issues"][0]["message"]
     assert by_id["retired"]["outcomes"] == {} and by_id["retired"]["issues"][0]["code"] == "unknown_step"
 
 
@@ -687,7 +707,7 @@ def test_studio_success_keeps_nonblocking_config_diagnostics_and_publish_validat
         schema,
         """mutation($id: ID!, $draft: JSON!, $revision: Int!) {
           save_workflow_draft(id: $id, draft: $draft, layout: {}, expected_revision: $revision) {
-            revision diagnostics
+            revision diagnostics { node path code message }
           }
         }""",
         {"id": workflow.sqid, "draft": draft, "revision": workflow.draft_revision},
@@ -708,7 +728,7 @@ def test_studio_success_keeps_nonblocking_config_diagnostics_and_publish_validat
 def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeypatch, register_step):
     """The rowless projection passes one resolved class to the common choice owner."""
     from angee.base import impl as impl_owner
-    from angee.graphql.impl import registry_impl_choices
+    from angee.base.impl import resolve_all_impl_classes
     from angee.workflows.schema import WorkflowStepChoice
 
     class Projected(Step[Value, Value, None]):
@@ -730,9 +750,71 @@ def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeyp
 
     monkeypatch.setattr(impl_owner, "resolve_impl_class", resolve_once)
     monkeypatch.setattr(Projected, "choice", classmethod(build_once))
-    choices = registry_impl_choices(Step, WorkflowStepChoice.from_step)
+    choices = [WorkflowStepChoice.from_step(step) for step in resolve_all_impl_classes(Step)]
     assert resolved.count(Projected.key) == 1
     assert built == [Projected]
     projected = next(choice for choice in choices if choice.key == Projected.key)
     assert projected.defaults == build().defaults
     assert projected.outcomes == {"done": "Done", "error": "Error"}
+
+
+@pytest.mark.parametrize("broken", ["retired", "tightened"])
+def test_broken_published_child_is_a_located_issue_for_query_save_and_publish(schema, callers, register_step, broken):
+    from angee.workflows.awaits import AwaitRun
+
+    class Config(BaseModel):
+        minimum: int = 1
+
+    class Child(Step[Value, Value, Config]):
+        key = "studio_broken_child"
+
+    register_step(Child)
+    register_step(AwaitRun)
+    admin, _, _ = callers
+    child = load_workflow({"nodes": {"entry": {"step": Child.key}}, "results": [{"from": "entry"}]},
+                          key="broken_child", actor=admin)
+    parent = load_workflow(document("entry"), actor=admin)
+    if broken == "retired":
+        from django.conf import settings
+        settings.ANGEE_WORKFLOW_STEP_CLASSES.pop(Child.key)
+    else:
+        class Tightened(BaseModel):
+            minimum: int = Field(ge=2)
+        Child.config_model = Tightened
+    draft = {"nodes": {"awaited": {"step": "await_run", "config": {"expects": child.key}}}}
+    query = """query($id: ID!, $configurations: [WorkflowStepConfiguration!]!) {
+      workflow_step_outcomes(id: $id, configurations: $configurations) {
+        node outcomes issues { node path code message }
+      }
+    }"""
+    data = result_data(execute_schema(schema, query, {"id": parent.sqid, "configurations": [
+        {"node": "awaited", "step": "await_run", "config": {"expects": child.key}},
+    ]}, user=admin))["workflow_step_outcomes"][0]
+    assert data["issues"][0]["code"] == "expected_workflow"
+    assert data["issues"][0]["path"] == ["nodes", "awaited", "config", "expects"]
+    saved = Workflow.objects.save_draft(parent, draft=draft, expected_revision=parent.draft_revision, actor=admin)
+    assert any(issue.code == "expected_workflow" for issue in saved.issues)
+    with pytest.raises(ValidationError, match="invalid published contract"):
+        Workflow.objects.publish(parent, expected_revision=saved.revision, actor=admin)
+
+
+def test_await_resolution_is_batched_and_configurations_are_bounded(callers, register_step):
+    from angee.workflows.awaits import AwaitRun
+    from angee.workflows.managers import StepConfiguration
+
+    register_step(AwaitRun)
+    admin, _, _ = callers
+    children = [load_workflow(document("entry"), key=f"batch_{index}", actor=admin) for index in range(3)]
+    def entries(count):
+        return [StepConfiguration(node=f"node_{index}", step="await_run", config={"expects": children[index % 3].key})
+                for index in range(count)]
+    with CaptureQueriesContext(connection) as one:
+        Workflow.objects.authoring_outcomes(entries(1), actor=admin)
+    with CaptureQueriesContext(connection) as many:
+        Workflow.objects.authoring_outcomes(entries(10), actor=admin)
+    assert len(many) == len(one)
+    version_table = Workflow._meta.get_field("published").related_model._meta.db_table
+    contract_queries = [query for query in many if f'JOIN "{version_table}"' in query["sql"]]
+    assert len(contract_queries) == 1
+    with pytest.raises(ValidationError, match="100"):
+        Workflow.objects.authoring_outcomes(entries(101), actor=admin)

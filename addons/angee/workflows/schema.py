@@ -12,6 +12,7 @@ from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.impl import resolve_all_impl_classes
 from angee.base.models import record_display_label
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionGroupType
@@ -24,7 +25,7 @@ from angee.graphql.actions import (
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
-from angee.graphql.impl import ImplChoice, registry_impl_choices
+from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
     RecordReferenceNode,
@@ -36,6 +37,8 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
+from angee.workflows.definition import Body, Definition, Issue
+from angee.workflows.managers import StepConfiguration
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerGrantTarget
@@ -620,7 +623,9 @@ class WorkflowStepChoice(ImplChoice):
     def from_step(cls, step: type[Step]) -> WorkflowStepChoice:
         """Build common metadata and workflow facts from one resolved class."""
         choice = step.choice()
-        outcomes, _ = step.authoring_outcomes(choice.defaults.get("config", {}))
+        outcomes, _ = Definition.node_outcomes(
+            step.key, Body(step=step.key, config=choice.defaults.get("config", {})), [], implementation=step,
+        )
         return cls.from_choice(choice, internal=step.internal, outcomes=outcomes)
 
 
@@ -633,13 +638,20 @@ class WorkflowStepConfiguration:
     config: JSON
 
 
+@strawberry.experimental.pydantic.type(model=Issue, all_fields=True)
+class WorkflowIssue:
+    """Typed projection of the document owner's located diagnostic."""
+
+    path: JSON
+
+
 @strawberry.type
 class WorkflowConfiguredOutcomes:
     """Configured outcomes associated with their stable client node identity."""
 
     node: str
     outcomes: JSON
-    issues: JSON
+    issues: list[WorkflowIssue]
 
 
 @strawberry.type
@@ -650,7 +662,7 @@ class WorkflowStudioQuery:
     def workflow_step_choices(self, info: strawberry.Info, id: PublicID) -> list[WorkflowStepChoice]:
         """Offer registered steps, including internal metadata for retained nodes."""
         authorized_permission_target(info, Workflow, id, "monitor")
-        return registry_impl_choices(Step, WorkflowStepChoice.from_step)
+        return [WorkflowStepChoice.from_step(step) for step in resolve_all_impl_classes(Step)]
 
     @strawberry.field
     def workflow_step_outcomes(
@@ -665,10 +677,11 @@ class WorkflowStudioQuery:
             WorkflowConfiguredOutcomes(
                 node=node,
                 outcomes=cast(JSON, outcomes),
-                issues=cast(JSON, [issue.model_dump(mode="json") for issue in issues]),
+                issues=cast(list[WorkflowIssue], issues),
             )
             for node, outcomes, issues in Workflow.objects.authoring_outcomes(
-                configurations,
+                [StepConfiguration.model_validate({"node": entry.node, "step": entry.step, "config": entry.config})
+                 for entry in configurations],
                 actor=request_from_info(info).user,
             )
         ]
@@ -679,7 +692,7 @@ class WorkflowDraftAcknowledgement:
     """Revision accepted by this save and its non-blocking diagnostics."""
 
     revision: int
-    diagnostics: JSON
+    diagnostics: list[WorkflowIssue]
 
 
 @strawberry.type
@@ -716,7 +729,7 @@ class WorkflowStudioMutation:
         )
         return WorkflowDraftAcknowledgement(
             revision=saved.revision,
-            diagnostics=cast(JSON, [issue.model_dump(mode="json") for issue in saved.issues]),
+            diagnostics=cast(list[WorkflowIssue], saved.issues),
         )
 
     @strawberry.mutation

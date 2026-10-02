@@ -45,14 +45,14 @@ export const WorkflowStudioDocument = graphql(`
 
 export const WorkflowStepOutcomesDocument = graphql(`
   query WorkflowStepOutcomes($id: ID!, $configurations: [WorkflowStepConfiguration!]!) {
-    workflow_step_outcomes(id: $id, configurations: $configurations) { node outcomes issues }
+    workflow_step_outcomes(id: $id, configurations: $configurations) { node outcomes issues { node path code message } }
   }
 `);
 
 export const SaveWorkflowDraftDocument = graphql(`
   mutation SaveWorkflowDraft($id: ID!, $draft: JSON!, $layout: JSON!, $revision: Int!, $nodeKeys: JSON!) {
     save_workflow_draft(id: $id, draft: $draft, layout: $layout, expected_revision: $revision, node_keys: $nodeKeys) {
-      revision diagnostics
+      revision diagnostics { node path code message }
     }
   }
 `);

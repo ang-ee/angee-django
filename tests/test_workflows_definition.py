@@ -1200,6 +1200,35 @@ def test_definition_layout_rejects_malformed_positions(layout):
     assert all(path.startswith("layout") for path in refused.value.message_dict)
 
 
+def test_rekey_locates_only_duplicate_entries_and_shares_parse_mapping():
+    from angee.workflows.definition import DefinitionInvalid
+
+    document = {"nodes": {id_: {"step": "echo"} for id_ in ("one", "two", "three")}}
+    with pytest.raises(DefinitionInvalid) as refused:
+        Definition.rekey(document, keys={"one": "same", "two": "same", "three": "different"})
+    assert {issue.node for issue in refused.value.issues} == {"one", "two"}
+    assert all(issue.path == ["nodes", issue.node] for issue in refused.value.issues)
+    malformed = {"nodes": {"entry": {"step": 3}}}
+    with pytest.raises(DefinitionInvalid) as refused:
+        Definition.rekey(malformed)
+    assert refused.value.issues == Definition.check(malformed)[1]
+    assert refused.value.issues[0].node == "entry"
+
+
+def test_rekey_rejects_ambiguous_identity_and_unknown_layout_without_repointing_bindings():
+    from angee.workflows.definition import DefinitionInvalid
+
+    document = {"nodes": {
+        "fetch": {"step": "echo"},
+        "new": {"step": "echo", "input": {"from": "fetch", "path": ["result"]}},
+    }}
+    with pytest.raises(DefinitionInvalid, match="client identity"):
+        Definition.rekey(document, keys={"fetch": "download", "new": "fetch"})
+    assert document["nodes"]["new"]["input"]["from"] == "fetch"
+    with pytest.raises(DefinitionInvalid, match="absent"):
+        Definition.rekey(document, layout={"absent": [1, 2]})
+
+
 def test_draft_save_applies_definition_rekey_and_layout_validation(execution):
     from angee.base.scoping import system_queryset
     from angee.workflows.testing.drivers import load_workflow

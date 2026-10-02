@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Self, cast
 
@@ -12,7 +11,6 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
-from angee.base.impl import ImplBase, resolve_all_impl_classes
 from angee.base.impl import ImplChoice as BaseImplChoice
 from angee.base.models import AngeeModel
 
@@ -32,14 +30,6 @@ class ImplChoice:
     def from_choice(cls, choice: BaseImplChoice, **extra: Any) -> Self:
         """Project implementation-owned metadata once, with declared subtype facts."""
         return cls(**asdict(choice), **extra)
-
-
-def registry_impl_choices[TImpl: ImplBase, TChoice: ImplChoice](
-    base_class: type[TImpl],
-    project: Callable[[type[TImpl]], TChoice],
-) -> list[TChoice]:
-    """Project rowless metadata from each registered class once, after caller admission."""
-    return [project(impl) for impl in resolve_all_impl_classes(base_class)]
 
 
 def impl_choices(model: str, field: str) -> list[ImplChoice]:

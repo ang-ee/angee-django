@@ -316,14 +316,6 @@ class Step[I, O, C](ImplBase):
         return cls.outcomes
 
     @classmethod
-    def authoring_outcomes(cls, config: Any) -> tuple[dict[Outcome, str], ValidationError | None]:
-        """Offer configured outcomes or static fallback with the node's refusal."""
-        try:
-            return cls.available_outcomes(cls.parse_config(config), validate=True), None
-        except ValidationError as error:
-            return cls._with_error_outcome(cls.outcomes), error
-
-    @classmethod
     def required_outcomes(cls, config: Any) -> set[Outcome]:
         """Outcomes the graph must route instead of silently ending the branch."""
         return set()
