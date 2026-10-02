@@ -8,11 +8,20 @@ from django.db import models
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models import AngeeDataModel
-from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.hasura import _declared_aliases, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import create_user, execute_schema, make_addon, result_data
 from tests.scopedemo.models import Scope
+
+
+@pytest.fixture(autouse=True)
+def clear_declared_aliases():
+    """Each test changes model declarations before building its isolated schema."""
+
+    _declared_aliases.cache_clear()
+    yield
+    _declared_aliases.cache_clear()
 
 
 @strawberry_django.type(Scope)

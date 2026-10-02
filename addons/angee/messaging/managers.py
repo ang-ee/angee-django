@@ -2692,7 +2692,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 models.Prefetch("reactions__handle", queryset=apps.get_model("parties", "Handle")._base_manager.all()),
                 models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.all()),
             )
-            .annotate(_order_at=MessageQuerySet.chronological_time())
+            .annotate(
+                _order_at=MessageQuerySet.chronological_time(),
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            )
         )
         kinds = {
             strip_null_bytes(value or "").strip().lower()
@@ -2951,7 +2954,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if not body:
             raise ValueError("Message body is required.")
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().get(pk=message.pk)
+            message = type(message)._base_manager.select_for_update().annotate(
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            ).get(pk=message.pk)
             edit_error = message.content_edit_error()
             if edit_error is not None:
                 raise ValueError(edit_error)
@@ -3007,7 +3012,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         """Delete ``message`` from ``thread`` and repair thread denormalisations."""
 
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().get(pk=message.pk)
+            message = type(message)._base_manager.select_for_update().annotate(
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            ).get(pk=message.pk)
             if message.thread_id != thread.pk:
                 raise ValueError("Message does not belong to this thread.")
             delete_error = message.delete_error()

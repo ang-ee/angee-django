@@ -76,10 +76,9 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
     allowed = [False] * len(policies)
     for (model, key), entries in scopes.items():
         rows = read_scoped_queryset(model, actor)
-        if rows is not None:
-            readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
-            for index, value in entries:
-                allowed[index] = value in readable
+        readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
+        for index, value in entries:
+            allowed[index] = value in readable
     return allowed
 
 

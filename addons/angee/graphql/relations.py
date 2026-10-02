@@ -79,12 +79,11 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         if model is None:
             continue
         targets = read_scoped_queryset(model, actor)
-        if targets is not None:
-            keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
-            readable |= models.Q(**{
-                reference.ct_field_attname: content_type.pk,
-                f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
-            })
+        keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+        readable |= models.Q(**{
+            reference.ct_field_attname: content_type.pk,
+            f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
+        })
     return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
         readable, output_field=models.BooleanField(),
     ))
@@ -152,8 +151,6 @@ def actor_scoped_relation_expression(
             traversed.append(part)
             continue
         related_queryset = read_scoped_queryset(related_model, actor)
-        if related_queryset is None:
-            related_queryset = related_model._default_manager.none()
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))
@@ -276,8 +273,6 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
             # A public-ID scalar has no nested model projection to optimize.
             return field_name
         queryset = read_scoped_queryset(related_model, current_actor())
-        if queryset is None:
-            queryset = related_model._default_manager.none()
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)

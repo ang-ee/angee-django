@@ -189,8 +189,13 @@ Use these owners instead of maintaining another contract in an addon:
   aggregate builders) instead of reimplementing ORM, permission, or serialization
   behavior.
 - Declare computed GraphQL field dependencies with native Strawberry-Django
-  `only`, `select_related`, and `prefetch_related` hints. This includes inherited
-  `AngeeNode.display_name`: bind its existing resolver on the concrete type with
+  `only`, `select_related`, `prefetch_related`, and `annotate` hints. Computed
+  fields promote their model-owned aliases through native `annotate` hints only
+  when selected; filter/order aliases stay unselected until the SQL uses them.
+  See [the Hasura adapter](../../addons/angee/graphql/data/hasura.py) and
+  [workflow decision fields](../../addons/angee/workflows/schema.py).
+  Dependencies include inherited `AngeeNode.display_name`: bind its existing
+  resolver on the concrete type with
   the fields its model's `__str__` actually reads. Test narrow selections at
   multiple row counts; selecting the underlying field elsewhere can hide a
   deferred-field N+1.
@@ -1010,8 +1015,9 @@ and current contracts before applying a historical example to a new deployment.
   FK policies deliberately, including generic relations that can cascade into
   retained rows. This is a modelling rule, not a mechanical system check. Shared
   retained models compose [`AppendOnlyModel`](../../angee/base/mixins.py) and
-  their managers compose `AppendOnlyQuerySet`. The model closes ordinary instance
-  writes and binds a guarded base manager after class preparation; the queryset
+  their default managers compose `AppendOnlyQuerySet`. The model closes ordinary instance
+  writes and declares a guarded base manager through `Meta.base_manager_name`;
+  `angee.E034` checks its default manager's queryset composition. The queryset
   rejects generic updates and deletion with a model-labelled `ValidationError`.
   Its `validate_insert` seam narrows all generic insert entrypoints. Retention
   commands insert validated batches through `owner_bulk_create`; lease state
@@ -1122,7 +1128,8 @@ and current contracts before applying a historical example to a new deployment.
   support; forms project the same declaration downstream. Dynamic factories
   resolve through `parse_config()` at runtime; `normalize_config()` serializes
   that parsed model with its wire aliases. Typed implementation values share
-  `ImplBase`'s cached native adapter and Django field-path errors. Explicit
+  [`get_type_adapter`](../../angee/base/validation.py)'s cached native adapter
+  and Django field-path errors. Explicit
   config parsing rejects non-empty values without a model; model-row validation
   still leaves undeclared legacy config alone. Generated choice metadata stays
   deterministic.
@@ -1765,8 +1772,6 @@ optimized `allowed_visibility` projection share those conditions and native
 permission scopes. Hidden domain facts stay inside the projection query.
 Message writers must still preserve publication invariants under the task lock.
 
-A human decision is final unless its subject addon contributes
-`Decision.can_revisit_expression(actor)` and `Decision.revisit(actor, revision)`.
-The projection uses native permission scopes; the verb rechecks under the domain
-lock and admits a successor through `DecisionRequest.replaces`, retaining the
-old answer. See [intake's donor](../../addons/angee/intake/models.py).
+Decision admission, answers and successor questions belong to the
+[decisions manager](../../addons/angee/decisions/managers.py). Subject addons
+compose its retained lifecycle; controls consume the owning verb's eligibility.

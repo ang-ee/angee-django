@@ -17,8 +17,9 @@ from rebac.evaluator import evaluator_scope
 
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
+from angee.testing.permissions import installed_field_owners
 from tests.chatterdemo.models import ChatterDoc
-from tests.conftest import File, Vendor, installed_field_owners
+from tests.conftest import File, Vendor
 from tests.messaging_models import Channel, Message, Part, Thread, ThreadAttachment
 from tests.test_messaging import _storage_drive
 

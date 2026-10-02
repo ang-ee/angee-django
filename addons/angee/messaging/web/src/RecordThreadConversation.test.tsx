@@ -285,12 +285,12 @@ describe("RecordThreadConversation", () => {
     payload.record_thread.post_kinds = ["NOTE"];
     mocks.threadData = payload;
     render(<RecordThreadConversation modelLabel="projects.Project" recordId="project_1"
-      stream={{ prompt: "Add a note", submitLabel: "Add note", postKind: "note" }} />);
+      stream={{ prompt: "Add a note", submitLabel: "Add note", postKind: "NOTE" }} />);
     expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Private thought" } });
     fireEvent.click(screen.getByRole("button", { name: "Add note" }));
     expect(mocks.mutateCalls).toEqual([expect.objectContaining({
-      op: "MessagingPostRecordMessage", vars: expect.objectContaining({ kind: "note" }),
+      op: "MessagingPostRecordMessage", vars: expect.objectContaining({ kind: "NOTE" }),
     })]);
   });
 
@@ -353,14 +353,14 @@ describe("RecordThreadConversation", () => {
     expect(mocks.mutateCalls).toEqual([]);
   });
 
-  test.each(["comment", "note"])("freezes a permitted %s draft in preview and blocks every submission path", (kind) => {
+  test.each(["COMMENT", "NOTE"])("freezes a permitted %s draft in preview and blocks every submission path", (kind) => {
     const { rerender, container } = render(conversationPreview(false));
-    if (kind === "note") fireEvent.click(screen.getByRole("button", { name: "Note" }));
+    if (kind === "NOTE") fireEvent.click(screen.getByRole("button", { name: "Note" }));
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep this draft" } });
 
     rerender(conversationPreview(true));
     const input = screen.getByLabelText<HTMLTextAreaElement>("Message");
-    const send = screen.getByRole<HTMLButtonElement>("button", { name: kind === "note" ? "Log" : "Send" });
+    const send = screen.getByRole<HTMLButtonElement>("button", { name: kind === "NOTE" ? "Log" : "Send" });
     expect(input.readOnly).toBe(true);
     expect(input.value).toBe("Keep this draft");
     expect(send.disabled).toBe(true);

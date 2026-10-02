@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import pytest
@@ -18,8 +19,45 @@ from tests.proposals_models import Proposal, Round
 
 pytest_plugins = ("tests.proposals_campaign",)
 
+# django-zed-rebac owns these fixed scope-compilation reads. Application row
+# reads and roster expansion have separate exact guards below.
+REBAC_TRACK_STATUS_QUERY_CEILING = 150
+REBAC_ROUND_QUERY_CEILING = 44
 
-def test_proposal_track_status_list_keeps_the_reviewed_query_budget_at_five_and_fifty_rows(
+
+def _list_statement_categories(queries, model, *, roster=False) -> Counter[str]:
+    """Separate native list projections from the permission compiler's reads."""
+
+    categories: Counter[str] = Counter()
+    quote = connection.ops.quote_name
+    row_prefix = f"SELECT {quote(model._meta.db_table)}.{quote(model._meta.pk.column)},"
+    roster_prefix = f"SELECT {quote(Proposal._meta.db_table)}.{quote(Proposal._meta.pk.column)},"
+    for query in queries:
+        sql = query["sql"]
+        if sql.startswith(row_prefix):
+            category = "application"
+        elif roster and sql.startswith(roster_prefix):
+            category = "roster"
+        elif roster and sql.startswith('INSERT INTO "rebac_permissionauditevent"'):
+            category = "roster_audit"
+        elif sql.startswith('SELECT "rebac_schemageneration"."revision"'):
+            category = "schema_revision"
+        elif sql.startswith('SELECT 1 AS "a" FROM "rebac_schemageneration"'):
+            category = "constant_decision"
+        elif sql.startswith("SELECT DISTINCT ") and '"rebac_' in sql.partition(" WHERE ")[0]:
+            category = "actor_sets"
+        elif sql.startswith("SELECT ") and sql.partition(" FROM ")[0].endswith(' AS "pk"'):
+            category = "decided_rows"
+        else:
+            pytest.fail(f"Unexpected statement in list projection: {sql}")
+        categories[category] += 1
+    assert categories["application"] == 1, categories
+    assert categories["roster"] == int(roster), categories
+    assert categories["roster_audit"] == int(roster), categories
+    return categories
+
+
+def test_proposal_track_status_uses_one_application_select_and_constant_policy_reads(
     campaign: ProposalCampaign,
 ) -> None:
     c = campaign
@@ -39,22 +77,21 @@ def test_proposal_track_status_list_keeps_the_reviewed_query_budget_at_five_and_
 
     with actor_context(manager):
         read(5)  # Warm schema/ContentType caches, never the row result.
-        counts = []
+        categories = []
         for limit in (5, 50):
             with CaptureQueriesContext(connection) as queries:
                 rows = read(limit)
             assert len(rows) == limit
             assert all(row._track_status is None for row in rows)
-            counts.append(len(queries))
-        assert counts[0] == counts[1], counts
-        assert max(counts) <= 151, counts
+            categories.append(_list_statement_categories(queries, Proposal))
+        assert categories[0] == categories[1], categories
+        assert categories[0].total() - 1 <= REBAC_TRACK_STATUS_QUERY_CEILING, categories
 
 
-@pytest.mark.parametrize("roster,budget", ((False, 45), (True, 47)), ids=("capabilities", "roster"))
-def test_round_capability_and_roster_lists_keep_the_reviewed_query_budgets(
+@pytest.mark.parametrize("roster", (False, True), ids=("capabilities", "roster"))
+def test_round_lists_use_one_application_select_and_constant_policy_and_roster_reads(
     campaign: ProposalCampaign,
     roster: bool,
-    budget: int,
 ) -> None:
     c = campaign
     manager = c.person("facilitator")
@@ -87,14 +124,14 @@ def test_round_capability_and_roster_lists_keep_the_reviewed_query_budgets(
     actor = responder if roster else manager
     with actor_context(actor):
         read(5, actor, roster)
-        counts = []
+        categories = []
         for limit in (5, 50):
             with CaptureQueriesContext(connection) as queries:
                 rows = read(limit, actor, roster)
             assert len(rows) == limit
-            counts.append(len(queries))
-        assert counts[0] == counts[1], counts
-        assert max(counts) <= budget, counts
+            categories.append(_list_statement_categories(queries, Round, roster=roster))
+        assert categories[0] == categories[1], categories
+        assert categories[0].total() - 1 - 2 * roster <= REBAC_ROUND_QUERY_CEILING, categories
 
 
 def test_round_and_proposal_read_scopes_compile_to_sql_for_non_admins(campaign: ProposalCampaign) -> None:

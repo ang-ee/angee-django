@@ -2129,6 +2129,47 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     assert capabilities["AUTO_COMMENT"] == (False, False)
 
 
+def test_record_message_capabilities_have_constant_query_count(composed_tables: None, record_property) -> None:
+    """Both capability fields share one tracking-existence projection per list."""
+
+    admin = _platform_admin("msg-capability-budget-admin")
+    with actor_context(admin), system_context(reason="test.messaging.capability.budget.seed"), mute_changes():
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Capability budget")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
+        sender = messaging_models.Handle.objects.for_user(admin)
+        expected = {}
+        for index in range(25):
+            message = messaging_models.Message.objects.create(
+                thread=attachment.thread, direction="internal", message_type="comment",
+                created_by=admin, sender=sender,
+            )
+            tracked = index % 2 == 0
+            if tracked:
+                messaging_models.TrackingValue.objects.create(message=message, field_name="status")
+            expected[str(message.sqid)] = not tracked
+    query = """
+        query Capabilities($id: ID!, $limit: Int!) {
+          record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id, message_limit: $limit}) {
+            messages { id can_edit can_delete }
+          }
+        }
+    """
+    schema = _schema()
+    _data(execute_schema(schema, query, {"id": ticket.sqid, "limit": 1}, request=_request(admin)))
+    counts = []
+    for size in (1, 25):
+        with CaptureQueriesContext(connection) as captured:
+            payload = _data(execute_schema(
+                schema, query, {"id": ticket.sqid, "limit": size}, request=_request(admin),
+            ))["record_thread"]
+        assert len(payload["messages"]) == size
+        for message in payload["messages"]:
+            assert message["can_edit"] == message["can_delete"] == expected[message["id"]]
+        counts.append(len(captured))
+        record_property(f"capability_queries_{size}", len(captured))
+    assert counts[0] == counts[1], counts
+
+
 def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) -> None:
     """The record chatter API exposes current-user receipt-derived unread state.
 

@@ -54,8 +54,7 @@ def read_resource_queryset(
     """Bind a read-only GraphQL resource to its signed-in REBAC scope."""
 
     def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        scoped = read_scoped_queryset(model, session_user(info), action="read")
-        return model.objects.none() if scoped is None else scoped
+        return read_scoped_queryset(model, session_user(info), action="read")
 
     return get_queryset
 

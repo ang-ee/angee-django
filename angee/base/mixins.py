@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
+from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
@@ -20,6 +21,7 @@ from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
+from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.scoping import system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe
 
@@ -307,15 +309,13 @@ class OwnerMixin(AuditMixin):
         return self
 
 
-class _AppendOnlyWrites:
+class _AppendOnlyWritesMixin(models.QuerySet[_ModelT]):
     """The closed collection-write policy shared by the scoped and base querysets.
 
     ``owner_update`` and ``owner_bulk_create`` are public, framework-protected
     APIs for domain owners that have already validated fields and predicates.
     They skip this class's guard only, preserving every downstream guard.
     """
-
-    model: type[models.Model]
 
     def immutable_error(self, operation: str) -> ValidationError:
         """Identify the model whose generic collection mutation is forbidden."""
@@ -328,13 +328,13 @@ class _AppendOnlyWrites:
 
     def bulk_create(
         self,
-        objs: Iterable[Any],
+        objs: Iterable[_ModelT],
         batch_size: int | None = None,
         ignore_conflicts: bool = False,
         update_conflicts: bool = False,
         update_fields: Iterable[str] | None = None,
         unique_fields: Iterable[str] | None = None,
-    ) -> list[Any]:
+    ) -> list[_ModelT]:
         """Reject conflict handling before asking the owner to admit inserts."""
 
         if ignore_conflicts or update_conflicts:
@@ -342,15 +342,15 @@ class _AppendOnlyWrites:
         self.validate_insert()
         return self.owner_bulk_create(objs, batch_size=batch_size)
 
-    def owner_bulk_create(self, objs: Iterable[Any], *, batch_size: int | None = None) -> list[Any]:
+    def owner_bulk_create(self, objs: Iterable[_ModelT], *, batch_size: int | None = None) -> list[_ModelT]:
         """Protected API: insert an owner-validated batch through downstream guards."""
 
-        return cast(list[Any], super().bulk_create(objs, batch_size=batch_size))  # type: ignore[misc]
+        return super().bulk_create(objs, batch_size=batch_size)
 
     def owner_update(self, **kwargs: Any) -> int:
         """Protected API: apply an owner-validated write through downstream guards."""
 
-        return cast(int, super().update(**kwargs))  # type: ignore[misc]
+        return super().update(**kwargs)
 
     def update(self, **kwargs: Any) -> int:
         """Reject every collection edit."""
@@ -373,7 +373,7 @@ class _AppendOnlyWrites:
         raise self.immutable_error("_raw_delete")
 
 
-class AppendOnlyQuerySet(_AppendOnlyWrites, RebacQuerySet[_ModelT]):
+class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]):
     """Close generic collection edits and deletion around owner-controlled writes.
 
     Compose before the domain's base queryset to preserve authorization.
@@ -391,8 +391,15 @@ class AppendOnlyQuerySet(_AppendOnlyWrites, RebacQuerySet[_ModelT]):
         return super().insert(obj)
 
 
-class AppendOnlyBaseQuerySet(_AppendOnlyWrites, TrackedQuerySet[_ModelT]):
+class AppendOnlyBaseQuerySet(
+    _AngeeQuerySetMixin[_ModelT], _AppendOnlyWritesMixin[_ModelT], TrackedQuerySet[_ModelT],
+):
     """Unscoped rows for Django's own relation reads, with the same writes closed."""
+
+    def validate_insert(self) -> None:
+        """Apply the domain's default-queryset admission to base-manager inserts."""
+
+        self.model._default_manager.get_queryset().validate_insert()
 
 
 class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyBaseQuerySet)):  # type: ignore[misc]
@@ -402,7 +409,7 @@ class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyBaseQuerySet)
 class AppendOnlyModel(models.Model):
     """Admit new rows while reserving retained-row changes for owner verbs.
 
-    The model's managers must compose :class:`AppendOnlyQuerySet`. An owner may
+    The model's default manager must compose :class:`AppendOnlyQuerySet`. An owner may
     use ``_owner_insert`` after its own admission or ``_owner_delete`` after its
     own retention check; ordinary instance and collection writes stay closed.
     """
@@ -412,6 +419,22 @@ class AppendOnlyModel(models.Model):
     class Meta:
         abstract = True
         base_manager_name = "_append_only_base"
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require the default manager to retain the append-only write contract."""
+
+        errors = super().check(**kwargs)
+        if not cls._meta.abstract and not isinstance(cls._default_manager.get_queryset(), AppendOnlyQuerySet):
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label}'s default manager must compose AppendOnlyQuerySet.",
+                    hint="Declare a default manager whose queryset inherits AppendOnlyQuerySet.",
+                    obj=cls,
+                    id="angee.E034",
+                )
+            )
+        return errors
 
     def validate_append(self) -> None:
         """Let a domain owner narrow first insertion without replacing the guard."""

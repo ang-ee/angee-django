@@ -26,10 +26,35 @@ from angee.base.checks import (
 )
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import HierarchyQuerySet, OwnerMixin
-from angee.base.models import AngeeModel
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, HierarchyQuerySet, OwnerMixin
+from angee.base.models import AngeeManager, AngeeModel
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_append_only_default_manager_check(guarded: bool) -> None:
+    """Django's model checks catch a concrete retained row with an ordinary manager."""
+
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class Retained(AppendOnlyModel):
+            objects = AngeeManager.from_queryset(AppendOnlyQuerySet)() if guarded else AngeeManager()
+
+            class Meta(AppendOnlyModel.Meta):
+                app_label = "contenttypes"
+                abstract = False
+
+        errors = checks.run_checks(app_configs=list(isolated.get_app_configs()), tags=[checks.Tags.models])
+        append_errors = [error for error in errors if error.id == "angee.E034"]
+        assert len(append_errors) == (0 if guarded else 1)
+        if append_errors:
+            assert append_errors[0].obj is Retained
+
+
+def test_installed_append_only_default_managers_compose_guard() -> None:
+    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
+    assert models
+    assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
 
 
 def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:

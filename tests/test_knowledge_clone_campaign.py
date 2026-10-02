@@ -272,7 +272,7 @@ def test_empty_creation_key_fails_before_a_clone_is_written(clone_template):
 
 
 def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables, record_property):
-    """The reviewed batch path grows by histories, not per-page permission reads."""
+    """Cloning may cross batch boundaries but must not issue per-page statements."""
 
     author, actor = create_user("budget-author"), create_user("budget-actor")
     counts = []
@@ -290,10 +290,40 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
             clone = Vault.objects.create_from(source, name=f"Copy {size}")
         counts.append(len(captured))
         record_property(f"clone_queries_{size}", len(captured))
-        assert len(captured) <= {5: 230, 60: 286}[size], f"{size} pages used {len(captured)} queries"
         with system_context(reason="test.clone.budget.contents"):
             assert Page.objects.filter(vault=clone).count() == size
             assert MarkdownPage.objects.filter(vault=clone).count() == size
             assert Page.history.filter(vault_id=clone.pk).count() == size
-    # Review measured +56 for +55 pages; permit batch-size boundaries across DBs.
-    assert counts[1] - counts[0] <= 60, counts
+    # Leave this guard red until the child-row bulk-insert owner is decided.
+    # A few native batch boundaries are allowed; one statement per child is not.
+    assert counts[1] - counts[0] <= 6, counts
+
+
+def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_property):
+    """The same page rows cost the same in a shallow tree and a deep chain."""
+
+    actor = create_user("tree-depth-owner")
+    counts = []
+    for depth in (2, 30):
+        with actor_context(actor), system_context(reason="test.clone.depth.setup"):
+            source = Vault.objects.create_for(actor, name=f"Depth {depth}")
+            pages = []
+            for index in range(30):
+                parent = pages[-1 if depth == 30 else 0] if pages else None
+                pages.append(Page.objects.create_in(
+                    source, title=f"Folder {index}", parent=parent, kind=Page.PageKind.FOLDER,
+                ))
+        with actor_context(actor), CaptureQueriesContext(connection) as captured:
+            clone = Vault.objects.create_from(source, name=f"Copied depth {depth}")
+        counts.append(len(captured))
+        record_property(f"clone_queries_depth_{depth}", len(captured))
+        with system_context(reason="test.clone.depth.contents"):
+            copies = {page.title: page for page in Page.objects.filter(vault=clone)}
+            history = {row.id: row for row in Page.history.filter(vault_id=clone.pk)}
+            assert len(copies) == len(history) == 30
+            for original in pages:
+                copied = copies[original.title]
+                parent = next((page for page in pages if page.pk == original.parent_id), None)
+                assert copied.parent_id == (copies[parent.title].pk if parent else None)
+                assert history[copied.pk].parent_id == copied.parent_id
+    assert counts[0] == counts[1], counts

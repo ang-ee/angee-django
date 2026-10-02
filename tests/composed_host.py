@@ -20,8 +20,8 @@ from typing import Any
 
 import environ
 
-COMPOSED_TEST_TIMEOUT = 600
-"""Bound native test groups including composition and schema setup."""
+COMPOSED_TEST_TIMEOUT = 120
+"""Bound composition and native test groups, allowing headroom over measured 15–29s runs."""
 
 
 def run_composed_tests(

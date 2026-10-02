@@ -15,8 +15,9 @@ from rebac import RebacMixin
 from rebac.managers import TrackedQuerySet
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
-from angee.base.scoping import lock_if_supported, system_queryset
+from angee.base.scoping import aggregate_scoped_queryset, lock_if_supported, read_scoped_queryset, system_queryset
 from tests.conftest import Drive, File, Integration
+from tests.decisions_models import DecisionEvidence
 from tests.tables import model_tables
 
 POSTGRESQL_ONLY = pytest.mark.skipif(
@@ -83,6 +84,24 @@ class ThirdPartySystemQueryThing(RebacMixin):
         """Django model options for the test model."""
 
         app_label = "tests"
+
+
+def test_read_scope_preserves_permission_naive_manager_predicates() -> None:
+    """No row policy keeps the default manager's selection without requiring an actor."""
+
+    rows = read_scoped_queryset(GuardedSystemQueryThing, None)
+    assert type(rows) is type(GuardedSystemQueryThing.objects.all())
+    assert rows.query.where == GuardedSystemQueryThing.objects.all().query.where
+
+
+@pytest.mark.parametrize("model", (Drive, DecisionEvidence))
+def test_read_scope_without_actor_is_empty_without_querying(model) -> None:
+    """An empty protected scope can be consumed without an ambient actor or a database."""
+
+    rows = read_scoped_queryset(model, None)
+    assert rows.query.is_empty()
+    assert list(rows) == []
+    assert list(aggregate_scoped_queryset(rows)) == []
 
 
 @pytest.mark.parametrize("model", [Drive, File, Integration])

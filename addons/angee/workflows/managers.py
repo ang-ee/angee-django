@@ -126,7 +126,6 @@ class WorkflowManager(AngeeManager):
         document = definition.model_dump(mode="json", by_alias=True)
         issues: list[Issue] = []
         readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
-        assert readable is not None
         for key, node, path in definition.declarations():
             if node.step != "await_run":
                 continue
@@ -151,7 +150,6 @@ class WorkflowManager(AngeeManager):
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
         """Name readable published parents whose frozen contract names this workflow."""
         readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
-        assert readable is not None
         parents = readable.exclude(pk=workflow.pk).filter(published__isnull=False).values_list(
             "key", "published__document",
         )
@@ -632,7 +630,7 @@ class StepWatchManager(AngeeManager):
                 lock_if_supported(rows, no_key=True).get()
             for record in records:
                 readable = read_scoped_queryset(type(record), actor)
-                if readable is None or not readable.filter(pk=record.pk).exists():
+                if not readable.filter(pk=record.pk).exists():
                     raise PermissionDenied("Read access to a saved watched record is required.")
             for target in targets.values():
                 self.get_or_create(step_run=step_run, content_type=target.content_type, object_id=target.object_id)

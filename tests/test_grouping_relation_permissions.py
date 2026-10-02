@@ -30,6 +30,7 @@ from strawberry import auto
 from angee.base.models import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import _declared_aliases
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
@@ -40,6 +41,15 @@ from tests.conftest import (
     result_data,
 )
 from tests.tables import model_tables
+
+
+@pytest.fixture(autouse=True)
+def clear_declared_aliases():
+    """Declaration mutation tests must not reuse another schema's validated aliases."""
+
+    _declared_aliases.cache_clear()
+    yield
+    _declared_aliases.cache_clear()
 
 
 class GroupLabel(AngeeDataModel):
@@ -140,6 +150,8 @@ class GroupMiddleType(AngeeNode):
 class GroupParentType(AngeeNode):
     kind: auto
     amount: auto
+    label_name: str | None = strawberry_django.field(annotate=models.F("label_name"))
+    nested_name: str | None = strawberry_django.field(annotate=models.F("nested_name"))
     target: GroupLabelType | None = actor_scoped_to_one("target")
     middle: GroupMiddleType | None = actor_scoped_to_one("middle")
     permissions = permissions_field(("read",))
@@ -834,12 +846,36 @@ def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case:
     assert " IN (" in reads[0]
 
 
-def test_unused_relation_axes_do_not_compile_permission_scopes(relation_grouping_case: Any) -> None:
+@pytest.mark.parametrize("limit", (1, 6))
+def test_unused_relation_axes_do_not_compile_permission_scopes(relation_grouping_case: Any, limit: int) -> None:
     """A scalar-only read must not build any declared relation's permission tree."""
 
     case = relation_grouping_case
     active = backend()
-    with patch.object(active, "queryset_filter", wraps=active.queryset_filter) as scope:
-        data = _query(case, case.alice, '{ group_parents(where: {kind: {_eq: "target"}}) { id } }')
-    assert data["group_parents"]
+    document = '{ group_parents(where: {kind: {_eq: "target"}}, limit: LIMIT) { id } }'.replace("LIMIT", str(limit))
+    _query(case, case.alice, document)
+    with (
+        patch.object(active, "queryset_filter", wraps=active.queryset_filter) as scope,
+        CaptureQueriesContext(connection) as queries,
+    ):
+        data = _query(case, case.alice, document)
+    assert len(data["group_parents"]) == limit
+    print(f"Unused aliases at {limit} rows: {len(queries)} statements")
     assert {call.kwargs["model"] for call in scope.call_args_list} == {GroupParent}
+    for model in (GroupLabel, GroupMiddle):
+        assert all(f'JOIN "{model._meta.db_table}"' not in query["sql"] for query in queries)
+
+
+def test_selected_alias_compiles_only_its_related_permission_scope(relation_grouping_case: Any) -> None:
+    """Native annotate hints project one requested alias and preserve target redaction."""
+
+    case = relation_grouping_case
+    active = backend()
+    with patch.object(active, "queryset_filter", wraps=active.queryset_filter) as scope:
+        data = _query(case, case.alice, """{
+          group_parents(where: {kind: {_eq: "target"}}, order_by: {id: asc}) { id label_name }
+        }""")
+    values = {row["id"]: row["label_name"] for row in data["group_parents"]}
+    assert values[str(case.parents[0].sqid)] == case.alpha.display_name
+    assert values[str(case.parents[2].sqid)] is None
+    assert {call.kwargs["model"] for call in scope.call_args_list} == {GroupParent, GroupLabel}

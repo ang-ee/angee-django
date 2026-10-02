@@ -157,7 +157,9 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
                         *(
                             models.Prefetch(
                                 concrete_child_accessor(page_model, child_model),
-                                queryset=child_model._base_manager.all(),
+                                queryset=child_model._base_manager.only(
+                                    "pk", *("kind",) if child_model is markdown_model else (),
+                                ),
                             )
                             for child_model in concrete_child_models(page_model)
                         )
@@ -321,8 +323,8 @@ class PageManager(AngeeManager):
 
         The clone owner supplies actor-readable source pages. Their unchanged
         scalar values retain source validation; tree edges are checked here and
-        database constraints still apply. Save notifications preserve native
-        history and other subscribers after each level's bulk insert.
+        database constraints still apply. Insert all pages, restore their parent
+        links, and batch native history before notifying the remaining subscribers.
         """
 
         user_id = actor_user_id(actor)
@@ -337,27 +339,36 @@ class PageManager(AngeeManager):
             tree.prepare()
         except CycleError as error:
             raise ValidationError("Template page parents must form a tree.") from error
-        copies: dict[Any, Page] = {}
-        while tree.is_active():
-            ready = tree.get_ready()
-            batch = [
-                self.model(
-                    vault=vault,
-                    parent=copies[pages[pk].parent_id] if pages[pk].parent_id is not None else None,
-                    title=pages[pk].title,
-                    icon=pages[pk].icon,
-                    created_by_id=user_id,
-                    updated_by_id=user_id,
-                )
-                for pk in ready
-            ]
-            self.sudo(reason="knowledge.page.clone").bulk_create(batch)
-            for pk, page in zip(ready, batch, strict=True):
-                copies[pk] = page.with_actor(actor)
+        copies = {
+            pk: self.model(
+                vault=vault,
+                title=page.title,
+                icon=page.icon,
+                created_by_id=user_id,
+                updated_by_id=user_id,
+            )
+            for pk, page in pages.items()
+        }
+        batch = list(copies.values())
+        elevated = self.sudo(reason="knowledge.page.clone")
+        elevated.bulk_create(batch)
+        children = []
+        for pk, page in copies.items():
+            page.with_actor(actor)
+            if pages[pk].parent_id is not None:
+                page.parent = copies[pages[pk].parent_id]
+                children.append(page)
+        if children:
+            elevated.bulk_update(children, ["parent"])
+        self.model.history.db_manager(self.db).bulk_history_create(batch)
+        for page in batch:
+            page.skip_history_when_saving = True
+            try:
                 post_save.send(
                     sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
                 )
-            tree.done(*ready)
+            finally:
+                del page.skip_history_when_saving
         return copies
 
 
@@ -1158,7 +1169,7 @@ class LinkManager(AngeeManager):
         if not batch:
             return
         page_model = apps.get_model("knowledge", "Page")
-        vault_ids = {body.page_ptr.vault_id for body in batch}
+        vault_ids = {body.vault_id for body in batch}
         links = self.model._base_manager
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
             resolved = {
@@ -1170,7 +1181,7 @@ class LinkManager(AngeeManager):
             rows = []
             for body in batch:
                 for target, display in parse_wikilinks(body.body).items():
-                    target_id = resolved.get((body.page_ptr.vault_id, target))
+                    target_id = resolved.get((body.vault_id, target))
                     if target_id == body.pk:
                         target_id = None
                     rows.append(self.model(

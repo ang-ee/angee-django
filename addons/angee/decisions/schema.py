@@ -5,13 +5,10 @@ from __future__ import annotations
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.mixins import StaleRevisionError
-from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
@@ -42,7 +39,7 @@ class DecisionType(RecordReferenceNode):
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
-        """Compose extension-owned scalar projections through native nested loading."""
+        """Compose extension-owned scalar aliases through native nested loading."""
         return with_filter_aliases(super().get_queryset(queryset, info))
 
     group: DecisionGroupType | None = actor_scoped_to_one("group")
@@ -83,7 +80,7 @@ class DecisionType(RecordReferenceNode):
 class DecisionEvidenceType(RecordReferenceNode):
     """A protected public record reference derived at admission."""
 
-    decision: DecisionType
+    decision: DecisionType = actor_scoped_to_one("decision")
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
@@ -123,10 +120,7 @@ class DecisionMutation:
     def decide(self, info: strawberry.Info, id: PublicID, revision: int, action: str, values: JSON) -> ActionResult:
         """Record one action against the frozen form at the expected revision."""
         decision = authorized_permission_target(info, Decision, id, "act")
-        try:
-            decision = decision.decide(actor=info.context.request.user, revision=revision, action=action, values=values)
-        except (StaleRevisionError, RetryableDecisionError) as error:
-            raise ValidationError({"conflict": error.code}) from error
+        decision = decision.decide(actor=info.context.request.user, revision=revision, action=action, values=values)
         return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
 
 

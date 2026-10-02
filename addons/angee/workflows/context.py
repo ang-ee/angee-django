@@ -9,6 +9,7 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
+from rebac.resources import model_resource_type
 
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.scoping import read_scoped_queryset
@@ -94,9 +95,9 @@ class StepContext:
         """Load a public id through native identity and permission scoping."""
         if lock:
             self._require_mode(StepMode.DATABASE)
-        queryset = read_scoped_queryset(model, self.actor, action=permission)
-        if queryset is None:
+        if not model_resource_type(model):
             raise PermissionDenied(f"{model._meta.label} has no actor-scoped read contract.")
+        queryset = read_scoped_queryset(model, self.actor, action=permission)
         if lock:
             queryset = queryset.lock_if_supported(no_key=True)
         instance = instance_from_public_id(model, public_id, queryset=queryset)

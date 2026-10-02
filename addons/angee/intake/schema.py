@@ -8,14 +8,11 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.functions import Coalesce, NullIf
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.mixins import StaleRevisionError
-from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
@@ -264,10 +261,7 @@ class IntakeActionMutation:
         """Apply the need owner's access decision and return the approved account."""
 
         target = authorized_permission_target(info, Need, need, "write")
-        try:
-            user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
-        except (StaleRevisionError, RetryableDecisionError) as error:
-            raise ValidationError({"conflict": error.code}) from error
+        user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
 
     @strawberry.mutation

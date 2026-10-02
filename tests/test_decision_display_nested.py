@@ -1,7 +1,7 @@
 """Execution display projections remain scoped and batched through nested decisions."""
 
 import pytest
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 
@@ -103,6 +103,7 @@ def test_alias_projection_uses_the_queryset_actor(nested_reviews, viewer_index, 
     decision = admit()
     with actor_context(nested_reviews[ambient_index]):
         rows = with_filter_aliases(Decision.objects.with_actor(nested_reviews[viewer_index]))
+        rows = rows.annotate(workflow_name=models.F("workflow_name"), node_key=models.F("node_key"))
         projected = rows.values("workflow_name", "node_key").get(pk=decision.pk)
     assert projected == {
         "workflow_name": workflow.name if viewer_index == 1 else None,

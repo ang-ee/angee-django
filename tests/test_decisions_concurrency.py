@@ -13,6 +13,7 @@ from django.db.models.functions import Now
 from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.exceptions import RetryableDecisionError
@@ -134,7 +135,7 @@ def test_t9_decide_races_with_expiry_in_both_lock_orders(people, first_holder):
                 contender, pid = submit(pool, lambda: answer(decision, reviewer))
                 wait_for_lock(pid, contender)
         if first_holder == "expiry":
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError):
                 contender.result(timeout=10)
     retained = seat(group)
     assert retained.revision == decision.revision + 1
@@ -156,7 +157,7 @@ def test_two_people_deciding_the_same_seat_keep_the_first_answer(people):
             contender, pid = submit(pool, lambda: answer(decision, other, "Later answer"))
             wait_for_lock(pid, contender)
             answer(decision, reviewer)
-        with pytest.raises(ValidationError, match="changed; reload"):
+        with pytest.raises(StaleRevisionError):
             contender.result(timeout=10)
     retained = seat(group)
     assert retained.resolved_by_id == reviewer.pk and retained.revision == decision.revision + 1
@@ -184,7 +185,7 @@ def test_decide_races_with_cancel_in_both_lock_orders(people, winner):
         if winner == "decide":
             assert contender.result(timeout=10) == 0
         else:
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError):
                 contender.result(timeout=10)
     assert seat(group).closed_reason == ("resolved" if winner == "decide" else "canceled")
 
@@ -209,7 +210,7 @@ def test_decide_races_with_superseding_admission(people, winner):
                 wait_for_lock(pid, contender)
                 new = Decision.objects.admit_group([request], actor=issuer)
         if winner == "supersede":
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError):
                 contender.result(timeout=10)
     if winner == "decide":
         new = Decision.objects.admit_group([request], actor=issuer)
