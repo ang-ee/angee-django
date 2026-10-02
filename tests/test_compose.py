@@ -1963,3 +1963,18 @@ for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+def test_tailwind_sources_resolve_workspace_package_links(tmp_path: Path) -> None:
+    """The watcher sees real package source directories, not dependency symlinks."""
+    runtime = tmp_path / "runtime"
+    for package in ("app", "ui"):
+        source = tmp_path / "slot" / "packages" / package
+        (source / "src").mkdir(parents=True)
+        link = tmp_path / "web" / "node_modules" / "@angee" / package
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(source, target_is_directory=True)
+    css = WebRuntime((), runtime_dir=runtime).tailwind_sources_css()
+    assert '@source "../../slot/packages/ui/src";' in css
+    assert '@source "../../slot/packages/app/src";' in css
+    assert "node_modules" not in css
+    assert css == WebRuntime((), runtime_dir=runtime).tailwind_sources_css()

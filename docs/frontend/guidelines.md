@@ -812,7 +812,8 @@ Hard-won traps — the wise learn from others' mistakes
   hand-author daemon result types; actions return `MutationResult{status}`.
 - **Expose every addon web package through the composed web manifest** — the
   composer emits `runtime/web/tailwind.sources.css` from declared package
-  sources. Do not hand-edit runtime CSS; a package missing from the manifest will
+  sources, resolving workspace links to real directories so the dev watcher sees
+  edits. Do not hand-edit runtime CSS; a package missing from the manifest will
   miss its unique arbitrary Tailwind classes.
 - **Shared/generic icon glyphs live in the base `chrome/icon-registry.ts`** —
   composition is fail-fast on id, so an addon cannot re-register another's glyph,

@@ -105,10 +105,12 @@ class WebRuntime:
 
         packages = (*self.manifest["corePackages"], *self.manifest["addonPackages"])
         def source_path(entry: Mapping[str, str]) -> str:
-            root = entry.get("root")
-            if root is not None:
-                return f'{root}/{entry["sourceRoot"]}'
-            return f'{self.web_root}/node_modules/{entry["package"]}/{entry["sourceRoot"]}'
+            root = entry.get("root", f'{self.web_root}/node_modules/{entry["package"]}')
+            source = f'{root}/{entry["sourceRoot"]}'
+            if self.runtime_dir is None:
+                return source
+            css_root = self.runtime_dir.resolve() / "web"
+            return Path(os.path.relpath((css_root / source).resolve(), css_root)).as_posix()
 
         return "\n".join(
             [
