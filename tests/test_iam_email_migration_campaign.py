@@ -79,9 +79,9 @@ def test_migration_refuses_all_collisions_before_any_write_with_only_a_count(leg
         )
 
 
-def test_normalization_migration_refuses_constraint_history_that_skipped_normalization():
-    state = ProjectState()
-    assert transition.applies(state) is False
-    state.add_model(ModelState.from_model(get_user_model()))
-    with pytest.raises(ValueError, match="constraint precedes its normalization migration"):
-        transition.applies(state)
+def test_normalization_migration_is_complete_once_history_carries_the_constraint(legacy_email_state):
+    assert transition.applies(ProjectState()) is False
+    assert transition.applies(legacy_email_state) is True
+    fresh = ProjectState()
+    fresh.add_model(ModelState.from_model(get_user_model()))
+    assert transition.applies(fresh) is False
