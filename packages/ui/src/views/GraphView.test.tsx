@@ -176,7 +176,7 @@ test("topology, outcome, and layout updates preserve the viewport until a fit is
   expect(currentProps().onInit).toBeUndefined();
 });
 
-test("unmeasured nodes and impossible handles gate only their own edges and warn once", () => {
+test("valid edges mount together once measured; impossible handles are excluded and warned once", () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const extra = { id: "extra", kind: "handler", title: "Extra", ports: [{ id: "done" }] };
   reactFlowMock.initialized = false;
@@ -187,7 +187,9 @@ test("unmeasured nodes and impossible handles gate only their own edges and warn
   ];
   const graph = () => <GraphView nodes={[...nodes, extra]} edges={allEdges} nodeStyles={nodeStyles} />;
   const view = render(graph());
-  expect((currentProps().edges as Array<{ id: string }>).map((edge) => edge.id)).toEqual(["draft-review"]);
+  // Mounting edges one by one re-filters the set as bounds land and loops
+  // React Flow's edge-label measurement, so none mount before all are ready.
+  expect((currentProps().edges as Array<{ id: string }>).map((edge) => edge.id)).toEqual([]);
   expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("impossible"));
   reactFlowMock.unmeasured.clear();
   reactFlowMock.initialized = true;

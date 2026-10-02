@@ -223,6 +223,7 @@ const HANDLE_POSITIONS = {
   LR: { source: Position.Right, target: Position.Left },
   RL: { source: Position.Left, target: Position.Right },
 };
+const NO_EDGES: never[] = [];
 
 const NODE_TYPES = { angee: GraphNode };
 
@@ -388,15 +389,22 @@ function GraphCanvas<
       ...toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle),
       selected: edge.selected ?? edgeSelection[edge.id] ?? false,
     })), [edges, geometryLayout, invalidEdges, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
-  // A primitive selector stays stable when unrelated store state changes. Each
-  // link waits only for its own measured source and target bounds.
-  const readyEdges = useStore((state) => renderEdges.map((edge) => {
+  // A primitive selector stays stable when unrelated store state changes.
+  const handlesReady = useStore((state) => renderEdges.every((edge) => {
     const source = state.nodeLookup.get(edge.source)?.internals.handleBounds?.source;
     const target = state.nodeLookup.get(edge.target)?.internals.handleBounds?.target;
     return source?.some((handle) => (handle.id ?? null) === (edge.sourceHandle ?? null))
-      && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null)) ? "1" : "0";
-  }).join(""));
+      && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null));
+  }));
   const initialized = useNodesInitialized();
+  // Valid links mount together once every handle is measured. Mounting them one
+  // by one re-filters the edge set as bounds land, and React Flow's edge-label
+  // measurement then loops ("Maximum update depth exceeded" in EdgeText).
+  // Impossible links are already excluded above, so they cannot hold this back.
+  const readyRenderEdges = React.useMemo(
+    () => (initialized && handlesReady ? renderEdges : NO_EDGES),
+    [initialized, handlesReady, renderEdges],
+  );
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
   const { fitView, getNode, getEdge, getNodes, getNodesBounds, setViewport, viewportInitialized } = useReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>();
@@ -468,7 +476,7 @@ function GraphCanvas<
           nodeTypes={NODE_TYPES}
           deleteKeyCode={null}
           nodes={renderNodes}
-          edges={renderEdges.filter((_edge, index) => readyEdges[index] === "1")}
+          edges={readyRenderEdges}
           onKeyDown={(event) => {
             if (!isGraphActivationKey(event.key)) return;
             if (!(event.target instanceof Element)) return;
