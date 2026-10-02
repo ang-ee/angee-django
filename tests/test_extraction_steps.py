@@ -52,6 +52,7 @@ from angee.workflows_extraction.steps import (
 )
 from tests.conftest import File, MimeType, make_integration
 from tests.extraction_models import Extraction
+from tests.test_extraction_models import NotesProfile
 from tests.test_extraction_models import evidence as evidence
 from tests.test_storage import drive as drive
 
@@ -468,6 +469,42 @@ def test_explicit_correspondence_finalizes_the_held_candidate_without_inference(
     finalized = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
     assert finalized.result == held.result and finalized.revision == held.revision + 1
     assert DeterministicExtraction.calls == []
+
+
+def test_held_text_pass_is_inferred_before_identity_correspondence(evidence, step_evidence, monkeypatch):
+    """A reprocessed text pass that cannot see retained lines owes inference, not a review."""
+    from angee.workflows_extraction import steps as step_module
+
+    retain, values = evidence
+    actor, _file = step_evidence
+    first = retain()
+    text_pass = deepcopy(first.result)
+    text_pass["documents"][0]["lines"] = []
+    held = retain(request_key="text-pass", result=replace(
+        values["result"], value=text_pass, claims={}, provider_metadata={"unresolved_reasons": ["needs_mapping"]},
+    ))
+    assert held.awaiting_correspondence
+
+    def infer(parts, schema, model, *, config):
+        DeterministicExtraction.calls.append("infer")
+        return MappingResult(first.result, {}, {})
+
+    def normalize(self, sources, parts, schema, *, value, claims, metadata, config, recognition_used=False):
+        return Result(value, tuple(parts), claims, ("mapping",), provider_metadata=metadata)
+
+    monkeypatch.setattr(step_module, "map_parts", infer)
+    monkeypatch.setattr(NotesProfile, "normalize_inference_candidate", normalize)
+    run = execute(InferEvidenceStep, {
+        "base_extraction_id": str(held.sqid),
+        "base_revision": held.revision,
+        "model_id": str(system_queryset(InferenceModel).get().sqid),
+        "target_model": "storage.File",
+        "target_id": str(values["target"].sqid),
+    }, actor)
+    assert run.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
+    assert run.outcome == "inferred" and DeterministicExtraction.calls == ["infer"]
+    inferred = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
+    assert inferred.revision == held.revision + 1 and inferred.document_map == first.document_map
 
 
 def test_cross_target_original_source_is_rejected_before_inference(step_evidence):
