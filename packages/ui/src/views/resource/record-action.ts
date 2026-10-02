@@ -137,6 +137,8 @@ export interface UseActionResultMutationOptions {
   invalidateModels?: readonly string[];
   /** Schema that owns the target record; defaults to the ambient data provider. */
   dataProviderName?: string;
+  /** The verb records its outcome even when it fails, so caches refresh after a failure too. */
+  invalidateOnFailure?: boolean;
 }
 
 export type ActionResultMutation = (
@@ -199,6 +201,7 @@ export function useActionOutcomeMutation<TField extends string = string>(
     ...(options.invalidateModels !== undefined
       ? { invalidateModels: canonicalInvalidateModels }
       : {}),
+    ...(options.invalidateOnFailure ? { invalidateOnFailure: true } : {}),
     invalidates,
   });
 }

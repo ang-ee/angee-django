@@ -6,12 +6,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.db import models
 from graphql import build_client_schema, get_introspection_query, print_schema
 
 from angee.base.serialization import canonical_json_sha256
@@ -35,16 +37,113 @@ _TOKEN_CACHE_PREFIX = "angee:operator:token:"
 _TOKEN_CACHE_SKEW_SECONDS = 5
 
 
-class OperatorDaemonError(RuntimeError):
-    """An operator daemon REST call failed."""
+class OperatorInstanceKind(models.TextChoices, StrEnum):
+    """The daemon instance kinds a caller renders and records: workspaces and services.
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    The daemon names the ``kind`` of the instance a classified error is about in
+    the same vocabulary; other kinds it reports (``file``, ``stack``, …) decode to
+    ``None``.
+    """
+
+    WORKSPACE = "workspace", "Workspace"
+    SERVICE = "service", "Service"
+
+    @classmethod
+    def decode(cls, value: object) -> OperatorInstanceKind | None:
+        """Return the kind the daemon reported, or ``None`` for any other kind."""
+
+        return cls(value) if isinstance(value, str) and value in cls.values else None
+
+
+class OperatorDaemonError(RuntimeError):
+    """An operator daemon REST call failed.
+
+    ``kind`` and ``name`` are the instance the daemon classified the failure as
+    being about (its ``ErrorResponse`` fields); ``kind`` is ``None`` and ``name``
+    blank when the daemon named no workspace or service.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        kind: OperatorInstanceKind | None = None,
+        name: str = "",
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.kind = kind
+        self.name = name
+
+    @staticmethod
+    def from_response(method: str, url: str, status_code: int, body: bytes) -> OperatorDaemonError:
+        """Return the typed error for one failed daemon REST response.
+
+        The daemon answers a failed call with its ``ErrorResponse`` JSON — the
+        ``error`` text plus the ``kind``/``name``/``reason`` of a classified failure
+        — or with plain text. The message surfaces the daemon's own words instead of
+        a bare status. Every 404 is :class:`OperatorDaemonNotFound` and every 409
+        :class:`OperatorDaemonConflict`; ``kind``/``name`` come from the body only.
+        """
+
+        raw = body.decode(errors="replace").strip()
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = None
+        fields: dict[str, Any] = decoded if isinstance(decoded, dict) else {}
+        detail = str(fields.get("error") or fields.get("reason") or raw)
+        message = f"operator {method} {url.rsplit('/', 1)[-1]}: HTTP {status_code}" + (f": {detail}" if detail else "")
+        error_class = {404: OperatorDaemonNotFound, 409: OperatorDaemonConflict}.get(status_code, OperatorDaemonError)
+        return error_class(
+            message,
+            status_code=status_code,
+            kind=OperatorInstanceKind.decode(fields.get("kind")),
+            name=str(fields.get("name") or ""),
+        )
+
+    def names(self, kind: OperatorInstanceKind, name: str) -> bool:
+        """Whether the daemon reported this failure as about the ``kind`` instance ``name``."""
+
+        return self.kind == kind and self.name == name
 
 
 class OperatorDaemonNotFound(OperatorDaemonError):
-    """The daemon reported that the requested resource is already absent."""
+    """The daemon answered 404.
+
+    Only a not-found that :meth:`~OperatorDaemonError.names` the instance asked
+    for says that instance is absent; a plain 404 (a proxy, a mis-mounted URL)
+    says nothing about it.
+    """
+
+
+class OperatorDaemonConflict(OperatorDaemonError):
+    """The daemon answered 409.
+
+    For a create the daemon refused because the instance it resolved already
+    exists, ``kind`` and ``name`` are its own report of that instance — the daemon
+    owns instance naming, so a caller reads the name here rather than re-deriving
+    it from template inputs. Every 409 becomes this class, including a stale-etag
+    file write; those carry no instance ``kind``.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceStatus:
+    """One workspace as the daemon reports it (``GET /workspaces/{name}/status``).
+
+    ``template`` is the daemon template ref the workspace was rendered from — the
+    ref :meth:`OperatorDaemon.resolve_template_ref` returns for that template — and
+    ``inputs`` the template inputs it recorded. ``services`` names the stack
+    services that mount the workspace (the daemon's ``mounted_by`` entries of kind
+    ``service``), sorted and de-duplicated.
+    """
+
+    name: str
+    template: str
+    inputs: dict[str, str]
+    services: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,15 +292,59 @@ class OperatorDaemon:
         data = self._request("POST", f"{self._base()}/services/create", payload)
         return str((data or {}).get("name") or "")
 
+    def workspace_status(self, name: str) -> WorkspaceStatus | None:
+        """Read a workspace's template, inputs and mounting services; ``None`` when absent.
+
+        ``GET /workspaces/{name}/status``. Absent means the daemon's not-found names
+        this workspace; any other failure raises.
+        """
+
+        data = self._instance_request(
+            OperatorInstanceKind.WORKSPACE, name, "GET", f"/workspaces/{quote(name, safe='')}/status"
+        )
+        if data is None:
+            return None
+        services = {
+            str(ref["name"])
+            for ref in data.get("mounted_by") or ()
+            if isinstance(ref, dict) and OperatorInstanceKind.decode(ref.get("kind")) == OperatorInstanceKind.SERVICE
+            and ref.get("name")
+        }
+        inputs = data.get("inputs")
+        return WorkspaceStatus(
+            name=str(data.get("name") or name),
+            template=str(data.get("template") or ""),
+            inputs={str(key): str(value) for key, value in inputs.items()} if isinstance(inputs, dict) else {},
+            services=tuple(sorted(services)),
+        )
+
+    def service_status(self, name: str) -> str | None:
+        """Return a service's runtime status (``running``, ``exited``, …); ``None`` when not declared.
+
+        The daemon has no single-service read, so this reads its ``GET /services``
+        listing; the status is the runtime's own word for the container state.
+        """
+
+        for node in _collection_items(self._request("GET", f"{self._base()}/services")):
+            if isinstance(node, dict) and node.get("name") == name:
+                return str(node.get("status") or "")
+        return None
+
     def start_service(self, name: str) -> None:
         """Bring up a rendered service (``POST /services/{name}/up``)."""
 
         self._request("POST", f"{self._base()}/services/{quote(name, safe='')}/up", {})
 
     def destroy_workspace(self, name: str) -> None:
-        """Destroy a workspace and its files (``POST /workspaces/{name}/destroy``)."""
+        """Destroy a workspace and its files (``POST /workspaces/{name}/destroy``).
 
-        self._request("POST", f"{self._base()}/workspaces/{quote(name, safe='')}/destroy?purge=true", {})
+        A workspace the daemon reports absent by name is already destroyed; any
+        other not-found raises.
+        """
+
+        self._instance_request(
+            OperatorInstanceKind.WORKSPACE, name, "POST", f"/workspaces/{quote(name, safe='')}/destroy?purge=true", {}
+        )
 
     def destroy_service(self, name: str) -> None:
         """Destroy (stop + remove) a stack service (``POST /services/{name}/destroy``).
@@ -211,9 +354,13 @@ class OperatorDaemon:
         later ``create_service`` then 409s), and a secret change needs the service
         *recreated* — ``destroy_service`` then ``create_service`` over the same
         workspace — to re-resolve its ``${secret.<name>}`` env, not just restarted.
+        A service the daemon reports absent by name is already destroyed; any other
+        not-found raises.
         """
 
-        self._request("POST", f"{self._base()}/services/{quote(name, safe='')}/destroy", {})
+        self._instance_request(
+            OperatorInstanceKind.SERVICE, name, "POST", f"/services/{quote(name, safe='')}/destroy", {}
+        )
 
     def service_endpoint(self, name: str) -> dict[str, Any]:
         """Return a routed service's reachable endpoint (``GET /services/{name}/endpoint``).
@@ -268,6 +415,28 @@ class OperatorDaemon:
             )
         return self.server_base
 
+    def _instance_request(
+        self,
+        kind: OperatorInstanceKind,
+        name: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        """Issue a call about one instance; ``None`` when the daemon reports that instance absent.
+
+        Only a not-found naming exactly ``kind``/``name`` means absent. A plain 404 —
+        a proxy or a mis-mounted URL — still raises, so it is never mistaken for the
+        instance being gone.
+        """
+
+        try:
+            return self._request(method, f"{self._base()}{path}", payload)
+        except OperatorDaemonNotFound as error:
+            if error.names(kind, name):
+                return None
+            raise
+
     def _request(
         self,
         method: str,
@@ -290,12 +459,7 @@ class OperatorDaemon:
             timeout=timeout,
         )
         if not response.is_success:
-            # Surface the daemon's own error message instead of a bare "HTTP 500":
-            # the body is JSON like ``{"error": "…"}`` (or text); the caller records it.
-            error_detail = _daemon_error_body(response.status_code, response.content)
-            message = f"operator {method} {url.rsplit('/', 1)[-1]}: {error_detail}"
-            error_class = OperatorDaemonNotFound if response.status_code == 404 else OperatorDaemonError
-            raise error_class(message, status_code=response.status_code)
+            raise OperatorDaemonError.from_response(method, url, response.status_code, response.content)
         return response.json() if response.content else None
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -366,20 +530,6 @@ def _collection_items(value: Any) -> tuple[Any, ...] | list[Any]:
     if isinstance(value, dict) and isinstance(value.get("nodes"), list):
         return value["nodes"]
     return ()
-
-
-def _daemon_error_body(status: int, body: bytes) -> str:
-    """Return a human message from one daemon error response."""
-
-    raw = body.decode(errors="replace").strip()
-    detail = raw
-    try:
-        decoded = json.loads(raw)
-    except ValueError:
-        decoded = None
-    if isinstance(decoded, dict):
-        detail = str(decoded.get("error") or decoded.get("reason") or raw)
-    return f"HTTP {status}: {detail}" if detail else f"HTTP {status}"
 
 
 def _cache_timeout_seconds(ttl: str) -> int | None:

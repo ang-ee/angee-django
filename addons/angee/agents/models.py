@@ -17,7 +17,7 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -52,6 +52,8 @@ from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.iam.service_users import deactivate_service_user, sync_service_user
 from angee.integrate.models import IntegrationCreateMode
+from angee.jobs.locks import LockKey, record_lock_key
+from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 
 
 class InferenceModelUse(models.TextChoices, StrEnum):
@@ -885,9 +887,9 @@ class Agent(AuditMixin, AngeeDataModel):
     service_inputs = models.JSONField(default=dict, blank=True)
     workspace_inputs = models.JSONField(default=dict, blank=True)
     service = models.CharField(max_length=128, blank=True)
-    """Operator service instance name, set when the agent is rendered."""
+    """Operator service instance this agent records as its own; unique among agents when set."""
     workspace = models.CharField(max_length=128, blank=True)
-    """Operator workspace instance name, set when the agent is rendered."""
+    """Operator workspace instance this agent records as its own; unique among agents when set."""
     lifecycle = StateField(choices_enum=AgentLifecycle, default=AgentLifecycle.DRAFT)
     """Provision-pipeline position (:class:`AgentLifecycle`), set by the render flow."""
     runtime_status = StateField(choices_enum=RuntimeStatus, default=RuntimeStatus.STOPPED)
@@ -895,6 +897,24 @@ class Agent(AuditMixin, AngeeDataModel):
     with ``last_error``. Set by the render flow; the daemon owns the live truth."""
     last_error: str = DiagnosticTextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
+    conflict_kind: OperatorInstanceKind | None = StateField(
+        choices_enum=OperatorInstanceKind, null=True, blank=True, db_index=False
+    )
+    """Kind of the conflicting instance: the one the daemon refused to create because it exists.
+
+    Recorded with :attr:`conflict_name` from the daemon's own 409 report. Adopt,
+    Replace and Deprovision act on it; it is cleared only where it is resolved —
+    when this agent records the instance as its own (adopt, or teardown before a
+    destroy), when a teardown completes, or when a rename makes a conflicting
+    workspace's derived name stale."""
+    conflict_name = models.CharField(max_length=128, blank=True)
+    """The daemon-reported name of the conflicting instance; the operator owns naming."""
+
+    _INSTANCE_FIELDS: ClassVar[Mapping[OperatorInstanceKind, str]] = {
+        OperatorInstanceKind.WORKSPACE: "workspace",
+        OperatorInstanceKind.SERVICE: "service",
+    }
+    """The field that records this agent's operator instance of each kind."""
 
     lifecycle_transitions = StateTransitions(
         lifecycle,
@@ -933,6 +953,16 @@ class Agent(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "agents/agent"
+        # One operator instance is recorded by at most one agent, so no verb can
+        # adopt or destroy an instance another agent records.
+        constraints = (
+            models.UniqueConstraint(
+                fields=("workspace",), condition=~models.Q(workspace=""), name="uniq_agents_agent_workspace"
+            ),
+            models.UniqueConstraint(
+                fields=("service",), condition=~models.Q(service=""), name="uniq_agents_agent_service"
+            ),
+        )
 
     def __str__(self) -> str:
         """Return the agent's name."""
@@ -943,7 +973,9 @@ class Agent(AuditMixin, AngeeDataModel):
         """Persist the agent and sync its service-user label.
 
         Mirrors ``iam.User.save()``: the row save owns a small derived sync, and
-        the manager performs the system-owned dependent write.
+        the manager performs the system-owned dependent write. A rename also clears
+        a conflicting workspace: the daemon derived its name from the old agent name,
+        so the next provision derives a fresh one.
         """
 
         creating = self._state.adding
@@ -952,9 +984,15 @@ class Agent(AuditMixin, AngeeDataModel):
         persisted_name = None
         if not creating and should_check_name:
             persisted_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
+        renamed = not creating and should_check_name and persisted_name != self.name
+        if renamed and self.conflict_kind == OperatorInstanceKind.WORKSPACE:
+            self.conflict_kind = None
+            self.conflict_name = ""
+            if update_fields is not None:
+                kwargs["update_fields"] = {*_update_field_names(update_fields), "conflict_kind", "conflict_name"}
         with transaction.atomic():
             super().save(*args, **kwargs)
-            if creating or (should_check_name and persisted_name != self.name):
+            if creating or renamed:
                 sync_service_user(self, prefix="agent")
 
     def principal_subject(self) -> SubjectRef:
@@ -1003,24 +1041,41 @@ class Agent(AuditMixin, AngeeDataModel):
             self.runtime_backend.runs_in_process or bool(self.service)
         )
 
+    # --- Lifecycle verb eligibility -------------------------------------------
+    # Each lifecycle verb owns one ``<verb>_blocker``. ``can_<verb>`` is its visibility
+    # projection: the same blocker answered from this row's own columns
+    # (``prerequisites=False``), so a list can select it without per-row queries. The
+    # verb itself enforces the whole blocker, including the configuration it needs.
+
     @property
     def can_provision(self) -> bool:
-        """Whether the provision action may start from the current lifecycle facts."""
+        """Visibility projection of :meth:`provision_blocker`."""
 
-        return str(self.runtime_status) == str(RuntimeStatus.ERROR) or str(self.lifecycle) in {
-            str(AgentLifecycle.DRAFT),
-            str(AgentLifecycle.DEPROVISIONED),
-        }
+        return self.provision_blocker(prerequisites=False) is None
+
+    @property
+    def can_adopt(self) -> bool:
+        """Visibility projection of :meth:`adopt_blocker`."""
+
+        return self.adopt_blocker(prerequisites=False) is None
+
+    @property
+    def can_replace(self) -> bool:
+        """Visibility projection of :meth:`replace_blocker`."""
+
+        return self.replace_blocker(prerequisites=False) is None
+
+    @property
+    def can_reprovision(self) -> bool:
+        """Visibility projection of :meth:`reprovision_blocker`."""
+
+        return self.reprovision_blocker(prerequisites=False) is None
 
     @property
     def can_deprovision(self) -> bool:
-        """Whether the teardown action is meaningful for the current rendered state."""
+        """Visibility projection of :meth:`deprovision_blocker`."""
 
-        return str(self.lifecycle) in {
-            str(AgentLifecycle.PROVISIONING),
-            str(AgentLifecycle.READY),
-            str(AgentLifecycle.DEPROVISIONING),
-        } or bool(self.workspace or self.service)
+        return self.deprovision_blocker() is None
 
     @property
     def can_delete(self) -> bool:
@@ -1035,23 +1090,229 @@ class Agent(AuditMixin, AngeeDataModel):
             return None
         return "Deprovision this agent before deleting it."
 
+    def provision_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Provision may not start now, or ``None``."""
+
+        if blocker := self._in_progress_blocker() or self._conflict_blocker():
+            return blocker
+        if self.workspace or (
+            str(self.lifecycle) == str(AgentLifecycle.READY) and str(self.runtime_status) != str(RuntimeStatus.ERROR)
+        ):
+            return "Agent is already provisioned — deprovision it first."
+        return self._render_blocker() if prerequisites else None
+
+    def adopt_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Adopt may not start now, or ``None``.
+
+        Adopt needs a recorded conflicting instance, and the workspace template the
+        daemon's report of it is verified against.
+        """
+
+        if blocker := self._in_progress_blocker():
+            return blocker
+        if self.conflict_kind is None:
+            return "This agent records no conflicting operator instance to adopt."
+        if prerequisites and self.workspace_template_id is None:
+            return "Set a workspace template on this agent first."
+        return None
+
+    def replace_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Replace may not start now, or ``None``.
+
+        Replace provisions afresh after its teardown, so it needs everything
+        Provision needs; refusing up front means it never destroys an instance it
+        cannot rebuild.
+        """
+
+        if blocker := self._in_progress_blocker():
+            return blocker
+        if self.conflict_kind is None:
+            return "This agent records no conflicting operator instance to replace."
+        return self._render_blocker() if prerequisites else None
+
+    def reprovision_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Reprovision may not start now, or ``None``."""
+
+        if blocker := self._in_progress_blocker():
+            return blocker
+        if not self.workspace:
+            return "Agent isn't provisioned — provision it first."
+        if blocker := self._conflict_blocker():
+            return blocker
+        if not self.runtime_backend.renders_service:
+            return "This agent's runtime renders no service to reprovision."
+        return self._render_blocker(needs_template=False) if prerequisites else None
+
+    def deprovision_blocker(self) -> str | None:
+        """Return why Deprovision has nothing to do, or ``None``.
+
+        Teardown stays available from ``PROVISIONING`` and ``DEPROVISIONING``: a verb
+        that stalled there leaves through Deprovision.
+        """
+
+        idle = str(self.lifecycle) in {str(AgentLifecycle.DRAFT), str(AgentLifecycle.DEPROVISIONED)}
+        if idle and not (self.workspace or self.service or self.conflict_kind is not None):
+            return "This agent has no operator instance to tear down."
+        return None
+
+    def _in_progress_blocker(self) -> str | None:
+        """Refuse a verb while the lifecycle records another one under way."""
+
+        if str(self.lifecycle) == str(AgentLifecycle.PROVISIONING):
+            return "This agent is being provisioned; if that stalled, deprovision it to recover."
+        if str(self.lifecycle) == str(AgentLifecycle.DEPROVISIONING):
+            return "This agent is being torn down; deprovision it again to finish."
+        return None
+
+    def _conflict_blocker(self) -> str | None:
+        """Refuse a render while a conflicting instance is recorded: the daemon would refuse it again."""
+
+        if self.conflict_kind is None:
+            return None
+        label = OperatorInstanceKind(self.conflict_kind).label.lower()
+        return (
+            f"The operator already has {label} “{self.conflict_name}” for this agent: "
+            "adopt it, replace it, or deprovision to clear the record."
+        )
+
+    def _render_blocker(self, *, needs_template: bool = True) -> str | None:
+        """Return what a render of this agent still lacks, or ``None``."""
+
+        if needs_template and not self.runtime_backend.runs_in_process and self.workspace_template_id is None:
+            return "Set a workspace template on this agent first."
+        if not self.inference_credential_ready():
+            return "Connect a usable inference credential to this agent's provider first."
+        return None
+
+    # --- Operator instances ----------------------------------------------------
+
+    def provisioning_lock_key(self) -> LockKey:
+        """Return the advisory lock key every lifecycle verb on this agent shares.
+
+        It serialises the verbs' daemon work on one agent. It is advisory: the
+        lifecycle transitions and the unique instance constraints stay authoritative.
+        """
+
+        return record_lock_key(self._meta.label_lower, self.pk, "provisioning")
+
+    def instance_recorded_by(self, kind: OperatorInstanceKind, name: str) -> Agent | None:
+        """Return another agent that records the operator ``kind`` instance ``name``, or ``None``.
+
+        Rows are read unscoped: which agent records an instance is a fact about every
+        agent, not about the rows the current actor can see.
+        """
+
+        field = self._INSTANCE_FIELDS[kind]
+        return type(self)._base_manager.filter(**{field: name}).exclude(pk=self.pk).first()
+
+    def records_instance(self, kind: OperatorInstanceKind, name: str) -> bool:
+        """Whether this agent records the operator ``kind`` instance ``name`` as its own."""
+
+        return bool(name) and getattr(self, self._INSTANCE_FIELDS[kind]) == name
+
+    def workspace_identity_inputs(self) -> dict[str, str]:
+        """Return the workspace template inputs that identify this agent's workspace.
+
+        The daemon derives the workspace name from them and records them on the
+        workspace, so its report of an existing workspace can be checked against them.
+        """
+
+        return {"agent_name": self.name}
+
+    def conflicting_instance_blocker(self, status: WorkspaceStatus, *, template_ref: str | None) -> str | None:
+        """Return why the conflicting instance is not this agent's to adopt or destroy, or ``None``.
+
+        ``status`` is the daemon's report of the workspace involved: the conflicting
+        workspace itself, or — for a conflicting service — the workspace this agent
+        records. ``template_ref`` is the daemon's ref for this agent's workspace
+        template. A conflicting workspace must have been rendered from that template
+        with this agent's identity inputs. Every service mounting the workspace counts
+        toward the instance: no more may mount it than this agent's runtime renders,
+        and a conflicting service must be one of them. No workspace or mounting
+        service may be recorded by another agent, and none may differ from one this
+        agent already records, which recording it would overwrite.
+
+        Limit: the daemon reports no provenance for a service (no template, no inputs),
+        so a service counts as this agent's only by mounting the workspace verified here.
+        """
+
+        if self.conflict_kind == OperatorInstanceKind.WORKSPACE:
+            if template_ref is None or status.template != template_ref:
+                return (
+                    f"Workspace “{status.name}” was rendered from template “{status.template}”, "
+                    f"not this agent's “{template_ref or 'none'}”."
+                )
+            for key, value in self.workspace_identity_inputs().items():
+                recorded = status.inputs.get(key, "")
+                if recorded != value:
+                    return f"Workspace “{status.name}” was rendered with {key} “{recorded}”, not “{value}”."
+        elif self.conflict_name not in status.services:
+            return f"Service “{self.conflict_name}” does not mount this agent's workspace “{status.name}”."
+        renders = 1 if self.runtime_backend.renders_service else 0
+        if len(status.services) > renders:
+            return (
+                f"Workspace “{status.name}” is mounted by {', '.join(status.services)}, "
+                "more services than this agent's runtime renders."
+            )
+        instances = [(OperatorInstanceKind.SERVICE, service) for service in status.services]
+        if self.conflict_kind == OperatorInstanceKind.WORKSPACE:
+            instances.insert(0, (OperatorInstanceKind.WORKSPACE, status.name))
+        for kind, name in instances:
+            label = OperatorInstanceKind(kind).label.lower()
+            # Recording it would overwrite — and so forget — this agent's own instance.
+            own = getattr(self, self._INSTANCE_FIELDS[kind])
+            if own and own != name:
+                return f"This agent already records {label} “{own}”, so it cannot also take over “{name}”."
+            if other := self.instance_recorded_by(kind, name):
+                return f"The operator {label} “{name}” is recorded by agent “{other.name}”."
+        return None
+
+    # --- Lifecycle transitions -------------------------------------------------
+
     @transition(
         lifecycle,
-        source=[
-            AgentLifecycle.DRAFT,
-            AgentLifecycle.PROVISIONING,
-            AgentLifecycle.READY,
-            AgentLifecycle.DEPROVISIONED,
-        ],
+        source=[AgentLifecycle.DRAFT, AgentLifecycle.READY, AgentLifecycle.DEPROVISIONED],
         target=AgentLifecycle.PROVISIONING,
         on_success=save_state,
     )
     def mark_provisioning(self) -> None:
-        """Enter the provision flow: lifecycle provisioning, run state reset to stopped."""
+        """Enter the provision flow: lifecycle provisioning, run state reset to stopped.
+
+        Not from ``PROVISIONING``: a second provision never runs over one under way.
+        """
 
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
         self._transition_fields = {"runtime_status", "last_error"}
+
+    @transition(
+        lifecycle,
+        source=[AgentLifecycle.DRAFT, AgentLifecycle.READY, AgentLifecycle.DEPROVISIONED],
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
+    def mark_adopting(self, *, workspace: str, service: str) -> None:
+        """Record the verified conflicting instance as this agent's own and enter provisioning.
+
+        One write records the workspace and service and clears the conflict, so no
+        failure between them can forget the instance. The unique instance constraints
+        refuse it when another agent records either.
+        """
+
+        self.workspace = workspace
+        self.service = service
+        self.conflict_kind = None
+        self.conflict_name = ""
+        self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
+        self.last_error = ""
+        self._transition_fields = {
+            "workspace",
+            "service",
+            "conflict_kind",
+            "conflict_name",
+            "runtime_status",
+            "last_error",
+        }
 
     @transition(
         lifecycle,
@@ -1082,6 +1343,22 @@ class Agent(AuditMixin, AngeeDataModel):
     @transition(
         lifecycle,
         source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
+    def mark_service_destroyed(self) -> None:
+        """Forget the service as soon as the operator confirms it destroyed.
+
+        A service recorded afterwards — usually under the same name — is then never
+        mistaken for the destroyed one.
+        """
+
+        self.service = ""
+        self._transition_fields = {"service"}
+
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
         target=AgentLifecycle.READY,
         on_success=save_state,
     )
@@ -1107,13 +1384,26 @@ class Agent(AuditMixin, AngeeDataModel):
         on_success=save_state,
     )
     def mark_deprovisioned(self) -> None:
-        """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped."""
+        """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped.
+
+        A completed teardown also resolves the recorded conflicting instance: it was
+        either destroyed as this agent's own or left in place as not this agent's.
+        """
 
         self.workspace = ""
         self.service = ""
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
+        self.conflict_kind = None
+        self.conflict_name = ""
+        self._transition_fields = {
+            "workspace",
+            "service",
+            "runtime_status",
+            "last_error",
+            "conflict_kind",
+            "conflict_name",
+        }
 
     @transition(
         lifecycle,
@@ -1127,37 +1417,58 @@ class Agent(AuditMixin, AngeeDataModel):
         target=AgentLifecycle.DEPROVISIONING,
         on_success=save_state,
     )
-    def mark_deprovisioning(self) -> None:
-        """Mark the agent as tearing down through the operator teardown flow."""
+    def mark_deprovisioning(self, *, workspace: str = "", service: str = "") -> None:
+        """Mark the agent as tearing down through the operator teardown flow.
+
+        ``workspace``/``service`` record a verified conflicting instance as this agent's
+        own in this same write — clearing the conflict, under the unique instance
+        constraints — so the teardown only ever destroys instances this agent records.
+        """
 
         self.last_error = ""
-        self._transition_fields = {"last_error"}
+        transition_fields = {"last_error"}
+        if workspace or service:
+            self.workspace = workspace or self.workspace
+            self.service = service or self.service
+            self.conflict_kind = None
+            self.conflict_name = ""
+            transition_fields.update({"workspace", "service", "conflict_kind", "conflict_name"})
+        self._transition_fields = transition_fields
 
     def mark_provision_failed(
-        self, message: str, *, clear_instances: bool = False, clear_service: bool = False
+        self,
+        message: str,
+        *,
+        destroyed: Mapping[OperatorInstanceKind, str] | None = None,
+        conflict_kind: OperatorInstanceKind | None = None,
+        conflict_name: str = "",
     ) -> None:
         """Record a failed operation: run state ``ERROR`` (the red dot), reason kept.
 
         The failure lands on the run-state axis: ``last_error`` holds the reason and the
-        dot turns red. ``clear_instances`` blanks both instance names (a provision rolled
-        the workspace back); ``clear_service`` blanks only the service (a reprovision
-        destroyed the old service before the recreate failed — the workspace is preserved).
-        The lifecycle then follows the workspace, never stranding mid-flow: an agent left
-        holding a workspace is still provisioned (``READY``), one rolled back to nothing is
-        a clean ``DRAFT`` retry. The red run-state dot carries the failure either way, and
-        the persisted names never point at a torn-down instance. This deliberately bypasses
-        the declared lifecycle graph because the target is data-dependent recovery state,
+        dot turns red. ``destroyed`` maps each instance kind to the name the failed
+        operation confirmed gone; a recorded name is blanked only while it is still
+        that name, so the row never points at a torn-down instance and never forgets
+        one recorded later or whose destroy did not succeed.
+        ``conflict_kind``/``conflict_name`` record the conflicting instance the daemon
+        reported; without them a recorded conflict is kept. Only the fields this
+        changes are written. The lifecycle then follows the workspace, never stranding
+        mid-flow: an agent left holding a workspace is still provisioned (``READY``),
+        one holding none is a clean ``DRAFT`` retry. This deliberately bypasses the
+        declared lifecycle graph because the target is data-dependent recovery state,
         not a user-visible lifecycle action.
         """
 
         transition_fields = {"runtime_status", "last_error"}
-        if clear_instances:
-            self.workspace = ""
-            self.service = ""
-            transition_fields.update({"workspace", "service"})
-        elif clear_service:
-            self.service = ""
-            transition_fields.add("service")
+        for kind, name in (destroyed or {}).items():
+            if name and self.records_instance(kind, name):
+                field = self._INSTANCE_FIELDS[kind]
+                setattr(self, field, "")
+                transition_fields.add(field)
+        if conflict_kind is not None:
+            self.conflict_kind = conflict_kind
+            self.conflict_name = conflict_name
+            transition_fields.update({"conflict_kind", "conflict_name"})
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.ERROR)
         self.last_error = message[:2000]
         self._transition_fields = transition_fields
@@ -1177,7 +1488,7 @@ class Agent(AuditMixin, AngeeDataModel):
         """
 
         structured = {
-            "agent_name": self.name,
+            **self.workspace_identity_inputs(),
             "instructions": self.instructions,
             "mcp_json": json.dumps(self.mcp_config(), separators=(",", ":")),
         }

@@ -1515,6 +1515,12 @@ validated at the driver boundary.
   owner already: `angee.integrate.http.HttpClient` (`self.http`), which builds the
   one context; route new outbound calls through it rather than hand-rolling
   `urlopen` + context.
+- **Instance names on a row follow daemon-confirmed facts.** Record a daemon
+  instance's name when the daemon reports it created and blank it only when the
+  daemon confirms it gone. A 409 is the typed
+  [`OperatorDaemonConflict`](../../addons/angee/operator/daemon.py) whose `kind` and
+  `name` come from the daemon's error body; never parse the message or re-derive
+  the name.
 - **MCP bearers are per agent and derived from the server credential.**
   `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server; rotating
   the credential (or changing placement) invalidates every provisioned agent's bearer
