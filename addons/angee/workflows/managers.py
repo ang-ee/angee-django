@@ -44,6 +44,7 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import StepMode, Superseded, io_timeout_budget
+from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 logger = logging.getLogger(__name__)
@@ -471,8 +472,24 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             with self.hold(run.pk) as locked:
                 from angee.workflows.runner import runner
 
+                if (subject := self._lock_subject(locked)) is not None:
+                    subject.admit_run(locked)
                 runner.advance(locked)
             return locked.with_actor(actor)
+
+    def _lock_subject(self, run: Any, *, required: bool = True) -> RunSubject | None:
+        """Lock an opted-in root subject after the caller has locked its run."""
+        if run.parent_step_id is not None:
+            return None
+        model = run.subject_model_class
+        if model is None or not issubclass(model, RunSubject):
+            return None
+        subject = lock_if_supported(
+            system_queryset(model).filter(pk=run.subject_object_id), no_key=True,
+        ).first()
+        if subject is None and required:
+            raise ValidationError("The workflow run subject no longer exists.")
+        return cast(RunSubject | None, subject)
 
     def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "") -> None:
         self.filter(pk=run.pk).update(
@@ -481,6 +498,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
         if status in RunStatus.terminal_values() and not run.is_terminal:
+            if (subject := self._lock_subject(run, required=False)) is not None:
+                subject.settle_run(self.get(pk=run.pk), status)
             if status != RunStatus.CANCELED:
                 def cancel_children() -> None:
                     self.cancel_abandoned(run.pk)
@@ -558,6 +577,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
     def reopen(self, run: Any) -> None:
         """Clear a locked run's terminal facts and replan retained step rows."""
+        if (subject := self._lock_subject(run)) is not None:
+            subject.admit_run(run)
         self._write_state(run, status=str(RunStatus.RUNNING), outcome="", output={})
         run.refresh_from_db()
         from angee.workflows.runner import runner
