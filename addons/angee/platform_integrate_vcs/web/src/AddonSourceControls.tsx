@@ -1,7 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Dialog, Glyph, LoadingPanel, MutationDialog, errorMessage, mutationDialogValueCodecs, textRoleVariants, useActionOutcomeMutation, useActionResultRun, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
+import { Button, Dialog, Glyph, LoadingPanel, MutationDialog, actionOutcomeSubmitResult, errorMessage, mutationDialogValueCodecs, textRoleVariants, useActionOutcomeMutation, useActionResultRun, useRelationOptions, type DescriptorField, type MutationDialogValues } from "@angee/ui";
 import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
 import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate-vcs";
 import { PLATFORM_ADDON_MUTATION_INVALIDATES } from "@angee/platform";
@@ -46,7 +46,6 @@ function AddSourceDialog({
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
   const t = usePlatformIntegrateVcsT();
-  const toast = useToast();
   const { options: bridgeOptions } = useRelationOptions(VCS_BRIDGE_RELATION, {
     enabled: open,
     sort: true,
@@ -60,7 +59,7 @@ function AddSourceDialog({
     idArgument: null,
     invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
   });
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "vcsBridgeId",
@@ -122,14 +121,7 @@ function AddSourceDialog({
       submittingLabel={t("apps.adding")}
       errorFallback={t("apps.actionFailed")}
       parseValues={parseAddonSourceValues}
-      onSubmit={async (values) => {
-        const result = await addSource("", values);
-        if (result?.ok) {
-          toast.success({ title: result.message });
-          return;
-        }
-        throw new Error(result?.message ?? t("apps.actionFailed"));
-      }}
+      onSubmit={async (values) => actionOutcomeSubmitResult(await addSource("", values))}
     />
   );
 }

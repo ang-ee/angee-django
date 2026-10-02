@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
@@ -44,6 +44,18 @@ const { Provider, clearClients } = createUiTestProviders({
 
 afterEach(() => { cleanup(); clearClients(); });
 
+test("a drawer record exposes its resource name as the accessible dialog title", async () => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const getOne = vi.fn(async () => ({ data: { id: "trigger-1", kind: "Schedule" } }));
+  render(<RouterContextProvider router={router}><Provider resources={resources} dataProvider={{ getOne }}>
+    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ModalsHost><ToastProvider>
+      <ResourceList resource={trigger.modelLabel} scope="local" placement="drawer" recordId="trigger-1" hideCreate
+        columns={[{ field: "kind" }]} formFields={[{ name: "kind", readOnly: true }]} />
+    </ToastProvider></ModalsHost></AppRuntimeProvider>
+  </Provider></RouterContextProvider>);
+  expect(await screen.findByRole("dialog", { name: "Trigger" })).toBeTruthy();
+});
+
 test("a native controlled child list isolates queries and record UI from its parent collection", async () => {
   const getList = vi.fn(async (params: GetListParams) => ({
     data: [{ id: "trigger-1", kind: "Schedule", enabled: true, workflow: "workflow-1" }],
@@ -58,16 +70,18 @@ test("a native controlled child list isolates queries and record UI from its par
   });
   let parent!: ResourceViewContextValue;
   let selectedRecordId: string | undefined;
+  let closeChildRecord!: () => void;
 
   function TriggerCollection() {
     const [recordId, setRecordId] = React.useState<string>();
     selectedRecordId = recordId;
+    closeChildRecord = () => setRecordId(undefined);
     return <ResourceList resource={trigger.modelLabel} scope="local" placement="inline"
       recordPresentation="workspace"
       recordTabs={[{ id: "activity", label: "Activity", render: () => <div style={{ height: 3000 }}>Long inspector</div> }]}
       baseFilter={{ workflow: { exact: "workflow-1" } }} createDefaults={{ workflow: "workflow-1" }}
       recordId={recordId} onSelect={(id) => setRecordId(id ?? REFINE_CREATE_ID)}
-      onClose={() => setRecordId(undefined)}
+      onClose={closeChildRecord}
       columns={[{ field: "kind", header: "Kind" }, { field: "enabled", header: "Enabled" }]}
       formFields={[{ name: "workflow", label: "Workflow", createOnly: true },
         { name: "kind", label: "Kind" }, { name: "enabled", label: "Enabled", widget: "switch" }]} />;
@@ -98,7 +112,7 @@ test("a native controlled child list isolates queries and record UI from its par
   await waitFor(() => expect(selectedRecordId).toBe(REFINE_CREATE_ID));
   expect(await screen.findByLabelText("Kind")).toBeTruthy();
   expect(document.querySelector('[data-record-presentation="workspace"]')).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "List view" }));
+  act(() => closeChildRecord());
   await waitFor(() => expect(selectedRecordId).toBeUndefined());
 
   fireEvent.click(screen.getByRole("button", { name: "Open Schedule" }));
@@ -110,7 +124,7 @@ test("a native controlled child list isolates queries and record UI from its par
   expect(longInspector.closest('[data-record-presentation="workspace"]')).toBeTruthy();
   expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ resource: "triggers", id: "trigger-1",
     meta: expect.objectContaining({ modelLabel: trigger.modelLabel }) }));
-  fireEvent.click(screen.getByRole("button", { name: "List view" }));
+  act(() => closeChildRecord());
   await waitFor(() => expect(selectedRecordId).toBeUndefined());
   expect(document.querySelector('[data-record-presentation="workspace"]')).toBeNull();
 

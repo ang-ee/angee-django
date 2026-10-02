@@ -3,24 +3,27 @@ import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
 import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
+import { LoadingPanel } from "../../../fragments/LoadingPanel";
 import { BoardView } from "../BoardView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
+import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
-import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
+import { FlatListBody, ListEmpty, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import type { CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
-import { createLabelForResource, mergeFilterFields, mergeFilterOptions } from "../resource-view-utils";
+import type { BoardCardSpec, CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
+import { DeclaredBoardCardBody } from "../board/cards";
+import { columnsWithMetadataDefaults, fieldLabel } from "../model-metadata-defaults";
+import { createLabelForResource } from "../resource-view-utils";
 import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceToolbarProps } from "../resource-toolbar-props";
-import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
+import { useListViewToolbarInputs } from "../resource-view-toolbar-inputs";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 interface ListViewContentProps<TRow extends Row> {
@@ -32,6 +35,7 @@ interface ListViewContentProps<TRow extends Row> {
   headerVisibility: ListViewProps<TRow>["headerVisibility"];
   selectable: ListViewProps<TRow>["selectable"];
   renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
+  renderItem?: ListViewProps<TRow>["renderItem"];
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
@@ -47,6 +51,7 @@ interface ListViewContentProps<TRow extends Row> {
   scalarFacets: ReturnType<typeof useScalarFacets>;
   explicitGroupOptions: ListViewProps<TRow>["groupOptions"];
   explicitFilterOptions: ListViewProps<TRow>["filterOptions"];
+  filterRow: ListViewProps<TRow>["filterRow"];
   explicitCustomFilterFields: ListViewProps<TRow>["customFilterFields"];
   defaultGroup: ListViewProps<TRow>["defaultGroup"];
   defaultGroups: ListViewProps<TRow>["defaultGroups"];
@@ -61,10 +66,12 @@ interface ListViewContentProps<TRow extends Row> {
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
   bulkActions: ListViewProps<TRow>["bulkActions"];
   cardActions: ListViewProps<TRow>["cardActions"];
+  boardCard?: BoardCardSpec;
   renderCard: ListViewProps<TRow>["renderCard"];
   emptyContent: ListEmptyContent;
   className: string | undefined;
   presentation: ListViewProps<TRow>["presentation"];
+  chrome: ListViewProps<TRow>["chrome"];
 }
 
 export function ListViewContent<TRow extends Row = Row>({
@@ -76,6 +83,7 @@ export function ListViewContent<TRow extends Row = Row>({
   headerVisibility = "visible",
   selectable = true,
   renderGroupLabel,
+  renderItem,
   surface,
   resource,
   resolvedColumns,
@@ -91,6 +99,7 @@ export function ListViewContent<TRow extends Row = Row>({
   scalarFacets,
   explicitGroupOptions,
   explicitFilterOptions,
+  filterRow,
   explicitCustomFilterFields,
   defaultGroup,
   defaultGroups,
@@ -105,34 +114,19 @@ export function ListViewContent<TRow extends Row = Row>({
   toolbarActions,
   bulkActions,
   cardActions,
+  boardCard,
   renderCard,
   emptyContent,
   className,
   presentation,
+  chrome,
 }: ListViewContentProps<TRow>): React.ReactElement {
   const t = useUiT();
   const flatMeasures = React.useMemo(
     () => groupMeasuresFromColumns(resolvedColumns),
     [resolvedColumns],
   );
-  const facetFilters = React.useMemo(
-    () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
-    [declaredFacets.filters, scalarFacets.filters],
-  );
-  const facetCustomFilterFields = React.useMemo(
-    () =>
-      mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
-    [declaredFacets.filterFields, scalarFacets.filterFields],
-  );
-  // Use the query owner's authored search field or record-representation fallback,
-  // not the hardcoded "title" that non-title models lack.
-  const textFilterField =
-    declaredTextField === undefined
-      ? modelMetadata
-        ? ResourceQuery.from(modelMetadata).textSearchFields()[0] ?? null
-        : DEFAULT_TEXT_FILTER_FIELD
-      : declaredTextField;
-  const toolbarInputs = useResourceViewToolbarInputs({
+  const toolbarInputs = useListViewToolbarInputs({
     query: source?.query,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
@@ -144,14 +138,14 @@ export function ListViewContent<TRow extends Row = Row>({
     defaultGroup,
     defaultGroups,
     groupOptions: explicitGroupOptions,
-    contributedGroupOptions: declaredFacets.groupOptions,
+    declaredFacets,
+    scalarFacets,
     filterOptions: explicitFilterOptions,
-    contributedFilterOptions: facetFilters,
     customFilterFields: explicitCustomFilterFields,
-    contributedCustomFilterFields: facetCustomFilterFields,
-    textFilterField,
+    textFilterField: declaredTextField,
     groupStack: effectiveGroupStack,
   });
+  const { textFilterField } = toolbarInputs;
   const interactive = Boolean(onRowClick || rowHref);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
@@ -176,18 +170,32 @@ export function ListViewContent<TRow extends Row = Row>({
     },
     [cardActions, renderRowActions],
   );
+  const declaredCardColumns = React.useMemo(() => boardCard
+    ? columnsWithMetadataDefaults(
+        [boardCard.title, ...(boardCard.fields ?? []).slice(0, 4)].map((field) =>
+          resolvedColumns.find((column) => column.field === field) ?? { field },
+        ),
+        modelMetadata,
+      )
+    : [], [boardCard, resolvedColumns, modelMetadata]);
+  const boardCardBody = React.useCallback((row: TRow) =>
+    <DeclaredBoardCardBody columns={declaredCardColumns} modelMetadata={modelMetadata} row={row} />,
+  [declaredCardColumns, modelMetadata]);
+  const resolvedRenderCard = renderCard ?? (boardCard ? boardCardBody : undefined);
   const contributedUtilities = (
     <ResourceViewUtilities
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
         selectedIds: surface.selectedIds,
+        selectable,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
         refresh: () => void surface.list.refetch(),
       }}
     />
   );
   const toolbar = useResourceToolbarProps({
+    chrome,
     maxGroupDepth,
     wrap: toolbarWrap,
     actions: toolbarActions,
@@ -200,16 +208,21 @@ export function ListViewContent<TRow extends Row = Row>({
     groupOptions: toolbarInputs.groupOptions,
     customGroupOptions: toolbarInputs.customGroupOptions,
     filterOptions: toolbarInputs.filterOptions,
+    filterRow,
+    facetLabels: filterRow?.facetIds ? Object.fromEntries(filterRow.facetIds.map((field) => [
+      field,
+      fieldLabel(field, modelMetadata?.fields[field], toolbarInputs.customFilterFields.find((option) => (option.field ?? option.id) === field)?.label),
+    ])) : undefined,
     customFilterFields: toolbarInputs.customFilterFields,
     customFilterChips: toolbarInputs.customFilterChips,
     favorites: resourceView.savedFavorites,
     activeFilterIds: toolbarInputs.activeFilterIds,
     filterText: toolbarInputs.filterText,
     textFilterField,
-    createLabel: createLabel ?? createLabelForResource(resource),
+    createLabel: createLabel ?? createLabelForResource(resource, t, modelMetadata?.label),
     onCreate,
     resourceView,
-    groupingEnabled: !boardGroupingPinned,
+    groupingEnabled: !renderItem && !boardGroupingPinned,
     pagerSubject: serverGroupedMode ? t("pager.groups") : undefined,
     pagerTotalUnit: serverGroupedMode ? "groups" : undefined,
     pagerPageSizeOptions: clientRowModel ? undefined : PAGE_SIZE_OPTIONS,
@@ -218,6 +231,7 @@ export function ListViewContent<TRow extends Row = Row>({
 
   return (
     <ResourceListFrame
+      heading={chrome?.heading}
       className={className}
       presentation={presentation}
       toolbar={toolbar}
@@ -243,6 +257,8 @@ export function ListViewContent<TRow extends Row = Row>({
         surface.list.fetching &&
         surface.rowModels.length > 0
       }
+      fetching={surface.list.fetching}
+      hasRows={surface.rows.length > 0}
       overlays={
         bulkDelete.isPreviewOpen && bulkDelete.previewState ? (
           <DeletePreviewDialog
@@ -257,7 +273,14 @@ export function ListViewContent<TRow extends Row = Row>({
         ) : null
       }
     >
-      {surface.kind === "grouped" && resourceView.state.view === "board" ? (
+      {renderItem ? (
+        surface.rowModels.length > 0 ? <ol
+          start={(surface.list.page - 1) * surface.list.pageSize + 1}
+          className="min-h-0 flex-1 list-decimal space-y-6 overflow-auto p-4 pl-10"
+        >{surface.rowModels.map((row) => <li key={row.id}>{renderItem(row.original)}</li>)}</ol>
+          : surface.list.fetching ? <LoadingPanel message={t("list.loading")} />
+            : <ListEmpty className="p-6">{emptyContent}</ListEmpty>
+      ) : surface.kind === "grouped" && resourceView.state.view === "board" ? (
         <GroupedBoardBody
           columns={resolvedColumns}
           modelMetadata={modelMetadata}
@@ -273,7 +296,7 @@ export function ListViewContent<TRow extends Row = Row>({
             cardActions || renderRowActions ? boardCardActions : undefined
           }
           cardActionContext={cardActionContext}
-          renderCard={renderCard}
+          renderCard={resolvedRenderCard}
           fetching={surface.list.fetching}
           error={surface.list.error}
           emptyContent={emptyContent}
@@ -287,7 +310,7 @@ export function ListViewContent<TRow extends Row = Row>({
           table={surface.table}
           tableColumns={surface.tableColumns}
           visibleColumnCount={surface.visibleColumnCount}
-          visibleFields={surface.visibleFields}
+          visibleFields={chrome?.columnChooser === false ? [] : surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
           measures={surface.measures}
@@ -330,7 +353,7 @@ export function ListViewContent<TRow extends Row = Row>({
             cardActions || renderRowActions ? boardCardActions : undefined
           }
           cardActionContext={cardActionContext}
-          renderCard={renderCard}
+          renderCard={resolvedRenderCard}
           dragEnabled={surface.boardDragEnabled}
           rankField={surface.boardRankField}
           optimisticPlacementByRowId={surface.boardOptimisticPlacementByRowId}
@@ -355,7 +378,7 @@ export function ListViewContent<TRow extends Row = Row>({
           allPageSelected={surface.allPageSelected}
           somePageSelected={surface.somePageSelected}
           onPageSelectionChange={surface.setPageSelection}
-          visibleFields={surface.visibleFields}
+          visibleFields={chrome?.columnChooser === false ? [] : surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
@@ -385,7 +408,7 @@ export function ListViewContent<TRow extends Row = Row>({
           allPageSelected={surface.allPageSelected}
           somePageSelected={surface.somePageSelected}
           onPageSelectionChange={surface.setPageSelection}
-          visibleFields={surface.visibleFields}
+          visibleFields={chrome?.columnChooser === false ? [] : surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
           groupStack={effectiveGroupStack}

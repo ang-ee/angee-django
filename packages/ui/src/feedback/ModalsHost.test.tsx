@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { ModalsHost, usePrompt } from "./ModalsHost";
+import { ModalsHost, useConfirm, usePrompt } from "./ModalsHost";
 
 describe("ModalsHost", () => {
   afterEach(() => {
@@ -37,7 +37,22 @@ describe("ModalsHost", () => {
       expect(screen.getByText("code#state")).toBeTruthy();
     });
   });
+
+  test("keeps structured confirmation content inside a block description", async () => {
+    render(<ModalsHost><ConfirmButton /></ModalsHost>);
+    fireEvent.click(screen.getByRole("button", { name: "Open confirmation" }));
+    const list = await screen.findByRole("list");
+    expect(list.closest("p")).toBeNull();
+    expect(list.parentElement?.tagName).toBe("DIV");
+  });
 });
+
+function ConfirmButton(): ReactElement {
+  const confirm = useConfirm();
+  return <button type="button" onClick={() => { void confirm({
+    title: "Enable trigger", body: <><p>Principal grants</p><ul><li>Read channel</li></ul></>,
+  }); }}>Open confirmation</button>;
+}
 
 function PromptButton(): ReactElement {
   const prompt = usePrompt();

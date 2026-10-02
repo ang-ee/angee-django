@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
-import { LabeledDescriptorField } from "./MutationDialog";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { listWidget, objectWidget } from "./StructuredField";
 import { structuredFieldErrorPaths } from "./field-values";
 import type { WidgetRenderProps } from "../../widgets/types";
@@ -31,7 +31,7 @@ describe("structured FormSpec widgets", () => {
       const [value, setValue] = React.useState<RowsValue>([retainedRow, secondRow]);
       return <ModelMetadataProvider metadata={metadata}><AppRuntimeProvider runtime={{ widgets: sectionedWidgets }}>
         <LabeledDescriptorField
-          field={{ ...field!, widget: "sectionedRows" }}
+          field={field!}
           value={value}
           messages={["Review the records.", "records.0.lines.0.description: Correct this description."]}
           controlRef={focusRef}
@@ -77,7 +77,7 @@ describe("structured FormSpec widgets", () => {
   test("renders titled rows read-only through the same widget without hidden controls", async () => {
     const [field] = sectionedFields();
     render(<AppRuntimeProvider runtime={{ widgets: sectionedWidgets }}>
-      <LabeledDescriptorField field={{ ...field!, widget: "sectionedRows" }}
+      <LabeledDescriptorField field={field!}
         value={[{ identity: "row-1", title: "Retained", lines: [
           { identity: "line-1", fingerprint: "fingerprint-1", description: "Retained line" },
         ] }]} readOnly onChange={vi.fn()} />
@@ -150,6 +150,7 @@ describe("structured FormSpec widgets", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set value" }));
     const input = screen.getByRole("textbox", { name: "Limit" });
     expect(input).toBeTruthy();
+    expect((input as HTMLInputElement).value).toBe("0");
     fireEvent.change(input, { target: { value: "42" } });
     expect((input as HTMLInputElement).value).toBe("42");
     expect(structuredFieldErrorPaths(
@@ -269,6 +270,7 @@ function SectionedEdit(props: WidgetRenderProps<RowsValue>) {
 const sectionedWidgets = {
   ...defaultWidgets,
   sectionedRows: {
+    acceptsRowTemplate: true as const,
     edit: SectionedEdit,
     read: (props: WidgetRenderProps<RowsValue>) => <SectionedEdit {...props} readOnly />,
   },
@@ -276,7 +278,7 @@ const sectionedWidgets = {
 
 function sectionedFields() {
   return deserializeFormSpec({ properties: {
-    records: { type: "array", label: "Records", widget: "rows", items: {
+    records: { type: "array", label: "Records", widget: "sectionedRows", items: {
       type: "object", properties: {
         identity: { type: "string", label: "Identity", hidden: true },
         title: { type: "string", label: "Title" },
@@ -289,7 +291,7 @@ function sectionedFields() {
         } },
       },
     } },
-  } }, defaultWidgets);
+  } }, sectionedWidgets);
 }
 
 function structuredFields() {

@@ -8,7 +8,8 @@ import pytest
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, isolate_apps
+from django.utils.module_loading import import_string
 from rebac import ObjectRef, system_context
 from rebac.resources import model_resource_type
 
@@ -21,6 +22,9 @@ from angee.base.refs import (
     ancestor_object_refs,
     canonical_record_model,
     canonical_record_target,
+    concrete_child,
+    concrete_child_accessor,
+    concrete_child_models,
     record_ref_for,
 )
 from tests.mtidemo.models import (
@@ -61,33 +65,45 @@ class RecordRefPlainTarget(SqidMixin, models.Model):
 
 
 class RecordRefTargetEdge(RecordRefMixin, models.Model):
-    """Concrete default-prefix edge used by record-ref tests."""
+    """Concrete target edge used by record-ref tests."""
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
 
     class Meta:
-        """Django model options for the default-prefix edge."""
+        """Django model options for the target edge."""
 
         app_label = "auth"
         db_table = "test_record_ref_target_edge"
 
 
 class RecordRefSubjectEdge(RecordRefMixin, models.Model):
-    """Concrete subject-prefix edge used by record-ref tests."""
-
-    record_ref_field_prefix = "subject"
+    """Concrete subject edge used by record-ref tests."""
 
     subject_content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     subject_object_id = models.PositiveBigIntegerField()
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
 
     class Meta:
-        """Django model options for the subject-prefix edge."""
+        """Django model options for the subject edge."""
 
         app_label = "auth"
         db_table = "test_record_ref_subject_edge"
+
+
+class RecordRefCustomEdge(RecordRefMixin, models.Model):
+    """Concrete reference with independently named relation fields and columns."""
+
+    kind = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+", db_column="kind_column")
+    key = models.PositiveBigIntegerField(db_column="key_column")
+    linked = GenericForeignKey("kind", "key")
+
+    class Meta:
+        """Django model options for the custom reference edge."""
+
+        app_label = "auth"
+        db_table = "test_record_ref_custom_edge"
 
 
 class RecordRefNullableEdge(RecordRefMixin, models.Model):
@@ -109,6 +125,7 @@ RECORD_REF_TEST_MODELS = (
     RecordRefPlainTarget,
     RecordRefTargetEdge,
     RecordRefSubjectEdge,
+    RecordRefCustomEdge,
     RecordRefNullableEdge,
 )
 
@@ -147,7 +164,7 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
 def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype(
     record_ref_tables: None,
 ) -> None:
-    """Default-prefix edges project target facts without a second ContentType query."""
+    """Target edges project reference facts without a second ContentType query."""
 
     del record_ref_tables
     with system_context(reason="record-ref typed target"):
@@ -210,8 +227,8 @@ def test_record_ref_mixin_returns_empty_ref_for_stale_contenttype(record_ref_tab
     assert edge.record_ref == RecordRef(model_label="", object_id=43, public_id="", resource_type="")
 
 
-def test_record_ref_mixin_supports_subject_field_prefix(record_ref_tables: None) -> None:
-    """The field-prefix override reads subject_* columns instead of target columns."""
+def test_record_ref_mixin_uses_the_declared_subject_relation(record_ref_tables: None) -> None:
+    """The generic foreign key owns the subject pointer's field names."""
 
     del record_ref_tables
     with system_context(reason="record-ref typed target"):
@@ -231,6 +248,130 @@ def test_record_ref_mixin_supports_subject_field_prefix(record_ref_tables: None)
     assert edge.record_public_id == target.public_id
     assert not hasattr(edge, "subject_model_label")
     assert not hasattr(edge, "subject_public_id")
+
+
+def test_record_ref_mixin_uses_arbitrary_field_and_column_names(record_ref_tables: None) -> None:
+    """Neither the relation name nor SQL columns dictate the pointer's attributes."""
+
+    del record_ref_tables
+    with system_context(reason="record-ref custom target"):
+        target = RecordRefTypedTarget.objects.create(name="typed")
+    edge = RecordRefCustomEdge.objects.create(linked=target)
+    edge = RecordRefCustomEdge.objects.get(pk=edge.pk)
+
+    with CaptureQueriesContext(connection) as queries:
+        assert edge.record_ref == record_ref_for(target)
+
+    assert len(queries) == 0
+
+
+@pytest.mark.parametrize(
+    ("source_path", "reference_name"),
+    [
+        ("angee.integrate.models.RecordLink", "target"),
+        ("angee.knowledge.models.RecordBinding", "target"),
+        ("angee.messaging.models.ThreadAttachment", "target"),
+        ("angee.money.models.CurrencyRate", "context"),
+        ("angee.portfolio.models.Update", "target"),
+        ("angee.projects.models.ProjectBinding", "target"),
+        ("angee.projects.models.Link", "target"),
+        ("angee.storage.models.FileAttachment", "target"),
+        ("angee.tags.models.TagAssignment", "target"),
+        ("angee.workflows.models.WorkflowRun", "subject"),
+    ],
+)
+@isolate_apps()
+def test_record_ref_mixin_projects_each_source_addon_reference(
+    record_ref_tables: None, source_path: str, reference_name: str,
+) -> None:
+    """Each source relation projects correctly after Django clones its abstract fields."""
+
+    del record_ref_tables
+    source_model = import_string(source_path)
+
+    class ConcreteReference(source_model):
+        """Materialize the source's native reference fields for this projection probe."""
+
+        class Meta:
+            """Keep each probe in its own isolated app registry."""
+
+            app_label = "auth"
+
+    target = RecordRefPlainTarget.objects.create(name="plain")
+    # Unrelated FKs need no composed targets for this unsaved reference probe.
+    unrelated_relations = {field.attname: None for field in ConcreteReference._meta.fields if field.is_relation}
+    edge = ConcreteReference(**unrelated_relations, **{reference_name: target})
+
+    assert edge.record_ref == record_ref_for(target)
+
+
+@isolate_apps()
+def test_record_ref_mixin_rejects_a_missing_generic_foreign_key() -> None:
+    """A missing relation is an invalid declaration, not an empty record pointer."""
+
+    class MissingReference(RecordRefMixin):
+        """Invalid reference model without a generic relation."""
+
+        class Meta:
+            """Keep this declaration in the isolated app registry."""
+
+            app_label = "auth"
+
+    errors = MissingReference.check()
+    assert [(error.id, error.msg) for error in errors if error.id == "angee.E029"] == [
+        ("angee.E029", "auth.MissingReference must declare exactly one GenericForeignKey for RecordRefMixin; found 0.")
+    ]
+
+
+@isolate_apps()
+def test_record_ref_mixin_rejects_ambiguous_generic_foreign_keys() -> None:
+    """Two generic relations cannot silently choose which record to project."""
+
+    class AmbiguousReference(RecordRefMixin):
+        """Invalid reference model with two otherwise valid generic relations."""
+
+        content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+        object_id = models.PositiveBigIntegerField()
+        first = GenericForeignKey()
+        second = GenericForeignKey()
+
+        class Meta:
+            """Keep this declaration in the isolated app registry."""
+
+            app_label = "auth"
+
+    errors = AmbiguousReference.check()
+    assert [(error.id, error.msg) for error in errors if error.id == "angee.E029"] == [
+        (
+            "angee.E029",
+            "auth.AmbiguousReference must declare exactly one GenericForeignKey for RecordRefMixin; found 2.",
+        )
+    ]
+
+
+@isolate_apps()
+def test_record_ref_mixin_rejects_obsolete_prefix_declarations() -> None:
+    """A stale consumer declaration fails startup instead of silently doing nothing."""
+
+    class StaleReference(RecordRefMixin):
+        """A valid pointer with an obsolete independent naming declaration."""
+
+        record_ref_field_prefix = "subject_"
+        content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+        object_id = models.PositiveBigIntegerField()
+        target = GenericForeignKey()
+
+        class Meta:
+            app_label = "auth"
+
+    errors = StaleReference.check()
+    assert [error.id for error in errors if error.id.startswith("angee.")] == ["angee.E030"]
+
+
+def test_record_ref_mixin_accepts_its_declared_generic_pointer() -> None:
+    """Valid relation declarations have no reference-specific startup error."""
+
+    assert not [error for error in RecordRefCustomEdge.check() if error.id.startswith("angee.")]
 
 
 def test_canonical_record_target_canonicalizes_mti_child_to_typed_ancestor(record_ref_tables: None) -> None:
@@ -255,6 +396,26 @@ def test_canonical_record_model_exposes_the_mti_ancestor_without_contenttypes() 
     assert canonical_record_model(MtiChildProxy) is MtiParent
     assert canonical_record_model(RecordRefTypedTarget) is RecordRefTypedTarget
     assert canonical_record_model(RecordRefPlainTarget) is RecordRefPlainTarget
+
+
+def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:
+    """One owner resolves MTI children from a parent row and honors Django's relation cache."""
+
+    del record_ref_tables
+    with system_context(reason="concrete child lookup"):
+        child = MtiChild.objects.create(title="Parent", detail="Child")
+        parent = MtiParent.objects.get(pk=child.pk)
+        with CaptureQueriesContext(connection) as uncached:
+            found = concrete_child(parent, MtiChild)
+        assert found is not None and found.detail == "Child"
+        assert len(uncached) == 1
+        prefetched = MtiParent.objects.select_related("mtichild").get(pk=child.pk)
+        with CaptureQueriesContext(connection) as cached:
+            assert concrete_child(prefetched, MtiChild) is prefetched.mtichild
+        assert len(cached) == 0
+        assert concrete_child(prefetched, MtiChild, queryset=MtiChild.objects.none()) is None
+    assert concrete_child_models(MtiParent) == (MtiChild,)
+    assert concrete_child_accessor(MtiParent, MtiChild) == "mtichild"
 
 
 def test_canonical_record_target_leaves_leaf_and_untyped_rows_uncanonicalized(record_ref_tables: None) -> None:

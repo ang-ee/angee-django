@@ -1,5 +1,5 @@
 import * as React from "react";
-import { rowPublicId, type Row } from "@angee/metadata";
+import { holdsPermission, rowPublicId, type Row } from "@angee/metadata";
 import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../../ui/button";
@@ -7,8 +7,16 @@ import { DropdownMenu } from "../../ui/dropdown-menu";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
-import { RecordActionMenuItems } from "./RecordActionMenu";
+import { RecordActionMenuItems, RecordActionTrigger } from "./RecordActionMenu";
+import { RecordActionMenuContext } from "../../ui/record-action-context";
 import type { ActionDescriptor, ActionResult } from "../page";
+import { useRuntimeViewAs } from "../../runtime";
+import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
+import { useLatestRef } from "../../lib/use-latest-ref";
+import { useUiT } from "../../i18n";
+
+/** The same permission-bearing descriptor used by `<Action>`. */
+export type RecordActionDescriptor = ActionDescriptor;
 
 export interface RecordDeleteAction {
   canDelete: boolean;
@@ -17,7 +25,7 @@ export interface RecordDeleteAction {
 }
 
 interface ActionMutationVariables {
-  action: ActionDescriptor;
+  action: RecordActionDescriptor;
   values: Record<string, string>;
 }
 
@@ -34,29 +42,35 @@ interface ActionMutationVariables {
 export function RecordActionBar({
   record,
   actions,
-  applyPatch,
-  reload,
+  applyPatch = unavailablePatch,
+  reload = noop,
   deleteAction,
   contributedActions,
-  blocked = false,
+  blocked: blockedByForm = false,
 }: {
   record: Row | null;
-  actions: readonly ActionDescriptor[];
-  applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
-  reload: () => void;
+  actions: readonly RecordActionDescriptor[];
+  applyPatch?: (patch: Record<string, unknown>) => Promise<Row | null>;
+  reload?: () => void | Promise<Row | null>;
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
 }): React.ReactElement | null {
+  const preview = useRuntimeViewAs();
+  const t = useUiT();
+  const menu = React.useContext(RecordActionMenuContext);
+  const chrome = useRecordChromeContextMaybe();
+  const blocked = blockedByForm || menu?.blocked || chrome?.actionsBlocked || Boolean(preview.viewAs || preview.pending);
+  const blockedRef = useLatestRef(blocked);
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
   const actionsTriggerRef = React.useRef<HTMLElement>(null);
   // The open typed-args action form (F-a), or null. Set after any confirm passes;
   // the dialog owns collecting the args and firing the action's `submit`.
-  const [formAction, setFormAction] = React.useState<ActionDescriptor | null>(
+  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor } | null>(
     null,
   );
   const actionMutation = useMutation<
@@ -65,6 +79,7 @@ export function RecordActionBar({
     ActionMutationVariables
   >({
     mutationFn: async ({ action, values }) => {
+      if (blockedRef.current || action.disabled || (action.permission && !holdsPermission(record, action.permission))) return;
       if (action.run) {
         return action.run({
           record,
@@ -96,8 +111,8 @@ export function RecordActionBar({
   const recordId = rowPublicId(record);
 
   const runAction = React.useCallback(
-    async (action: ActionDescriptor): Promise<void> => {
-      if (blocked) return;
+    async (action: RecordActionDescriptor): Promise<void> => {
+      if (blockedRef.current || action.disabled || (action.permission && !holdsPermission(record, action.permission))) return;
       if (action.confirm) {
         const confirmation =
           typeof action.confirm === "function" && record !== null
@@ -116,12 +131,12 @@ export function RecordActionBar({
             : {}),
           confirm: action.label,
         });
-        if (!confirmed) return;
+        if (!confirmed || blockedRef.current) return;
       }
       // A typed-args action collects its args (and merges the record/selection
       // context) in the dialog, which fires `submit` — not the string-only prompt.
       if (action.args && action.submit) {
-        setFormAction(action);
+        setFormAction({ action });
         return;
       }
       let values: Record<string, string> = {};
@@ -135,24 +150,48 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, blocked, confirm, prompt, record],
+    [actionMutation, blockedRef, confirm, prompt, record],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
   // matches (e.g. "Disable" only while enabled); a record must be loaded first.
   const visibleActions = actions.filter(
     (action) =>
-      !action.visibleWhen || (record != null && action.visibleWhen(record)),
+      (!action.permission || holdsPermission(record, action.permission))
+      && (!action.visibleWhen || (record != null && action.visibleWhen(record))),
   );
+  const toolbarActions = visibleActions.filter((action) => action.placement === "toolbar");
+  const menuActions = visibleActions.filter((action) => action.placement !== "toolbar");
+  const visibleDeleteAction = deleteAction?.canDelete ? deleteAction : undefined;
+  const disabled = (action: ActionDescriptor) =>
+    blocked || Boolean(action.disabled) || pendingId !== null ||
+    (recordId === null && !action.run && !action.submit);
   if (
     visibleActions.length === 0 &&
-    deleteAction === undefined &&
-    contributedActions == null
+    visibleDeleteAction === undefined &&
+    contributedActions == null &&
+    formAction === null
   ) return null;
 
   return (
     <>
-      <DropdownMenu.Root>
+      {menu ? visibleActions.map((action) => (
+        <RecordActionTrigger key={action.id} glyph={action.icon}
+          variant={action.danger ? "danger" : "secondary"}
+          disabled={disabled(action)} loading={pendingId === action.id}
+          onClick={() => void runAction(action)}>
+          {action.label}
+        </RecordActionTrigger>
+      )) : <>
+      {toolbarActions.map((action, index) => (
+        <Button key={action.id} type="button" size="sm"
+          variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
+          disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
+          {action.icon ? <Glyph name={action.icon} /> : null}
+          {action.label}
+        </Button>
+      ))}
+      {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null ? <DropdownMenu.Root>
         <DropdownMenu.Trigger
           render={
             // A DropdownMenu.Item closes the menu on click, so the item's
@@ -168,35 +207,31 @@ export function RecordActionBar({
               loading={pendingId !== null}
             >
               <Glyph name="more-vertical" />
-              Actions
+              {t("list.actions")}
             </Button>
           }
         />
         <DropdownMenu.Portal keepMounted>
           <DropdownMenu.Positioner sideOffset={6} align="start">
             <DropdownMenu.Content className="w-52">
-              {deleteAction !== undefined ? (
+              {visibleDeleteAction !== undefined ? (
                 <DropdownMenu.Item
                   variant="danger"
-                  disabled={blocked || !deleteAction.canDelete || deleteAction.isPending}
-                  onClick={deleteAction.onDelete}
+                  disabled={blocked || visibleDeleteAction.isPending}
+                  onClick={() => { if (!blockedRef.current) visibleDeleteAction.onDelete(); }}
                 >
                   <Glyph name="trash" />
-                  Delete
+                  {t("actions.delete")}
                 </DropdownMenu.Item>
               ) : null}
-              {deleteAction !== undefined && visibleActions.length > 0 ? (
+              {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
                 <DropdownMenu.Separator />
               ) : null}
-              {visibleActions.map((action) => (
+              {menuActions.map((action) => (
                 <DropdownMenu.Item
                   key={action.id}
                   variant={action.danger ? "danger" : "default"}
-                  disabled={
-                    blocked || Boolean(action.disabled) ||
-                    pendingId === action.id ||
-                    (recordId === null && !action.run && !action.submit)
-                  }
+                  disabled={disabled(action)}
                   onClick={() => void runAction(action)}
                 >
                   {action.icon ? <Glyph name={action.icon} /> : null}
@@ -214,14 +249,16 @@ export function RecordActionBar({
             </DropdownMenu.Content>
           </DropdownMenu.Positioner>
         </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+      </DropdownMenu.Root> : null}
+      </>}
       {formAction ? (
         <ActionFormDialog
-          key={formAction.id}
-          action={formAction}
+          key={formAction.action.id}
+          action={formAction.action}
           context={{
             record,
             selectedIds: recordId !== null ? [recordId] : [],
+            refresh: async () => await reload() ?? null,
           }}
           open
           onOpenChange={(open) => {
@@ -232,6 +269,12 @@ export function RecordActionBar({
       ) : null}
     </>
   );
+}
+
+function noop(): void {}
+
+async function unavailablePatch(): Promise<never> {
+  throw new Error("A patch action requires its record form's applyPatch binding.");
 }
 
 // A rich (non-string) label can't title a toast; fall back to the action id so

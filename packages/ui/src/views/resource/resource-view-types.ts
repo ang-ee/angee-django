@@ -12,9 +12,10 @@ import type {
 import type { ButtonVariant } from "../../ui/button";
 
 import type {
-  ResourceToolbarFilterField,
+  FilterClauseField,
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
+  ResourceToolbarChrome,
 } from "../../toolbars";
 import type {
   ListViewNavigationScope,
@@ -23,6 +24,8 @@ import type {
 import type { ColumnDescriptor, FacetDescriptor } from "../page";
 import type { Occurrence } from "../calendar/CalendarView";
 import type { AnyCalendarWindowSource } from "../calendar/use-calendar-window";
+import type { GanttRowLayout } from "../gantt/gantt-types";
+import type { GanttLaneDetails } from "../gantt/gantt-lane";
 import type { DndPayload } from "../../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
@@ -70,10 +73,47 @@ export interface BoardLaneSource {
   foldField?: string;
 }
 
+/** Read-only schedules on rows supplied by the list's related lane source. */
+export interface GanttViewSpec extends GanttRowLayout {
+  start: string;
+  end: string;
+  /** Bars from another resource; the list resource itself supplies lanes, filters, presets, and selection. */
+  linked?: { resource: string; lane: string; filter?: ResourceFilter<ResourceTypeName> };
+  /** Defaults to the resource's record representation. */
+  label?: string;
+  /** A status field resolved through the runtime's status-tone vocabulary. */
+  tone?: string;
+  /** Field on the lane resource holding the current bar's identity (scalar id or to-one relation). */
+  current?: string;
+  /** Read-only point events from a second resource, scoped to the same lane page. */
+  markers?: {
+    resource: string;
+    /** Relation group axis on the marker resource, targeting the lane resource. */
+    lane: string;
+    date: string;
+    /** Defaults to the marker resource's record representation. */
+    label?: string;
+    tone?: string;
+    /** Marker-specific scope; the bars' filters and search never apply to this resource. */
+    filter?: ResourceFilter<ResourceTypeName>;
+  };
+  /** Declared lane content, selected from the lane resource even for empty lanes. */
+  lane?: {
+    fields?: readonly string[];
+    content: (row: Row) => GanttLaneDetails;
+  };
+}
+
 /** One card's optimistic board placement while its server write settles. */
 export interface BoardCardPlacement {
   laneId: string;
   rank?: number;
+}
+
+/** Declared default board card: one title and up to four readable detail fields. */
+export interface BoardCardSpec {
+  title: string;
+  fields?: readonly string[];
 }
 
 export interface CardActionContext {
@@ -104,9 +144,17 @@ export type ResourceCollectionPresentation = "page" | "workspace" | "embedded";
 export type ResourceTableLayout = "auto" | "fixed";
 export type ResourceTableHeaderVisibility = "visible" | "visually-hidden";
 
+export interface ListChrome extends ResourceToolbarChrome {
+  columnChooser?: boolean;
+  /** Copy surrounding the live collection count in the shared heading line. */
+  heading?: { label: ReactNode; hint?: ReactNode; audience?: ReactNode };
+}
+
 export interface ListViewProps<TRow extends Row = Row> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
+  /** Hide selected list chrome while preserving the resource view's query. */
+  chrome?: ListChrome;
   /** Page/workspace surfaces fill their owner; embedded surfaces grow in flow. */
   presentation?: ResourceCollectionPresentation;
   /** CSS table sizing strategy. Fixed layout lets rich single-column rows truncate to their pane. */
@@ -119,6 +167,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   source?: CollectionSource<TRow>;
   /** Allowed render kinds; defaults to the resource's available kinds. */
   availableViews?: readonly ResourceViewKind[];
+  /** Shipped view ids declared for this collection route. */
+  presetIds?: readonly string[];
   /** Semantic search field; null omits the search control. */
   textFilterField?: string | null;
   /** Limit nested grouping where the source supports a single axis. */
@@ -129,16 +179,22 @@ export interface ListViewProps<TRow extends Row = Row> {
   renderGroupLabel?: (group: GroupLabelContext) => ReactNode;
   /** Columns rendered by the list. */
   columns: readonly ColumnDescriptor<TRow>[];
+  /** Render flat ordered-list items instead of table rows. The collection retains
+   * filtering and paging; the item owns its links/actions. Grouping, other view
+   * kinds and row selection are unavailable in this presentation. */
+  renderItem?: (row: TRow) => ReactNode;
   /** Extra resource fields selected in addition to the declared columns. */
   fields?: readonly string[];
   /** Base resource filter applied before user-owned view filters. */
   baseFilter?: ResourceFilter<ResourceTypeName>;
   /** Favorite or quick filters shown in the list toolbar. */
   filterOptions?: readonly ResourceToolbarFilterOption[];
+  /** Show filter-option or shipped-preset ids and facets in a compact row. */
+  filterRow?: { quickFilterIds?: readonly string[]; facetIds?: readonly string[] };
   /** Explicit relation facets exposed as quick filters and group-by axes. */
   facets?: readonly FacetDescriptor[];
   /** Presentation overrides for custom filters; the query supplies all supported fields. */
-  customFilterFields?: readonly ResourceToolbarFilterField[];
+  customFilterFields?: readonly FilterClauseField[];
   /** Curated group shortcuts; the custom editor always uses the query's supported axes. */
   groupOptions?: readonly ResourceToolbarGroupOption[];
   /** Default resource order when the URL-owned data view has no sort. */
@@ -150,8 +206,12 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Calendar data + interaction seams. When declared, the Calendar kind is offered
    * in the switcher and rendered as a windowed-collection surface (no `useList`). */
   calendar?: CalendarViewSpec;
+  /** Date-scaled bars on related rows or a linked resource. */
+  gantt?: GanttViewSpec;
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
+  /** Card content without replacing the board's shared frame and actions. */
+  boardCard?: BoardCardSpec;
   /** Group seeded by the resource list. */
   defaultGroup?: ResourceViewGroup | null;
   /** Per-view group defaults seeded by the resource list. */

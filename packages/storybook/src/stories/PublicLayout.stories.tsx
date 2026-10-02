@@ -56,3 +56,9 @@ export const SignIn: Story = {
     </div>
   ),
 };
+
+export const NoHero: Story = {
+  render: () => <PublicLayout hero={null}><p>A full-width public form card.</p></PublicLayout>,
+};
+
+export const Dark: Story = { ...NoHero, globals: { colorScheme: "dark" } };

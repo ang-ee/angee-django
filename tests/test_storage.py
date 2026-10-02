@@ -4,28 +4,35 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import SuspiciousFileOperation
+from django.core.exceptions import SuspiciousFileOperation, ValidationError
 from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
+from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
+from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
+from strawberry.django.views import GraphQLView
 
+from angee.base.identity import public_id_of
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.base.refs import canonical_record_target
 from angee.data.field_classification import is_archive_field
+from angee.graphql.views import graphql_endpoint
 from angee.storage import exceptions
 from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
@@ -74,6 +81,80 @@ def test_storage_autoconfig_has_no_runtime_setting_shim() -> None:
     autoconfig = importlib.import_module("angee.storage.autoconfig")
 
     assert not hasattr(autoconfig, "setting")
+
+
+@pytest.mark.parametrize("content", [b"", b"verified bytes"])
+def test_file_verified_read_accepts_content_at_the_limit(monkeypatch: pytest.MonkeyPatch, content: bytes) -> None:
+    """Exact bounds, empty content and retained identities share one reader."""
+
+    digest = hashlib.sha256(content).hexdigest()
+    file = File(content_hash=digest, size_bytes=len(content), upload_state=UploadState.READY)
+    stream = BytesIO(content)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    assert file.read_verified(max_bytes=len(content), expected_digest=digest) == content
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "content,size_delta",
+    [(b"changed bytes!", 0), (b"short", 0), (b"unexpected longer bytes", 0), (b"verified bytes", -1)],
+)
+def test_file_verified_read_rejects_changed_content(
+    monkeypatch: pytest.MonkeyPatch, content: bytes, size_delta: int,
+) -> None:
+    """Neither a changed digest nor a changed size can pass the storage boundary."""
+
+    original = b"verified bytes"
+    file = File(
+        content_hash=hashlib.sha256(original).hexdigest(),
+        size_bytes=len(original) + size_delta,
+        upload_state=UploadState.READY,
+    )
+    stream = BytesIO(content)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    with pytest.raises(ValidationError, match="stored bytes"):
+        file.read_verified(max_bytes=100)
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "state,size,digest", [(UploadState.DRAFT, 1, ""), (UploadState.READY, 11, ""), (UploadState.READY, 1, "changed")],
+)
+def test_file_verified_read_checks_metadata_before_io(
+    monkeypatch: pytest.MonkeyPatch, state: UploadState, size: int, digest: str,
+) -> None:
+    """Unready, oversized and superseded references do not open backend bytes."""
+
+    file = File(content_hash="current", size_bytes=size, upload_state=state)
+    monkeypatch.setattr(File, "open_stream", lambda self: pytest.fail("Metadata failure must not open storage."))
+
+    with pytest.raises(ValidationError):
+        file.read_verified(max_bytes=10, expected_digest=digest)
+
+
+def test_file_verified_read_bounds_short_reads_even_when_metadata_lies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A short-reading backend is stopped after one overflow byte and closed."""
+
+    consumed = 0
+
+    class ShortReader(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            nonlocal consumed
+            assert size >= 0
+            chunk = super().read(min(size, 2))
+            consumed += len(chunk)
+            return chunk
+
+    stream = ShortReader(b"unbounded content")
+    file = File(content_hash=hashlib.sha256(b"small").hexdigest(), size_bytes=5, upload_state=UploadState.READY)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    with pytest.raises(ValidationError, match="byte limit"):
+        file.read_verified(max_bytes=5)
+    assert consumed == 6
+    assert stream.closed
 
 
 def test_backend_has_no_dormant_default_flag() -> None:
@@ -491,6 +572,28 @@ def test_upload_rejects_folders_from_other_drives(tmp_path: Path, drive: Any) ->
 
 
 @pytest.mark.django_db(transaction=True)
+def test_upload_naming_only_a_folder_targets_its_drive(tmp_path: Path, drive: Any) -> None:
+    """draft resolves the drive from a named folder the actor can read."""
+
+    with system_context(reason="test storage setup"):
+        other = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="other",
+            name="Other",
+            prefix="other",
+            created_by=drive.alice,
+        )
+        folder = Folder._base_manager.create(drive=other, name="Inbox", created_by=drive.alice)
+    with actor_context(drive.alice):
+        row = File.objects.draft(filename="routed.bin", folder_id=str(folder.sqid))
+    assert (row.drive_id, row.folder_id) == (other.pk, folder.pk)
+
+    stranger = get_user_model().objects.create_user(username="storage-bob", email="bob@example.com")
+    with actor_context(stranger), pytest.raises(exceptions.UploadTargetNotFound):
+        File.objects.draft(filename="nope.bin", folder_id=str(folder.sqid))
+
+
+@pytest.mark.django_db(transaction=True)
 def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None:
     """delete() trashes, restore() reverses, purge() removes row and bytes."""
 
@@ -858,10 +961,6 @@ def test_proxy_upload_view_streams_for_actor_and_rejects_reuse_and_anon(drive: A
     here the actor is pinned directly.
     """
 
-    import json
-
-    from django.test import RequestFactory
-
     from angee.storage import views
 
     with actor_context(drive.alice):
@@ -892,13 +991,12 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
 ) -> None:
     """Content-addressed downloads advertise and honor validators."""
 
-    from django.test import RequestFactory
-
     from angee.storage import views
     from angee.storage.uploads import DOWNLOAD_TOKEN_HEADER, DOWNLOAD_TOKEN_MAX_AGE
 
     row = _proxy_upload(drive, PNG_BYTES)
-    token = row.issue_download_token()
+    with actor_context(drive.alice):
+        token = row.issue_download_token()
     request = RequestFactory().get(f"/storage/download/{row.filename}?token={token}")
 
     ok = views.download(request, row.filename)
@@ -1166,7 +1264,8 @@ def test_index_external_creates_updates_and_emits_file_finalized(drive: Any) -> 
         "source": "test",
         "origin": {"path": "docs/report.txt", "rev": 2},
     }
-    assert updated.created_by_id == drive.alice.pk
+    assert updated.owner_id == drive.alice.pk
+    assert updated.created_by_id is None
     assert seen == [created.pk, created.pk]
 
 
@@ -1438,3 +1537,47 @@ def test_attachment_locks_canonical_target_and_file_before_creation(
     assert stored.file_id == row.pk
     assert stored.object_id == target.pk
     assert stored.content_type_id == canonical.content_type.pk
+
+
+def test_storage_preview_does_not_mint_download_urls(
+    drive: Any, monkeypatch: pytest.MonkeyPatch, settings: Any,
+) -> None:
+    """A real preview query reaches the nullable file field without minting a bearer."""
+
+    settings.ROOT_URLCONF = "angee.storage.urls"
+    row = _proxy_upload(drive, PNG_BYTES)
+    admin = create_platform_admin("storage-preview-admin")
+    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    payload = {
+        "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",
+        "variables": {"id": str(row.sqid)},
+    }
+    request = RequestFactory().post(
+        "/graphql/public/", data=payload, content_type="application/json",
+        HTTP_X_ANGEE_VIEW_AS=public_id_of(drive.alice),
+    )
+    request.user = admin
+    with patch.object(File, "issue_download_token", autospec=True, side_effect=AssertionError("minted")) as mint:
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        assert response.status_code == 200
+        assert json.loads(response.content) == {"data": {"files_by_pk": {"id": str(row.sqid), "url": None}}}
+        mint.assert_not_called()
+    assert request.user is admin
+    assert not hasattr(request, "view_as")
+
+    # The same field on an ordinary request still reaches the real token owner.
+    request = RequestFactory().post("/graphql/public/", data=payload, content_type="application/json")
+    request.user = drive.alice
+    with patch.object(File, "issue_download_token", autospec=True, side_effect=File.issue_download_token) as mint:
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        assert response.status_code == 200
+        data = json.loads(response.content)
+        assert "errors" not in data
+        assert data["data"]["files_by_pk"]["url"].startswith("/storage/download/")
+        mint.assert_called_once()
+
+
+def test_folder_create_refuses_unsupported_creation_keys() -> None:
+    with pytest.raises(ValidationError, match="does not support creation keys"):
+        storage_schema.FolderWriteBackend(Folder).create(None, {}, client_creation_key="request")

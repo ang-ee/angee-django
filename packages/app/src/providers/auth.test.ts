@@ -11,6 +11,7 @@ import {
   AngeeLoginDocument,
   AngeeLogoutDocument,
 } from "./documents.public";
+import { AngeeViewAsIdentityDocument } from "./documents.console";
 
 const currentUser = {
   id: "user_1",
@@ -25,6 +26,21 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
+  test("console IAM supplies the viewed identity, real identity and permitted people", async () => {
+    const viewed = { ...currentUser, id: "person-2", username: "grace", firstName: "Grace", lastName: "Hopper", roleRefs: [] };
+    const identityRequest = vi.fn(async (document) => {
+      expect(document).toBe(AngeeViewAsIdentityDocument);
+      return { current_user: viewed, real_user: currentUser, viewable_people: [{ id: viewed.id, name: "Grace Hopper" }] } as never;
+    });
+    const provider = createAngeeAuthProviderFromRequest(async () => ({ current_user: viewed }) as never, { identityRequest });
+    await expect(provider.getIdentity?.()).resolves.toMatchObject({
+      id: viewed.id, name: "Grace Hopper", roles: [],
+      realUser: { id: currentUser.id }, viewablePeople: [{ id: viewed.id, name: "Grace Hopper" }],
+    });
+    const anonymous = createAngeeAuthProviderFromRequest(async () => ({ current_user: null }) as never, { identityRequest });
+    await expect(anonymous.getIdentity?.()).resolves.toBeNull();
+    expect(identityRequest).toHaveBeenCalledTimes(1);
+  });
   test("maps currentUser into Refine identity and permissions", async () => {
     const provider = createAngeeAuthProviderFromRequest(async (document) => {
       expect(document).toBe(AngeeCurrentUserDocument);

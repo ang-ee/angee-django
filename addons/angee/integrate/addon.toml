@@ -16,6 +16,16 @@ dependencies = [
   "qrcode[pil]>=8.2",
 ]
 
+[[migrations]]
+name = "record_link_target_names"
+app_label = "integrate"
+module = "runtime_migrations.record_link_target_names"
+
+[[migrations]]
+name = "integration_concrete_type"
+app_label = "integrate"
+module = "runtime_migrations.integration_concrete_type"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

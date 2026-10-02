@@ -1,8 +1,7 @@
 import * as React from "react";
-import { formatDistanceToNow } from "date-fns";
 
 import { cn } from "../lib/cn";
-import { dateFromUnknown } from "../widgets/date-format";
+import { dateFromUnknown, formatDateTime, formatRelativeTime } from "../widgets/date-format";
 
 export interface RelativeTimeProps
   extends Omit<React.TimeHTMLAttributes<HTMLTimeElement>, "children" | "dateTime"> {
@@ -24,10 +23,11 @@ export function RelativeTime({
   return (
     <time
       dateTime={date.toISOString()}
+      title={formatDateTime(date)}
       className={cn("tabular-nums", className)}
       {...props}
     >
-      {formatDistanceToNow(date, { addSuffix })}
+      {formatRelativeTime(date, { addSuffix })}
     </time>
   );
 }

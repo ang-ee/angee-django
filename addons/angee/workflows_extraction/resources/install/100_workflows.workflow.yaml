@@ -5,66 +5,43 @@ rows:
     fields:
       key: document_extraction
       name: Document extraction
-      description: Retain schema-validated evidence from authorized Files and Message parts.
-      subject_declaration: ""
-      budget: {}
-      input_schema:
-        type: object
-        additionalProperties: false
-        required:
-          - files
-          - message_parts
-          - schema
-          - profile
-          - profile_config
-          - recognition_timeout
-          - model
-          - recognition_model
-          - target_model
-          - target_id
-        properties:
-          files:
-            type: array
-            items: {type: string, minLength: 1}
-          message_parts:
-            type: array
-            items: {type: string, minLength: 1}
-          schema: {type: object}
-          profile: {type: string, minLength: 1}
-          profile_config:
-            type: object
-            required: [recognition_config]
-            properties:
-              recognition_config: {type: object}
-            additionalProperties: true
-          recognition_timeout: {type: integer, minimum: 1, default: 60}
-          model: {type: [string, "null"]}
-          recognition_model: {type: [string, "null"]}
-          target_model: {type: string, minLength: 1}
-          target_id: {type: string, minLength: 1}
-      output_schema:
-        type: object
-        additionalProperties: false
-        required: [extraction_id, revision, status, error_code, unresolved_reasons]
-        properties:
-          extraction_id: {type: string}
-          revision: {type: integer}
-          status: {type: string}
-          error_code: {type: string}
-          unresolved_reasons: {type: array, items: {type: string}}
-      result_rules:
-        - outcome: processed
-          producer: process_evidence
-          when_outcome: processed
-          binding: &evidence_result
-            kind: object
-            fields:
-              extraction_id: {kind: step_output, step_key: process_evidence, path: [extraction_id]}
-              revision: {kind: step_output, step_key: process_evidence, path: [revision]}
-              status: {kind: step_output, step_key: process_evidence, path: [status]}
-              error_code: {kind: step_output, step_key: process_evidence, path: [error_code]}
-              unresolved_reasons: {kind: step_output, step_key: process_evidence, path: [unresolved_reasons]}
-        - outcome: source_hold
-          producer: process_evidence
-          when_outcome: source_hold
-          binding: *evidence_result
+      subject_model: ""
+      publish: true
+      draft:
+        nodes:
+          prepare_pages:
+            step: prepare_pages
+            config: {profile: plain_text}
+            input:
+              files: {from: input, path: [files]}
+              message_parts: {from: input, path: [message_parts]}
+              target_model: {from: input, path: [target_model]}
+              target_id: {from: input, path: [target_id]}
+            next: {prepared: map_pages}
+          map_pages:
+            step: map
+            input: {items: {from: prepare_pages, path: [pages]}}
+            body:
+              step: recognize_page
+              input:
+                page: {from: item}
+                model_id: {from: input, path: [recognition_model]}
+            next: {done: process_evidence, failed: process_evidence}
+          process_evidence:
+            step: process_evidence
+            config:
+              profile: plain_text
+              schema:
+                $id: urn:angee:extraction:plain_text:v1
+                type: object
+                required: [text]
+                properties: {text: {type: string}}
+            input:
+              prepared: {from: prepare_pages, path: [prepared]}
+              recognition: {from: map_pages}
+              target_model: {from: input, path: [target_model]}
+              target_id: {from: input, path: [target_id]}
+              model_id: {from: input, path: [model]}
+              recognition_model_id: {from: input, path: [recognition_model]}
+        results:
+          - {from: process_evidence, when: [processed, source_hold]}

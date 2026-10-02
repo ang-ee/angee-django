@@ -29,6 +29,7 @@ import {
 } from "@angee/ui/chrome/menu-tree";
 import { useChromeMenuItems } from "@angee/ui/chrome/refine-menu";
 import { trailingRouteParamName } from "./route-paths";
+import type { BaseAddonRoute } from "./define-base-addon";
 
 export interface ShellPageTestProvidersProps {
   children: ReactNode;
@@ -96,16 +97,19 @@ export function expectValidBaseAddon(
 ): void {
   const routes = addon.routes ?? [];
   const routesByName = new Map(routes.map((route) => [route.name, route]));
-  const resourceOwners = new Map<string, string>();
+  const resourceOwners = new Map<string, BaseAddonRoute[]>();
   for (const route of routes) {
     if (route.resource) {
-      const owner = resourceOwners.get(route.resource);
-      if (owner) {
+      const owners = resourceOwners.get(route.resource) ?? [];
+      const conflicts = owners.some((owner) => !owner.recordMatch || !route.recordMatch
+        || (owner.recordMatch.field === route.recordMatch.field
+          && owner.recordMatch.equals === route.recordMatch.equals));
+      if (conflicts) {
         throw new Error(
-          `Addon "${addon.id}" resource "${route.resource}" is claimed by both "${owner}" and "${route.name}".`,
+          `Addon "${addon.id}" resource "${route.resource}" is claimed by both "${owners[0]?.name}" and "${route.name}".`,
         );
       }
-      resourceOwners.set(route.resource, route.name);
+      resourceOwners.set(route.resource, [...owners, route]);
     }
     if (trailingRouteParamName(route.path) && !route.parent) {
       throw new Error(
@@ -194,6 +198,7 @@ export interface CaptureChromeOptions {
   addons: readonly BaseAddon[];
   path: string;
   home?: string;
+  confineTo?: string;
   schemas?: CreateAppInput["schemas"];
 }
 
@@ -202,6 +207,7 @@ export async function captureChrome({
   addons,
   path,
   home = path,
+  confineTo,
   schemas = TEST_SCHEMAS,
 }: CaptureChromeOptions): Promise<CapturedChrome> {
   const captures: CapturedChromeProps[] = [];
@@ -249,6 +255,7 @@ export async function captureChrome({
     defaultSchema: "console",
     subscriptionSchema: "console",
     home,
+    confineTo,
   }).mount(host);
 
   try {

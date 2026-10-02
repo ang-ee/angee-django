@@ -1,4 +1,6 @@
 import * as React from "react";
+import { extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome } from "@angee/refine";
+import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
 
 export type DottedPathFieldErrorMap = Readonly<
@@ -16,9 +18,115 @@ export interface DottedPathFieldErrors {
 /** Field- and form-level validation messages extracted from a save failure. */
 export interface ValidationErrors {
   /** Messages keyed by the wire field name in the schema's naming convention (snake_case on Hasura resources). */
-  fieldErrors: Record<string, string[]>;
+  fieldErrors: Record<string, readonly string[]>;
   /** Non-field / form-level messages. */
-  formErrors: string[];
+  formErrors: readonly string[];
+}
+
+/** A save either acknowledges data, reports validation issues, or rejects a stale edit. */
+export type FormSubmitResult<TData> =
+  | { status: "ok"; data: TData; message?: string }
+  | { status: "invalid"; issues: ValidationErrors }
+  | { status: "conflict"; message: string; field?: string };
+
+/** Decode a wire action response through the transport owner. */
+export function actionFormSubmitResult(data: unknown, root: string): FormSubmitResult<ActionOutcome> {
+  return actionOutcomeSubmitResult(extractActionOutcome(data, root));
+}
+
+/** Adapt an already normalized action outcome without decoding it again. */
+export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefined): FormSubmitResult<ActionOutcome> {
+  return outcome?.ok
+    ? { status: "ok", data: outcome, message: outcome.message }
+    : invalidFormSubmit({
+        fieldErrors: outcome?.validationErrors ?? {},
+        formErrors: outcome?.message ? [outcome.message] : [],
+      });
+}
+
+export function invalidFormSubmit(issues: ValidationErrors): Extract<FormSubmitResult<never>, { status: "invalid" }> {
+  return { status: "invalid", issues };
+}
+
+/** Missing mutation data cannot acknowledge a saved form. */
+export function savedFormSubmitResult<TData>(data: TData | null | undefined, missingMessage: string): FormSubmitResult<TData> {
+  return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
+}
+
+/** Decode a transport failure; contract violations remain developer errors. */
+export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
+  if (cause instanceof FormSubmitContractError) throw cause;
+  if (publicGraphQLErrorsFromUnknown(cause).some((item) =>
+    item.extensions.code === "STALE_REVISION" || item.extensions.code === "CREATION_KEY_CONFLICT")) {
+    return { status: "conflict", message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
+  }
+  return invalidFormSubmit(validationErrorsFromError(cause, fallback));
+}
+
+class FormSubmitContractError extends TypeError {
+  constructor() {
+    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues }, or { status: "conflict", message }.');
+    this.name = "FormSubmitContractError";
+  }
+}
+
+function assertNeverResult(_result: never): never {
+  throw new FormSubmitContractError();
+}
+
+/** Narrow one submit result and bind its issues to RHF; malformed results fail loudly. */
+export function applyFormErrors<TValues extends FieldValues, TData>(
+  form: Pick<UseFormReturn<TValues>, "setError">,
+  result: FormSubmitResult<TData>,
+  options: {
+    fieldNames?: Iterable<string>;
+    fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
+    fallback?: string;
+  } = {},
+): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
+  let issues: ValidationErrors;
+  let type: "server" | "conflict";
+  if (result == null || typeof result !== "object") throw new FormSubmitContractError();
+  switch (result.status) {
+    case "ok":
+      if (!Object.hasOwn(result, "data")) throw new FormSubmitContractError();
+      return false;
+    case "invalid":
+      if (!result.issues || !isStringListMap(result.issues.fieldErrors)
+        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")) {
+        throw new FormSubmitContractError();
+      }
+      issues = result.issues;
+      type = "server";
+      break;
+    case "conflict":
+      if (typeof result.message !== "string" || (result.field !== undefined && typeof result.field !== "string")) throw new FormSubmitContractError();
+      issues = { fieldErrors: result.field ? { [result.field]: [result.message] } : {}, formErrors: [result.message] };
+      type = "conflict";
+      break;
+    default:
+      return assertNeverResult(result);
+  }
+  const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
+  const bound: Record<string, readonly string[]> = {};
+  const unclaimed: Record<string, readonly string[]> = {};
+  for (const [name, messages] of Object.entries(issues.fieldErrors)) {
+    if (messages.length === 0) continue;
+    form.setError(name as Path<TValues>, {
+      type, message: messages.join(" "), types: { [type]: [...messages] },
+    });
+    const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
+    target[name] = messages;
+  }
+  const summary = [...issues.formErrors];
+  if (summary.length === 0 && Object.keys(bound).length && options.fieldSummary) {
+    summary.push(options.fieldSummary(bound));
+  }
+  const unclaimedSummary = dottedPathErrorSummary(unclaimed);
+  if (unclaimedSummary) summary.push(unclaimedSummary);
+  const message = summary.join(" ") || options.fallback;
+  if (message) form.setError("root.server", { type, message });
+  return true;
 }
 
 /**
@@ -57,7 +165,7 @@ export function lineRowErrorsFromDottedPaths(
  * extensions; the base form binds field messages and shows the rest at form
  * level.
  */
-export function validationErrorsFromError(error: unknown): ValidationErrors {
+export function validationErrorsFromError(error: unknown, fallback = "Could not save record."): ValidationErrors {
   const fieldErrors: Record<string, string[]> = {};
   const formErrors: string[] = [];
   let structured = false;
@@ -84,7 +192,7 @@ export function validationErrorsFromError(error: unknown): ValidationErrors {
   }
 
   if (!structured) {
-    const message = validationErrorMessage(error);
+    const message = validationErrorMessage(error, fallback);
     if (message) formErrors.push(message);
   }
   return { fieldErrors, formErrors };
@@ -213,11 +321,11 @@ function isStringListMap(value: unknown): value is Record<string, string[]> {
   );
 }
 
-function validationErrorMessage(error: unknown): string {
+function validationErrorMessage(error: unknown, fallback: string): string {
   const safe = errorFromUnknown(error);
   if (safe) return safe.message.replace(/^\[\w+\]\s*/, "");
   if (typeof error === "string") return error.replace(/^\[\w+\]\s*/, "");
-  return "Could not save record.";
+  return fallback;
 }
 
 const EMPTY_FIELD_NAMES: readonly string[] = [];

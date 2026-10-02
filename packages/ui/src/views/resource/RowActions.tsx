@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Row } from "@angee/metadata";
+import { holdsPermission, type Row } from "@angee/metadata";
 import type {
   AuthoredDocument,
   AuthoredVariables,
@@ -9,7 +9,14 @@ import type {
 import { errorMessage, useConfirm, useToast } from "../../feedback";
 import { Glyph } from "../../chrome/Glyph";
 import { Button, type ButtonVariant } from "../../ui/button";
+import { DropdownMenu } from "../../ui/dropdown-menu";
+import { useUiT } from "../../i18n";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
+import { ActionFormDialog } from "../form/ActionFormDialog";
+import type { ActionDescriptor, ActionConfirm } from "../page/Action";
+import { useActionResultRun } from "./action-result-run";
 
 export interface RowActionConfirmCopy<TRow extends Row> {
   title: (row: TRow) => React.ReactNode;
@@ -37,7 +44,12 @@ interface RowActionDeclarationBase<TRow extends Row> {
   id: string;
   label: string;
   icon?: string;
+  /** How the row verb reads. A labelled verb shows its label by default. */
+  presentation?: "icon" | "label" | "both";
   variant: ButtonVariant;
+  /** The row's next verb stays visible; other inline verbs appear on row hover. */
+  primary?: boolean;
+  placement?: "inline" | "menu";
   visible: (row: TRow) => boolean;
   disabled: (row: TRow) => boolean;
   pendingPolicy: RowActionPendingPolicy;
@@ -150,6 +162,74 @@ export function defineRowAction<
   };
 }
 
+export interface DescriptorRowActionsOptions<TRow extends Row> {
+  visible?: (action: ActionDescriptor, row: TRow) => boolean;
+  contextRecord?: (row: TRow) => Row;
+  /** Values already known from a row run immediately after confirmation. */
+  valuesFromRow?: (action: ActionDescriptor, row: TRow) => Record<string, unknown>;
+  pendingPolicy?: RowActionPendingPolicy;
+}
+
+/** Adapt typed record descriptors to the existing RowActions and dialog lifecycle. */
+export function useDescriptorRowActions<TRow extends Row>(
+  actions: readonly ActionDescriptor[],
+  options: DescriptorRowActionsOptions<TRow> = {},
+): { rowActions: readonly RowActionDeclaration<TRow>[]; dialog: React.ReactNode } {
+  const [active, setActive] = React.useState<{ action: ActionDescriptor; row: TRow } | null>(null);
+  const settle = useActionResultRun();
+  const rowActions = actions.map((action) => defineRowAction<TRow>({
+    kind: "page",
+    id: action.id,
+    label: typeof action.label === "string" ? action.label : action.id,
+    ...(action.icon ? { icon: action.icon } : {}),
+    variant: action.danger ? "danger" : "ghost",
+    primary: action.primary,
+    placement: action.placement === "menu" ? "menu" : "inline",
+    visible: (row) => {
+      const record = options.contextRecord?.(row) ?? row;
+      return (options.visible?.(action, row) ?? true)
+        && (!action.permission || holdsPermission(record, action.permission))
+        && (!action.visibleWhen || action.visibleWhen(record));
+    },
+    disabled: () => Boolean(action.disabled),
+    pendingPolicy: options.pendingPolicy ?? "disable-actions",
+    ...(action.confirm ? { confirm: {
+      title: (row: TRow) => descriptorConfirmation(action.confirm!, row).title,
+      body: (row: TRow) => descriptorConfirmation(action.confirm!, row).body,
+      confirm: () => action.label,
+    } } : {}),
+    onSelect: async (row) => {
+      const record = options.contextRecord?.(row) ?? row;
+      if (options.valuesFromRow) {
+        if (action.submit) await settle(async () => {
+          const result = await action.submit!(options.valuesFromRow!(action, row), {
+            record, selectedIds: [String(row.id)],
+          });
+          if (!result || !("status" in result)) return result;
+          if (result.status === "ok") return result.data;
+          return result.status === "conflict"
+            ? { ok: false, message: result.message }
+            : { ok: false, message: result.issues.formErrors.join(" ") || action.id,
+                validationErrors: result.issues.fieldErrors };
+        });
+        return;
+      }
+      setActive({ action, row });
+    },
+  }));
+  return {
+    rowActions,
+    dialog: active ? <ActionFormDialog key={`${active.action.id}:${String(active.row.id)}`}
+      action={active.action}
+      context={{ record: options.contextRecord?.(active.row) ?? active.row, selectedIds: [String(active.row.id)] }}
+      open onOpenChange={(open) => { if (!open) setActive(null); }} /> : null,
+  };
+}
+
+function descriptorConfirmation(confirm: ActionConfirm | ((record: Row) => ActionConfirm), row: Row): ActionConfirm {
+  return typeof confirm === "function" ? confirm(row) : confirm;
+}
+
 function singleRootSucceeded(result: unknown): boolean {
   if (!result || typeof result !== "object" || Array.isArray(result)) return false;
   const roots = Object.values(result);
@@ -255,25 +335,30 @@ function VisibleRowActions<TRow extends Row>({
   controller,
   row,
 }: DeclaredRowActionsProps<TRow>): React.ReactElement {
+  const t = useUiT();
+  const primary = actions.find((action) => action.primary && action.placement !== "menu");
+  const secondary = actions.filter((action) => action !== primary && action.placement !== "menu");
+  const menu = actions.filter((action) => action.placement === "menu");
+  const renderAction = (action: RowActionDeclaration<TRow>, menuItem = false) =>
+    action.kind === "authored" ? (
+      <AuthoredRowActionButton key={action.id} action={action} controller={controller} row={row} menuItem={menuItem} />
+    ) : (
+      <PageRowActionButton key={action.id} action={action} controller={controller} row={row} menuItem={menuItem} />
+    );
   return (
     <div className="flex justify-end gap-1">
-      {actions.map((action) =>
-        action.kind === "authored" ? (
-          <AuthoredRowActionButton
-            key={action.id}
-            action={action}
-            controller={controller}
-            row={row}
-          />
-        ) : (
-          <PageRowActionButton
-            key={action.id}
-            action={action}
-            controller={controller}
-            row={row}
-          />
-        ),
-      )}
+      {primary ? renderAction(primary) : null}
+      {secondary.length > 0 ? <span className="inline-flex gap-1 opacity-0 group-hover/record:opacity-100 group-focus-within/record:opacity-100 focus-within:opacity-100">
+        {secondary.map((action) => renderAction(action))}
+      </span> : null}
+      {menu.length > 0 ? <DropdownMenu.Root>
+        <DropdownMenu.Trigger render={<Button type="button" size="iconSm" variant="ghost" aria-label={t("list.actions")}>
+          <Glyph name="more-vertical" decorative />
+        </Button>} />
+        <DropdownMenu.Portal><DropdownMenu.Positioner sideOffset={6} align="end">
+          <DropdownMenu.Content className="w-52">{menu.map((action) => renderAction(action, true))}</DropdownMenu.Content>
+        </DropdownMenu.Positioner></DropdownMenu.Portal>
+      </DropdownMenu.Root> : null}
     </div>
   );
 }
@@ -282,6 +367,7 @@ interface AuthoredRowActionButtonProps<TRow extends Row> {
   action: AuthoredRowActionDeclaration<TRow>;
   controller: RowActionsController<TRow>;
   row: TRow;
+  menuItem?: boolean;
 }
 
 /** Both generated callbacks and authored mutations share confirmation semantics. */
@@ -306,8 +392,10 @@ function AuthoredRowActionButton<TRow extends Row>({
   action,
   controller,
   row,
+  menuItem,
 }: AuthoredRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
+  const preview = useLatestRef(useRuntimeViewAs());
   const toast = useToast();
   const mutationOptions = React.useMemo(
     () => ({
@@ -325,6 +413,7 @@ function AuthoredRowActionButton<TRow extends Row>({
   const runArmed = React.useCallback(async (): Promise<void> => {
     try {
       if (action.confirm && !await confirmAction()) return;
+      if (preview.current.viewAs || preview.current.pending) return;
       controller.commit(action.id, row);
       // The unexported declaration brand proves this document and projector
       // were paired by defineRowAction before the heterogeneous array erased TDocument.
@@ -340,7 +429,7 @@ function AuthoredRowActionButton<TRow extends Row>({
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, confirmAction, controller, mutate, row, toast]);
+  }, [action, confirmAction, controller, mutate, preview, row, toast]);
 
   return (
     <RowActionButton
@@ -348,6 +437,7 @@ function AuthoredRowActionButton<TRow extends Row>({
       active={active}
       busy={busy}
       row={row}
+      menuItem={menuItem}
       onSelect={() => {
         if (!controller.arm(action.id, row)) return;
         void runArmed();
@@ -360,14 +450,17 @@ interface PageRowActionButtonProps<TRow extends Row> {
   action: PageRowActionDeclaration<TRow>;
   controller: RowActionsController<TRow>;
   row: TRow;
+  menuItem?: boolean;
 }
 
 function PageRowActionButton<TRow extends Row>({
   action,
   controller,
   row,
+  menuItem,
 }: PageRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
+  const preview = useLatestRef(useRuntimeViewAs());
   const active =
     controller.pending?.actionId === action.id
     && controller.pending.row === row
@@ -376,18 +469,20 @@ function PageRowActionButton<TRow extends Row>({
   const runArmed = React.useCallback(async (): Promise<void> => {
     try {
       if (action.confirm && !await confirmAction()) return;
+      if (preview.current.viewAs || preview.current.pending) return;
       controller.commit(action.id, row);
       await action.onSelect(row);
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, confirmAction, controller, row]);
+  }, [action, confirmAction, controller, preview, row]);
   return (
     <RowActionButton
       action={action}
       active={active}
       busy={busy}
       row={row}
+      menuItem={menuItem}
       onSelect={() => {
         if (!controller.arm(action.id, row)) return;
         void runArmed();
@@ -401,6 +496,7 @@ interface RowActionButtonProps<TRow extends Row> {
   active: boolean;
   busy: boolean;
   row: TRow;
+  menuItem?: boolean;
   onSelect: () => void;
 }
 
@@ -409,24 +505,36 @@ function RowActionButton<TRow extends Row>({
   active,
   busy,
   row,
+  menuItem = false,
   onSelect,
 }: RowActionButtonProps<TRow>): React.ReactElement {
+  const preview = useRuntimeViewAs();
+  const blocked = Boolean(preview.viewAs || preview.pending);
+  const presentation = action.presentation ?? "label";
+  const showIcon = presentation !== "label" && Boolean(action.icon);
+  const showLabel = presentation !== "icon" || !action.icon;
+  if (menuItem) return <DropdownMenu.Item
+    variant={action.variant === "danger" ? "danger" : "default"}
+    disabled={blocked || busy || action.disabled(row)}
+    onClick={(event) => { event.stopPropagation(); if (!blocked && !busy && !action.disabled(row)) onSelect(); }}
+  >{action.icon ? <Glyph decorative name={action.icon} /> : null}{action.label}</DropdownMenu.Item>;
   return (
     <Button
       type="button"
-      variant={action.variant}
-      size={action.icon ? "iconSm" : "sm"}
+      variant={action.primary ? "primary" : action.variant === "danger" ? "danger" : "secondary"}
+      size={showIcon && !showLabel ? "iconSm" : "sm"}
       aria-label={action.label}
-      title={action.icon ? action.label : undefined}
-      disabled={busy || action.disabled(row)}
+      title={showIcon && !showLabel ? action.label : undefined}
+      disabled={blocked || busy || action.disabled(row)}
       pending={active && action.pendingPolicy === "active-row"}
       onClick={(event) => {
         event.stopPropagation();
-        if (action.disabled(row)) return;
+        if (blocked || busy || action.disabled(row)) return;
         onSelect();
       }}
     >
-      {action.icon ? <Glyph decorative name={action.icon} /> : action.label}
+      {showIcon && action.icon ? <Glyph decorative name={action.icon} /> : null}
+      {showLabel ? action.label : null}
     </Button>
   );
 }

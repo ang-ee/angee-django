@@ -1,4 +1,4 @@
-"""Proposal visibility through invitations, scoped grants, and global roles."""
+"""Proposal visibility through admitted shells, scoped grants, and global roles."""
 
 from __future__ import annotations
 
@@ -7,14 +7,16 @@ from typing import Any
 
 import pytest
 from django.apps import apps
-from django.db import connection, models
+from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext, isolate_apps
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
     ObjectRef,
     PermissionDenied,
     RelationshipTuple,
+    SubjectRef,
     actor_context,
     system_context,
     to_object_ref,
@@ -22,11 +24,12 @@ from rebac import (
     write_relationships,
 )
 
-from angee.proposals.models import TaskProposalAccess
-from tests.conftest import create_platform_admin
-from tests.projects_models import Project, Task
+from angee.base.errors import RecordAccessSubjectRefused
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.messaging.testing.models import Person
+from angee.projects.testing.models import Project, Task
+from tests.conftest import Backend, Drive, create_platform_admin
 from tests.proposals_models import Answer, Proposal, Round, Topic
-from tests.tables import model_tables
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
@@ -48,9 +51,7 @@ def proposal_schema(rebac_storage: str, project_access_schema: Any) -> None:
 def _grant(resource: Any, relation: str, subject: Any) -> None:
     """Write one direct relationship using the models' canonical identities."""
 
-    write_relationships(
-        [RelationshipTuple(to_object_ref(resource), relation, to_subject_ref(subject))]
-    )
+    write_relationships([RelationshipTuple(to_object_ref(resource), relation, to_subject_ref(subject))])
 
 
 def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
@@ -70,7 +71,7 @@ def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("target_kind", ("project", "task"))
-def test_proposals_follow_invitation_and_scope_hierarchy(
+def test_proposals_follow_admission_and_scope_hierarchy(
     proposal_schema: None,
     target_kind: str,
 ) -> None:
@@ -120,12 +121,9 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
             sort_order=1024.0,
         )
 
-    with system_context(reason="tests.proposals.invite"):
-        _grant(round, "responder", alice)
-        _grant(round, "responder", bob)
-
-    alice_proposal = _create_proposal(actor=alice, round=round, responder=alice)
-    bob_proposal = _create_proposal(actor=bob, round=round, responder=bob)
+    with actor_context(admin):
+        alice_proposal = round.with_actor(admin).admit(alice)
+        bob_proposal = round.with_actor(admin).admit(bob)
     with system_context(reason="tests.proposals.answers"):
         alice_answer = Answer.objects.create(
             proposal=alice_proposal,
@@ -143,24 +141,16 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
     with pytest.raises(PermissionDenied):
         _create_proposal(actor=bob, round=round, responder=alice)
 
-    assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {
-        alice_proposal.pk
-    }
-    assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {
-        bob_proposal.pk
-    }
+    assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {alice_proposal.pk}
+    assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {bob_proposal.pk}
     assert set(Proposal.objects.as_user(admin).values_list("pk", flat=True)) == {
         alice_proposal.pk,
         bob_proposal.pk,
     }
     assert not Proposal.objects.as_user(diego).exists()
     assert not Proposal.objects.as_user(service).exists()
-    assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {
-        alice_answer.pk
-    }
-    assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {
-        bob_answer.pk
-    }
+    assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {alice_answer.pk}
+    assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {bob_answer.pk}
     assert not Answer.objects.as_user(diego).exists()
 
     with system_context(reason="tests.proposals.project_viewer"):
@@ -186,12 +176,8 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
         alice_proposal.pk,
         bob_proposal.pk,
     }
-    assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {
-        alice_proposal.pk
-    }
-    assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {
-        alice_answer.pk
-    }
+    assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {alice_proposal.pk}
+    assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {alice_answer.pk}
     assert not alice_proposal.with_actor(carla).has_access("read__cost")
     if target_kind == "task":
         assert set(Proposal.objects.as_user(task_viewer).values_list("pk", flat=True)) == {
@@ -234,6 +220,7 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
     del proposal_schema
     with system_context(reason="tests.proposals.deferred_save"):
         user = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-owner")
+        responder = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-responder")
         project = Project.objects.create(title="Deferred proposal target")
         now = timezone.now()
         round = Round.objects.create(
@@ -244,7 +231,7 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
             submission_deadline=now + timedelta(days=7),
         )
         topic = Topic.objects.create(round=round, key="scope", name="Original topic", sort_order=1024.0)
-        proposal = Proposal.objects.create(round=round, responder=user)
+        proposal = Proposal.objects.create(round=round, responder=responder)
         row, field = {
             "round": (round, "name"),
             "topic": (topic, "name"),
@@ -256,10 +243,7 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
         setattr(deferred, field, "Changed value")
         with CaptureQueriesContext(connection) as queries:
             deferred.save()
-        updates = [
-            query["sql"] for query in queries
-            if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')
-        ]
+        updates = [query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')]
         assert len(updates) == 1
         assert '"created_at" =' not in updates[0]
         stored = type(row)._base_manager.get(pk=row.pk)
@@ -268,26 +252,243 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
 
 
 @pytest.mark.django_db(transaction=True)
-@isolate_apps()
 def test_task_proposal_donor_preserves_deferred_save() -> None:
-    """The optional queue guard must not load other columns on an unrelated save."""
+    """The question guard preserves a loaded-fields-only update of unrelated facts."""
 
-    class DeferredTask(TaskProposalAccess, models.Model):
-        title = models.CharField(max_length=80)
-        body = models.TextField()
-
-        class Meta:
-            app_label = "tests"
-
-    with model_tables((DeferredTask,)):
-        row = DeferredTask.objects.create(title="Original", body="Retained")
-        deferred = DeferredTask.objects.only("pk", "title").get(pk=row.pk)
-        deferred.title = "Changed"
+    with system_context(reason="tests.proposals.task_deferred_save"):
+        row = Task.objects.create(clarification_creation_key="retained")
+        deferred = Task.objects.only("pk", "note").get(pk=row.pk)
+        deferred.note = "Changed note"
         with CaptureQueriesContext(connection) as queries:
             deferred.save()
         updates = [query["sql"] for query in queries if query["sql"].startswith("UPDATE ")]
         assert len(updates) == 1
-        assert '"body" =' not in updates[0]
-        stored = DeferredTask.objects.get(pk=row.pk)
-        assert stored.title == "Changed"
-        assert stored.body == "Retained"
+        assert '"clarification_creation_key" =' not in updates[0]
+        stored = Task.objects.get(pk=row.pk)
+        assert stored.note == "Changed note"
+        assert stored.clarification_creation_key == "retained"
+
+
+def _review_round(admin, *, policy="drafts_and_tracks", **fields):
+    with actor_context(admin):
+        project = Project.objects.create(title="Round target")
+        now = timezone.now()
+        round = Round(
+            project=project,
+            facilitator=admin,
+            name="Review round",
+            opening_policy=policy,
+            last_call_at=now + timedelta(days=1),
+            submission_deadline=now + timedelta(days=2),
+            **fields,
+        )
+        round.sudo(reason="tests.proposals.review_round").save()
+    return round
+
+
+@pytest.mark.django_db(transaction=True)
+def test_submit_attributes_receipt_to_the_pinned_actor_over_the_ambient_actor(proposal_schema):
+    admin = create_platform_admin("submit-pinned-manager")
+    user_model = apps.get_model("iam", "User")
+    responder = user_model.objects.create_user(username="submit-pinned-responder")
+    ambient = user_model.objects.create_user(username="submit-ambient-person")
+    round = _review_round(admin)
+    with actor_context(admin):
+        proposal = round.with_actor(admin).admit(responder)
+    with actor_context(ambient):
+        proposal.with_actor(admin).submit()
+    stored = Proposal._base_manager.get(pk=proposal.pk)
+    assert stored.submitted_by_id == admin.pk
+    assert stored.updated_by_id == admin.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_disclosure_excludes_preopening_withdrawal_and_hides_peer_identity(proposal_schema):
+    admin = create_platform_admin("disclosure-manager")
+    user_model = apps.get_model("iam", "User")
+    alice = user_model.objects.create_user(username="disclosure-alice")
+    bob = user_model.objects.create_user(username="disclosure-bob")
+    carla = user_model.objects.create_user(username="disclosure-carla")
+    round = _review_round(admin)
+    with actor_context(admin):
+        alice_proposal = round.with_actor(admin).admit(alice)
+        bob_proposal = round.admit(bob)
+        round.admit(carla)
+    with actor_context(alice):
+        alice_proposal.with_actor(alice).submit()
+        alice_proposal.with_actor(alice).withdraw()
+    with actor_context(admin):
+        revision = round.revision
+        assert round.with_actor(admin).can_admit()
+        round.open(expected_revision=revision)
+        with pytest.raises(StaleRevisionError):
+            round.open(expected_revision=revision)
+    with system_context(reason="tests.proposals.receipts"):
+        alice_proposal.refresh_from_db()
+        bob_proposal.refresh_from_db()
+    assert alice_proposal.disclosed_at is None
+    assert bob_proposal.disclosed_at is not None
+    assert bob_proposal.with_actor(carla).has_access("read")
+    assert not bob_proposal.with_actor(carla).has_access("read__responder")
+    assert bob_proposal.with_actor(bob).has_access("read__responder")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retirement_cleans_peer_tracks_and_excludes_group_shared_answers(proposal_schema, settings):
+    admin = create_platform_admin("retirement-manager")
+    user_model = apps.get_model("iam", "User")
+    alice = user_model.objects.create_user(username="retirement-alice")
+    bob = user_model.objects.create_user(username="retirement-bob")
+    round = _review_round(admin)
+    with actor_context(admin), system_context(reason="tests.proposals.drive"):
+        backend = Backend.objects.create(slug="proposal-backend", backend_class="local")
+        Drive.objects.create(slug="proposal-default", name="Default", prefix="default", backend=backend)
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "proposal-default"
+    with actor_context(admin):
+        own = round.with_actor(admin).admit(alice, track=True)
+        peer = round.admit(bob, track=True)
+        assert own.track.owner_id is None
+        assert peer.create_track().pk == peer.track_id
+        assert peer.track.owns_items
+    with actor_context(admin), system_context(reason="tests.proposals.retirement_shares"):
+        peer_task = Task.objects.create(project=peer.track, title="Peer task", owner=alice, assignee=alice)
+        drive = Drive.objects.get(project_bindings__project=peer.track)
+        topic = Topic.objects.create(round=round, key="response", name="Response")
+        answer = Answer.objects.create(proposal=peer, topic=topic)
+        group = apps.get_model("iam", "Group").objects.create(name="Reviewers")
+        _grant(group, "member", alice)
+        group_subject = SubjectRef.of("auth/group", str(group.pk), "member")
+        _grant(answer, "reader", group_subject)
+        _grant(drive, "viewer", alice)
+        _grant(peer.track, "editor", alice)
+    assert answer.with_actor(alice).has_access("read")
+    with actor_context(admin):
+        report = round.with_actor(admin).remove_responder(alice, expected_revision=round.revision)
+    assert report["removed"]
+    assert report["reported"]
+    assert not answer.with_actor(alice).has_access("read")
+    assert not peer.track.with_actor(alice).has_access("read")
+    assert not drive.with_actor(alice).has_access("read")
+    with system_context(reason="tests.proposals.retirement_result"):
+        peer_task.refresh_from_db()
+    assert peer_task.owner_id is None
+    assert peer_task.assignee_id is None
+    with actor_context(admin), pytest.raises(ValidationError, match="not admitted"):
+        round.with_actor(admin).remove_responder(admin)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
+    admin = create_platform_admin("question-manager")
+    user_model = apps.get_model("iam", "User")
+    asker = user_model.objects.create_user(username="question-asker")
+    recipient = user_model.objects.create_user(username="question-recipient")
+    round = _review_round(admin)
+    with actor_context(admin):
+        round.with_actor(admin).admit(asker)
+        round.admit(recipient)
+    with actor_context(asker):
+        question = round.with_actor(asker).ask(
+            "Question", "Body", audience="managers", client_creation_key="question-1"
+        )
+        assert round.ask("Question", "Body", audience="managers", client_creation_key="question-1").pk == question.pk
+        with pytest.raises(CreationKeyConflict):
+            round.ask("Changed", "Body", audience="managers", client_creation_key="question-1")
+    with actor_context(admin):
+        with pytest.raises(ValidationError, match="surrendered"):
+            round.with_actor(admin).pass_clarification(question, recipient)
+        passed = round.pass_clarification(question, recipient, audience="asker")
+        assert passed.clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+    assert passed.created_by_id is None
+    assert passed.updated_by_id is None
+    with system_context(reason="tests.proposals.immutable_donors"):
+        row = Task.objects.get(pk=question.pk)
+        row.visibility = "inherited"
+        with pytest.raises(ValidationError, match="immutable"):
+            row.save(update_fields=("visibility",))
+        row.refresh_from_db()
+        row.clarification_creation_key = "replacement"
+        with pytest.raises(ValidationError, match="immutable"):
+            row.save(update_fields=("clarification_creation_key",))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_task_holder_ceiling_asks_the_round_only_for_track_items(proposal_schema, settings, monkeypatch):
+    """A track task keeps the requester out through its round; a question on the
+    round's target project never consults that project's own holder policy."""
+
+    admin = create_platform_admin("ceiling-manager")
+    user_model = apps.get_model("iam", "User")
+    requester = user_model.objects.create_user(username="ceiling-requester")
+    asker = user_model.objects.create_user(username="ceiling-asker")
+    responder = user_model.objects.create_user(username="ceiling-responder")
+    with system_context(reason="tests.proposals.ceiling.requester"):
+        party = Person.objects.for_user(requester)
+    round = _review_round(admin, requester_party=party)
+    with actor_context(admin), system_context(reason="tests.proposals.ceiling.drive"):
+        backend = Backend.objects.create(slug="ceiling-backend", backend_class="local")
+        Drive.objects.create(slug="ceiling-default", name="Default", prefix="default", backend=backend)
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "ceiling-default"
+    with actor_context(admin):
+        proposal = round.with_actor(admin).admit(responder, track=True)
+        round.admit(asker)
+    with system_context(reason="tests.proposals.ceiling.track_task"):
+        track_task = Task.objects.create(project=proposal.track, title="Build detail")
+    with actor_context(asker):
+        question = round.with_actor(asker).ask("Question", "Body")
+    assert question.project_id == round.project_id
+
+    def forbidden(self, relation, subject):
+        pytest.fail("A task outside a track must not consult its project's holder policy.")
+
+    monkeypatch.setattr(Project, "validate_record_access_subject", forbidden)
+    with actor_context(admin):
+        with pytest.raises(RecordAccessSubjectRefused):
+            track_task.with_actor(admin).grant_record_access("reader", requester)
+        assert not track_task.with_actor(requester).has_access("read")
+        passed = round.with_actor(admin).pass_clarification(question, responder)
+        question.with_actor(admin).grant_record_access("reader", requester)
+    assert passed.assignee_id == responder.pk
+    assert question.with_actor(requester).has_access("read")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_answer_insert_cannot_widen_responder_audience(proposal_schema):
+    admin = create_platform_admin("answer-manager")
+    responder = apps.get_model("iam", "User").objects.create_user(username="answer-responder")
+    round = _review_round(admin)
+    with actor_context(admin):
+        proposal = round.with_actor(admin).admit(responder)
+    with system_context(reason="tests.proposals.answer_topic"):
+        topic = Topic.objects.create(round=round, key="answer", name="Answer")
+    with actor_context(responder), pytest.raises(PermissionDenied, match="manager"):
+        Answer(proposal=proposal, topic=topic, shared_with_responders=True).sudo(reason="tests.proposals.insert").save()
+    with actor_context(admin):
+        answer = Answer(proposal=proposal, topic=topic, shared_with_responders=True)
+        answer.sudo(reason="tests.proposals.manager_insert").save()
+    assert answer.shared_with_responders
+
+
+@pytest.mark.django_db(transaction=True)
+def test_facilitator_only_publication_does_not_admit_peer_to_track(proposal_schema, settings):
+    admin = create_platform_admin("private-track-manager")
+    user_model = apps.get_model("iam", "User")
+    alice = user_model.objects.create_user(username="private-track-alice")
+    bob = user_model.objects.create_user(username="private-track-bob")
+    round = _review_round(admin, policy="facilitator_only")
+    with actor_context(admin), system_context(reason="tests.proposals.private_drive"):
+        backend = Backend.objects.create(slug="private-backend", backend_class="local")
+        Drive.objects.create(slug="private-default", name="Default", prefix="default", backend=backend)
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "private-default"
+    with actor_context(admin):
+        alice_proposal = round.with_actor(admin).admit(alice, track=True)
+        bob_proposal = round.admit(bob)
+        bob_proposal.submit()
+        round.open()
+        alice_proposal.publish_track()
+    assert not alice_proposal.with_actor(bob).has_access("read_track")
+    assert alice_proposal.with_actor(alice).has_access("read_track")
+    with actor_context(alice), pytest.raises(PermissionDenied, match="manager"):
+        Task(project=alice_proposal.track, title="Shared task", shared_with_responders=True).sudo(
+            reason="tests.proposals.shared_task_insert",
+        ).save()

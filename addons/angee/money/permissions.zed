@@ -1,19 +1,14 @@
 // Authorization schema for the money addon.
 // @rebac_package: money
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
-// Roles-as-namespace anchor, mirroring sequence/role: `includes` lets one money
-// role imply another, and resources gate on `effective_member` so granted +
-// implied members both resolve. Platform admins (angee/role:admin) reach every
-// money role through the const-backed `admin` relation — synthetic, no per-object
-// tuple — the same universal-admin path the resource types below use.
+// Explicit role members and platform admins manage money records.
 definition money/role {
     relation member:   auth/user | auth/group#member | angee/role:admin#member
-    relation includes: money/role
     relation admin:    angee/role // rebac:const=admin
 
-    permission effective_member = member + includes->effective_member + admin->member
+    permission effective_member = member + admin->member
 }
 
 // Currencies are a shared master catalogue: every authenticated user reads them
@@ -29,15 +24,19 @@ definition money/currency {
     permission delete = admin->member + manager->effective_member
 }
 
-// Only explicitly eligible native/global rates carry the shared reader tuple.
+// Global rates derive shared reads from their own context/reference columns.
 // Contextual or source-owned rates are scoped by composing product addons.
 definition money/rate {
     relation admin:   angee/role // rebac:const=admin
     relation manager: money/role:money_admin
-    relation shared:  auth/user:*
+    relation shared:  money/rate // rebac:const={"target_id":"shared","filters":{"context_content_type_id__isnull":true,"context_object_id":"","reference_currency_id__isnull":true}}
 
+    // The shared sentinel needs no target row because this permission is authenticated.
+    // Arrow-only through shared: never check directly or use as an action/field gate;
+    // doing so bypasses the context/reference filters. Check read on the rate instead.
+    permission shared_reader = authenticated
     permission create = admin->member + manager->effective_member
-    permission read   = shared + admin->member + manager->effective_member
+    permission read   = shared->shared_reader + admin->member + manager->effective_member
     permission write  = admin->member + manager->effective_member
     permission delete = admin->member + manager->effective_member
 }

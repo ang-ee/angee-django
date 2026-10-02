@@ -1,0 +1,39 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: archive_import_file
+    fields:
+      key: archive_import_file
+      name: Archive import from file
+      subject_model: storage.file
+      publish: true
+      draft: &archive_import_graph
+        nodes:
+          probe:
+            step: archive_probe
+            next: {recognized: gate}
+          gate:
+            step: archive_gate
+            input: {from: probe}
+            next: {mapped: import_units}
+          import_units:
+            step: map
+            input: {items: {from: gate}}
+            body:
+              step: archive_execute
+              input: {from: item}
+            next: {done: summary, failed: summary}
+          summary:
+            step: archive_summary
+            input: {from: import_units}
+        results:
+          - {from: probe, when: [unrecognized]}
+          - {from: gate, when: [skipped, unsupported, expired, superseded]}
+          - {from: summary, when: [complete, partial]}
+  - xref: archive_import_drive
+    fields:
+      key: archive_import_drive
+      name: Archive import from drive
+      subject_model: storage.drive
+      publish: true
+      draft: *archive_import_graph

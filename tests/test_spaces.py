@@ -6,13 +6,15 @@ import importlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
@@ -26,16 +28,22 @@ from angee.compose.permissions import (
 )
 from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.messaging.testing.models import Party, Person, Thread
+from angee.projects.testing.models import Queue
+from angee.spaces.testing.models import Group, Membership
+from angee.testing.permissions import installed_field_owners
 from tests import test_messaging_graphql
 from tests.conftest import (
+    MarkdownPage,
+    Page,
     SchemaAddon,
+    Vault,
     assert_private_hasura_insert_access,
     create_user,
     execute_schema,
     result_data,
+    vault_for,
 )
-from tests.spaces_models import Group, Membership
-from tests.test_messaging import Party, Person, Thread
 
 # These concrete test models register after Django's app population. The lazy
 # string relation resolves when ``Party`` registers, but Django may already have
@@ -51,24 +59,23 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     del transactional_db
     app_configs = list(apps.get_app_configs())
     runtime_dir = tmp_path / "runtime"
-    source_map = extension_source_map(app_configs)
+    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
 
-    messaging = apps.get_app_config("messaging")
-    sentinel = object()
-    original_schema = getattr(messaging, "rebac_schema", sentinel)
+    originals = {config: getattr(config, "rebac_schema", None) for config in app_configs}
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
-        if original_schema is sentinel:
-            if hasattr(messaging, "rebac_schema"):
-                delattr(messaging, "rebac_schema")
-        else:
-            messaging.rebac_schema = original_schema
+        for config, original in originals.items():
+            if original is None:
+                if hasattr(config, "rebac_schema"):
+                    delattr(config, "rebac_schema")
+            else:
+                config.rebac_schema = original
 
 
 def _role_relations(group: Group, user: Any) -> set[str]:
@@ -83,18 +90,6 @@ def _role_relations(group: Group, user: Any) -> set[str]:
             subject=to_subject_ref(user), action=f"roster_{role}", resource=to_object_ref(group),
         ).allowed
     }
-
-
-def _wildcard_reader_exists(group: Group) -> bool:
-    """Return whether ``group`` carries its public-reader wildcard tuple."""
-
-    return active_relationship_model().objects.filter(
-        resource_type="spaces/group",
-        resource_id=str(group.pk),
-        relation="reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
 
 
 def _group_relationship_count(group: Group) -> int:
@@ -158,10 +153,10 @@ def test_group_create_ignores_roster_backings_unused_by_create(spaces_tables: No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_group_console_insert_establishes_private_creator_access(
+def test_group_console_insert_establishes_private_owner_access(
     spaces_tables: None,
 ) -> None:
-    """A non-admin creator can create/read/write its private group; an outsider cannot read it."""
+    """The new group's owner can read and write it; an outsider cannot read it."""
 
     del spaces_tables
     creator = create_user("spaces-group-creator")
@@ -205,10 +200,10 @@ def test_group_console_insert_establishes_private_creator_access(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_membership_console_insert_inherits_group_creator_access(
+def test_membership_console_insert_inherits_group_owner_access(
     spaces_tables: None,
 ) -> None:
-    """A non-admin can create/read/write its group membership; an outsider cannot read it."""
+    """A group's owner can create, read and write roster rows; an outsider cannot."""
 
     del spaces_tables
     creator = create_user("spaces-membership-creator")
@@ -257,10 +252,18 @@ def test_membership_console_insert_inherits_group_creator_access(
 
 
 def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) -> None:
-    """Groups persist, update, delete, reject duplicate slugs, and nest without a scope."""
+    """Groups support hierarchy and share ownership and audience with concrete children."""
 
     del spaces_tables
+    owner, person = _person_for("spaces-child-owner")
     with system_context(reason="spaces group crud"):
+        queue = Queue.objects.create(name="Dispatch", key="DSP", created_by=owner)
+        Membership.objects.create(group=queue, party=person, is_confirmed=True)
+        assert Queue._meta.get_field("owner").model is Group
+        assert queue.owner_id == owner.pk
+        assert [entry.party_id for entry in queue.thread_audience()] == [person.pk]
+        queue.delete()
+
         root = Group.objects.create(name="Community")
         sibling = Group.objects.create(name="Community")
         child = Group.objects.create(name="Moderators", parent=root)
@@ -332,6 +335,9 @@ def test_membership_lifecycle_filters_live_roles(
 
     def assert_roles(group: Group, expected: set[str]) -> None:
         assert _role_relations(group, user) == expected
+        assert backend().check_access(
+            subject=to_subject_ref(user), action="set_notifications", resource=to_object_ref(membership),
+        ).allowed == bool(expected)
         for role in ("owner", "moderator", "member", "viewer"):
             scoped = Group.objects.with_actor(user).with_action(f"roster_{role}").filter(pk=group.pk)
             assert scoped.exists() == (role in expected), str(scoped.query)
@@ -365,8 +371,8 @@ def test_membership_lifecycle_filters_live_roles(
         assert_roles(group, set())
 
 
-def test_membership_repoint_revokes_the_stored_subject(spaces_tables: None) -> None:
-    """Moving a confirmed roster row revokes the old user before granting the new one."""
+def test_membership_repoint_changes_the_live_holder(spaces_tables: None) -> None:
+    """Moving a confirmed roster row makes its new user's live role replace the old one."""
 
     del spaces_tables
     old_user, old_person = _person_for("spaces-old-member")
@@ -382,8 +388,8 @@ def test_membership_repoint_revokes_the_stored_subject(spaces_tables: None) -> N
     assert _role_relations(group, new_user) == {"member"}
 
 
-def test_unrelated_membership_save_writes_no_mirror_tuple(spaces_tables: None) -> None:
-    """A confidence-only save leaves roster access entirely field-backed."""
+def test_confidence_only_save_leaves_pending_membership_without_roles(spaces_tables: None) -> None:
+    """Changing confidence does not grant a pending member any roster role."""
 
     del spaces_tables
     _user, person = _person_for("spaces-unchanged-member")
@@ -396,8 +402,8 @@ def test_unrelated_membership_save_writes_no_mirror_tuple(spaces_tables: None) -
         assert _role_relations(group, _user) == set()
 
 
-def test_person_user_change_reconciles_membership_subject(spaces_tables: None) -> None:
-    """Changing Person.user migrates each confirmed membership grant to the new user."""
+def test_person_user_change_changes_the_live_roster_holder(spaces_tables: None) -> None:
+    """Changing Person.user immediately changes who holds each confirmed roster role."""
 
     del spaces_tables
     old_user, person = _person_for("spaces-person-old-user")
@@ -449,82 +455,99 @@ def test_moderator_can_confirm_membership_but_outsider_cannot(spaces_tables: Non
 
 
 def test_membership_without_a_platform_user_grants_nothing(spaces_tables: None) -> None:
-    """A valid party roster row with no Person.user identity never writes an access tuple."""
+    """A party without Person.user supplies no holder to the real roster relations."""
 
     del spaces_tables
+    user = create_user("spaces-unlinked-party-observer")
     with system_context(reason="spaces membership without user"):
         group = Group.objects.create(name="Community", slug="community")
         party = Party.objects.create(display_name="External contact")
         membership = Membership.objects.create(group=group, party=party)
         membership.confirm()
 
-    assert not active_relationship_model().objects.filter(
-        resource_type="spaces/group",
-        resource_id=str(group.pk),
-        relation__in=("owner", "moderator", "member", "viewer"),
-    ).exists()
+    for role in ("owner", "moderator", "member", "viewer"):
+        assert SchemaRelation.objects.filter(
+            definition__resource_type="spaces/group", name=f"roster_{role}",
+        ).exists()
+        assert not Group.objects.with_actor(user).with_action(f"roster_{role}").filter(pk=group.pk).exists()
+    assert _role_relations(group, user) == set()
 
 
-def test_public_visibility_reconciles_the_wildcard_reader(spaces_tables: None) -> None:
-    """Public/private flips add and remove ``reader@auth/user:*``."""
+def test_public_visibility_follows_the_group_column(spaces_tables: None) -> None:
+    """Public/private flips change read access without relationship writes."""
 
     del spaces_tables
+    reader = to_subject_ref(create_user("spaces-public-reader"))
     with system_context(reason="spaces visibility"):
         group = Group.objects.create(name="Community", slug="community")
-        assert not _wildcard_reader_exists(group)
+        for visibility, allowed in (
+            (Group.GroupVisibility.PRIVATE, False),
+            (Group.GroupVisibility.PUBLIC, True),
+            (Group.GroupVisibility.PRIVATE, False),
+        ):
+            group.visibility = visibility
+            group.save(update_fields=["visibility", "updated_at"])
+            assert backend().check_access(
+                subject=reader, action="read", resource=to_object_ref(group),
+            ).allowed == allowed
+            assert _group_relationship_count(group) == 0
 
-        group.visibility = Group.GroupVisibility.PUBLIC
-        group.save(update_fields=["visibility", "updated_at"])
-        assert _wildcard_reader_exists(group)
 
-        group.visibility = Group.GroupVisibility.PRIVATE
-        group.save(update_fields=["visibility", "updated_at"])
-        assert not _wildcard_reader_exists(group)
+def test_visibility_reads_persisted_facts_including_bulk_writes(spaces_tables: None) -> None:
+    """Dirty and deferred values do not replace the persisted visibility column."""
 
-
-def test_visibility_reads_persisted_facts_and_rejects_bulk_bypasses(spaces_tables: None) -> None:
-    """Dirty or deferred visibility cannot leak access outside its native save."""
-
+    reader = to_subject_ref(create_user("spaces-persisted-reader"))
     with system_context(reason="spaces visibility persisted policy"):
         group = Group.objects.create(name="Community", visibility=Group.GroupVisibility.PUBLIC)
         group.visibility = Group.GroupVisibility.PRIVATE
         group.description = "Only content changed"
         group.save(update_fields=["description"])
-        assert _wildcard_reader_exists(group)
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
 
         group = Group.objects.defer("visibility").get(pk=group.pk)
         group.description = "Deferred policy"
         group.save(update_fields=["description"])
-        assert _wildcard_reader_exists(group)
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
         group.visibility = Group.GroupVisibility.PRIVATE
         group.save(update_fields=["visibility"])
-        assert not _wildcard_reader_exists(group)
+        assert not backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
 
-        with pytest.raises(ValidationError, match="eligibility"):
-            Group.objects.filter(pk=group.pk).update(visibility=Group.GroupVisibility.PUBLIC)
-        with pytest.raises(ValidationError, match="native owner"):
-            Group.objects.bulk_create([Group(name="Bypass", slug="bypass")])
+        Group.objects.filter(pk=group.pk).update(visibility=Group.GroupVisibility.PUBLIC)
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
+        for path in ("", group.path):
+            with pytest.raises(ValidationError, match="saved-row owner"):
+                Group.objects.bulk_create([
+                    Group(name="Public", slug="public", visibility=Group.GroupVisibility.PUBLIC, path=path),
+                ])
+            assert not Group.objects.filter(slug="public").exists()
+        inserted = Group.objects.create(name="Public", slug="public", visibility=Group.GroupVisibility.PUBLIC)
+        assert inserted.path == f"/{inserted.pk:0{Group.path_segment_width}d}/"
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(inserted)).allowed
+        assert _group_relationship_count(group) == _group_relationship_count(inserted) == 0
 
 
 def test_visibility_double_flip_is_idempotent(spaces_tables: None) -> None:
-    """Repeated public/private reconciliation creates no duplicate or stale tuple."""
+    """Repeated public/private saves change reads without storing tuples."""
 
     del spaces_tables
+    reader = to_subject_ref(create_user("spaces-repeat-reader"))
     with system_context(reason="spaces visibility idempotence"):
         group = Group.objects.create(name="Community", slug="community")
-        group.visibility = Group.GroupVisibility.PUBLIC
-        group.save(update_fields=["visibility", "updated_at"])
-        group.save(update_fields=["visibility", "updated_at"])
-        assert _group_relationship_count(group) == 1
+        for visibility, allowed in (
+            (Group.GroupVisibility.PUBLIC, True),
+            (Group.GroupVisibility.PRIVATE, False),
+        ):
+            group.visibility = visibility
+            for _ in range(2):
+                group.save(update_fields=["visibility", "updated_at"])
+                assert backend().check_access(
+                    subject=reader, action="read", resource=to_object_ref(group),
+                ).allowed == allowed
+                assert _group_relationship_count(group) == 0
 
-        group.visibility = Group.GroupVisibility.PRIVATE
-        group.save(update_fields=["visibility", "updated_at"])
-        group.save(update_fields=["visibility", "updated_at"])
-        assert _group_relationship_count(group) == 0
 
-
-def test_group_delete_revokes_membership_and_group_relationships(spaces_tables: None) -> None:
-    """Deleting a public group removes its wildcard and every roster role tuple."""
+def test_group_delete_removes_roster_rows(spaces_tables: None) -> None:
+    """Deleting a public group removes its canonical roster rows."""
 
     del spaces_tables
     user, person = _person_for("spaces-delete-member")
@@ -540,12 +563,13 @@ def test_group_delete_revokes_membership_and_group_relationships(spaces_tables: 
             role=Membership.MembershipRole.OWNER,
         )
         membership.confirm()
-        assert _wildcard_reader_exists(group)
         assert _role_relations(group, user) == {"owner"}
-        assert _group_relationship_count(group) == 1
+        assert _group_relationship_count(group) == 0
 
         resource_id = str(group.pk)
+        membership_id = membership.pk
         group.delete()
+        assert not Membership.objects.filter(pk=membership_id).exists()
 
     assert not active_relationship_model().objects.filter(
         resource_type="spaces/group",
@@ -623,24 +647,163 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
             denied.save(update_fields=["visibility", "updated_at"])
 
 
-def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> None:
-    """The composed messaging definition carries the group relation and only legal arms."""
+def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], list[str]]:
+    """Return scoped rows and every executed policy/application statement."""
 
-    merged = merged_schemas(apps.get_app_configs())
+    with (
+        patch.object(backend(), "accessible", side_effect=AssertionError("enumerated resource IDs")),
+        CaptureQueriesContext(connection) as queries,
+    ):
+        scoped = Vault.objects.with_actor(actor).with_action(action).scoped()
+        pks = set(scoped.values_list("pk", flat=True))
+    return pks, [query["sql"] for query in queries]
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None, settings: Any, storage: str) -> None:
+    """A team's vault: the roster reads, moderators and owners write, viewers and outsiders see nothing."""
+
+    del spaces_tables
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+    owner, owner_person = _person_for("spaces-vault-owner")
+    moderator, moderator_person = _person_for("spaces-vault-moderator")
+    member, member_person = _person_for("spaces-vault-member")
+    viewer, viewer_person = _person_for("spaces-vault-viewer")
+    outsider = create_user("spaces-vault-outsider")
+    alice = create_user("spaces-vault-alice")
+    private = vault_for(alice, name="Private")
+    with system_context(reason="spaces team vault"):
+        group = Group.objects.create(name="Managers", slug="managers")
+        for person, role in (
+            (owner_person, Membership.MembershipRole.OWNER),
+            (moderator_person, Membership.MembershipRole.MODERATOR),
+            (member_person, Membership.MembershipRole.MEMBER),
+            (viewer_person, Membership.MembershipRole.VIEWER),
+        ):
+            Membership.objects.create(group=group, party=person, role=role, is_confirmed=True)
+        vault = Vault.objects.create(name="Handbook", team=group)
+        page = Page.objects.create(vault=vault, title="Onboarding")
+    assert vault.owner_id is None
+    assert _group_relationship_count(group) == 0
+
+    for actor, readable in ((owner, True), (moderator, True), (member, True), (viewer, False), (outsider, False)):
+        assert Vault.objects.as_user(actor).filter(pk=vault.pk).exists() is readable
+        assert Page.objects.as_user(actor).filter(pk=page.pk).exists() is readable
+        assert not Vault.objects.as_user(actor).filter(pk=private.pk).exists()
+    assert not Vault.objects.as_user(alice).filter(pk=vault.pk).exists()
+
+    for actor in (owner, moderator):
+        with actor_context(actor):
+            writable = Vault.objects.as_user(actor).get(pk=vault.pk)
+            writable.description = f"edited by {actor.username}"
+            writable.save(update_fields=("description",))
+    for actor in (member, viewer, outsider):
+        denied = Vault._base_manager.get(pk=vault.pk).with_actor(actor)
+        denied.description = "vandalised"
+        with pytest.raises(PermissionDenied):
+            denied.save(update_fields=("description",))
+    # Rebinding the team hands the vault to another roster: it follows share, not write.
+    rebinding = Vault._base_manager.get(pk=vault.pk).with_actor(owner)
+    rebinding.team = None
+    with pytest.raises(PermissionDenied):
+        rebinding.save(update_fields=("team",))
+
+    for actor, action, expected in (
+        (member, "read", {vault.pk}),
+        (member, "write", set()),
+        (member, "share", set()),
+        (moderator, "write", {vault.pk}),
+        (viewer, "read", set()),
+        (outsider, "read", set()),
+        (alice, "read", {private.pk}),
+        (alice, "share", {private.pk}),
+    ):
+        pks, statements = _vault_scope_pks(actor, action)
+        assert pks == expected, (actor.username, action)
+        # A policy predecision may read the live roster before the final query.
+        assert any(Membership._meta.db_table in sql for sql in statements)
+
+    with system_context(reason="spaces team vault revoke roster"):
+        Membership.objects.filter(group=group, party=member_person).update(is_confirmed=False)
+    pks, statements = _vault_scope_pks(member, "read")
+    assert pks == set()
+    assert any(Membership._meta.db_table in sql for sql in statements)
+
+    with system_context(reason="spaces team vault unbinding"):
+        Vault._base_manager.filter(pk=vault.pk).update(team=None)
+    for actor in (owner, moderator, member):
+        assert not Vault.objects.as_user(actor).filter(pk=vault.pk).exists()
+        assert not Page.objects.as_user(actor).filter(pk=page.pk).exists()
+    assert _group_relationship_count(group) == 0
+
+
+def test_team_member_clones_an_ownerless_template_vault(spaces_tables: None) -> None:
+    """A template vault reachable only through its team is cloned by a member, not by an outsider."""
+
+    del spaces_tables
+    member, person = _person_for("spaces-template-member")
+    outsider = create_user("spaces-template-outsider")
+    with system_context(reason="spaces template vault"):
+        group = Group.objects.create(name="Managers", slug="managers")
+        Membership.objects.create(group=group, party=person, is_confirmed=True)
+        template = Vault.objects.create(name="Intake template", team=group)
+        MarkdownPage.objects.create(vault=template, title="Checklist", kind=Page.PageKind.TEMPLATE)
+    assert template.owner_id is None
+
+    with actor_context(member):
+        clone = Vault.objects.create_from(template, name="Intake 12")
+    assert (clone.owner_id, clone.team_id) == (member.pk, None)
+    assert [row.title for row in Page.objects.as_user(member).filter(vault=clone)] == ["Checklist"]
+    with actor_context(outsider), pytest.raises(Vault.DoesNotExist):
+        Vault.objects.create_from(template, name="Taken")
+
+
+def test_spaces_fragment_binds_the_vault_to_its_team_roster() -> None:
+    """The composed vault reads and writes through its team; delete and share stay the owner's."""
+
+    app_configs = list(apps.get_app_configs())
+    merged = merged_schemas(app_configs, field_owners=installed_field_owners(app_configs))
+    knowledge = merged["angee.knowledge"]
+    definition = knowledge.get_definition("knowledge/vault")
+    assert definition is not None
+    assert "team" in {relation.name for relation in definition.relations}
+
+    rendered = render_zed("angee.knowledge", knowledge)
+    assert "relation team: spaces/group // rebac:field=team" in rendered
+    block = rendered.split("definition knowledge/vault {", maxsplit=1)[1].split("\n}", maxsplit=1)[0]
+    permissions = {
+        line.split("=", maxsplit=1)[0].split()[1]: line
+        for line in block.splitlines()
+        if line.strip().startswith("permission ")
+    }
+    assert "team->post" in permissions["read"]
+    assert "team->write" in permissions["write"]
+    assert "share" in permissions["write__team"]
+    assert "team" not in permissions["delete"]
+    assert "team" not in permissions["share"]
+
+
+def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> None:
+    """The composed thread derives group access only from its selected groups."""
+
+    app_configs = list(apps.get_app_configs())
+    field_owners = installed_field_owners(app_configs)
+    merged = merged_schemas(app_configs, field_owners=field_owners)
     messaging = merged["angee.messaging"]
     definition = messaging.get_definition("messaging/thread")
     assert definition is not None
-    assert {relation.name for relation in definition.relations} >= {"group"}
+    assert {relation.name for relation in definition.relations} >= {"selected_group"}
+    assert "group" not in {relation.name for relation in definition.relations}
 
     rendered = render_zed("angee.messaging", messaging)
-    assert "relation group: spaces/group" in rendered
+    assert "relation group: spaces/group" not in rendered
     assert "relation selected_group: spaces/group // rebac:field=groups" in rendered
-    assert "group->read" in rendered
-    assert "group->post" in rendered
+    assert "selected_group->read" in rendered
+    assert "selected_group->post" in rendered
 
     thread_block = rendered.split("definition messaging/thread {", maxsplit=1)[1].split(
         "\n}", maxsplit=1
     )[0]
     delete_line = next(line for line in thread_block.splitlines() if "permission delete" in line)
     assert "group" not in delete_line
-    assert merged_schema_relpath("angee.messaging") in extension_source_map(apps.get_app_configs())
+    assert merged_schema_relpath("angee.messaging") in extension_source_map(app_configs, field_owners=field_owners)

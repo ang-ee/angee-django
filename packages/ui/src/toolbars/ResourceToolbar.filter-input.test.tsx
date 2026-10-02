@@ -2,11 +2,12 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { ResourceToolbar, type ResourceToolbarFilterField } from "./ResourceToolbar";
+import { ResourceToolbar } from "./ResourceToolbar";
+import type { FilterClauseField } from "./FilterClauseEditor";
 
 afterEach(cleanup);
 
-async function editor(field: ResourceToolbarFilterField) {
+async function editor(field: FilterClauseField) {
   const add = vi.fn();
   render(<ResourceToolbar pager={{ total: 0, page: 1, pageSize: 20 }} customFilterFields={[field]} onCustomFilterAdd={add} onFilterTextChange={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));

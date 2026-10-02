@@ -100,6 +100,12 @@ describe("statusBadge widget tone", () => {
     expect(screen.getByText("Active").className).toContain("bg-info-soft");
   });
 
+  test("the badge renders an authored option label rather than its enum member", () => {
+    render(<Badge value="HIGH" field={{ options: [{ value: "high", label: "Urgent" }], tone: { HIGH: "warning" } }} />);
+    expect(screen.getByText("Urgent").className).toContain("bg-warning-soft");
+    expect(screen.queryByText("HIGH")).toBeNull();
+  });
+
   test("a value the override map misses still gets the widget convention", () => {
     // Unlike a plain cellContent/BoardView cell (which falls to neutral on a
     // miss), the badge layers its convention over a partial `<Column tone>` map.

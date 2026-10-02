@@ -1,3212 +1,826 @@
-"""Source models for workflow definitions.
-
-The workflows addon owns graph definitions as data: a draft workflow lineage
-head carries editable steps, edges, and triggers, while ``publish()`` copies that
-draft into an immutable version. Step behavior remains in registry-selected
-``StepImpl`` classes, so row data names keys and config, not Python callables.
-Future runtime subject/artifact references use Django contenttypes-backed object
-references; public ids stay at the transport boundary.
-"""
+"""Abstract definitions and retained workflow execution rows."""
 
 from __future__ import annotations
 
-import copy
-import logging
-from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Literal, Self, cast
+from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core import checks
-from django.core.exceptions import (
-    EmptyResultSet,
-    FieldError,
-    FullResultSet,
-    ValidationError,
-)
-from django.db import OperationalError, ProgrammingError, connection, models, transaction
-from django.db.models.functions import Coalesce
-from django.db.models.signals import pre_delete
-from django.dispatch import receiver
-from django.utils import timezone
-from rebac import resolve_subjects, system_context
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import models, transaction
+from django.db.models.functions import Coalesce, Now
+from django.utils.functional import cached_property
+from rebac import system_context, to_subject_ref
+from rebac.models import active_relationship_model
 
-from angee.base.fields import StateField
-from angee.base.identity import canonical_subject_ref
-from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeUnscopedManager
+from angee.base.evidence import DerivedFrom
+from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
-from angee.base.scoping import system_queryset
-from angee.base.transitions import (
-    StateTransitions,
-    TransitionNotAllowed,
-    save_state,
-    transition,
-)
-from angee.graphql.events import ChangeRelatedRecord
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.service_users import sync_service_user
 from angee.resources.mixins import ResourceLoadMixin
-from angee.workflows.attempts import (
-    AttemptCause,
-    AttemptResultKind,
-    AttemptStatus,
-    FixtureRole,
-    GateResumeState,
-    JsonPresence,
-    LeaseRevocationReason,
-    WorkflowScope,
-    json_values_equal,
-    validate_json_presence,
-)
-from angee.workflows.definitions import declaration_changed
-from angee.workflows.dispatch import (
-    WorkflowDispatchEnvelope,
-    WorkflowDispatchKind,
-    dispatch_constraints,
-)
-from angee.workflows.graph import GraphIdentity, WorkflowGraph
+from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
 from angee.workflows.managers import (
-    DecisionManager,
-    DefinitionQuerySet,
-    DefinitionWriteSession,
-    EdgeManager,
-    StepArtifactManager,
-    StepAttemptManager,
-    StepAttemptSystemManager,
-    StepExternalSubscriptionManager,
-    StepManager,
+    StepAttemptQuerySet,
     StepRunManager,
-    TriggerManager,
-    WorkflowDispatchManager,
+    StepWatchManager,
     WorkflowManager,
-    WorkflowRecoveryEvidenceManager,
+    WorkflowRunEvidenceManager,
     WorkflowRunManager,
-    WorkflowRunSystemManager,
-    WorkflowTestFixtureManager,
-    _combined_delete_results,
-    _definition_rows,
 )
-from angee.workflows.resources import WorkflowDefinitionResource
-from angee.workflows.settlement import subject_settler
+from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.states import (
-    CURRENT_PUBLICATION_STATUSES,
-    DecisionGate,
-    JoinRule,
-    ParentRelation,
+    ERROR_OUTCOME,
+    NAME_MAX_LENGTH,
+    AttemptResult,
     RunOrigin,
+    RunRelation,
     RunStatus,
     StepRunStatus,
-    TriggerKind,
-    Verdict,
     WaitingKind,
-    WorkflowPurpose,
-    WorkflowStatus,
 )
-from angee.workflows.steps import (
-    StepExecutionMode,
-    StepImpl,
-)
-from angee.workflows.trigger_declarations import (
-    EventSource,
-    EventTriggerConfig,
-    ScheduleTriggerConfig,
-    TriggerConfig,
-    validate_trigger_config,
-)
-
-logger = logging.getLogger(__name__)
-_CHANGE_FEED_FIX = "declare changes() for the model to join the change feed"
-
-
-def _save_step_run_projection(instance: Any, source: Any, target: Any) -> None:
-    """Persist a model transition through the closed projection operation."""
-
-    fields = {"status", *getattr(instance, "_transition_fields", set())}
-    try:
-        with transaction.atomic():
-            current = system_queryset(type(instance), lock=("self",)).get(pk=instance.pk)
-            if current.status != source:
-                raise TransitionNotAllowed("StepRun status changed before projection.")
-            attempt_model = instance._meta.get_field("current_attempt").remote_field.model
-            attempt = (
-                system_queryset(attempt_model).get(pk=instance.current_attempt_id)
-                if instance.current_attempt_id is not None
-                else None
-            )
-            instance.project_from_attempt(attempt, fields=fields)
-    finally:
-        if hasattr(instance, "_transition_fields"):
-            del instance._transition_fields
-
-
-def _empty_workflow_output_schema() -> dict[str, Any]:
-    """Return the declared empty output used by workflows without result rules."""
-
-    return {"type": "object", "properties": {}, "additionalProperties": False}
-
-
-_UNSET_RESULT_OUTPUT = object()
-
-
-@contextmanager
-def _workflow_child_create(instance: Any) -> Iterator[None]:
-    """Authorize one unsaved child through its proposed workflow relation."""
-
-    if not instance._state.adding:
-        yield
-        return
-    actor, bypass = instance.effective_actor(strict=True)
-    if bypass:
-        yield
-        return
-    assert actor is not None
-    with DefinitionQuerySet.caller_context(instance):
-        workflow = instance.workflow
-        verified_actor = type(instance)._default_manager.check_create({"workflow": (workflow,)})
-    instance.with_actor(verified_actor).sudo(reason="workflows.child.create")
-    try:
-        yield
-    finally:
-        instance.with_actor(verified_actor)
-
-
-@dataclass(frozen=True, slots=True)
-class StepConfigProjection:
-    """Canonical authoring value and diagnostics for one persisted step config."""
-
-    value: Any
-    errors: dict[str, list[str]]
-
-
-def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a declared workflow status through the narrow model operation."""
-
-    cast("Workflow", instance).persist_status(source=source)
+from angee.workflows.steps import Step
+from angee.workflows.triggers import TriggerEventManager, TriggerManager, TriggerSource
 
 
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
-    """Editable workflow lineage head or immutable published workflow version.
+    """Editable identity and draft, pointing to one immutable published version."""
 
-    A resource-assigned stable key identifies the lineage independently of its
-    mutable display name and is shared by every published version.
-    """
-
-    resource_class = WorkflowDefinitionResource
-    declaration_fields = frozenset(
-        {
-            "key",
-            "name",
-            "description",
-            "purpose",
-            "subject_declaration",
-            "error_workflow",
-            "max_steps",
-            "budget",
-            "input_schema",
-            "output_schema",
-            "result_rules",
-        }
-    )
-    editable_declaration_fields = declaration_fields - {"key"}
     runtime = True
-    rebac_grantable = {"editor": "write", "viewer": "write"}
-
+    resource_class = WorkflowDefinitionResource
+    rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
-    key = models.SlugField(max_length=100, blank=True, default="")
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        editable=False, related_name="workflow_principal",
+    )
+    key = models.SlugField(max_length=100, unique=True)
     name = models.CharField(max_length=200)
-    description = models.TextField(blank=True)
-    purpose = StateField(choices_enum=WorkflowPurpose, default=WorkflowPurpose.AUTOMATION)
-    subject_declaration = models.CharField(max_length=200, blank=True, default="")
-    status = StateField(choices_enum=WorkflowStatus, default=WorkflowStatus.DRAFT)
-    version = models.PositiveIntegerField(default=0)
+    description = models.TextField(blank=True, default="")
+    subject_model = ModelLabelField(max_length=200, blank=True, default="")
+    draft = models.JSONField(default=dict)
     draft_revision = models.PositiveIntegerField(default=0, editable=False)
-    published_from = models.ForeignKey(
-        "workflows.Workflow",
+    layout = models.JSONField(default=dict, blank=True)
+    published = models.ForeignKey(
+        "workflows.WorkflowVersion",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name="published_versions",
-    )
-    error_workflow = models.ForeignKey(
-        "workflows.Workflow",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="error_for_workflows",
-    )
-    max_steps = models.PositiveIntegerField(default=1000)
-    budget = models.JSONField(default=dict, blank=True)
-    input_schema = models.JSONField(default=dict, blank=True)
-    output_schema = models.JSONField(default=_empty_workflow_output_schema, blank=True)
-    result_rules = models.JSONField(default=list, blank=True)
-
-    status_transitions = StateTransitions(
-        status,
-        {
-            WorkflowStatus.DRAFT: [WorkflowStatus.TEST, WorkflowStatus.PUBLISHED],
-            WorkflowStatus.PUBLISHED: [WorkflowStatus.ARCHIVED],
-        },
+        related_name="+",
     )
 
     objects = WorkflowManager()
 
     class Meta:
-        """Django model options for workflow definitions."""
+        """Django options for the composed workflow identity."""
 
         abstract = True
-        ordering = ("name", "version")
         rebac_resource_type = "workflows/workflow"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("key",),
-                condition=models.Q(published_from__isnull=True) & ~models.Q(key=""),
-                name="uniq_workflows_workflow_head_key",
-                violation_error_code="unique",
-                violation_error_message="A workflow with this key already exists.",
-            ),
-            models.UniqueConstraint(
-                fields=("published_from", "draft_revision"),
-                condition=models.Q(status=WorkflowStatus.TEST),
-                name="uniq_workflows_test_snapshot_revision",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    ~models.Q(status=WorkflowStatus.TEST)
-                    | (models.Q(published_from__isnull=False) & models.Q(version=0))
-                ),
-                name="chk_workflows_test_snapshot_shape",
-            ),
-        )
+
+    def validate_subject(self, subject: Any) -> None:
+        """Require the declared concrete model when this workflow has a subject."""
+        if self.subject_model and (
+            subject is None or subject._meta.label != self.subject_model
+        ):
+            raise ValidationError("The workflow subject has the wrong model.")
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep the service principal's name synchronized with its workflow."""
+
+        creating = self._state.adding
+        update_fields = kwargs.get("update_fields")
+        name_written = update_fields is None or "name" in update_fields
+        previous_name = None
+        if not creating and name_written:
+            previous_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if creating or (name_written and previous_name != self.name):
+                sync_service_user(self, prefix="workflow")
 
     def __str__(self) -> str:
-        """Return the workflow's display label."""
+        """Return the authored workflow name."""
 
         return self.name
 
-    def validate_record_access_target(self) -> None:
-        """Keep direct grants on the mutable owner of a workflow lineage."""
 
-        if self.published_from_id is not None:
-            raise ValidationError("Direct record access can only be managed on a workflow lineage head.")
+class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+    """Prevent collection mutation of published graph documents."""
 
-    @classmethod
-    def lineage_projection_annotation(cls) -> dict[str, Any]:
-        """Return the ORM projection for lineage and current publication context."""
 
-        lineage = models.Q(pk=models.OuterRef("_workflow_lineage_id")) | models.Q(
-            published_from_id=models.OuterRef("_workflow_lineage_id")
-        )
-        current = cls.objects.current_published().filter(lineage)
-        latest = cls.objects.filter(lineage, status__in=CURRENT_PUBLICATION_STATUSES).order_by("-version", "-pk")
-        return {
-            "_workflow_lineage_id": models.functions.Coalesce("published_from_id", "pk"),
-            "_workflow_publication_status": models.functions.Coalesce(
-                models.Subquery(latest.values("status")[:1]),
-                models.Value(WorkflowStatus.DRAFT),
-            ),
-            "_workflow_current_published_pk": models.Subquery(current.values("pk")[:1]),
-            "_workflow_current_published_version": models.Subquery(current.values("version")[:1]),
-            "_workflow_current_published_subject_declaration": models.Subquery(
-                current.values("subject_declaration")[:1]
-            ),
-        }
+WorkflowVersionManager = AngeeManager.from_queryset(WorkflowVersionQuerySet)
 
-    @classmethod
-    def after_resource_load(cls, instances: Iterable[Any], *, tier: str, source: str, publish: bool = False) -> None:
-        """Publish complete installed graphs after all rows and grants have loaded."""
 
-        instances = tuple(instances)
-        for workflow in sorted(instances, key=lambda instance: instance.pk or 0):
-            if workflow.published_from_id is not None:
-                continue
-            workflow._propagate_resource_key_backfill()
-            if publish:
-                workflow.publish_if_changed()
-        super().after_resource_load(instances, tier=tier, source=source, publish=publish)
-
-    @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.PUBLISHED, on_success=_save_workflow_status)
-    def mark_published(self) -> None:
-        """Mark this copied version as published."""
-
-        if self.published_from_id is None:
-            raise ValidationError("Only a copied version can be marked published.")
-
-    @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.TEST, on_success=_save_workflow_status)
-    def mark_test(self) -> None:
-        """Mark a copied saved revision as an immutable test snapshot."""
-
-        if self.published_from_id is None:
-            raise ValidationError("Only a copied version can be marked as a test snapshot.")
-
-    @transition(
-        status,
-        source=WorkflowStatus.PUBLISHED,
-        target=WorkflowStatus.ARCHIVED,
-        on_success=_save_workflow_status,
-    )
-    def archive(self) -> None:
-        """Archive a published workflow version."""
-
-    def clean(self) -> None:
-        """Validate lineage-owned links and normalize stable and subject keys."""
-
-        super().clean()
-        self.key = (self.key or "").lower()
-        if self.published_from_id is not None:
-            lineage: Any = self.published_from
-            if self.key != lineage.key:
-                raise ValidationError({"key": "Published workflow versions must share their lineage stable key."})
-        if self.error_workflow_id is not None:
-            error_workflow: Any = self.error_workflow
-            if error_workflow.published_from_id is not None:
-                raise ValidationError({"error_workflow": "Error workflow must point to a workflow lineage head."})
-        # Mirror Trigger.event_model_label: store the canonical label_lower form
-        # and reject labels that resolve to no installed model.
-        self.subject_declaration = self.subject_declaration.strip().lower()
-        if self.subject_declaration:
-            try:
-                apps.get_model(self.subject_declaration)
-            except (LookupError, ValueError) as error:
-                raise ValidationError(
-                    {
-                        "subject_declaration": (
-                            f"Subject declaration {self.subject_declaration!r} is not an installed model label."
-                        )
-                    }
-                ) from error
-
-    def validate_subject_declaration(self, subject: Any) -> None:
-        """Raise when ``subject`` does not satisfy this workflow's subject declaration."""
-
-        if not self.subject_declaration:
-            return
-        if subject is None:
-            raise ValidationError(
-                {"subject": f"Subject declaration {self.subject_declaration!r} requires a subject."}
-            )
-        if subject._meta.label_lower != self.subject_declaration:
-            raise ValidationError(
-                {
-                    "subject": (
-                        f"Subject model {subject._meta.label!r} does not satisfy "
-                        f"subject declaration {self.subject_declaration!r}."
-                    )
-                }
-            )
-
-    def insert_publication(self) -> None:
-        """Insert a manager-built draft snapshot through the publication owner."""
-
-        if not self._state.adding or self.published_from_id is None or self.status != WorkflowStatus.DRAFT:
-            raise ValidationError("Publication insertion requires a new draft snapshot.")
-        with DefinitionQuerySet.caller_context(self):
-            self.full_clean()
-        super().save(force_insert=True)
-
-    def persist_status(self, *, source: Any) -> None:
-        """Persist only a declared status transition, preserving all definition fields."""
-
-        with transaction.atomic():
-            current = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            if current.status != source:
-                raise TransitionNotAllowed("Workflow status changed before persistence.")
-            super().save(update_fields=["status", "updated_at"])
-
-    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
-        """Persist the workflow after enforcing immutability and model validation."""
-
-        if self._state.adding:
-            if self.published_from_id is not None:
-                raise ValidationError("Published workflow versions can only be created by publish().")
-            elif self.status != WorkflowStatus.DRAFT or self.version != 0 or self.draft_revision != 0:
-                raise ValidationError("New workflow lineage heads must begin as revision-zero drafts.")
-            with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
-            super().save(*args, **kwargs)
-            return
-
-        manager = type(self).objects
-        with manager._definition_write(
-            (self.pk,),
-            session=session,
-        ) as session:
-            persisted = cast(Self, _definition_rows(type(self)).get(pk=self.pk))
-            self._raise_if_immutable_save(persisted)
-            if self.published_from_id != persisted.published_from_id:
-                raise ValidationError({"published_from": "Workflow lineage ownership is immutable."})
-            if self.version != persisted.version:
-                raise ValidationError({"version": "Workflow publication versions are immutable."})
-            if self.status != persisted.status:
-                raise ValidationError({"status": "Workflow status changes require a declared transition."})
-            # The database counter is the sole owner; a stale model can never write it backwards.
-            self.draft_revision = persisted.draft_revision
-            with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
-            self._raise_if_key_changed(persisted)
-            update_fields = kwargs.get("update_fields")
-            changed = declaration_changed(
-                self, persisted, fields=self.editable_declaration_fields, update_fields=update_fields
-            )
-            assigns_stable_key = (
-                not persisted.key and bool(self.key) and (update_fields is None or "key" in update_fields)
-            )
-            super().save(*args, **kwargs)
-            if assigns_stable_key:
-                self._propagate_resource_key_backfill()
-            if changed and self.published_from_id is None:
-                session.changed(self.pk)
-
-    def delete(
-        self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any
-    ) -> tuple[int, dict[str, int]]:
-        """Delete only mutable workflow rows."""
-
-        manager = type(self).objects
-        with manager._definition_write((self.pk,), session=session) as session:
-            persisted = cast(Self, _definition_rows(type(self)).get(pk=self.pk))
-            self._raise_if_immutable_save(persisted)
-            if persisted.published_versions.exists():
-                raise ValidationError("A workflow with publication history cannot be deleted.")
-            # Collector skips child instance delete methods. Own the full cascade here.
-            edges = persisted.edges.all().bound_to(self).all().delete(session=session)
-            steps = persisted.steps.all().bound_to(self).all().delete(session=session)
-            with DefinitionQuerySet.caller_context(self):
-                workflow = super().delete(*args, **kwargs)
-            return _combined_delete_results(edges, steps, workflow)
-
-    def publish(self, *, session: DefinitionWriteSession | None = None) -> Self:
-        """Copy this draft lineage head into an immutable published version."""
-
-        if self.published_from_id is not None:
-            raise ValidationError({"published_from": "Only a workflow lineage head can be published."})
-        manager = type(self).objects
-        with manager._definition_write((self.pk,), session=session) as session:
-            draft = cast(
-                Self,
-                DefinitionQuerySet.bind_instance(_definition_rows(type(self)).get(pk=self.pk), self),
-            )
-            if draft.status != WorkflowStatus.DRAFT:
-                raise ValidationError({"status": "Only draft workflows can be published."})
-            with DefinitionQuerySet.caller_context(draft):
-                draft._validate_publishable()
-            with DefinitionQuerySet.caller_context(draft):
-                version = draft._next_published_version()
-            published = draft._new_definition_copy(
-                version=version,
-                draft_revision=session.revision(draft.pk, draft.draft_revision),
-            )
-            DefinitionQuerySet.bind_instance(published, draft)
-            published.insert_publication()
-            with DefinitionQuerySet.caller_context(draft):
-                draft._copy_definition_to(published, session=session)
-            published.mark_published()
-            return cast(Self, published)
-
-    def _new_definition_copy(self, *, version: int, draft_revision: int) -> Self:
-        """Build an unsaved immutable-definition copy with lineage-owned fields."""
-
-        return type(self)(
-            key=self.key,
-            name=self.name,
-            description=self.description,
-            purpose=self.purpose,
-            subject_declaration=self.subject_declaration,
-            status=WorkflowStatus.DRAFT,
-            version=version,
-            draft_revision=draft_revision,
-            published_from=self,
-            error_workflow_id=self.error_workflow_id,
-            max_steps=self.max_steps,
-            budget=copy.deepcopy(self.budget),
-            input_schema=copy.deepcopy(self.input_schema),
-            output_schema=copy.deepcopy(self.output_schema),
-            result_rules=copy.deepcopy(self.result_rules),
-            created_by_id=self.created_by_id,
-            updated_by_id=self.updated_by_id,
-        )
-
-    def publish_if_changed(self, *, session: DefinitionWriteSession | None = None) -> Self | None:
-        """Publish this draft only when no current version has the same definition."""
-
-        manager = type(self).objects
-        if session is None:
-            stored = _definition_rows(type(self)).filter(pk=self.pk).first()
-            if stored is not None and not stored.is_immutable:
-                with DefinitionQuerySet.caller_context(self):
-                    current = manager.current_published_for(stored)
-                # A positive copied revision proves the stored signature unchanged;
-                # legacy rows initialized at zero still need the signature check.
-                if current is not None and 0 < stored.draft_revision == current.draft_revision:
-                    return None
-        with manager._definition_write((self.pk,), session=session) as session:
-            draft = cast(
-                Self,
-                DefinitionQuerySet.bind_instance(_definition_rows(type(self)).get(pk=self.pk), self),
-            )
-            with DefinitionQuerySet.caller_context(draft):
-                current = manager.current_published_for(draft)
-                if current is not None and draft._definition_signature() == current._definition_signature():
-                    return None
-            return draft.publish(session=session)
-
-    def _next_published_version(self) -> int:
-        """Return the next immutable version number for this lineage head."""
-
-        current = (
-            type(self).objects.filter(published_from=self).aggregate(max_version=models.Max("version"))["max_version"]
-            or 0
-        )
-        return int(current) + 1
-
-    def _copy_definition_to(self, published: Workflow, *, session: DefinitionWriteSession) -> None:
-        """Copy rows under the target draft's native lock and revision accumulator.
-
-        A newly inserted publication is still a mutable draft until its status
-        transition. It owns a separate explicit session; restoring into the
-        existing lineage head reuses the caller's already locked session.
-        """
-
-        manager = type(published).objects
-        with manager._definition_write(
-            (published.pk,),
-            session=session if published.published_from_id is None else None,
-        ) as target_session:
-            step_model = self.steps.model
-            edge_model = self.edges.model
-            step_map: dict[int, Any] = {}
-            for step in self.steps.order_by("pk"):
-                copied = step_model(
-                    workflow=published,
-                    key=step.key,
-                    name=step.name,
-                    step_class=step.step_class,
-                    config=copy.deepcopy(step.config),
-                    input_binding=copy.deepcopy(step.input_binding),
-                    join_rule=step.join_rule,
-                    is_entry=step.is_entry,
-                    position=copy.deepcopy(step.position),
-                )
-                DefinitionQuerySet.bind_instance(copied, published)
-                copied.save(session=target_session)
-                step_map[step.pk] = copied
-            for edge in self.edges.select_related("source", "target").order_by("pk"):
-                copied_edge = edge_model(
-                    workflow=published,
-                    source=step_map[edge.source_id],
-                    target=step_map[edge.target_id],
-                    condition=edge.condition,
-                )
-                DefinitionQuerySet.bind_instance(copied_edge, published)
-                copied_edge.save(session=target_session)
-
-    def _definition_signature(self) -> dict[str, Any]:
-        """Return the versioned definition content for publish idempotency."""
-
-        return {
-            "workflow": {
-                "name": self.name,
-                "description": self.description,
-                "purpose": str(self.purpose),
-                "subject_declaration": self.subject_declaration,
-                "error_workflow_id": self.error_workflow_id,
-                "max_steps": self.max_steps,
-                "budget": copy.deepcopy(self.budget),
-                "input_schema": copy.deepcopy(self.input_schema),
-                "output_schema": copy.deepcopy(self.output_schema),
-                "result_rules": copy.deepcopy(self.result_rules),
-            },
-            "steps": [
-                {
-                    "key": step.key,
-                    "name": step.name,
-                    "step_class": step.step_class,
-                    "config": copy.deepcopy(step.config),
-                    "input_binding": copy.deepcopy(step.input_binding),
-                    "join_rule": str(step.join_rule),
-                    "is_entry": step.is_entry,
-                    "position": copy.deepcopy(step.position),
-                }
-                for step in self.steps.order_by("key", "pk")
-            ],
-            "edges": [
-                {
-                    "source": edge.source.key,
-                    "target": edge.target.key,
-                    "condition": edge.condition,
-                }
-                for edge in self.edges.select_related("source", "target").order_by(
-                    "source__key",
-                    "target__key",
-                    "condition",
-                    "pk",
-                )
-            ],
-        }
-
-    def _validate_publishable(self) -> None:
-        """Validate the exact locked graph before creating an executable snapshot."""
-
-        self.validate_readiness()
-
-    def graph_diagnostics(self) -> tuple[Any, ...]:
-        """Return readiness diagnostics for the currently persisted definition."""
-
-        return type(self).objects.definition_graph(self).diagnostics()
-
-    def validate_readiness(self) -> None:
-        """Raise all readiness diagnostics for the currently persisted definition."""
-
-        type(self).objects.definition_graph(self).validate()
-
-    def _raise_if_immutable_save(self, persisted: Self | None) -> None:
-        """Reject writes to persisted published or archived workflow definitions."""
-
-        if persisted is None:
-            return
-        if persisted.is_immutable:
-            raise ValidationError("Published workflow versions are immutable.")
-
-    def _raise_if_key_changed(self, persisted: Self | None) -> None:
-        """Keep an assigned stable key immutable while allowing legacy backfill."""
-
-        if persisted is None:
-            return
-        if persisted.key and self.key != persisted.key:
-            raise ValidationError({"key": "Workflow stable keys are immutable once assigned."})
-
-    def _propagate_resource_key_backfill(self) -> None:
-        """Copy a resource-assigned stable key to legacy published versions."""
-
-        if not self.key:
-            return
-        versions = type(self)._base_manager.filter(published_from=self)
-        if versions.exclude(key__in=("", self.key)).exists():
-            raise ValidationError({"key": "Published workflow versions disagree with their lineage stable key."})
-        models.QuerySet.update(
-            versions.filter(key=""),
-            key=self.key,
-            updated_at=timezone.now(),
-        )
-
-    @property
-    def is_immutable(self) -> bool:
-        """Return whether this workflow version rejects definition edits."""
-
-        return self.status in {WorkflowStatus.TEST, WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
-
-
-class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
-    """One node in a workflow definition graph."""
-
-    resource_class = WorkflowDefinitionResource
-    declaration_fields = frozenset(
-        {
-            "workflow",
-            "key",
-            "name",
-            "step_class",
-            "config",
-            "input_binding",
-            "join_rule",
-            "is_entry",
-            "position",
-        }
-    )
-    editable_declaration_fields = declaration_fields - {"workflow"}
-    runtime = True
-
-    sqid_prefix = "wfs_"
-    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="steps")
-    key = models.SlugField(max_length=100)
-    name = models.CharField(max_length=200)
-    step_class = ImplClassField(
-        base_class=StepImpl,
-        registry_setting="ANGEE_WORKFLOW_STEP_CLASSES",
-    )
-    config = models.JSONField(default=dict, blank=True)
-    input_binding = models.JSONField(null=True, blank=True, default=None)
-    join_rule = StateField(choices_enum=JoinRule, default=JoinRule.ALL_SUCCESS)
-    is_entry = models.BooleanField(default=False)
-    position = models.JSONField(default=dict, blank=True)
-
-    objects = StepManager()
-
-    class Meta:
-        """Django model options for workflow steps."""
-
-        abstract = True
-        ordering = ("workflow", "key")
-        rebac_resource_type = "workflows/step"
-        constraints = (models.UniqueConstraint(fields=("workflow", "key"), name="uniq_workflows_step_key"),)
-
-    def __str__(self) -> str:
-        """Return the step's display label."""
-
-        return self.name or self.key
-
-    def config_projection(self) -> StepConfigProjection:
-        """Project legacy config for repair without rewriting its stored value."""
-
-        impl = cast(type[StepImpl], self.resolve_impl("step_class"))
-        raw = copy.deepcopy(self.config)
-        try:
-            impl.validate_config(raw)
-            value = impl.normalize_config(raw) if impl.config_model is not None else raw
-            return StepConfigProjection(value=value, errors={})
-        except ValidationError as error:
-            return StepConfigProjection(value=raw, errors=error.message_dict)
-
-    def clean(self) -> None:
-        """Validate structural draft fields without requiring readiness."""
-
-        super().clean()
-        if not isinstance(self.config, Mapping):
-            raise ValidationError({"config": "Step config must be an object."})
-        if self.input_binding is not None and not isinstance(self.input_binding, Mapping):
-            raise ValidationError({"input_binding": "Step input binding must be an object or null."})
-        try:
-            self.resolve_impl("step_class")
-        except ValidationError:
-            raise
-        except Exception as error:
-            raise ValidationError({"step_class": "Unknown workflow step class."}) from error
-
-    def validate_impl_configs(self, *, update_fields: Any = None) -> None:
-        """Canonicalize complete drafts while preserving incomplete object configs."""
-
-        if not self._state.adding and update_fields is not None and "config" not in update_fields:
-            return
-        if not isinstance(self.config, Mapping):
-            raise ValidationError({"config": "Step config must be an object."})
-        impl = cast(type[StepImpl], self.resolve_impl("step_class"))
-        if impl.config_model is None:
-            return
-        try:
-            self.config = impl.normalize_config(self.config)
-        except ValidationError:
-            # Incomplete typed config is a readiness diagnostic, not a storage error.
-            self.config = copy.deepcopy(dict(self.config))
-
-    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
-        """Persist the step after enforcing parent immutability and validation."""
-
-        old_parent_id = None
-        if not self._state.adding:
-            old_parent_id = (
-                _definition_rows(type(self)).filter(pk=self.pk).values_list("workflow_id", flat=True).first()
-            )
-        parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
-        manager = self._meta.get_field("workflow").remote_field.model.objects
-        with manager._definition_write(parent_ids, session=session) as session:
-            self.workflow = DefinitionQuerySet.bind_instance(
-                next(row for row in session.rows if row.pk == self.workflow_id), self
-            )
-            old = None if self._state.adding else _definition_rows(type(self)).filter(pk=self.pk).first()
-            if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
-                raise ValidationError("The stored workflow step changed while it was being edited.")
-            if old is not None and old.workflow_id != self.workflow_id:
-                if (
-                    _definition_rows(type(self))
-                    .filter(models.Q(outgoing_edges__isnull=False) | models.Q(incoming_edges__isnull=False), pk=self.pk)
-                    .exists()
-                ):
-                    raise ValidationError({"workflow": "A connected step cannot move to another workflow."})
-            with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
-            update_fields = kwargs.get("update_fields")
-            self.validate_impl_configs(update_fields=update_fields)
-            changed = declaration_changed(self, old, fields=self.declaration_fields, update_fields=update_fields)
-            with _workflow_child_create(self):
-                super().save(*args, **kwargs)
-            if changed:
-                for workflow_id in parent_ids:
-                    session.changed(workflow_id)
-
-    def delete(
-        self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any
-    ) -> tuple[int, dict[str, int]]:
-        """Delete only steps belonging to mutable workflow rows."""
-
-        workflow_id = _definition_rows(type(self)).filter(pk=self.pk).values_list("workflow_id", flat=True).first()
-        if workflow_id is None:
-            return (0, {})
-        manager = self._meta.get_field("workflow").remote_field.model.objects
-        with manager._definition_write((workflow_id,), session=session) as session:
-            persisted = _definition_rows(type(self)).get(pk=self.pk)
-            if persisted.workflow_id != workflow_id:
-                raise ValidationError("The stored workflow step changed while it was being deleted.")
-            edge_model = persisted.outgoing_edges.model
-            edges = (
-                edge_model.objects.all()
-                .bound_to(self)
-                .filter(models.Q(source_id=self.pk) | models.Q(target_id=self.pk))
-                .delete(session=session)
-            )
-            with DefinitionQuerySet.caller_context(self):
-                step = super().delete(*args, **kwargs)
-            if session is not None:
-                session.changed(workflow_id)
-            return _combined_delete_results(edges, step)
-
-
-class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
-    """Directed edge between two workflow steps."""
-
-    resource_class = WorkflowDefinitionResource
-    declaration_fields = frozenset({"workflow", "source", "target", "condition"})
-    editable_declaration_fields = declaration_fields - {"workflow", "source", "target"}
-    runtime = True
-
-    sqid_prefix = "wfe_"
-    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="edges")
-    source = models.ForeignKey("workflows.Step", on_delete=models.CASCADE, related_name="outgoing_edges")
-    target = models.ForeignKey("workflows.Step", on_delete=models.CASCADE, related_name="incoming_edges")
-    condition = models.SlugField(max_length=100, blank=True, default="")
-
-    objects = EdgeManager()
-
-    class Meta:
-        """Django model options for workflow edges."""
-
-        abstract = True
-        ordering = ("workflow", "source", "target", "condition")
-        rebac_resource_type = "workflows/edge"
-        constraints = (
-            models.UniqueConstraint(fields=("source", "target", "condition"), name="uniq_workflows_edge_condition"),
-        )
-
-    def __str__(self) -> str:
-        """Return a compact edge label."""
-
-        return f"{self.source_id}->{self.target_id}:{self.condition}"
-
-    def clean(self) -> None:
-        """Validate that an edge is fully contained in one workflow."""
-
-        super().clean()
-        errors: dict[str, str] = {}
-        if self.workflow_id is not None:
-            step_model = self._meta.get_field("source").remote_field.model
-            endpoints = dict(
-                _definition_rows(step_model)
-                .filter(pk__in=(self.source_id, self.target_id))
-                .values_list("pk", "workflow_id")
-            )
-            if self.source_id is not None and endpoints.get(self.source_id) != self.workflow_id:
-                errors["source"] = "Edge source must belong to the same workflow."
-            if self.target_id is not None and endpoints.get(self.target_id) != self.workflow_id:
-                errors["target"] = "Edge target must belong to the same workflow."
-        if errors:
-            raise ValidationError(errors)
-
-    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
-        """Persist the edge after enforcing parent immutability and validation."""
-
-        old_parent_id = None
-        if not self._state.adding:
-            old_parent_id = (
-                _definition_rows(type(self)).filter(pk=self.pk).values_list("workflow_id", flat=True).first()
-            )
-        parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
-        manager = self._meta.get_field("workflow").remote_field.model.objects
-        with manager._definition_write(parent_ids, session=session) as session:
-            self.workflow = DefinitionQuerySet.bind_instance(
-                next(row for row in session.rows if row.pk == self.workflow_id), self
-            )
-            old = None if self._state.adding else _definition_rows(type(self)).filter(pk=self.pk).first()
-            if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
-                raise ValidationError("The stored workflow edge changed while it was being edited.")
-            with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
-            update_fields = kwargs.get("update_fields")
-            changed = declaration_changed(self, old, fields=self.declaration_fields, update_fields=update_fields)
-            with _workflow_child_create(self):
-                super().save(*args, **kwargs)
-            if changed:
-                for workflow_id in parent_ids:
-                    session.changed(workflow_id)
-
-    def delete(
-        self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any
-    ) -> tuple[int, dict[str, int]]:
-        """Delete only edges belonging to mutable workflow rows."""
-
-        workflow_id = _definition_rows(type(self)).filter(pk=self.pk).values_list("workflow_id", flat=True).first()
-        if workflow_id is None:
-            return (0, {})
-        manager = self._meta.get_field("workflow").remote_field.model.objects
-        with manager._definition_write((workflow_id,), session=session) as session:
-            persisted = _definition_rows(type(self)).get(pk=self.pk)
-            if persisted.workflow_id != workflow_id:
-                raise ValidationError("The stored workflow edge changed while it was being deleted.")
-            with DefinitionQuerySet.caller_context(self):
-                result = super().delete(*args, **kwargs)
-            if session is not None:
-                session.changed(workflow_id)
-            return result
-
-
-def check_event_trigger_publishers(
-    app_configs: list[object] | None = None,
-    *,
-    databases: Iterable[str] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Check persisted event publishers only on explicitly requested databases."""
-
-    del app_configs, kwargs
-    if not databases:
-        return []
-    try:
-        trigger_model = apps.get_model("workflows", "Trigger")
-    except LookupError:
-        return []
-    errors = []
-    for database in databases:
-        try:
-            triggers = trigger_model._base_manager.using(database).filter(kind=TriggerKind.EVENT).order_by("pk")
-            for trigger in triggers.iterator():
-                try:
-                    trigger.validated_config(require_publisher=True)
-                except ValidationError as error:
-                    errors.append(
-                        checks.Error(
-                            f"Workflow trigger {trigger.pk}: {'; '.join(error.messages)}",
-                            obj=trigger_model,
-                            id="angee.workflows.E001",
-                        )
-                    )
-                    if len(errors) == 20:
-                        return errors
-        except (OperationalError, ProgrammingError):
-            continue
-    return errors
-
-
-def check_database_command_replay_declarations(
-    app_configs: list[object] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Warn when a registered database command leaves recovery policy implicit."""
-
-    del app_configs, kwargs
-    implementations = resolve_all_impl_classes(
-        "ANGEE_WORKFLOW_STEP_CLASSES",
-        StepImpl,
-        on_error=lambda error: None,
-    )
-    warnings = []
-    for implementation in implementations:
-        recovery_owner = next(
-            base for base in implementation.__mro__ if "recovery_capability" in base.__dict__
-        )
-        if (
-            implementation.execution_mode is StepExecutionMode.DATABASE_COMMAND
-            and implementation.replay_mode is None
-            and recovery_owner is StepImpl
-        ):
-            warnings.append(
-                checks.Warning(
-                    f"Database command {implementation.key!r} has no explicit recovery policy.",
-                    hint="Declare replay_mode or override recovery_capability() with the reason replay is unavailable.",
-                    obj=implementation,
-                    id="angee.workflows.W001",
-                )
-            )
-    return warnings
-
-
-class Trigger(AuditMixin, AngeeDataModel):
-    """Start rule attached to a workflow lineage head.
-
-    The default event publisher is the GraphQL change feed. Same-row donors
-    contribute additional publishers through ``event_publisher_model`` and own
-    their source-specific matching and admission rules.
-    """
+class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
+    """Immutable normalized graph document selected when a run starts."""
 
     runtime = True
-    trigger_protected_fields = ("execution_actor", "execution_actor_id")
+    sqid_prefix = "wfv_"
 
-    sqid_prefix = "wft_"
-    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
-    execution_actor = models.ForeignKey(
-        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
-    )
-    kind = StateField(choices_enum=TriggerKind, default=TriggerKind.MANUAL)
-    enabled = models.BooleanField(default=False)
-    config = models.JSONField(default=dict, blank=True)
-    event_model_label = models.CharField(max_length=200, blank=True, default="")
-    next_fire_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    last_fire_at = models.DateTimeField(null=True, blank=True)
-    hourly_window_started_at = models.DateTimeField(null=True, blank=True)
-    hourly_fire_count = models.PositiveIntegerField(default=0)
+    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.PROTECT, related_name="versions")
+    number = models.PositiveIntegerField()
+    document = models.JSONField(default=dict)
+    content_hash = models.CharField(max_length=64)
+    published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
 
-    objects = TriggerManager()
-
-    class Meta:
-        """Django model options for workflow triggers."""
-
-        abstract = True
-        ordering = ("workflow", "kind", "created_at")
-        rebac_resource_type = "workflows/trigger"
-        indexes = (
-            models.Index(
-                fields=("event_model_label",),
-                condition=models.Q(kind=TriggerKind.EVENT, enabled=True),
-                name="idx_wft_event_enabled",
-            ),
-        )
+    objects = WorkflowVersionManager()
 
     def __str__(self) -> str:
-        """Return the trigger's display label."""
+        """Identify the published version within its workflow."""
+        return f"Version {self.number}"
 
-        return f"{self.workflow_id}:{self.kind}"
+    class Meta:
+        """Django options for immutable workflow snapshots."""
 
-    def event_input_snapshot(self, subject: models.Model, actor: Any, source: Any) -> JsonPresence:
-        """Return immutable input captured when one new event occurrence is admitted.
+        abstract = True
+        rebac_resource_type = "workflows/version"
+        constraints = [
+            models.UniqueConstraint(fields=("workflow", "number"), name="workflows_version_number_unique"),
+        ]
 
-        Same-row donors may validate their own scope and cooperatively extend the
-        returned JSON object. The base trigger contributes no event input.
-        """
+    @cached_property
+    def definition(self) -> Definition:
+        """Parse the immutable document once for this model instance."""
 
-        del subject, actor, source
-        return JsonPresence()
+        return Definition.model_validate(self.document)
 
-    def event_publisher_model(self, declaration: EventTriggerConfig) -> type[models.Model]:
-        """Resolve a declared publisher; same-row donors handle their own source keys."""
-
-        if declaration.source != EventSource.CHANGE_PUBLISHED:
-            raise ValidationError({"config": f"Unknown event publisher {declaration.source!r}."})
-        for model in GraphQLSchemas.from_discovery().change_publisher_models():
-            if model._meta.label_lower == declaration.model:
-                return model
-        raise ValidationError(
-            {
-                "event_model_label": (
-                    f"Event trigger target {declaration.model!r} is not in the change feed; {_CHANGE_FEED_FIX}."
-                )
-            }
-        )
-
-    def event_subject_matches(self, subject: models.Model, *, source: str) -> bool:
-        """Let publisher donors constrain a delivery to their declared scope."""
-
-        return True
-
-    def validate_event_admission(self, subject: models.Model, *, source: str, dedup_key: str) -> None:
-        """Validate publisher-specific invariants under the locked workflow lineage."""
-
-    def clean(self) -> None:
-        """Validate lineage ownership and trigger declaration shape."""
-
-        super().clean()
-        workflow: Any = None
-        if self.workflow_id is not None:
-            workflow = self.workflow
-        if workflow is not None and workflow.published_from_id is not None:
-            raise ValidationError({"workflow": "Triggers attach only to workflow lineage heads."})
-        declaration = self.validated_config(require_publisher=self.enabled)
-        self._sync_index_fields(declaration)
-        if self.enabled and type(workflow).objects.current_published_for(workflow) is None:
-            raise ValidationError({"enabled": "Publish this workflow before enabling its trigger."})
-
-    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
-        """Persist the trigger after model validation."""
-
-        adding = self._state.adding
-        if adding:
-            self.enabled = False
-        update_fields = kwargs.get("update_fields")
-        operational_fields = {
-            "last_fire_at",
-            "hourly_window_started_at",
-            "hourly_fire_count",
-            "next_fire_at",
-            "updated_at",
-        }
-        if update_fields is not None and set(update_fields) <= operational_fields:
-            raise RuntimeError("Trigger operational fields are written only by the owning manager.")
-        old_workflow_id = None
-        discovered_state: tuple[Any, Any, Any, Any, Any] | None = None
-        if not adding:
-            discovered = (
-                system_queryset(type(self), lock=None)
-                .filter(pk=self.pk)
-                .values("workflow_id", "kind", "config", "enabled", "execution_actor_id")
-                .first()
-            )
-            if discovered is None:
-                raise type(self).DoesNotExist
-            old_workflow_id = discovered["workflow_id"]
-            discovered_state = (
-                discovered["workflow_id"],
-                discovered["kind"],
-                discovered["config"],
-                discovered["enabled"],
-                discovered["execution_actor_id"],
-            )
-        workflow_ids = sorted({value for value in (old_workflow_id, self.workflow_id) if value is not None})
-        workflow_model = type(self)._meta.get_field("workflow").remote_field.model
-        with (
-            DefinitionQuerySet.caller_context(self),
-            workflow_model.objects._definition_write(
-                workflow_ids,
-                session=session,
-            ) as write_session,
-        ):
-            self.workflow = DefinitionQuerySet.bind_instance(
-                next(row for row in write_session.rows if row.pk == self.workflow_id), self
-            )
-            persisted_rule: tuple[Any, Any] | None = None
-            if not adding:
-                locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-                if locked.workflow_id != old_workflow_id:
-                    raise ValidationError({"workflow": "The trigger lineage changed during this edit."})
-                locked_state = (
-                    locked.workflow_id,
-                    locked.kind,
-                    locked.config,
-                    locked.enabled,
-                    locked.execution_actor_id,
-                )
-                if locked_state != discovered_state:
-                    raise ValidationError("The trigger changed during this edit; reload and try again.")
-                fields = None if update_fields is None else set(update_fields)
-                if fields is not None:
-                    for field_name in ("workflow_id", "kind", "config", "enabled", "execution_actor_id"):
-                        public_name = field_name.removesuffix("_id")
-                        if public_name not in fields and field_name not in fields:
-                            setattr(self, field_name, getattr(locked, field_name))
-                if self.enabled != locked.enabled:
-                    raise ValidationError({"enabled": "Use the trigger enable or disable action."})
-                persisted_rule = (locked.kind, locked.config)
-                self.last_fire_at = locked.last_fire_at
-                self.hourly_window_started_at = locked.hourly_window_started_at
-                self.hourly_fire_count = locked.hourly_fire_count
-                self.next_fire_at = locked.next_fire_at
-            self.full_clean()
-            if adding and self.kind == TriggerKind.EVENT and isinstance(self.config, dict):
-                declaration = self.validated_config()
-                if isinstance(declaration, EventTriggerConfig) and "admission_policy" not in self.config:
-                    self.config = {**self.config, "admission_policy": str(declaration.admission_policy)}
-            rule_changed = persisted_rule is not None and persisted_rule != (self.kind, self.config)
-            cadence_changed = False
-            if rule_changed and self.enabled and persisted_rule is not None:
-                persisted_declaration = validate_trigger_config(cast(Any, persisted_rule[0]), persisted_rule[1])
-                declaration = self.validated_config()
-                persisted_cadence = (
-                    persisted_declaration.cadence if isinstance(persisted_declaration, ScheduleTriggerConfig) else None
-                )
-                cadence = declaration.cadence if isinstance(declaration, ScheduleTriggerConfig) else None
-                cadence_changed = persisted_cadence != cadence
-            if rule_changed and self.enabled and cadence_changed:
-                self.next_fire_at = (
-                    self.initial_fire_at(now=timezone.now()) if self.kind == TriggerKind.SCHEDULE else None
-                )
-            if update_fields is not None:
-                fields = set(update_fields)
-                if {"kind", "config", "event_model_label"} & fields:
-                    fields.update({"event_model_label", "next_fire_at"})
-                kwargs["update_fields"] = fields
-            self._save_validated(*args, **kwargs)
-
-    def _save_validated(self, *args: Any, **kwargs: Any) -> None:
-        """Persist after the owning locked path has completed validation."""
-
-        with _workflow_child_create(self):
-            super().save(*args, **kwargs)
-
-    def enable(self) -> None:
-        """Enable this trigger through the model owner."""
-
-        enabled = type(self).objects.set_enabled(self, enabled=True)
-        self.enabled = enabled.enabled
-        self.next_fire_at = enabled.next_fire_at
-
-    def disable(self) -> None:
-        """Disable this trigger through the model owner."""
-
-        disabled = type(self).objects.set_enabled(self, enabled=False)
-        self.enabled = disabled.enabled
-        self.next_fire_at = disabled.next_fire_at
-
-    def rate_limit_allows(self, *, timestamp: datetime) -> bool:
-        """Return whether this trigger can fire at ``timestamp``."""
-
-        declaration = self.validated_config()
-        cooldown_seconds = declaration.cooldown_seconds
-        if cooldown_seconds and self.last_fire_at is not None:
-            if self.last_fire_at + timedelta(seconds=cooldown_seconds) > timestamp:
-                return False
-
-        hourly_cap = declaration.hourly_cap
-        if hourly_cap is None:
-            return True
-        window_start = self.hourly_window_started_at
-        if window_start is None or timestamp - window_start >= timedelta(hours=1):
-            return True
-        return int(self.hourly_fire_count) < hourly_cap
-
-    def record_fire(self, *, timestamp: datetime) -> None:
-        """Record one trigger fire and persist rate-limit counters."""
-
-        trigger = type(self).objects.record_fire(self, timestamp=timestamp)
-        self.last_fire_at = trigger.last_fire_at
-        self.hourly_window_started_at = trigger.hourly_window_started_at
-        self.hourly_fire_count = trigger.hourly_fire_count
-        self.next_fire_at = trigger.next_fire_at
-
-    def condition_matches(self, sender: type[models.Model], instance: models.Model) -> bool:
-        """Return whether this event trigger matches a saved model instance."""
-
-        condition = self.config_mapping.get("condition", {})
-        if not isinstance(condition, Mapping):
-            return False
-        with system_context(reason="workflows.event_triggers.condition"):
-            return sender._default_manager.filter(pk=instance.pk, **dict(condition)).exists()
-
-    def initial_fire_at(self, *, now: datetime) -> datetime | None:
-        """Return the first persisted due timestamp for this schedule trigger."""
-
-        declaration = self.validated_config()
-        if not isinstance(declaration, ScheduleTriggerConfig):
-            return None
-        return declaration.next_fire_at(after=now, now=now)
-
-    def compute_next_fire_at(self, *, after: datetime, now: datetime) -> datetime | None:
-        """Return the next scheduled occurrence after ``after`` and later than ``now``."""
-
-        declaration = self.validated_config()
-        if not isinstance(declaration, ScheduleTriggerConfig):
-            return None
-        return declaration.next_fire_at(after=after, now=now)
-
-    def validated_config(self, *, require_publisher: bool = False) -> TriggerConfig:
-        """Return the declaration-owned rule and optionally verify event delivery."""
-
-        try:
-            declaration = validate_trigger_config(cast(Any, self.kind), self.config)
-        except (ValueError, TypeError) as error:
-            raise ValidationError({"config": str(error)}) from error
-        if require_publisher and isinstance(declaration, EventTriggerConfig):
-            event_model = self.event_publisher_model(declaration)
-            try:
-                condition_query = event_model._base_manager.filter(**(declaration.condition or {})).query
-                try:
-                    condition_query.get_compiler(connection=connection).as_sql()
-                except EmptyResultSet, FullResultSet:
-                    pass
-            except (FieldError, LookupError, TypeError, ValueError) as error:
-                raise ValidationError({"condition": f"Event trigger condition is invalid: {error}"}) from error
-        return declaration
-
-    def activation_blocker(self, *, has_current_publication: bool | None = None) -> str | None:
-        """Return the rule or publication reason that prevents activation."""
-
-        try:
-            self.validated_config(require_publisher=True)
-        except ValidationError as error:
-            return "; ".join(error.messages)
-        if has_current_publication is None:
-            has_current_publication = type(self.workflow).objects.current_published_for(self.workflow) is not None
-        if not has_current_publication:
-            return "Publish this workflow before enabling its trigger."
-        return None
-
-    @property
-    def config_mapping(self) -> Mapping[str, Any]:
-        """Return trigger config when it is a JSON object."""
-
-        return self.config if isinstance(self.config, Mapping) else {}
-
-    def _sync_index_fields(self, declaration: TriggerConfig) -> None:
-        """Mirror config-owned event declarations into indexed query fields."""
-
-        self.event_model_label = declaration.model if isinstance(declaration, EventTriggerConfig) else ""
-
-
-class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
-    """One execution of a pinned published workflow version."""
+class WorkflowRun(RecordRefMixin, AngeeDataModel):
+    """One actor's execution of one immutable graph against an optional record."""
 
     runtime = True
     rebac_grantable = {"reader": "write", "operator": "write"}
-    invocation_identity_attnames = frozenset(
-        {
-            "workflow_id",
-            "origin",
-            "trigger_id",
-            "parent_step_run_id",
-            "parent_relation",
-            "reprocessed_from_id",
-            "subject_content_type_id",
-            "subject_object_id",
-            "dedup_key",
-            "occurrence_id",
-            "admitted_actor_ref",
-            "input_present",
-            "input",
-            "test_request_actor_ref",
-            "test_scope",
-            "test_step_id",
-            "test_source_step_id",
-            "test_repair_source_attempt_id",
-            "recovery_source_attempt_id",
-            "recovery_request_actor_ref",
-            "recovery_mode",
-            "recovery_uncertainty_ack",
-        }
-    )
-
-    record_ref_field_prefix = "subject"
-
     sqid_prefix = "wfr_"
-    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.PROTECT, related_name="runs")
-    origin = StateField(choices_enum=RunOrigin, default=RunOrigin.UNKNOWN)
-    trigger = models.ForeignKey(
-        "workflows.Trigger",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="runs",
-    )
-    parent_step_run = models.ForeignKey(
-        "workflows.StepRun",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="child_runs",
-    )
-    parent_relation = StateField(choices_enum=ParentRelation, null=True, blank=True, editable=False)
-    reprocessed_from = models.ForeignKey(
-        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="reprocessed_runs", editable=False
-    )
-    status = StateField(choices_enum=RunStatus, default=RunStatus.PENDING)
-    subject_content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="+",
-    )
+
+    version = models.ForeignKey("workflows.WorkflowVersion", on_delete=models.PROTECT, related_name="runs")
+    run_as = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    subject_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, null=True, blank=True)
     subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
-    dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
-    occurrence_id = models.CharField(max_length=255, null=True, blank=True, editable=False)
-    admitted_actor_ref = models.CharField(max_length=255, blank=True, default="", editable=False)
-    test_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
-    test_scope = StateField(choices_enum=WorkflowScope, null=True, blank=True, editable=False)
-    test_step = models.ForeignKey(
-        "workflows.Step",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="selected_test_runs",
-        editable=False,
+    status = StateField(choices_enum=RunStatus, default=RunStatus.RUNNING, db_index=False)
+    input = models.JSONField(default=dict)
+    output = models.JSONField(default=dict)
+    outcome = models.CharField(max_length=NAME_MAX_LENGTH, blank=True, default="")
+    error = DiagnosticTextField(max_length=8192, blank=True, default="")
+    request_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    parent_step = models.ForeignKey(
+        "workflows.StepRun", on_delete=models.PROTECT, null=True, blank=True, related_name="child_runs",
     )
-    test_source_step_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
-    test_repair_source_attempt = models.ForeignKey(
-        "workflows.StepAttempt",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="repair_test_runs",
-        editable=False,
+    relation = StateField(choices_enum=RunRelation, null=True, blank=True)
+    reprocess_of = models.ForeignKey(
+        "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="reprocesses",
     )
-    recovery_source_attempt = models.ForeignKey(
-        "workflows.StepAttempt",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="recovery_runs",
-        editable=False,
+    trigger_event = models.OneToOneField(
+        "workflows.TriggerEvent", on_delete=models.PROTECT, null=True, blank=True, related_name="started_run",
     )
-    recovery_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
-    recovery_mode = models.CharField(max_length=32, blank=True, editable=False)
-    recovery_uncertainty_ack = models.BooleanField(default=False, editable=False)
-    input_present = models.BooleanField(default=False, editable=False)
-    input = models.JSONField(null=True, blank=True, editable=False)
-    wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    deliveries = models.PositiveBigIntegerField(default=0)
-    steps_taken = models.PositiveIntegerField(default=0)
-    budget_spent = models.JSONField(default=dict, blank=True)
-    error = models.TextField(blank=True)
-    result = models.JSONField(null=True, blank=True, editable=False)
-
-    status_transitions = StateTransitions(
-        status,
-        {
-            RunStatus.PENDING: [RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELED],
-            RunStatus.RUNNING: [RunStatus.WAITING, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED],
-            RunStatus.WAITING: [RunStatus.RUNNING, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED],
-        },
-    )
+    origin = StateField(choices_enum=RunOrigin, editable=False)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    prune_after = models.DateTimeField(null=True, blank=True, editable=False)
+    prune_reason = DiagnosticTextField(max_length=255, blank=True, default="", editable=False)
 
     objects = WorkflowRunManager()
-    system_objects = WorkflowRunSystemManager()
 
-    class Meta:
-        """Django model options for workflow runs."""
+    def __str__(self) -> str:
+        """Identify an execution by its workflow and start time."""
+        if self.version_id is None:
+            return str(self._meta.verbose_name)
+        name = getattr(self, "_workflow_name", None)
+        if name is None:
+            with system_context(reason="workflows.run_label"):
+                name = self.policy_version.workflow.name
+        started = self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "not started"
+        return f"{name} · {started}"
 
-        abstract = True
-        base_manager_name = "system_objects"
-        ordering = ("-created_at", "sqid")
-        rebac_resource_type = "workflows/run"
-        indexes = (models.Index(fields=("subject_content_type", "subject_object_id"), name="idx_wfr_subject_ref"),)
-        constraints = (
-            models.CheckConstraint(
-                condition=(
-                    models.Q(origin=RunOrigin.TEST)
-                    | models.Q(test_repair_source_attempt__isnull=True)
-                ),
-                name="chk_wfr_test_repair_source",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(input_present=True) | models.Q(input__isnull=True),
-                name="chk_wfr_absent_input_null",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(origin=RunOrigin.TEST, test_request_actor_ref__gt="")
-                    | (~models.Q(origin=RunOrigin.TEST) & models.Q(test_request_actor_ref=""))
-                ),
-                name="chk_wfr_test_request_actor",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    (
-                        models.Q(test_scope__isnull=True)
-                        | models.Q(test_scope__isnull=False, test_scope=WorkflowScope.WHOLE)
-                    ) & models.Q(
-                        origin=RunOrigin.TEST,
-                        test_step__isnull=True,
-                        test_source_step_id__isnull=True,
-                    )
-                    | models.Q(
-                        origin=RunOrigin.TEST,
-                        test_scope=WorkflowScope.NODE,
-                        test_scope__isnull=False,
-                        test_step__isnull=False,
-                        test_source_step_id__isnull=False,
-                    )
-                    | (
-                        ~models.Q(origin=RunOrigin.TEST)
-                        & models.Q(
-                            test_scope__isnull=True,
-                            test_step__isnull=True,
-                            test_source_step_id__isnull=True,
-                        )
-                    )
-                ),
-                name="chk_wfr_test_scope",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(
-                        origin=RunOrigin.RECOVERY,
-                        recovery_source_attempt__isnull=False,
-                        recovery_request_actor_ref__gt="",
-                        recovery_mode__gt="",
-                    )
-                    | (
-                        ~models.Q(origin=RunOrigin.RECOVERY)
-                        & models.Q(
-                            recovery_source_attempt__isnull=True,
-                            recovery_request_actor_ref="",
-                            recovery_mode="",
-                            recovery_uncertainty_ack=False,
-                        )
-                    )
-                ),
-                name="chk_wfr_recovery_identity",
-            ),
-            models.UniqueConstraint(
-                fields=("parent_step_run",),
-                condition=models.Q(parent_step_run__isnull=False),
-                name="uniq_workflows_run_parent_step_run",
-            ),
-        )
+    @property
+    def outcome_label(self) -> str:
+        """Use the frozen publication's reader vocabulary for a terminal result."""
+        return self.policy_version.definition.run_outcome_label(self.outcome) if self.outcome else ""
 
-    def admission_actor_subject(self) -> Any | None:
-        """Return the immutable admission subject, including historical rows."""
+    @cached_property
+    def policy_version(self) -> Any:
+        """Reuse loaded policy, resolving a viewer-redacted relation by its pinned ID."""
+        if version := self._state.fields_cache.get("version"):
+            return version
+        if "version" not in self._state.fields_cache:
+            with system_context(reason="workflows.execution_policy"):
+                return self.version
+        model = self._meta.get_field("version").related_model
+        return system_queryset(model).get(pk=self.version_id)
 
-        if self.admitted_actor_ref:
-            return canonical_subject_ref(self.admitted_actor_ref)
-        return None
-
-    def admission_actor(self) -> Any | None:
-        """Resolve the retained principal, failing closed on unsupported databases."""
-
-        subject = self.admission_actor_subject()
-        return None if subject is None else resolve_subjects((subject,)).get(subject)
-
-    def execution_admission_actor(self) -> Any:
-        """Resolve the immutable actor admitted by this recovery lineage root."""
-
-        target = self.delivery_target()
-        actor = target.admission_actor()
-        if actor is None:
-            raise ValidationError({"actor": "Workflow execution requires its admitted actor."})
-        return actor
+    @property
+    def subject_model_class(self) -> type[models.Model] | None:
+        """Resolve the declared execution type, falling back to the canonical record."""
+        if self.subject_object_id is None:
+            return None
+        with system_context(reason="workflows.subject_policy"):
+            label = self.policy_version.workflow.subject_model or self.record_model_label
+        return apps.get_model(label)
 
     @property
     def is_terminal(self) -> bool:
-        """Return whether this run has reached a terminal status."""
+        """Whether this run has finished its lifecycle."""
+        return self.status in RunStatus.terminal_values()
 
-        return self.status in RunStatus.TERMINAL
+    @property
+    def failure_reason(self) -> str | None:
+        """Surface the retained reader-facing failure from the run or its failed step.
 
-    def execution_lineage_root_id(self) -> int:
-        """Return the original run retained by this recovery provenance chain.
-
-        This identity does not grant access to either run. Callers must still
-        authorize every record and validate their domain payloads independently.
+        ``error`` stays out: it is gated to run writers (``read__error``).
         """
+        if self.outcome != ERROR_OUTCOME:
+            return None
+        if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
+            return self.output["error"]
+        with system_context(reason="workflows.failure_reason"):
+            outputs = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
+                "rank", "map_index", "pk",
+            ).values_list("output", flat=True)
+            return next((output["error"] for output in outputs
+                         if isinstance(output, dict) and isinstance(output.get("error"), str)
+                         and output["error"]), None)
 
-        current = self
-        seen: set[int] = set()
-        while current.origin == RunOrigin.RECOVERY:
-            if current.pk is None or current.pk in seen:
-                raise ValidationError({"run": "Workflow recovery lineage is cyclic."})
-            seen.add(current.pk)
-            attempt_model = self._meta.get_field("recovery_source_attempt").remote_field.model
-            source = (
-                system_queryset(attempt_model)
-                .select_related("step_run__run")
-                .filter(pk=current.recovery_source_attempt_id)
-                .first()
-            )
-            if (
-                source is None
-                or source.step_run.current_attempt_id != source.pk
-                or source.step_run.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
-                or source.step_run.run.workflow_id != current.workflow_id
-            ):
-                raise ValidationError({"run": "Workflow recovery lineage is incomplete or stale."})
-            current = source.step_run.run
-        if current.pk is None:
-            raise ValidationError({"run": "Workflow execution lineage requires a saved run."})
-        return current.pk
+    def can_cancel(self, actor: Any) -> bool:
+        """A writer may cancel active execution or clean up a terminal run's open rows."""
+        return self.with_actor(actor).has_access("write") and self._has_open_owned_work
 
-    def delivery_target(self) -> Self:
-        """Return the original run identity subscribed by parent operations."""
+    def check_await(self, observer: Any, *, expects: str) -> None:
+        """Require an observed run to match the pinned contract without a self-wait."""
+        with system_context(reason="workflows.await_policy"):
+            expected = self.policy_version.workflow.key == expects
+        if not expected:
+            raise ValidationError("The awaited run belongs to a different workflow.")
+        if self.pk == observer.pk:
+            raise ValidationError("A run cannot await itself.")
 
-        root_id = self.execution_lineage_root_id()
-        if root_id == self.pk:
-            return self
-        return system_queryset(type(self), lock=None).get(pk=root_id)
-
-    def same_execution_lineage(self, other: Any) -> bool:
-        """Return whether two authorized runs share exact recovery provenance."""
-
-        if not isinstance(other, type(self)):
-            raise TypeError("Workflow execution lineage requires two WorkflowRun records.")
-        return self.execution_lineage_root_id() == other.execution_lineage_root_id()
-
-    def allows_test_step(self, step: Any) -> bool:
-        """Return whether the pinned test scope admits one copied step."""
-
-        if step is None or step.workflow_id != self.workflow_id:
-            return False
-        if self.origin != RunOrigin.TEST or self.test_scope in {None, WorkflowScope.WHOLE}:
-            return True
-        if self.test_scope != WorkflowScope.NODE or self.test_step_id is None:
-            return False
-
-        with system_context(reason="workflows.test_scope.plan"):
-            workflow_model = self._meta.get_field("workflow").remote_field.model
-            workflow = system_queryset(workflow_model).get(pk=self.workflow_id)
-            plan = WorkflowGraph.from_workflow(workflow).test_plan(GraphIdentity(existing_id=self.test_step_id))
-        return GraphIdentity(existing_id=step.pk) in plan.executable
-
-    @classmethod
-    def waiting_projection_annotation(cls) -> dict[str, Any]:
-        """Return declared active wait kind and the next genuine scheduled wake."""
-
-        step_run = cls._meta.apps.get_model("workflows", "StepRun")
-        waiting = step_run.objects.filter(run_id=models.OuterRef("pk"), status=StepRunStatus.WAITING)
-        scheduled = waiting.filter(waiting_kind=WaitingKind.SCHEDULED)
-        return {
-            "_workflow_waiting_kind": models.Case(
-                models.When(~models.Q(status=RunStatus.WAITING), then=models.Value(None)),
-                models.When(
-                    models.Exists(waiting.filter(waiting_kind=WaitingKind.APPROVAL)),
-                    then=models.Value(WaitingKind.APPROVAL),
-                ),
-                models.When(
-                    models.Exists(waiting.filter(waiting_kind=WaitingKind.EXTERNAL)),
-                    then=models.Value(WaitingKind.EXTERNAL),
-                ),
-                models.When(
-                    models.Exists(waiting.filter(waiting_kind=WaitingKind.CHILDREN)),
-                    then=models.Value(WaitingKind.CHILDREN),
-                ),
-                models.When(models.Exists(scheduled), then=models.Value(WaitingKind.SCHEDULED)),
-                default=models.Value(None),
-                output_field=step_run._meta.get_field("waiting_kind"),
-            ),
-            "_workflow_next_wake_at": models.Subquery(
-                scheduled.filter(run__status=RunStatus.WAITING)
-                .order_by("wait_until", "pk")
-                .values("wait_until")[:1],
-                output_field=models.DateTimeField(),
-            ),
-        }
-
-    @classmethod
-    def active_step_projection_annotation(cls) -> dict[str, Any]:
-        """Return the oldest active journal step label without loading the run journal."""
-
-        step_run = cls._meta.apps.get_model("workflows", "StepRun")
-        active = step_run.objects.filter(
-            run_id=models.OuterRef("pk"),
-            status__in=(StepRunStatus.STARTED, StepRunStatus.WAITING),
-        ).order_by("created_at", "pk")
-        return {
-            "_workflow_active_step": models.Subquery(
-                active.annotate(
-                    display=Coalesce(
-                        "step__name",
-                        "system_kind",
-                        output_field=models.CharField(),
-                    ),
-                ).values("display")[:1],
-                output_field=models.CharField(),
-            ),
-        }
-
-    def awaiting_decision(self) -> bool:
-        """Return whether this run has an unresolved workflow decision."""
-
-        return self.step_runs.filter(decisions__verdict=Verdict.PENDING).exists()
-
-    @transition(status, source=RunStatus.PENDING, target=RunStatus.RUNNING, on_success=save_state)
-    def mark_running(self) -> None:
-        """Mark a pending run as actively orchestrating."""
-
-    @transition(status, source=RunStatus.WAITING, target=RunStatus.RUNNING, on_success=save_state)
-    def resume(self) -> None:
-        """Mark a waiting run as actively orchestrating again."""
-
-    @transition(
-        status,
-        source=RunStatus.RUNNING,
-        target=RunStatus.WAITING,
-        on_success=save_state,
-    )
-    def mark_waiting(self, *, wake_at: Any = None) -> None:
-        """Mark a run as waiting on durable external or timer state."""
-
-        self.wake_at = wake_at
-        self._transition_fields = {"wake_at"}
-
-    @transition(
-        status,
-        source=[RunStatus.RUNNING, RunStatus.WAITING],
-        target=RunStatus.SUCCEEDED,
-        on_success=save_state,
-    )
-    def mark_succeeded(self, *, outcome: str = "completed", output: Any = _UNSET_RESULT_OUTPUT) -> None:
-        """Mark a run as successful."""
-
-        self.result = {
-            "status": "succeeded",
-            "outcome": outcome,
-            "output": {} if output is _UNSET_RESULT_OUTPUT else output,
-            "error": None,
-        }
-        self.wake_at = None
-        self._transition_fields = {"wake_at", "result"}
-
-    @transition(
-        status,
-        source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
-        target=RunStatus.FAILED,
-        on_success=save_state,
-    )
-    def mark_failed(self, error: str = "") -> None:
-        """Mark a run as failed with an optional durable error message."""
-
-        self.error = error
-        self.result = {"status": "failed", "outcome": "failed", "output": None, "error": error}
-        self.wake_at = None
-        self._transition_fields = {"error", "wake_at", "result"}
-
-    @transition(
-        status,
-        source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
-        target=RunStatus.CANCELED,
-        on_success=save_state,
-    )
-    def mark_canceled(self) -> None:
-        """Mark a run as canceled."""
-
-        self.result = {"status": "canceled", "outcome": "canceled", "output": None, "error": None}
-        self.wake_at = None
-        self._transition_fields = {"wake_at", "result"}
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the run while keeping start identity and input immutable."""
-
-        if self._state.adding:
-            self._save_run_guarded(*args, **kwargs)
-            return
-        with transaction.atomic():
-            retained = (
-                system_queryset(type(self), lock=("self",))
-                .values("status", "result", *sorted(self.invocation_identity_attnames))
-                .get(pk=self.pk)
-            )
-            changed = {
-                field: "Retained workflow invocation identity is immutable."
-                for field in self.invocation_identity_attnames
-                if not (
-                    json_values_equal(retained[field], getattr(self, field))
-                    if field == "input"
-                    else retained[field] == getattr(self, field)
-                )
-            }
-            if changed:
-                raise ValidationError(changed)
-            if retained["status"] in RunStatus.TERMINAL and (
-                self.status != retained["status"] or self.result != retained["result"]
-            ):
-                raise ValidationError("A retained terminal workflow run cannot be overwritten.")
-            self._save_run_guarded(*args, **kwargs)
-            fields = kwargs.get("update_fields")
-            if (
-                (fields is None or "status" in fields)
-                and retained["status"] not in RunStatus.TERMINAL
-                and self.status in RunStatus.TERMINAL
-            ):
-                with system_context(reason="workflows.runs.terminal"):
-                    delivery_target = self.delivery_target()
-                    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-                    dispatch_model.objects.schedule_artifact_delivery(delivery_target)
-                    if (
-                        self.subject_content_type_id is not None
-                        and subject_settler(
-                            self.subject_content_type,
-                        )
-                        is not None
-                    ):
-                        dispatch_model.objects.schedule_run_settle(self)
-
-    @classmethod
-    def invocation_identity_write_names(cls) -> frozenset[str]:
-        """Include Django FK field names as well as their stored attnames."""
-
-        return cls.invocation_identity_attnames | frozenset(
-            field.name for field in cls._meta.concrete_fields
-            if field.attname in cls.invocation_identity_attnames
+    @property
+    def _has_open_owned_work(self) -> bool:
+        """Cancellation owns open rows throughout the tree, even below final descendants."""
+        return (
+            not self.is_terminal
+            or system_queryset(self.step_runs.model).filter(run=self)
+            .exclude(status__in=StepRunStatus.terminal_values()).exists()
+            or any(child._has_open_owned_work for child in system_queryset(type(self)).filter(
+                parent_step__run=self, relation=RunRelation.OWNED,
+            ))
         )
 
-    @classmethod
-    def normalize_parent_relation(
-        cls, parent_step_run_id: int | None, relation: ParentRelation | str | None,
-    ) -> ParentRelation | None:
-        """Normalize the declared relationship and require it exactly for child runs."""
-
-        try:
-            relation = cls._meta.get_field("parent_relation").to_python(relation)
-        except ValidationError as error:
-            raise ValidationError({"parent_relation": error}) from error
-        if (parent_step_run_id is None) != (relation is None):
-            raise ValidationError({"parent_relation": "Parent relationship is required exactly for a parent step."})
-        return cast(ParentRelation | None, relation)
-
-    def _save_run_guarded(self, *args: Any, **kwargs: Any) -> None:
-        """Validate new-run shape; existing identity is checked on the locked row."""
-
-        if self._state.adding:
-            cast(Any, self).parent_relation = self.normalize_parent_relation(
-                self.parent_step_run_id,
-                self.parent_relation,
-            )
-            if self.result is not None:
-                raise ValidationError({"result": "A new workflow run cannot have a terminal result."})
-        self._raise_if_test_identity_changed()
-        super().save(*args, **kwargs)
-
-    def _raise_if_test_identity_changed(self) -> None:
-        """Validate the shape of one newly admitted test request."""
-
-        if self._state.adding:
-            if self.origin == RunOrigin.TEST and not self.test_request_actor_ref:
-                raise ValidationError({"test_request_actor_ref": "Test runs require their requesting actor."})
-            if self.origin != RunOrigin.TEST and self.test_request_actor_ref:
-                raise ValidationError({"test_request_actor_ref": "Only test runs have a requesting actor."})
-            if self.origin != RunOrigin.TEST and self.test_repair_source_attempt_id is not None:
-                raise ValidationError({"test_repair_source_attempt": "Only test runs retain repair source evidence."})
-            if self.origin != RunOrigin.RECOVERY and self.recovery_uncertainty_ack:
-                raise ValidationError(
-                    {"recovery_uncertainty_ack": ("Only recovery runs can retain uncertainty acknowledgement.")}
-                )
-            if self.origin == RunOrigin.TEST:
-                if self.test_scope not in WorkflowScope.values:
-                    raise ValidationError({"test_scope": "Test runs require a declared scope."})
-                if self.test_scope == WorkflowScope.NODE and (
-                    self.test_step_id is None or self.test_source_step_id is None
-                ):
-                    raise ValidationError({"test_step": "Node test runs require an exact selected step."})
-                if self.test_scope == WorkflowScope.WHOLE and (
-                    self.test_step_id is not None or self.test_source_step_id is not None
-                ):
-                    raise ValidationError({"test_step": "Whole workflow tests cannot select one step."})
-                if self.test_step_id is not None:
-                    step_model = self._meta.get_field("test_step").remote_field.model
-                    if (
-                        not system_queryset(step_model)
-                        .filter(pk=self.test_step_id, workflow_id=self.workflow_id)
-                        .exists()
-                    ):
-                        raise ValidationError(
-                            {"test_step": "The selected test step must belong to the pinned snapshot."}
-                        )
-            elif self.test_scope or self.test_step_id is not None or self.test_source_step_id is not None:
-                raise ValidationError({"test_scope": "Only test runs carry test scope facts."})
-
-    def debit_budget(self, delta: Mapping[str, int]) -> None:
-        """Atomically add usage deltas to this run's budget ledger."""
-
-        if not delta:
-            return
-        with system_context(reason="workflows.runs.debit_budget"), transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            spent = dict(locked.budget_spent or {})
-            for key, value in delta.items():
-                spent[str(key)] = int(spent.get(str(key), 0)) + int(value)
-            locked.budget_spent = spent
-            locked.save(update_fields=["budget_spent", "updated_at"])
-
-
-class WorkflowTestFixture(AuditMixin, AngeeDataModel):
-    """Immutable manual or captured evidence admitted for one workflow test."""
-
-    runtime = True
-    sqid_prefix = "wtf_"
-
-    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.PROTECT, related_name="test_fixtures")
-    step = models.ForeignKey("workflows.Step", on_delete=models.PROTECT, related_name="test_fixtures")
-    role = StateField(choices_enum=FixtureRole)
-    item_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    value_present = models.BooleanField(default=False, editable=False)
-    value = models.JSONField(null=True, blank=True, editable=False)
-    outcome = models.SlugField(max_length=100, blank=True, default="", editable=False)
-    captured_attempt = models.ForeignKey(
-        "workflows.StepAttempt",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="test_fixture_captures",
-        editable=False,
-    )
-
-    objects = WorkflowTestFixtureManager()
+    def can_reprocess(self, actor: Any) -> bool:
+        """Reprocessing needs terminal execution, run write and workflow start access."""
+        if not self.is_terminal or not self.with_actor(actor).has_access("write"):
+            return False
+        with system_context(reason="workflows.reprocess_policy"):
+            workflow = self.policy_version.workflow
+        return bool(workflow.with_actor(actor).has_access("start"))
 
     class Meta:
+        """Django options for execution identity and terminal timestamps."""
+
         abstract = True
-        base_manager_name = "objects"
-        ordering = ("run_id", "step_id", "role", "item_index", "pk")
-        constraints = (
+        rebac_resource_type = "workflows/run"
+        constraints = [
+            models.CheckConstraint(condition=(
+                models.Q(origin=RunOrigin.MANUAL, parent_step__isnull=True, reprocess_of__isnull=True,
+                         trigger_event__isnull=True)
+                | models.Q(origin=RunOrigin.WORKFLOW, parent_step__isnull=False, reprocess_of__isnull=True,
+                           trigger_event__isnull=True)
+                | models.Q(origin=RunOrigin.REPROCESS, parent_step__isnull=True, reprocess_of__isnull=False,
+                           trigger_event__isnull=True)
+                | models.Q(origin=RunOrigin.TRIGGER, parent_step__isnull=True, reprocess_of__isnull=True,
+                           trigger_event__isnull=False)
+            ), name="workflows_run_origin_cause"),
             models.CheckConstraint(
-                condition=models.Q(value_present=True) | models.Q(value__isnull=True),
-                name="chk_wtf_absent_value_null",
+                condition=(
+                    models.Q(status__in=RunStatus.terminal_values(), finished_at__isnull=False)
+                    | models.Q(status__in=(RunStatus.RUNNING, RunStatus.WAITING), finished_at__isnull=True)
+                ),
+                name="workflows_run_finished_terminal",
             ),
-            models.UniqueConstraint(
-                fields=("run", "step", "role", "item_index"),
-                name="uniq_workflows_test_fixture_slot",
-                nulls_distinct=False,
+        ]
+        indexes = [
+            models.Index(fields=("subject_content_type", "subject_object_id"), name="workflows_run_subject"),
+            models.Index(
+                fields=("finished_at",),
+                condition=models.Q(status__in=RunStatus.terminal_values()),
+                name="workflows_run_finished",
             ),
-        )
-
-    def clean(self) -> None:
-        super().clean()
-        if self.run_id is not None and self.step_id is not None:
-            run, step = self.run, self.step
-            if run.origin != RunOrigin.TEST or step.workflow_id != run.workflow_id:
-                raise ValidationError({"step": "Fixture steps must belong to the pinned test snapshot."})
-        try:
-            validate_json_presence(JsonPresence(self.value_present, self.value), label="test fixture value")
-        except ValueError as error:
-            raise ValidationError({"value": str(error)}) from error
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Workflow test fixtures can only be written by WorkflowRunManager.")
-
-    def insert_retained(self) -> None:
-        """Insert this immutable row through its owning manager operation."""
-
-        if not self._state.adding:
-            raise TypeError("Retained evidence cannot be rewritten.")
-        super().save(force_insert=True)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow test fixtures are retained admission facts.")
+        ]
 
 
-class WorkflowRecoveryEvidence(AuditMixin, AngeeDataModel):
-    """Protected link to an accepted predecessor result reused by recovery."""
+class WorkflowRunEvidence(DerivedFrom):
+    """One subject or entry input record retained with its admitted run."""
 
     runtime = True
     sqid_prefix = "wre_"
-    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.PROTECT, related_name="recovery_evidence")
-    source_attempt = models.ForeignKey(
-        "workflows.StepAttempt", on_delete=models.PROTECT, related_name="reused_by_recoveries"
-    )
-    step = models.ForeignKey("workflows.Step", on_delete=models.PROTECT, related_name="recovery_evidence")
-    map_index = models.IntegerField(default=-1, editable=False)
-    objects = WorkflowRecoveryEvidenceManager()
+    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="evidence")
+    objects = WorkflowRunEvidenceManager()
 
     class Meta:
+        """Keep each canonical evidence target once per run."""
+
         abstract = True
-        ordering = ("run_id", "step_id", "map_index")
-        rebac_resource_type = "workflows/recovery_evidence"
-        constraints = (
-            models.UniqueConstraint(fields=("run", "step", "map_index"), name="uniq_wre_run_step_slot"),
-        )
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Recovery evidence can only be saved by WorkflowRunManager.")
-
-    def insert_retained(self) -> None:
-        """Insert this immutable row through its owning manager operation."""
-
-        if not self._state.adding:
-            raise TypeError("Retained evidence cannot be rewritten.")
-        super().save(force_insert=True)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise TypeError("Recovery evidence is immutable admission data.")
+        rebac_resource_type = "workflows/run_evidence"
+        constraints = [models.UniqueConstraint(
+            fields=("run", "content_type", "object_id"), name="workflows_run_evidence_unique",
+        )]
+        indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_run_evidence_record")]
 
 
-class StepRun(AuditMixin, AngeeDataModel):
-    """Journal row for one workflow step execution or system-injected event."""
+class StepRun(AngeeDataModel):
+    """One graph node's state and input, with its claim counter as the fence.
 
-    projection_field_names = frozenset(
-        {
-            "run",
-            "run_id",
-            "step",
-            "step_id",
-            "map_index",
-            "status",
-            "input",
-            "output",
-            "output_present",
-            "resume_state",
-            "claimed_deliveries",
-            "outcome",
-            "attempt",
-            "current_attempt",
-            "current_attempt_id",
-            "current_map_expansion",
-            "current_map_expansion_id",
-            "effect_key",
-            "effect_generation",
-            "wait_until",
-            "waiting_kind",
-            "heartbeat_at",
-            "error",
-            "stacktrace",
-        }
-    )
+    ``rank`` stores graph order for query sorting without reparsing the version.
+    """
 
     runtime = True
-
+    decision_group = models.OneToOneField(
+        "decisions.DecisionGroup", on_delete=models.PROTECT, null=True, blank=True, related_name="step_run",
+    )
+    awaited_run = models.ForeignKey(
+        "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="waiters",
+    )
     sqid_prefix = "wsr_"
+
     run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="step_runs")
-    step = models.ForeignKey(
-        "workflows.Step",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="step_runs",
+    node_key = models.CharField(
+        max_length=NAME_MAX_LENGTH + len(MAP_BODY_SUFFIX),
+        help_text="A declared node key, with room for a map item's .body suffix.",
     )
-    system_kind = models.SlugField(max_length=100, blank=True, default="")
-    map_index = models.IntegerField(default=-1)
-    status = StateField(choices_enum=StepRunStatus, default=StepRunStatus.SCHEDULED)
-    previous = models.ManyToManyField("self", symmetrical=False, blank=True, related_name="next_step_runs")
-    input = models.JSONField(default=dict, null=True, blank=True)
-    output = models.JSONField(default=dict, null=True, blank=True)
-    output_present = models.BooleanField(default=False)
-    resume_state = models.JSONField(default=dict, blank=True)
-    claimed_deliveries = models.PositiveBigIntegerField(default=0)
-    outcome = models.SlugField(max_length=100, blank=True, default="")
+    rank = models.PositiveIntegerField(editable=False, help_text="Execution order assigned once by the graph planner.")
+    map_index = models.PositiveIntegerField(default=0)
+    status = StateField(choices_enum=StepRunStatus, default=StepRunStatus.READY, db_index=False)
+    waiting_kind = StateField(choices_enum=WaitingKind, null=True, blank=True, db_index=False)
+    wait_reason = DiagnosticTextField(blank=True, default="")
     attempt = models.PositiveIntegerField(default=0)
-    effect_key = models.UUIDField(null=True, blank=True, editable=False)
-    effect_generation = models.PositiveIntegerField(default=0, editable=False)
-    current_attempt = models.OneToOneField(
-        "workflows.StepAttempt",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="current_for_step_run",
-        editable=False,
+    idempotency_token = models.UUIDField(null=True, blank=True, editable=False)
+    page_index = models.PositiveIntegerField(default=0, editable=False)
+    retries = models.PositiveIntegerField(default=0)
+    retry_acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+        help_text="Pending duplicate-effect acknowledgement, transferred to the next committed attempt.",
     )
-    current_map_expansion = models.ForeignKey(
-        "workflows.StepAttempt",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="current_map_members",
-        editable=False,
-    )
-    wait_until = models.DateTimeField(null=True, blank=True, db_index=True)
-    waiting_kind = StateField(choices_enum=WaitingKind, null=True, blank=True)
-    heartbeat_at = models.DateTimeField(null=True, blank=True)
-    error = models.TextField(blank=True)
-    stacktrace = models.TextField(blank=True)
-
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
-        """Invalidate exact reads of this execution's parent workflow run."""
-
-        run_model = self._meta.get_field("run").related_model
-        return (ChangeRelatedRecord(run_model._meta.label, run_model.public_id_from_pk(self.run_id)),)
-
-    status_transitions = StateTransitions(
-        status,
-        {
-            StepRunStatus.SCHEDULED: [
-                StepRunStatus.FAILED,
-                StepRunStatus.STARTED,
-                StepRunStatus.CANCELED,
-                StepRunStatus.SKIPPED,
-            ],
-            StepRunStatus.STARTED: [
-                StepRunStatus.WAITING,
-                StepRunStatus.SUCCEEDED,
-                StepRunStatus.FAILED,
-                StepRunStatus.CANCELED,
-            ],
-            StepRunStatus.WAITING: [
-                StepRunStatus.STARTED,
-                StepRunStatus.SUCCEEDED,
-                StepRunStatus.FAILED,
-                StepRunStatus.CANCELED,
-                StepRunStatus.SKIPPED,
-            ],
-            StepRunStatus.SUCCEEDED: [StepRunStatus.SCHEDULED],
-            StepRunStatus.FAILED: [StepRunStatus.SCHEDULED],
-            StepRunStatus.CANCELED: [StepRunStatus.SCHEDULED],
-            StepRunStatus.SKIPPED: [StepRunStatus.SCHEDULED],
-        },
-    )
+    dispatches = models.PositiveIntegerField(default=0)
+    deadline_at = models.DateTimeField(null=True, blank=True)
+    wake_at = models.DateTimeField(null=True, blank=True)
+    dispatched_at = models.DateTimeField(db_default=Now())
+    input = models.JSONField(default=dict)
+    output = models.JSONField(default=dict)
+    outcome = models.CharField(max_length=NAME_MAX_LENGTH, blank=True, default="")
+    state = models.JSONField(default=dict)
 
     objects = StepRunManager()
-    unscoped_objects = AngeeUnscopedManager()
+
+    def __str__(self) -> str:
+        """Distinguish mapped items while preserving the authored node name."""
+        return f"{self.node_key} [{self.map_index}]" if self.is_mapped else self.node_key
+
+    @property
+    def node_label(self) -> str:
+        """Return this row's published node label."""
+        return self.run.policy_version.definition.node_label(self.node_key)
+
+    @property
+    def outcome_label(self) -> str:
+        """Return this row's published outcome label."""
+        return (self.run.policy_version.definition.node_outcome_label(self.node_key, self.outcome)
+                if self.outcome else "")
+
+    @property
+    def is_mapped(self) -> bool:
+        """Identify a map body row by its node identity, including item index zero."""
+        return self.node_key.endswith(MAP_BODY_SUFFIX)
+
+    @property
+    def is_map(self) -> bool:
+        """Identify a map parent from its declaration, including an empty map."""
+        return not self.is_mapped and self.run.policy_version.definition.nodes[self.node_key].body is not None
+
+    def map_rows(self) -> Any:
+        """Select this map's body rows; ordinary nodes have no matching items."""
+        return self.run.step_runs.for_map(self.run_id, self.node_key)
+
+    @property
+    def map_total(self) -> int:
+        """Count admitted items for a map, including after its wait has ended."""
+        return len(self.input["items"]) if self.input and self.is_map else 0
+
+    @classmethod
+    def map_settled_expression(cls) -> Coalesce:
+        """Count terminal body rows in one correlated expression for bulk reads."""
+        rows = cast(Any, system_queryset(cls)).for_map(models.OuterRef("run_id"), models.OuterRef("node_key"))
+        counts = (rows.filter(status__in=StepRunStatus.terminal_values()).order_by().values("run_id")
+                  .annotate(total=models.Count("pk")).values("total"))
+        return Coalesce(models.Subquery(counts), 0, output_field=models.IntegerField())
+
+    @property
+    def map_settled(self) -> int:
+        """Use the same progress expression for ordinary model and optimized reads."""
+        if "_map_settled" in self.__dict__:
+            return int(self.__dict__["_map_settled"])
+        return int(system_queryset(type(self)).filter(pk=self.pk)
+                   .annotate(_map_settled=self.map_settled_expression()).values_list("_map_settled", flat=True).get())
+
+    @property
+    def step(self) -> type[Step]:
+        """Resolve the class once from this run's immutable node declaration."""
+        return self.run.policy_version.definition.step(self.node_key)
+
+    @property
+    def requires_duplicate_acknowledgement(self) -> bool:
+        """Whether any attempt on this page may have made a non-idempotent effect."""
+        with system_context(reason="workflows.effect_policy"):
+            return not self.step.effect_idempotent and self.attempts.filter(
+                page_index=self.page_index, effect_started_at__isnull=False,
+            ).exists()
+
+    @property
+    def retry_blocker(self) -> str | None:
+        """State-only retry eligibility, shared by the locked action and read surface."""
+        run = self.run
+        definition = run.policy_version.definition
+        if (
+            run.status not in {RunStatus.FAILED, RunStatus.WAITING, RunStatus.RUNNING}
+            or not (self.status == StepRunStatus.FAILED
+                    or self.status == StepRunStatus.WAITING and self.waiting_kind == WaitingKind.OPERATOR)
+            or self.status == StepRunStatus.FAILED and not definition.retry_allowed(self.node_key)
+        ):
+            return "This step cannot be retried in place."
+        others = sorted(row.node_key for row in run.step_runs.all()
+                        if row.pk != self.pk and definition.unrouted_failure([row]))
+        return f"Other unrouted failures remain: {', '.join(others)}." if others else None
+
+    def can_retry(self, actor: Any) -> bool:
+        """Expose retry eligibility without granting generic writes to engine rows."""
+        if not self.run.with_actor(actor).has_access("write"):
+            return False
+        with system_context(reason="workflows.retry_policy"):
+            return self.retry_blocker is None
 
     class Meta:
-        """Django model options for workflow step-run journal rows."""
+        """Django options for node identity, fences and tick predicates."""
 
         abstract = True
-        base_manager_name = "unscoped_objects"
-        ordering = ("created_at", "sqid")
         rebac_resource_type = "workflows/step_run"
-        constraints = (
-            models.UniqueConstraint(fields=("run", "step", "map_index"), name="uniq_workflows_step_run_map"),
+        ordering = ("rank", "map_index", "pk")
+        constraints = [
+            models.UniqueConstraint(fields=("run", "node_key", "map_index"), name="workflows_step_node_unique"),
             models.CheckConstraint(
                 condition=(
-                    models.Q(current_map_expansion__isnull=True)
-                    | (models.Q(map_index__gte=0) & models.Q(step__isnull=False))
+                    models.Q(status=StepRunStatus.RUNNING, deadline_at__isnull=False)
+                    | (~models.Q(status=StepRunStatus.RUNNING) & models.Q(deadline_at__isnull=True))
                 ),
-                name="chk_wsr_map_membership_body",
-            ),
-        )
-
-    @property
-    def is_terminal(self) -> bool:
-        """Return whether this journal row has reached a terminal status."""
-
-        return self.status in StepRunStatus.TERMINAL
-
-    @property
-    def is_retained(self) -> bool:
-        """Return whether this slot has crossed the permanent retained boundary."""
-
-        return (
-            self.effect_key is not None
-            or self.current_attempt_id is not None
-            or self.current_map_expansion_id is not None
-            or self.attempts.exists()
-        )
-
-    @property
-    def decision_gate(self) -> DecisionGate:
-        """Return the single parsed decision policy for this suspension."""
-
-        return DecisionGate.from_resume_state(self.resume_state)
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Keep attempt-owned facts immutable outside the attempt manager."""
-
-        if self._state.adding:
-            invalid = (
-                self.attempt != 0
-                or self.effect_key is not None
-                or self.effect_generation != 0
-                or self.current_attempt_id is not None
-                or self.current_map_expansion_id is not None
-            )
-            if invalid:
-                raise ValidationError({"effect_key": "Attempt identity is initialized by StepAttemptManager."})
-        elif not self._state.adding:
-            loaded = (
-                system_queryset(type(self), lock=None)
-                .filter(pk=self.pk)
-                .values(
-                    "run_id",
-                    "step_id",
-                    "map_index",
-                    "attempt",
-                    "current_attempt_id",
-                    "current_map_expansion_id",
-                    "effect_key",
-                    "effect_generation",
-                )
-                .get()
-            )
-            update_fields = kwargs.get("update_fields")
-            touches_projection = update_fields is None or bool(self.projection_field_names.intersection(update_fields))
-            attempt_model = self._meta.get_field("current_attempt").remote_field.model
-            retained = (
-                loaded["current_attempt_id"] is not None
-                or loaded["current_map_expansion_id"] is not None
-                or loaded["effect_key"] is not None
-                or system_queryset(attempt_model, lock=None).filter(step_run_id=self.pk).exists()
-            )
-            changed_ancestry = {
-                name for name in ("run_id", "step_id", "map_index") if loaded[name] != getattr(self, name)
-            }
-            if retained and changed_ancestry:
-                raise ValidationError({name: "Retained StepRun ancestry is immutable." for name in changed_ancestry})
-            if retained and touches_projection:
-                raise TypeError("Retained StepRun projections can only be saved by their manager owner.")
-            changed = {
-                name
-                for name in ("current_attempt_id", "effect_key", "effect_generation")
-                if loaded[name] != getattr(self, name)
-            }
-            if loaded["attempt"] != self.attempt and (
-                loaded["current_attempt_id"] is not None or loaded["effect_key"] is not None
-            ):
-                changed.add("attempt")
-            if changed:
-                raise ValidationError({name: "This field is owned by StepAttemptManager." for name in changed})
-        super().save(*args, **kwargs)
-
-    def project_from_attempt(self, attempt: Any, *, fields: Iterable[str]) -> None:
-        """Persist an attempt-owned projection while preserving immutable ancestry."""
-
-        fields = set(fields)
-        if fields - self.projection_field_names - {"updated_at"}:
-            raise TypeError("The attempt operation can persist only StepRun projection fields.")
-        attnames = {type(self)._meta.get_field(name).attname for name in fields - {"updated_at"}}
-        loaded = (
-            system_queryset(type(self), lock=None)
-            .values(
-                "run_id",
-                "step_id",
-                "map_index",
-                "current_attempt_id",
-                "status",
-                *sorted(attnames),
-            )
-            .get(pk=self.pk)
-        )
-        if any(loaded[name] != getattr(self, name) for name in ("run_id", "step_id", "map_index")):
-            raise ValidationError("Retained StepRun ancestry is immutable.")
-        if attempt is not None and (attempt.step_run_id != self.pk or attempt.pk != self.current_attempt_id):
-            raise ValidationError({"attempt": "Projection requires this step run's current attempt."})
-        if attempt is None and loaded["current_attempt_id"] is not None:
-            raise ValidationError({"attempt": "A retained projection requires its attempt."})
-        if all(loaded[name] == getattr(self, name) for name in attnames):
-            return
-        changed = (
-            type(self)
-            .objects.get_queryset()
-            ._project_from_attempt(
-                self,
-                fields=fields - {"updated_at"},
-                previous=loaded,
-            )
-        )
-        if changed != 1:
-            raise TransitionNotAllowed("StepRun projection changed before persistence.")
-        super().save(update_fields=fields)
-
-    @transition(
-        status,
-        source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
-        target=StepRunStatus.FAILED,
-        on_success=_save_step_run_projection,
-    )
-    def mark_preparation_failed(self) -> None:
-        """Project a retained failure before physical invocation."""
-
-    @transition(
-        status,
-        source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
-        target=StepRunStatus.STARTED,
-        on_success=_save_step_run_projection,
-    )
-    def mark_started(self, *, heartbeat_at: Any = None, claimed_deliveries: int = 0) -> None:
-        """Claim this row for execution."""
-
-        self.heartbeat_at = heartbeat_at
-        self.claimed_deliveries = claimed_deliveries
-        cast(Any, self).waiting_kind = None
-        self._transition_fields = {"heartbeat_at", "claimed_deliveries", "waiting_kind"}
-
-    @transition(
-        status, source=StepRunStatus.STARTED, target=StepRunStatus.WAITING, on_success=_save_step_run_projection
-    )
-    def mark_waiting(
-        self,
-        *,
-        until: Any = None,
-        resume_state: dict[str, Any] | None = None,
-        waiting_kind: WaitingKind = cast(WaitingKind, WaitingKind.SCHEDULED),
-    ) -> None:
-        """Persist durable wait conditions for this row."""
-
-        self.wait_until = until
-        self.waiting_kind = waiting_kind
-        if resume_state is not None:
-            self.resume_state = resume_state
-        self._transition_fields = {"wait_until", "resume_state", "waiting_kind"}
-
-    def wake(self, *, at: datetime) -> None:
-        """Make this waiting journal row due without changing its state.
-
-        Event delivery changes only the durable due time. The engine owns the
-        later ``WAITING`` → ``STARTED`` claim and therefore remains the sole
-        scheduler of implementation work.
-        """
-
-        if self.status != StepRunStatus.WAITING:
-            raise TransitionNotAllowed(f"StepRun.wake requires status={StepRunStatus.WAITING}; found {self.status}.")
-        self.wait_until = at
-        attempt = self.current_attempt
-        self.project_from_attempt(attempt, fields={"wait_until", "resume_state", "updated_at"})
-
-    @transition(
-        status,
-        source=[StepRunStatus.STARTED, StepRunStatus.WAITING],
-        target=StepRunStatus.SUCCEEDED,
-        on_success=_save_step_run_projection,
-    )
-    def mark_succeeded(self, *, output: Any = None, output_present: bool = True, outcome: str = "") -> None:
-        """Persist a successful step result."""
-
-        self.output = output if output_present else None
-        self.output_present = output_present
-        self.outcome = outcome
-        self.error = ""
-        self.stacktrace = ""
-        self.wait_until = None
-        cast(Any, self).waiting_kind = None
-        self._transition_fields = {
-            "output",
-            "output_present",
-            "outcome",
-            "error",
-            "stacktrace",
-            "wait_until",
-            "waiting_kind",
-        }
-
-    @transition(
-        status,
-        source=[StepRunStatus.STARTED, StepRunStatus.WAITING],
-        target=StepRunStatus.FAILED,
-        on_success=_save_step_run_projection,
-    )
-    def mark_failed(self, *, error: str = "", stacktrace: str = "", outcome: str = "failed") -> None:
-        """Persist a failed step result."""
-
-        self.error = error
-        self.stacktrace = stacktrace
-        self.outcome = outcome
-        self.wait_until = None
-        cast(Any, self).waiting_kind = None
-        self._transition_fields = {"error", "stacktrace", "outcome", "wait_until", "waiting_kind"}
-
-    @transition(
-        status,
-        source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
-        target=StepRunStatus.SKIPPED,
-        on_success=_save_step_run_projection,
-    )
-    def mark_skipped(self) -> None:
-        """Mark this row as skipped by routing or join semantics."""
-
-        self.wait_until = None
-        cast(Any, self).waiting_kind = None
-        self._transition_fields = {"wait_until", "waiting_kind", "resume_state"}
-
-    @transition(
-        status,
-        source=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING],
-        target=StepRunStatus.CANCELED,
-        on_success=_save_step_run_projection,
-    )
-    def mark_canceled(self) -> None:
-        """Mark this row as canceled."""
-
-        self.wait_until = None
-        cast(Any, self).waiting_kind = None
-        self._transition_fields = {"wait_until", "waiting_kind", "resume_state"}
-
-    @transition(
-        status,
-        source=[StepRunStatus.SUCCEEDED, StepRunStatus.FAILED, StepRunStatus.CANCELED, StepRunStatus.SKIPPED],
-        target=StepRunStatus.SCHEDULED,
-        on_success=_save_step_run_projection,
-    )
-    def reschedule_for_override(self, *, input: Any = None) -> None:
-        """Reset a terminal journal row so a manual override can run it again."""
-
-        self.input = input if input is not None else {}
-        self.output = {}
-        self.resume_state = {}
-        self.claimed_deliveries = 0
-        self.outcome = ""
-        self.wait_until = None
-        cast(Any, self).waiting_kind = None
-        self.heartbeat_at = None
-        self.error = ""
-        self.stacktrace = ""
-        self._transition_fields = {
-            "input",
-            "output",
-            "resume_state",
-            "claimed_deliveries",
-            "outcome",
-            "wait_until",
-            "waiting_kind",
-            "heartbeat_at",
-            "error",
-            "stacktrace",
-        }
-
-
-class StepAttempt(AuditMixin, AngeeDataModel):
-    """Append-only evidence for one physical execution attempt."""
-
-    runtime = True
-
-    sqid_prefix = "wsa_"
-    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.PROTECT, related_name="attempts")
-
-    @property
-    def is_held_suspension(self) -> bool:
-        """Whether this applied suspension still holds its execution lease."""
-
-        return (
-            self.result_kind == AttemptResultKind.SUSPEND
-            and self.applied_at is not None
-            and self.lease_revoked_at is None
-        )
-
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
-        """Invalidate exact reads of this attempt's execution journal row."""
-
-        step_run_model = self._meta.get_field("step_run").related_model
-        return (ChangeRelatedRecord(
-            step_run_model._meta.label,
-            step_run_model.public_id_from_pk(self.step_run_id),
-        ),)
-
-    retry_of = models.OneToOneField(
-        "self",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="retry_successor",
-        editable=False,
-    )
-    retry_index = models.PositiveIntegerField(default=0, editable=False)
-    available_at = models.DateTimeField(null=True, blank=True, db_index=True, editable=False)
-    ordinal = models.PositiveIntegerField()
-    cause = models.CharField(max_length=32, choices=[(value.value, value.name.title()) for value in AttemptCause])
-    lease_token = models.UUIDField(editable=False)
-    effect_key = models.UUIDField(editable=False)
-    effect_generation = models.PositiveIntegerField(default=0, editable=False)
-    input_present = models.BooleanField(default=False)
-    input = models.JSONField(null=True, blank=True)
-    input_provenance = models.JSONField(default=dict, blank=True)
-    map_expansion = models.ForeignKey(
-        "self",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="map_item_attempts",
-        editable=False,
-    )
-    map_item_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    map_item_present = models.BooleanField(default=False, editable=False)
-    map_item = models.JSONField(null=True, blank=True, editable=False)
-    test_fixture = models.ForeignKey(
-        "workflows.WorkflowTestFixture",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="applied_attempts",
-        editable=False,
-    )
-    recovery_source_attempt = models.ForeignKey(
-        "self",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="recovery_attempts",
-        editable=False,
-    )
-    recovery_mode = models.CharField(max_length=32, blank=True, editable=False)
-    intended_effect_key = models.UUIDField(null=True, blank=True, editable=False)
-    claimed_at = models.DateTimeField(null=True, blank=True)
-    started_at = models.DateTimeField(null=True, blank=True)
-    external_content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="+",
-        editable=False,
-    )
-    external_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
-    heartbeat_at = models.DateTimeField(null=True, blank=True)
-    lease_revoked_at = models.DateTimeField(null=True, blank=True)
-    lease_revocation_reason = StateField(choices_enum=LeaseRevocationReason, null=True, blank=True, db_index=False)
-    result_kind = StateField(choices_enum=AttemptResultKind, null=True, blank=True, db_index=False)
-    result_recorded_at = models.DateTimeField(null=True, blank=True)
-    output_present = models.BooleanField(default=False)
-    output = models.JSONField(null=True, blank=True)
-    checkpoint_present = models.BooleanField(default=False)
-    checkpoint = models.JSONField(null=True, blank=True)
-    error = models.TextField(null=True, blank=True)
-    stacktrace = models.TextField(null=True, blank=True)
-    outcome = models.SlugField(max_length=100, blank=True, default="")
-    waiting_kind = models.CharField(max_length=32, blank=True, default="")
-    result_requested_until = models.DateTimeField(null=True, blank=True)
-    result_decisions = models.JSONField(default=list, blank=True)
-    decision_settlement = models.JSONField(default=dict, blank=True, editable=False)
-    artifacts_present = models.BooleanField(default=False, editable=False)
-    orchestration_error = models.TextField(blank=True, default="", editable=False)
-    applied_at = models.DateTimeField(null=True, blank=True)
-
-    objects = StepAttemptManager()
-    system_objects = StepAttemptSystemManager()
-
-    class Meta:
-        abstract = True
-        base_manager_name = "system_objects"
-        ordering = ("step_run_id", "ordinal")
-        rebac_resource_type = "workflows/step_attempt"
-        constraints = (
-            models.UniqueConstraint(fields=("step_run", "ordinal"), name="uniq_workflows_step_attempt_ordinal"),
-            models.UniqueConstraint(fields=("lease_token",), name="uniq_workflows_step_attempt_lease"),
-            models.CheckConstraint(
-                condition=models.Q(input_present=True) | models.Q(input__isnull=True),
-                name="chk_wsa_absent_input_null",
+                name="workflows_step_running_deadline",
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(external_content_type__isnull=True, external_object_id__isnull=True)
-                    | models.Q(external_content_type__isnull=False, external_object_id__isnull=False)
+                    models.Q(status=StepRunStatus.WAITING, waiting_kind__isnull=False)
+                    | (~models.Q(status=StepRunStatus.WAITING) & models.Q(waiting_kind__isnull=True))
                 ),
-                name="chk_wsa_external_target_pair",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(output_present=True) | models.Q(output__isnull=True),
-                name="chk_wsa_absent_output_null",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(checkpoint_present=True) | models.Q(checkpoint__isnull=True),
-                name="chk_wsa_absent_checkpoint_null",
+                name="workflows_step_waiting_kind",
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(lease_revoked_at__isnull=True, lease_revocation_reason__isnull=True)
-                    | models.Q(lease_revoked_at__isnull=False, lease_revocation_reason__isnull=False)
+                    models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.TIME,
+                             wake_at__isnull=False, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
+                               decision_group__isnull=False, wake_at__isnull=True, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RUN,
+                               awaited_run__isnull=False, wake_at__isnull=True, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.MAP,
+                               wake_at__isnull=True, wait_reason="")
+                    | (models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.OPERATOR,
+                                wake_at__isnull=True) & ~models.Q(wait_reason=""))
+                    | (~models.Q(status=StepRunStatus.WAITING)
+                       & models.Q(wake_at__isnull=True, wait_reason=""))
                 ),
-                name="chk_wsa_revocation_pair",
+                name="workflows_step_wait_columns",
             ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(result_recorded_at__isnull=True, result_kind__isnull=True)
-                    | models.Q(result_recorded_at__isnull=False, result_kind__isnull=False)
-                ),
-                name="chk_wsa_result_pair",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(applied_at__isnull=True)
-                    | (models.Q(result_recorded_at__isnull=False) & models.Q(lease_revoked_at__isnull=True))
-                ),
-                name="chk_wsa_applied_result",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(
-                        cause=AttemptCause.AUTOMATIC_RETRY,
-                        retry_of__isnull=False,
-                        retry_index__gt=0,
-                        available_at__isnull=False,
-                    )
-                    | (
-                        ~models.Q(cause=AttemptCause.AUTOMATIC_RETRY)
-                        & models.Q(retry_of__isnull=True, retry_index=0, available_at__isnull=True)
-                    )
-                ),
-                name="chk_wsa_retry_series",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(orchestration_error="") | models.Q(
-                    result_kind__isnull=False, result_kind=AttemptResultKind.TRANSIENT_ERROR
-                ),
-                name="chk_wsa_orchestration_error",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(
-                        map_expansion__isnull=True,
-                        map_item_index__isnull=True,
-                        map_item_present=False,
-                        map_item__isnull=True,
-                    )
-                    | models.Q(
-                        map_expansion__isnull=False,
-                        map_item_index__isnull=False,
-                        map_item_present=True,
-                    )
-                ),
-                name="chk_wsa_map_item_source",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(cause=AttemptCause.TEST_FIXTURE, test_fixture__isnull=False)
-                    | ~models.Q(cause=AttemptCause.TEST_FIXTURE)
-                ),
-                name="chk_wsa_test_fixture_cause",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(
-                        cause=AttemptCause.MANUAL_RETRY,
-                        recovery_source_attempt__isnull=False,
-                        recovery_mode__gt="",
-                        intended_effect_key__isnull=False,
-                    )
-                    | (
-                        ~models.Q(cause=AttemptCause.MANUAL_RETRY)
-                        & models.Q(
-                            recovery_source_attempt__isnull=True,
-                            recovery_mode="",
-                            intended_effect_key__isnull=True,
-                        )
-                    )
-                ),
-                name="chk_wsa_recovery_attempt",
-            ),
-        )
-
-    @property
-    def status(self) -> AttemptStatus:
-        """Derive lifecycle display from retained lease and result evidence."""
-
-        if self.result_recorded_at is not None:
-            return AttemptStatus.COMPLETED if self.applied_at is not None else AttemptStatus.LATE_RESULT
-        if self.lease_revoked_at is not None:
-            return AttemptStatus.REVOKED
-        if self.started_at is not None:
-            return AttemptStatus.RUNNING
-        if self.claimed_at is not None:
-            return AttemptStatus.CLAIMED
-        return AttemptStatus.ALLOCATED
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Step attempts can only be saved by StepAttemptManager.")
-
-    def allocate(self) -> None:
-        """Insert one manager-validated claim; constraints own its unique identity."""
-
-        if not self._state.adding:
-            raise TypeError("An allocated attempt cannot be inserted again.")
-        super().save(force_insert=True)
-
-    def admit_invocation(self, *, lease_token: Any, at: datetime) -> bool:
-        """Claim the first physical invocation before a receiver can re-enter."""
-
-        changed = (
-            type(self)
-            .objects.get_queryset()
-            ._admit_invocation(
-                attempt_id=self.pk,
-                lease_token=lease_token,
-                at=at,
-            )
-        )
-        if changed:
-            self.started_at = at
-            self.heartbeat_at = at
-        return changed == 1
-
-    def heartbeat(self) -> bool:
-        """Advance a live heartbeat once before save receivers can re-enter."""
-
-        if type(self).objects.get_queryset()._heartbeat(self) != 1:
-            return False
-        super().save(update_fields=["heartbeat_at", "updated_at"])
-        return True
-
-    def revoke_lease(self) -> None:
-        """Retain a lease revocation without rewriting invocation or result facts."""
-
-        if type(self).objects.get_queryset()._revoke_lease(self) != 1:
-            raise ValidationError({"attempt": "The invocation lease is no longer available for revocation."})
-        super().save(update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"])
-
-    def bind_external(self) -> None:
-        """Retain the manager-validated external operation identity."""
-
-        if type(self).objects.get_queryset()._bind_external(self) != 1:
-            raise ValidationError({"attempt": "The invocation already has an external binding or is no longer active."})
-        super().save(update_fields=["external_content_type", "external_object_id", "updated_at"])
-
-    result_field_names = (
-        "result_kind",
-        "result_recorded_at",
-        "output_present",
-        "output",
-        "checkpoint_present",
-        "checkpoint",
-        "error",
-        "stacktrace",
-        "outcome",
-        "waiting_kind",
-        "result_requested_until",
-        "result_decisions",
-        "artifacts_present",
-        "applied_at",
-        "orchestration_error",
-    )
-
-    def retain_result(self) -> None:
-        """Retain one result before save receivers can invoke finalization again."""
-
-        changed = type(self).objects.get_queryset()._retain_result(self)
-        if changed != 1:
-            raise ValidationError({"attempt": "This attempt already retained its result."})
-        super().save(update_fields=[*self.result_field_names, "updated_at"])
-
-    def retain_orchestration_error(self) -> None:
-        """Retain failure to schedule an already recorded transient result."""
-
-        super().save(update_fields=["orchestration_error", "updated_at"])
-
-    def settle_decisions(self) -> None:
-        """Write the full gate settlement once on an applied suspension."""
-
-        value = self.decision_settlement
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"decision_ids", "outcome"}
-            or not isinstance(value["decision_ids"], list)
-            or not value["decision_ids"]
-            or not isinstance(value["outcome"], str)
-        ):
-            raise ValidationError({"decision_settlement": "A settlement needs resolved decisions and an outcome."})
-        changed = (
-            type(self)
-            .objects.get_queryset()
-            ._settle_decisions(
-                attempt_id=self.pk,
-                settlement=value,
-            )
-        )
-        if changed != 1:
-            raise ValidationError({"decision_settlement": "This suspension is not available for settlement."})
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
-
-
-class StepExternalSubscription(AuditMixin, AngeeDataModel):
-    """One exact domain record observed by an attempt's external wait predicate."""
-
-    runtime = True
-    sqid_prefix = "wes_"
-    attempt = models.ForeignKey(
-        "workflows.StepAttempt",
-        on_delete=models.CASCADE,
-        related_name="external_subscriptions",
-        editable=False,
-    )
-    target_content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.PROTECT,
-        related_name="+",
-        editable=False,
-    )
-    target_object_id = models.PositiveBigIntegerField(editable=False)
-    target = GenericForeignKey("target_content_type", "target_object_id")
-
-    objects = StepExternalSubscriptionManager()
-
-    class Meta:
-        abstract = True
-        ordering = ("attempt_id", "target_content_type_id", "target_object_id")
-        indexes = (
+        ]
+        indexes = [
             models.Index(
-                fields=("target_content_type", "target_object_id"),
-                name="idx_wes_target",
+                fields=("wake_at",), condition=models.Q(status=StepRunStatus.WAITING), name="workflows_step_wake"
             ),
-        )
-        constraints = (
-            models.UniqueConstraint(
-                fields=("attempt", "target_content_type", "target_object_id"),
-                name="uniq_wes_attempt_target",
+            models.Index(
+                fields=("deadline_at",),
+                condition=models.Q(status=StepRunStatus.RUNNING),
+                name="workflows_step_deadline",
             ),
-        )
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("External subscriptions can only be recorded by StepAttemptManager.")
-
-    def insert_retained(self) -> None:
-        """Insert this immutable row through its owning manager operation."""
-
-        if not self._state.adding:
-            raise TypeError("Retained evidence cannot be rewritten.")
-        super().save(force_insert=True)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise TypeError("External subscriptions are retained for their attempt lifecycle.")
+            models.Index(
+                fields=("dispatched_at",),
+                condition=models.Q(status=StepRunStatus.READY),
+                name="workflows_step_dispatch",
+            ),
+        ]
 
 
-class StepArtifact(AuditMixin, AngeeDataModel):
-    """Immutable ordered pointer explicitly emitted by one retained attempt result."""
+class StepAttempt(AngeeDataModel):
+    """One committed claim, closed once the attempt finishes."""
 
     runtime = True
-    sqid_prefix = "war_"
-    attempt = models.ForeignKey("workflows.StepAttempt", on_delete=models.PROTECT, related_name="artifacts")
-    declaration_index = models.PositiveIntegerField(editable=False)
-    label = models.CharField(max_length=255, editable=False)
-    target_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
-    target_object_id = models.PositiveBigIntegerField()
-    target = GenericForeignKey("target_content_type", "target_object_id")
+    sqid_prefix = "wsa_"
 
-    objects = StepArtifactManager()
+    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="attempts")
+    number = models.PositiveIntegerField()
+    page_index = models.PositiveIntegerField(default=0, editable=False)
+    started_at = models.DateTimeField(db_default=Now())
+    finished_at = models.DateTimeField(null=True, blank=True)
+    result = StateField(choices_enum=AttemptResult, null=True, blank=True, db_index=False)
+    error = DiagnosticTextField(max_length=8192, blank=True, default="")
+    stacktrace = DiagnosticTextField(max_length=65536, blank=True, default="")
+    effect_started_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+
+    objects = AngeeManager.from_queryset(StepAttemptQuerySet)()
+
+    def __str__(self) -> str:
+        """Identify this retained claim within its step."""
+        return f"Attempt {self.number}"
 
     class Meta:
+        """Django options for one attempt per claim number."""
+
         abstract = True
-        ordering = ("attempt_id", "declaration_index")
+        rebac_resource_type = "workflows/step_attempt"
+        constraints = [
+            models.UniqueConstraint(fields=("step_run", "number"), name="workflows_attempt_number_unique"),
+            models.CheckConstraint(
+                condition=(models.Q(finished_at__isnull=True, result__isnull=True)
+                           | models.Q(finished_at__isnull=False, result__isnull=False)),
+                name="workflows_attempt_finished_result",
+            ),
+        ]
+
+
+class StepArtifact(RecordRefMixin, AngeeDataModel):
+    """One record retained as a step's result evidence without copying its data."""
+
+    runtime = True
+    sqid_prefix = "wfa_"
+
+    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="artifacts")
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("content_type", "object_id")
+    label = models.CharField(max_length=200, blank=True, default="")
+
+    def __str__(self) -> str:
+        """Use the authored evidence label, falling back to its public identity."""
+        return self.label or str(self.sqid)
+
+    class Meta:
+        """Django options for actor-readable execution artifacts."""
+
+        abstract = True
         rebac_resource_type = "workflows/step_artifact"
-        indexes = (
-            models.Index(fields=("target_content_type", "target_object_id"), name="idx_war_target"),
-        )
-        constraints = (
-            models.UniqueConstraint(fields=("attempt", "declaration_index"), name="uniq_war_attempt_index"),
-        )
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Workflow artifacts can only be saved by StepArtifactManager.")
-
-    def insert_retained(self) -> None:
-        """Insert this immutable row through its owning manager operation."""
-
-        if not self._state.adding:
-            raise TypeError("Retained evidence cannot be rewritten.")
-        super().save(force_insert=True)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow artifacts are immutable retained result evidence.")
 
 
-class Decision(AuditMixin, AngeeDataModel):
-    """One awaited resolution slot for a suspended step-run."""
+class StepWatch(RecordRefMixin, AngeeDataModel):
+    """One transactional observation and its durable, coalesced wake obligation."""
 
     runtime = True
-    rebac_grantable = {"reader": "share"}
-    _form_schema_state_attribute = "_workflows_form_schema_state"
-
-    sqid_prefix = "wdc_"
-    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="decisions")
-    suspension_attempt = models.ForeignKey(
-        "workflows.StepAttempt", on_delete=models.PROTECT, null=True, blank=True, related_name="decisions"
-    )
-    declaration_index = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    priority = models.IntegerField(default=0)
-    action = models.SlugField(max_length=100)
-    payload = models.JSONField(default=dict, blank=True)
-    target_model = models.CharField(max_length=255, blank=True, default="", db_index=True)
-    target_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
-    target_tab = models.CharField(max_length=100, blank=True, default="")
-    verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING)
-    resolution = models.JSONField(default=dict, blank=True)
-    resolved_by = models.CharField(max_length=255, blank=True, default="")
-    resolved_at = models.DateTimeField(null=True, blank=True, editable=False)
-    attempts = models.PositiveIntegerField(default=0)
-    max_attempts = models.PositiveIntegerField(null=True, blank=True)
-    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    escalate_at = models.DateTimeField(null=True, blank=True, db_index=True)
-
-    objects = DecisionManager()
+    sqid_prefix = "wsw_"
+    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="watches")
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("content_type", "object_id")
+    pending = models.BooleanField(default=False, editable=False)
+    objects = StepWatchManager()
 
     class Meta:
-        """Django model options for workflow decisions."""
+        """Canonical record uniqueness and source capture lookup."""
 
         abstract = True
-        base_manager_name = "objects"
-        ordering = ("step_run", "priority", "declaration_index", "created_at", "sqid")
-        rebac_resource_type = "workflows/decision"
-        indexes = (
-            models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),
-            models.Index(fields=("target_model", "target_id"), name="idx_wdc_target"),
-        )
-        constraints = (
-            models.UniqueConstraint(
-                fields=("suspension_attempt", "declaration_index"), name="uniq_wdc_attempt_declaration"
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(suspension_attempt__isnull=True, declaration_index__isnull=True)
-                    | models.Q(suspension_attempt__isnull=False, declaration_index__isnull=False)
-                ),
-                name="chk_wdc_declaration_source_pair",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(target_model="", target_id="", target_tab="")
-                    | (~models.Q(target_model="") & ~models.Q(target_id=""))
-                ),
-                name="chk_wdc_target_pair",
-            ),
-        )
+        verbose_name_plural = "step watches"
+        rebac_resource_type = "workflows/step_watch"
+        constraints = [models.UniqueConstraint(
+            fields=("step_run", "content_type", "object_id"), name="workflows_watch_record_unique",
+        )]
+        indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_watch_record")]
+
+
+class DecisionWorkflow(models.Model):
+    """Contribute execution query axes without coupling decisions to its waiter."""
+
+    extends: str | None = "decisions.Decision"
+    hasura_filterable_fields = (
+        "group__step_run", "group__step_run__run", "group__step_run__run__version__workflow",
+        "group__step_run__run__version__workflow__key",
+    )
+    hasura_aliases = {
+        "workflow_name": "group__step_run__run__version__workflow__name",
+        "node_key": "group__step_run__node_key",
+    }
+
+    class Meta:
+        """Compose declarations onto the decision row without another table."""
+
+        abstract = True
+
+
+class Trigger(ResourceLoadMixin, AngeeDataModel):
+    """Disabled-by-default admission policy with source-scoped domain hooks.
+
+    An ``extends`` donor implementing ``trigger_input`` or ``check_admission``
+    declares ``trigger_sources`` as registered source keys. Admission runs all
+    matching guards and accepts at most one matching input builder.
+    """
+
+    runtime = True
+    resource_class = TriggerResource
+    sqid_prefix = "wft_"
+    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
+    source = ImplClassField(TriggerSource)
+    model_label: str = ModelLabelField(max_length=200, blank=True, default="")
+    condition = models.JSONField(default=dict, blank=True)
+    enabled = models.BooleanField(default=False, editable=False)
+    granted_targets = models.JSONField(default=list, editable=False)
+    """Targets this trigger contributes to the workflow principal's direct tuples."""
+    disabled_reason: str = DiagnosticTextField(blank=True, default="", editable=False)
+    objects = TriggerManager()
+
+    @classmethod
+    def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
+        """Workflow authors can configure sources without platform administration."""
+        workflows = read_scoped_queryset(cls._meta.get_field("workflow").related_model, actor, action="write")
+        return field_name == "source" and workflows.exists()
 
     @property
-    def is_terminal(self) -> bool:
-        """Return whether this decision has a terminal verdict."""
+    def source_class(self) -> type[TriggerSource]:
+        """Resolve source behavior through its declared implementation field."""
+        try:
+            return cast(type[TriggerSource], self._meta.get_field("source").resolve_for(self))
+        except ImportError as error:
+            raise ImproperlyConfigured(f"Trigger source {self.source!r} cannot be loaded: {error}") from error
 
-        return self.verdict in Verdict.TERMINAL
+    @property
+    def source_model(self) -> str:
+        """Expose the resolved model's canonical label, retaining unavailable-source configuration."""
+        try:
+            return self.source_class.model(self)._meta.label
+        except ImproperlyConfigured:
+            return self.model_label
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Keep retained suspension provenance immutable outside its manager."""
+    def granted_relationships(self, *, actor: Any) -> tuple[Any, ...]:
+        """List the currently stored direct tuples contributed by this trigger."""
 
-        if self._state.adding:
-            if self.suspension_attempt_id is not None or self.declaration_index is not None:
-                raise TypeError("Decision suspension provenance is owned by DecisionManager.")
+        self.workflow.require_access("read", actor)
+        if not self.workflow.user_id or not self.granted_targets:
+            return ()
+        subject = to_subject_ref(self.workflow.user)
+        targets = models.Q()
+        for value in self.granted_targets:
+            targets |= models.Q(
+                resource_type=value["resource_type"], resource_id=value["resource_id"],
+                relation=value["relation"],
+            )
+        return tuple(active_relationship_model().objects.filter(
+            subject_type=subject.subject_type, subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation,
+        ).filter(targets).order_by("resource_type", "resource_id", "relation"))
+
+    def validate_configuration(self) -> tuple[Any, Any]:
+        """Use the model's final resource input and native filter compiler."""
+        self._trigger_hooks("trigger_input")
+        self._trigger_hooks("check_admission")
+        model = self.source_class.model(self)
+        if self.workflow.subject_model and self.workflow.subject_model != model._meta.label:
+            raise ValidationError("The trigger source does not match the workflow subject model.")
+        return model, GraphQLSchemas.from_discovery().resource_filter(model, self.condition)
+
+    def trigger_input(self, record: Any) -> dict[str, Any]:
+        """Domain extensions build admitted input; source adapters never do."""
+        return {}
+
+    def check_admission(self, record: Any, *, actor: Any) -> None:
+        """Domain extensions may reject this record without disabling the trigger."""
+
+    def _trigger_hooks(self, name: str) -> list[Any]:
+        """Select only source-declared donor hooks in stable order; reject ambiguous input."""
+        hooks = []
+        for donor in type(self).mro():
+            hook = donor.__dict__.get(name)
+            if hook is None or donor is Trigger:
+                continue
+            sources = donor.__dict__.get("trigger_sources")
+            if not isinstance(sources, tuple) or any(not isinstance(source, str) for source in sources):
+                raise ImproperlyConfigured(f"{donor.__name__}.{name} must declare trigger_sources as a tuple of keys.")
+            if self.source in sources:
+                hooks.append((donor, hook))
+        hooks.sort(key=lambda item: (item[0].__module__, item[0].__qualname__))
+        if name == "trigger_input" and len(hooks) > 1:
+            raise ImproperlyConfigured("Multiple trigger_input hooks contribute to this source.")
+        return [hook for _, hook in hooks]
+
+    def admission_input(self, record: Any) -> dict[str, Any]:
+        """Build source-specific input from at most one declared domain contributor."""
+        hooks = self._trigger_hooks("trigger_input")
+        return hooks[0](self, record) if hooks else Trigger.trigger_input(self, record)
+
+    def admit_record(self, record: Any, *, actor: Any) -> None:
+        """Apply every source-specific domain admission policy."""
+        hooks = self._trigger_hooks("check_admission")
+        if hooks:
+            for hook in hooks:
+                hook(self, record, actor=actor)
         else:
-            retained = (
-                system_queryset(type(self), lock=None)
-                .filter(pk=self.pk)
-                .values(
-                    "step_run_id",
-                    "suspension_attempt_id",
-                    "declaration_index",
-                    "priority",
-                    "action",
-                    "payload",
-                    "target_model",
-                    "target_id",
-                    "target_tab",
-                    "max_attempts",
-                    "expires_at",
-                    "escalate_at",
-                )
-                .get()
-            )
-            if retained["step_run_id"] != self.step_run_id:
-                raise TypeError("Decision suspension ancestry is immutable.")
-            if (
-                retained["suspension_attempt_id"] != self.suspension_attempt_id
-                or retained["declaration_index"] != self.declaration_index
-            ):
-                raise TypeError("Decision suspension provenance is immutable.")
-            immutable = {
-                name
-                for name in (
-                    "priority",
-                    "action",
-                    "payload",
-                    "target_model",
-                    "target_id",
-                    "target_tab",
-                    "max_attempts",
-                    "expires_at",
-                    "escalate_at",
-                )
-                if retained[name] != getattr(self, name)
-            }
-            if retained["suspension_attempt_id"] is not None and immutable:
-                raise TypeError("Retained Decision declarations are immutable.")
-            update_fields = kwargs.get("update_fields")
-            execution_fields = {"verdict", "resolution", "resolved_by", "resolved_at", "attempts"}
-            touches_execution = update_fields is None or bool(execution_fields.intersection(update_fields))
-            if touches_execution:
-                raise TypeError("Decision execution fields are owned by DecisionManager operations.")
-        super().save(*args, **kwargs)
+            Trigger.check_admission(self, record, actor=actor)
 
-    @classmethod
-    def context_projection_annotation(cls) -> dict[str, Any]:
-        """Return Decision-readable labels without exposing journal identities.
-
-        The run owns workflow context. Named steps use their name or key;
-        system-injected steps use only their declared system kind.
-        """
-
-        return {
-            "_decision_workflow_key": models.F("step_run__run__workflow__key"),
-            "_decision_workflow_name": models.F("step_run__run__workflow__name"),
-            "_decision_step_key": models.F("step_run__step__key"),
-            "_decision_step_name": models.Case(
-                models.When(step_run__step__isnull=True, then=models.F("step_run__system_kind")),
-                models.When(step_run__step__name="", then=models.F("step_run__step__key")),
-                default=models.F("step_run__step__name"),
-                output_field=models.CharField(),
-            ),
-        }
-
-    @classmethod
-    def form_schema_annotation(cls) -> dict[str, Any]:
-        """Return the narrow ORM projection consumed by :attr:`form_schema`."""
-
-        return {cls._form_schema_state_attribute: models.F("step_run__resume_state")}
-
-    @property
-    def form_schema(self) -> dict[str, Any] | None:
-        """Return the enforced JSON-authored form schema, excluding Python model schemas."""
-
-        state = getattr(self, self._form_schema_state_attribute, None)
-        if not isinstance(state, dict):
-            state = self.step_run.resume_state
-        if not isinstance(state, dict):
-            return None
-        schemas = GateResumeState.from_checkpoint(state).decision_schemas
-        if str(self.pk) in schemas:
-            schema = schemas[str(self.pk)]
-            return dict(schema) if schema else None
-        gate = state.get("gate")
-        if isinstance(gate, dict):
-            gate_schema = gate.get("decision_schema")
-            return dict(gate_schema) if isinstance(gate_schema, dict) and gate_schema else None
-        return None
-
-    def resolution_actor_subject(self) -> Any | None:
-        """Return the retained human resolver; lifecycle expiry has no human actor."""
-
-        if self.verdict == Verdict.EXPIRED or not self.resolved_by:
-            return None
-        return canonical_subject_ref(self.resolved_by)
-
-    def create_for_suspension(self) -> None:
-        """Insert one manager-derived declaration through the cooperative save chain."""
-
-        if (
-            not self._state.adding
-            or self.suspension_attempt_id is None
-            or self.declaration_index is None
-            or self.suspension_attempt.step_run_id != self.step_run_id
-            or self.verdict != Verdict.PENDING
+    def clean(self) -> None:
+        """Validate authoring and require disabling before changing an enabled rule."""
+        super().clean()
+        self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
+        self.validate_configuration()
+        previous = system_queryset(type(self)).filter(pk=self.pk).first() if self.pk else None
+        self.granted_targets = previous.granted_targets if previous is not None else []
+        if previous is not None and self.workflow_id != previous.workflow_id:
+            raise ValidationError("A trigger's workflow cannot be changed.")
+        if self.enabled and (previous is None or not previous.enabled):
+            raise ValidationError("Enable triggers through the manager action.")
+        fields = ("condition", "source", "model_label", *self.source_class.scope_fields)
+        if previous is not None and any(
+            getattr(self, self._meta.get_field(name).attname) != getattr(previous, self._meta.get_field(name).attname)
+            for name in fields
         ):
-            raise ValidationError({"decision": "Suspension creation requires a new pending declaration."})
-        super().save(force_insert=True)
-
-    def record_invalid_resolution(self, *, at: datetime | None = None) -> bool:
-        """Advance only this persisted pending validation generation."""
-
-        timestamp = at or timezone.now()
-        changed = (
-            type(self).objects.filter(pk=self.pk).record_invalid_resolution(generation=self.attempts, at=timestamp)
-        )
-        if changed != 1:
-            return False
-        self.attempts += 1
-        self.updated_at = timestamp
-        return True
-
-    def resolve(
-        self, verdict: Verdict, *, resolution: Any = None, resolved_by: str = "", at: datetime | None = None
-    ) -> bool:
-        """Claim a terminal verdict before running cooperative save callbacks."""
-
-        return self._resolve_pending(verdict, resolution=resolution, resolved_by=resolved_by, at=at or timezone.now())
-
-    def expire(
-        self, *, resolved_by: str = "", at: datetime | None = None, generation: int | None = None, due: bool = False
-    ) -> bool:
-        """Expire a pending slot, optionally requiring its due timer generation."""
-
-        return self._resolve_pending(
-            Verdict.EXPIRED,
-            resolution={},
-            resolved_by=resolved_by,
-            at=at or timezone.now(),
-            generation=generation,
-            deadline="expires_at" if due else None,
-        )
-
-    def escalate(
-        self, *, resolved_by: str = "", at: datetime | None = None, generation: int | None = None, due: bool = False
-    ) -> bool:
-        """Escalate a pending slot, optionally requiring its due timer generation."""
-
-        return self._resolve_pending(
-            Verdict.ESCALATED,
-            resolution={},
-            resolved_by=resolved_by,
-            at=at or timezone.now(),
-            generation=generation,
-            deadline="escalate_at" if due else None,
-        )
-
-    def _resolve_pending(
-        self,
-        verdict: Verdict,
-        *,
-        resolution: Any,
-        resolved_by: str,
-        at: datetime,
-        generation: int | None = None,
-        deadline: Literal["expires_at", "escalate_at"] | None = None,
-    ) -> bool:
-        payload = resolution if resolution is not None else {}
-        if not isinstance(payload, dict):
-            raise ValidationError({"resolution": "Decision resolution must be a JSON object."})
-        with transaction.atomic():
-            changed = (
-                type(self)
-                .objects.filter(pk=self.pk)
-                .resolve_pending(
-                    verdict=verdict,
-                    resolution=payload,
-                    resolved_by=resolved_by,
-                    at=at,
-                    generation=generation,
-                    deadline=deadline,
-                )
-            )
-            if changed != 1:
-                return False
-            self.verdict = verdict
-            self.resolution = payload
-            self.resolved_by = resolved_by
-            self.resolved_at = at
-            super().save(update_fields=["verdict", "resolution", "resolved_by", "resolved_at", "updated_at"])
-            return True
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        if self.suspension_attempt_id is not None or self.declaration_index is not None:
-            raise TypeError("Retained workflow Decisions cannot be deleted.")
-        return super().delete(*args, **kwargs)
-
-
-@receiver(pre_delete)
-def _protect_retained_decision_delete(sender: type[models.Model], instance: models.Model, **kwargs: Any) -> None:
-    """Close collector and deliberately bypassed queryset deletion of retained Decisions."""
-
-    del sender, kwargs
-    if isinstance(instance, Decision) and (
-        instance.suspension_attempt_id is not None or instance.declaration_index is not None
-    ):
-        raise TypeError("Retained workflow Decisions cannot be deleted.")
-
-
-class WorkflowDispatch(AuditMixin, AngeeDataModel):
-    """One durable, resendable workflow delivery intent."""
-
-    runtime = True
-
-    sqid_prefix = "wfd_"
-    kind = StateField(choices_enum=WorkflowDispatchKind)
-    run = models.ForeignKey(
-        "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="dispatches"
-    )
-    step_attempt = models.ForeignKey(
-        "workflows.StepAttempt", on_delete=models.PROTECT, null=True, blank=True, related_name="dispatches"
-    )
-    decision = models.ForeignKey(
-        "workflows.Decision", on_delete=models.PROTECT, null=True, blank=True, related_name="dispatches"
-    )
-    generation = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    artifact_content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="+",
-        editable=False,
-    )
-    artifact_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
-    available_at = models.DateTimeField(db_index=True, editable=False)
-    next_send_at = models.DateTimeField(db_index=True, editable=False)
-    consumed_at = models.DateTimeField(null=True, blank=True, editable=False)
-    send_count = models.PositiveIntegerField(default=0, editable=False)
-    last_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
-    last_send_error = models.CharField(max_length=64, blank=True, default="", editable=False)
-
-    objects = WorkflowDispatchManager()
-
-    class Meta:
-        abstract = True
-        base_manager_name = "objects"
-        ordering = ("available_at", "pk")
-        constraints = dispatch_constraints()
-
-    @property
-    def envelope(self) -> WorkflowDispatchEnvelope:
-        """Return the transport envelope declared by this kind's specification."""
-
-        return self.kind.spec.envelope(self)
+            if previous.enabled and self.enabled:
+                raise ValidationError("Disable the trigger before editing its rule.")
+            self.disabled_reason = "Trigger configuration changed; enable it again."
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Workflow dispatches can only be saved by WorkflowDispatchManager.")
+        """Validate native saves as well as resource writes."""
+        with transaction.atomic():
+            if self.pk:
+                type(self).objects.lock_grants(self.workflow_id)
+            previous = None
+            if not self._state.adding:
+                previous = system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
+            self.clean()
+            self.workflow.require_access("write", self.actor())
+            if not self.enabled and kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "disabled_reason"}
+            super().save(*args, **kwargs)
+            if previous is not None and previous.granted_targets and not self.enabled:
+                type(self).objects.reconcile_grants(self, ())
 
-    def persist_delivery(self, *, fields: Iterable[str] | None = None) -> None:
-        """Insert an intent or update publication telemetry with fixed identity."""
+    def __str__(self) -> str:
+        """Identify the source and its model's reader-facing noun."""
+        try:
+            source_class = self.source_class
+            source = source_class.display_label()
+            model = source_class.model(self)
+        except (ImproperlyConfigured, ValidationError):
+            source = str(self.source)
+            try:
+                model = apps.get_model(self.model_label)
+            except (LookupError, ValueError):
+                return source
+        return f"{source}: {model._meta.verbose_name}"
 
-        if fields is not None and not set(fields) <= {
-            "last_sent_at",
-            "send_count",
-            "next_send_at",
-            "last_send_error",
-            "updated_at",
-        }:
-            raise TypeError("Only publication telemetry may be updated by this operation.")
-        if not self._state.adding:
-            persisted = (
-                system_queryset(type(self), lock=None)
-                .values(
-                    "kind",
-                    "run_id",
-                    "step_attempt_id",
-                    "decision_id",
-                    "generation",
-                    "artifact_content_type_id",
-                    "artifact_object_id",
-                    "available_at",
-                )
-                .get(pk=self.pk)
-            )
-            if (
-                persisted["kind"] != self.kind
-                or persisted["run_id"] != self.run_id
-                or persisted["step_attempt_id"] != self.step_attempt_id
-                or persisted["decision_id"] != self.decision_id
-                or persisted["generation"] != self.generation
-                or persisted["artifact_content_type_id"] != self.artifact_content_type_id
-                or persisted["artifact_object_id"] != self.artifact_object_id
-                or persisted["available_at"] != self.available_at
-            ):
-                raise TypeError("Workflow dispatch identity and availability are immutable.")
-        if self._state.adding and self.next_send_at is None:
-            self.next_send_at = self.available_at
-        super().save(force_insert=self._state.adding, update_fields=fields)
+    class Meta:
+        """Compose admission configuration and its permission identity."""
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow dispatches are durable delivery evidence and cannot be deleted.")
+        abstract = True
+        rebac_resource_type = "workflows/trigger"
+
+
+class TriggerEvent(RecordRefMixin, AngeeDataModel):
+    """One retained admission fact per trigger and concrete record reference."""
+
+    runtime = True
+    sqid_prefix = "wfe_"
+    trigger = models.ForeignKey("workflows.Trigger", on_delete=models.PROTECT, related_name="events")
+    record_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    record_object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("record_content_type", "record_object_id")
+    changed_at = models.DateTimeField(db_default=Now())
+    evaluated_at = models.DateTimeField(null=True, blank=True)
+    admitted_at = models.DateTimeField(null=True, blank=True)
+    rejection = DiagnosticTextField(blank=True, default="")
+    objects = TriggerEventManager()
+
+    def __str__(self) -> str:
+        """Use the public ledger identity without resolving its protected record."""
+        return str(self.sqid)
+
+    class Meta:
+        """Enforce concrete ledger identity independently of retained runs."""
+
+        abstract = True
+        rebac_resource_type = "workflows/trigger_event"
+        constraints = [models.UniqueConstraint(
+            fields=("trigger", "record_content_type", "record_object_id"), name="workflows_trigger_record_unique",
+        ), models.CheckConstraint(
+            condition=models.Q(admitted_at__isnull=True) | models.Q(evaluated_at__isnull=False),
+            name="workflows_event_admission_evaluated",
+        )]
+        indexes = [models.Index(
+            fields=("changed_at", "id"), condition=models.Q(admitted_at__isnull=True),
+            name="workflows_event_pending",
+        )]

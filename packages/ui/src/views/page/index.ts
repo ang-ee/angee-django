@@ -2,20 +2,23 @@ import type { ReactNode } from "react";
 
 import type {
   ActionArg,
+  ActionArgs,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
 } from "./Action";
 import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FacetDescriptor, FacetProps } from "./Facet";
 import type { FieldDescriptor, FieldProps } from "./Field";
 import type { GroupDescriptor, GroupProps } from "./Group";
-import type { TabDescriptor, TabProps } from "./Tab";
+import type { TabDescriptor, TabLabel, TabProps } from "./Tab";
 import { pageChildren, pageChildrenCacheKey, pageElementProps } from "./types";
 
 export { Action, type ActionConfirm } from "./Action";
@@ -33,7 +36,7 @@ export {
   type PageFieldKind,
 } from "./Field";
 export { Group } from "./Group";
-export { Tab } from "./Tab";
+export { Tab, resolveTabLabel } from "./Tab";
 export {
   PAGE_ELEMENT_SLOT,
   pageChildren,
@@ -44,14 +47,17 @@ export {
 } from "./types";
 export type {
   ActionArg,
+  ActionArgs,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
   ColumnDescriptor,
   ColumnProps,
   FacetDescriptor,
@@ -61,6 +67,7 @@ export type {
   GroupDescriptor,
   GroupProps,
   TabDescriptor,
+  TabLabel,
   TabProps,
 };
 
@@ -181,6 +188,7 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
     ...(props.aggregate !== undefined ? { aggregate: props.aggregate } : {}),
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
+    ...(props.showWhen !== undefined ? { showWhen: props.showWhen } : {}),
     ...(props.interactive !== undefined
       ? { interactive: props.interactive }
       : {}),
@@ -208,6 +216,9 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.icon !== undefined ? { icon: props.icon } : {}),
     ...(props.disabled !== undefined ? { disabled: props.disabled } : {}),
     ...(props.danger !== undefined ? { danger: props.danger } : {}),
+    ...(props.placement !== undefined ? { placement: props.placement } : {}),
+    ...(props.primary !== undefined ? { primary: props.primary } : {}),
+    ...(props.permission !== undefined ? { permission: props.permission } : {}),
     ...(props.confirm !== undefined ? { confirm: props.confirm } : {}),
     ...(props.set !== undefined ? { set: props.set } : {}),
     ...(props.prompt !== undefined ? { prompt: props.prompt } : {}),
@@ -223,9 +234,13 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
 function groupDescriptor(props: GroupProps): GroupDescriptor {
   return cachedDescriptor(groupDescriptorCache, props, () => ({
     ...(props.label !== undefined ? { label: props.label } : {}),
+    ...(props.hint !== undefined ? { hint: props.hint } : {}),
+    ...(props.audience !== undefined ? { audience: props.audience } : {}),
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
     ...(props.collapsible !== undefined ? { collapsible: props.collapsible } : {}),
     ...(props.defaultOpen !== undefined ? { defaultOpen: props.defaultOpen } : {}),
+    ...(props.content !== undefined ? { content: props.content } : {}),
+    ...(props.savedOnly !== undefined ? { savedOnly: props.savedOnly } : {}),
     fields: parseDirectPageFields(props.children),
     actions: parsePageActions(props.children),
   }));

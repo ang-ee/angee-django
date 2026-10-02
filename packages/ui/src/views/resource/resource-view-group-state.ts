@@ -45,15 +45,14 @@ export function useResourceViewGroupState({
   );
   // The previous applied default is transition memory: reading it here is
   // required to distinguish a newly-declared default from one the user cleared.
-  // Converting this to render state would add a second reconciliation render and
-  // can briefly expose the wrong grouping, so the reducer follow-up owns that move.
-  const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null>(null);
+  // Undefined marks initialization, before any declaration has been reconciled.
+  const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null | undefined>(undefined);
   const defaultGroupPending =
     activeDefaultGroup !== null
     && resourceView.state.group === null
     && !resourceView.state.groupDefaultCleared
     && (
-      handledDefaultGroupRef.current === null
+      handledDefaultGroupRef.current == null
       || !resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
     );
   const effectiveGroupStack = React.useMemo(() => {
@@ -110,7 +109,14 @@ export function useResourceViewGroupState({
       )
     ) {
       handledDefaultGroupRef.current = activeDefaultGroup;
-      resourceView.setGroup(activeDefaultGroup);
+      // Initializing or reasserting the same pinned group does not change the
+      // effective scope (including StrictMode effect replay). A new default does.
+      resourceView.setGroup(activeDefaultGroup, {
+        resetScope: previousDefault !== undefined && (
+          previousDefault === null
+          || !resourceViewGroupsEqual(previousDefault, activeDefaultGroup)
+        ),
+      });
     }
   }, [
     activeDefaultGroup,

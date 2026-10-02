@@ -8,7 +8,7 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.data.metadata import DataResourceSubtitleMetadata
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -16,6 +16,7 @@ from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
+from angee.iam.schema import UserType
 
 Note = apps.get_model("notes", "Note")
 
@@ -36,6 +37,7 @@ class NoteType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     word_count: auto
+    reviewer: UserType | None
 
 
 @strawberry.type
@@ -70,7 +72,8 @@ _NOTE_RESOURCE = hasura_model_resource(
     sortable=["title", "status", "updated_at", "created_at", "word_count"],
     aggregatable=["id", "word_count"],
     groupable=["status", "tags", "updated_at"],
-    writable=["title", "body", "status", "tags", "is_starred", "reminder_at"],
+    writable=["title", "body", "status", "tags", "is_starred", "reminder_at", "reviewer"],
+    write_backend=AngeeHasuraWriteBackend(Note, public_id_fields=("reviewer",)),
     id_column="sqid",
     subtitle=DataResourceSubtitleMetadata(word_count="word_count"),
 )

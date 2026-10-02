@@ -9,8 +9,8 @@ related row.
 
 from __future__ import annotations
 
-import enum
 import logging
+from enum import StrEnum
 from functools import partial
 from typing import Any, cast
 
@@ -18,16 +18,19 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
+from django.utils.text import capfirst
 from django.utils.translation import gettext as _
 from rebac import MissingActorError, PermissionDenied, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.base.errors import exception_text
 from angee.base.identity import public_id_of
 from angee.graphql.actions import (
     ActionResult,
@@ -44,7 +47,7 @@ from angee.graphql.data import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.graphql.impl import ImplChoice
+from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -52,13 +55,14 @@ from angee.graphql.writes import instance_for_write, write_queryset
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.permissions import is_platform_admin
 from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
-from angee.integrate.models import Bridge, IntegrationLifecycle
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
@@ -82,21 +86,18 @@ User = get_user_model()
 
 @strawberry.type
 class ConsoleImplChoicesQuery:
-    """Admin-gated impl-choice metadata for console forms."""
+    """Administrator metadata with explicit model-owned author access."""
 
-    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def impl_choices(self, model: str, field: str) -> list[ImplChoice]:
-        """Return registry choices for an ``ImplClassField``."""
-
+    @strawberry.field
+    def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
+        """Return registry choices under the administrator or owning model's policy."""
+        actor = _session_user(info)
+        if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
+            raise PermissionDenied("Implementation choices are not readable by this actor.")
         return resolve_impl_choices(model, field)
 
 
-@strawberry.enum
-class IntegrationCreateMode(enum.Enum):
-    """How the console starts creation for an integration capability."""
-
-    FORM = "FORM"
-    CONNECT = "CONNECT"
+strawberry.enum(IntegrationCreateMode)
 
 
 @strawberry.type
@@ -122,8 +123,8 @@ class ConsoleIntegrationCapabilitiesQuery:
         for model in Integration.concrete_child_models():
             if model._meta.label not in exposed:
                 continue
-            raw_mode = getattr(model, "integration_create_mode", None)
-            if raw_mode not in {mode.value for mode in IntegrationCreateMode}:
+            mode = model.integration_create_mode
+            if mode is None:
                 continue
             try:
                 model.objects.check_create()
@@ -132,21 +133,21 @@ class ConsoleIntegrationCapabilitiesQuery:
             capabilities.append(
                 IntegrationCapability(
                     resource=model._meta.label,
-                    label=str(model.integration_kind_value()),
+                    label=capfirst(str(model._meta.verbose_name)),
                     icon=None,
-                    create_mode=IntegrationCreateMode(raw_mode),
+                    create_mode=mode,
                 )
             )
         return capabilities
 
 
 @strawberry.enum
-class ConcreteIntegrationTargetState(enum.Enum):
+class ConcreteIntegrationTargetState(StrEnum):
     """Permission-safe resolution state for an Integration parent row."""
 
-    AVAILABLE = "AVAILABLE"
-    UNAVAILABLE = "UNAVAILABLE"
-    AMBIGUOUS = "AMBIGUOUS"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    AMBIGUOUS = "ambiguous"
 
 
 @strawberry.type
@@ -885,7 +886,9 @@ class ConnectionMutation:
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            oauth_client = integration.capability_impl.connect_oauth_client(integration.integration_kind_value())
+            oauth_client = integration.capability_impl.connect_oauth_client(
+                capfirst(str(integration._meta.verbose_name))
+            )
             return connect_integration_target(
                 info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
@@ -1012,7 +1015,7 @@ class ConnectionMutation:
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except ValidationError as error:
-            return UnlinkAccountResult(ok=False, error="; ".join(error.messages), error_code=error.code)
+            return UnlinkAccountResult(ok=False, error=exception_text(error), error_code=error.code)
 
 
 @strawberry.type
@@ -1174,7 +1177,15 @@ class IntegrationLabelMixin:
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 
-        return cast(Any, self).display_label
+        return cast(Any, self).record_display_label
+
+    @strawberry_django.field(only=["concrete_type_id"])
+    def kind(self) -> str:
+        """Return the concrete model's human name from Django metadata."""
+
+        concrete_type_id = cast(Any, self).concrete_type_id
+        model = ContentType.objects.get_for_id(concrete_type_id).model_class() if concrete_type_id else Integration
+        return capfirst(str(model._meta.verbose_name)) if model is not None else "Integration"
 
     @strawberry_django.field(only=["credential__status"])
     def credential_status(self) -> str:
@@ -1200,10 +1211,10 @@ class BridgeSyncStatusMixin:
         return bool(cast(Any, self).is_syncing)
 
     @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_run_id"])
-    def sync_stage(self) -> str:
+    def sync_stage(self) -> Bridge.SyncStage:
         """Reconcile direct workers against their lock; retained runs settle durably."""
 
-        return str(cast(Any, self).effective_sync_stage)
+        return cast(Any, self).effective_sync_stage
 
 
 @strawberry.type
@@ -1215,7 +1226,6 @@ class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
     lifecycle: auto
     runtime_status: auto
     config: strawberry.scalars.JSON
-    last_sync_status: auto
     last_sync_completed_at: auto
     last_sync_items: auto
     last_sync_summary: strawberry.scalars.JSON
@@ -1238,7 +1248,6 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     credential: CredentialType | None
     account: ExternalAccountType | None
     owner: UserType | None
-    kind: auto
     lifecycle: auto
     runtime_status: auto
     last_used_at: auto
@@ -1249,6 +1258,12 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["concrete_type_id"])
+    def concrete_type(self) -> str | None:
+        """Return the concrete content type key used by collection grouping."""
+
+        return str(cast(Any, self).concrete_type_id) if cast(Any, self).concrete_type_id else None
+
     @classmethod
     def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
         """Batch authorized concrete children for root and nested projections."""
@@ -1258,7 +1273,7 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
             exposed_model_labels=_exposed_model_labels(info),
         )
 
-    @strawberry.field
+    @strawberry_django.field(only=["concrete_type_id"])
     def concrete_target(self, info: strawberry.Info) -> ConcreteIntegrationTarget:
         """Return this parent's one authorized concrete child without leaking denied rows."""
 
@@ -1288,7 +1303,6 @@ class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     credential: ConnectedCredentialType | None
     account: ConnectedExternalAccountType | None
     owner: UserType | None
-    kind: auto
     lifecycle: auto
     runtime_status: auto
     last_used_at: auto
@@ -1390,13 +1404,13 @@ class RecordLinkType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def model_label(self) -> str:
         """Project target identity through the shared record-reference owner."""
 
         return cast(Any, self).record_model_label
 
-    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def record_id(self) -> PublicID:
         """Return the target public id; navigation rechecks the target's read policy."""
 
@@ -1577,18 +1591,25 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
     name="integrations",
-    filterable=["id", "display_name", "vendor", "kind", "lifecycle", "runtime_status", "updated_at"],
+    filterable=["id", "display_name", "vendor", "concrete_type", "lifecycle", "runtime_status", "updated_at"],
     sortable=[
         "display_name",
         "vendor",
-        "kind",
+        "concrete_type",
         "lifecycle",
         "runtime_status",
         "created_at",
         "updated_at",
     ],
     aggregatable=["id"],
-    groupable=["kind", "vendor", "vendor__display_name", "lifecycle", "runtime_status"],
+    groupable=[
+        "concrete_type",
+        "concrete_type__model",
+        "vendor",
+        "vendor__display_name",
+        "lifecycle",
+        "runtime_status",
+    ],
     updatable=["vendor", "credential", "account", "owner"],
     insert=False,
     field_id_decode={
@@ -1720,7 +1741,7 @@ class IntegrationActionMutation:
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
             now = timezone.now()
             for model in models_with(base=Bridge):
-                for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
+                for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
                     queue_bridge_sync(bridge, now=now)
                     queued += 1
         if queued == 0:

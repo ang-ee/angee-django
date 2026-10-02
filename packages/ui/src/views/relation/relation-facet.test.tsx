@@ -179,6 +179,21 @@ describe("useRelationFacets", () => {
     }]);
   });
 
+  test("labels an explicit enum facet from field metadata instead of the raw bucket", () => {
+    dataMocks.facets.mockReturnValue(resourceFacets({
+      status: [{ value: "draft", label: "DRAFT", count: 1, key: { status: "draft" } }],
+    }));
+    const { result } = renderHook(
+      () => useRelationFacets("agents.InferenceModel", [{ field: "status" }]),
+      { wrapper: Metadata },
+    );
+    expect(result.current.filters).toEqual([{
+      id: "status:draft", label: "Draft", chipLabel: "Draft",
+      filter: { status: { exact: "DRAFT" } },
+    }]);
+    expect(result.current.filterFields[0]?.options).toEqual([{ value: "draft", label: "Draft" }]);
+  });
+
   test("stays inert when the field is not a listable relation", () => {
     const { result } = renderHook(
       () =>
@@ -206,6 +221,7 @@ describe("useRelationFacets", () => {
 
 const query = ResourceQuery.forRows({ fields: {
   id: { scalar: "ID" }, name: { scalar: "String" },
+  status: { kind: "enum", values: [{ value: "DRAFT", description: "Draft" }] },
   provider: { kind: "relation", identityPath: "provider.id", labelPath: "provider.name" },
   publisher: { kind: "relation", identityPath: "publisher.id", labelPath: "publisher.name" },
 } }).contract;
@@ -216,10 +232,15 @@ for (const field of ["provider", "publisher"]) {
   };
   query.axes[field]!.drill = { kind: "identity", field, valueKey: key, nullMode: "isNull", valueMap: [] };
 }
+query.axes.status!.server = { input: "STATUS", key: "status" };
+query.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap: [{ from: "draft", to: "DRAFT" }] };
+query.fields.status!.filter!.valueMap = [{ from: "DRAFT", to: "draft" }];
 const METADATA = schemaFieldMetadataFromDataResources([testDataResource("agents.InferenceModel", {
   roots: { groups: "inference_models_groups" }, query,
-  fields: ["name", "provider", "publisher"].map((name) => ({ name,
-    kind: name === "name" ? "scalar" : "relation", scalar: name === "name" ? "String" : "ID",
+  fields: ["name", "provider", "publisher", "status"].map((name) => ({ name,
+    kind: name === "name" ? "scalar" as const : name === "status" ? "enum" as const : "relation" as const,
+    scalar: name === "name" ? "String" : name === "status" ? "Enum" : "ID",
+    ...(name === "status" ? { values: [{ value: "DRAFT", description: "Draft" }] } : {}),
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   })),
 })]);

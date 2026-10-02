@@ -1,11 +1,35 @@
 import type { ComponentType, ReactNode } from "react";
 
+import type { ActionOutcome, AuthoredDocument } from "@angee/refine";
 import type { Tone } from "../lib/tones";
+
+/** A verb binding; allowed values are returned by the record's authorization owner. */
+export interface VisibilityBinding {
+  allowedValues: readonly string[];
+  onSelect: (value: string) => Promise<ActionOutcome | null | undefined>;
+  disabled?: boolean;
+}
+
+/** A field's server visibility verb, with argument names declared by its addon. */
+export interface VisibilityAction {
+  document: AuthoredDocument;
+  resultField: string;
+  idArgument: string;
+  revisionArgument?: string;
+  /** Verb enum values may differ from create-input values. */
+  options?: readonly WidgetOption[];
+  /** Readable server projection carrying the current audience's human label. */
+  audienceField?: string;
+}
 
 export interface WidgetOption {
   value: string;
   label: ReactNode;
   disabled?: boolean;
+  /** A statusbar owner may mark a terminal or side option outside its path. */
+  onPath?: boolean;
+  /** Server-owned status choices declare eligibility; plain form options default to selectable. */
+  selectable?: boolean;
 }
 
 /**
@@ -28,16 +52,15 @@ export function relationIdList(value: unknown): string[] {
 }
 
 /**
- * The label for an option `value`: the matching option's `label`, else the raw
- * value, else "". The one owner of the
- * `options.find(o => o.value === v)?.label ?? v ?? ""` lookup the scalar and
- * relation widgets each re-spelled.
+ * The label for an option value. GraphQL enum member names resolve against
+ * authored input values through the same canonical matching rule as selects.
  */
 export function optionLabel(
   options: readonly WidgetOption[] | undefined,
   value: string | null | undefined,
 ): ReactNode {
-  return options?.find((option) => option.value === value)?.label ?? value ?? "";
+  const canonical = canonicalOptionValue(options, value);
+  return options?.find((option) => option.value === canonical)?.label ?? value ?? "";
 }
 
 /**
@@ -89,6 +112,10 @@ export function optionTextLabel(
 
 /** Presentation facts shared by page descriptors and rendered widget fields. */
 export interface FieldPresentation {
+  /** Statusbar layout; the form slot may supply measured width at render time. */
+  fill?: boolean;
+  containerWidth?: number;
+  visibilityAction?: VisibilityAction;
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;
@@ -101,6 +128,8 @@ export interface FieldPresentation {
 
 export interface WidgetField extends FieldPresentation {
   name?: string;
+  fill?: boolean;
+  containerWidth?: number;
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
   /** DOM association supplied by a descriptor-form owner for its actual control. */
@@ -112,6 +141,7 @@ export interface WidgetControlProps {
   "aria-describedby"?: string;
   "aria-labelledby"?: string;
   "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
   min?: number;
   max?: number;
   minLength?: number;
@@ -124,6 +154,7 @@ export interface WidgetFocusTarget {
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   value?: TValue | null;
+  /** Current sibling values in forms, or the source record in read/list views. */
   row?: TRow;
   /** Owning document for a widget rendered inside editable child lines. */
   parentRow?: unknown;
@@ -131,6 +162,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   /** Validation messages scoped to this widget's descriptor field. */
   messages?: readonly string[];
   readOnly?: boolean;
+  /** Temporarily lock a mounted editor while retaining its local draft. */
+  disabled?: boolean;
   onChange?: (value: TValue) => void;
   /** Atomically patch sibling fields of this editable line; stale rows are ignored. */
   onRowChange?: (patch: Record<string, unknown>) => void;
@@ -143,6 +176,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
 }
 
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {
+  /** Accepts a parsed `rowTemplate` for fixed-size arrays of objects in a form spec. */
+  acceptsRowTemplate?: true;
   edit?: ComponentType<WidgetRenderProps<TValue, TRow>>;
   read: ComponentType<WidgetRenderProps<TValue, TRow>>;
   cell?: ComponentType<WidgetRenderProps<TValue, TRow>>;

@@ -328,13 +328,19 @@ def final_input_policy_fields(
     fields = getattr(input_type, "fields", None)
     if not isinstance(fields, dict):
         return ()
-    by_source: dict[str, str] = {}
+    # Resource policies may already name a final wire field whose Python name
+    # is internal (e.g. guarded relation ordering). Native Python declarations
+    # still take precedence when a schema renames a public input field.
+    by_source: dict[str, str] = {name: name for name in fields}
     for wire_name, input_field in fields.items():
         source = (input_field.extensions or {}).get("strawberry-definition")
         python_name = str(getattr(source, "python_name", None) or wire_name)
         by_source[python_name] = wire_name
     projected: list[str] = []
     for path in accepted:
+        if path in by_source:
+            projected.append(by_source[path])
+            continue
         separator = "__" if "__" in path else "." if "." in path else None
         head, tail = path.split(separator, 1) if separator is not None else (path, "")
         wire_head = by_source.get(head)

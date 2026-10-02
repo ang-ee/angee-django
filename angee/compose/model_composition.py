@@ -19,6 +19,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from django.utils.module_loading import module_has_submodule
+from rebac.mixins import INJECTED_BASE_MANAGER
+from rebac.resources import model_resource_type
 
 from angee.base.models import AngeeModel
 from angee.base.transitions import revalidate_transition_metadata
@@ -130,6 +132,7 @@ class ModelComposition:
         for model in dict.fromkeys(declarations):
             self._validate_import(model)
         self._validate_fields()
+        self._validate_donor_managers()
         for source in self.ordered_models:
             self.grantable(source)
 
@@ -240,6 +243,31 @@ class ModelComposition:
 
         return self._contributed_field_origins.get(source, ())
 
+    def field_gate_owners(self) -> dict[str, dict[str, str]]:
+        """Map resource types to the packages owning their concrete donor columns.
+
+        Field names are canonical Django names, never foreign-key attnames.
+        Many-to-many and private fields cannot carry field gates.
+        """
+
+        owners: dict[str, dict[str, str]] = {}
+        for source in self.ordered_models:
+            resource_type = model_resource_type(source)
+            if not resource_type:
+                continue
+            columns = {
+                field.name
+                for donor in self.donors(source)
+                for field in donor._meta.local_fields
+                if field.concrete
+            }
+            owners[resource_type] = {
+                name: package
+                for name, package in sorted(self.contributed_field_origins(source))
+                if name in columns
+            }
+        return dict(sorted(owners.items()))
+
     def _validate_fields(self) -> None:
         """Reject competing additive fields and parent columns redeclared by children.
 
@@ -284,6 +312,22 @@ class ModelComposition:
                     and (field.concrete or field.many_to_many)
                 )
             )
+
+    def _validate_donor_managers(self) -> None:
+        """Reject independently declared managers with one name on a target."""
+
+        for source in self.ordered_models:
+            owners: dict[str, tuple[models.Manager, type[models.Model]]] = {}
+            for donor in self.donors(source):
+                for manager in donor._meta.local_managers:
+                    if manager.name == INJECTED_BASE_MANAGER:
+                        continue
+                    previous = owners.setdefault(manager.name, (manager, donor))
+                    if previous[0].creation_counter != manager.creation_counter:
+                        raise ImproperlyConfigured(
+                            f"{source._meta.label_lower} composes manager {manager.name!r} from "
+                            f"both {previous[1]._meta.label} and {donor._meta.label}"
+                        )
 
     def validate_concrete(self, concrete_models: Iterable[type[models.Model]]) -> None:
         """Validate transition declarations against final Django classes after import."""

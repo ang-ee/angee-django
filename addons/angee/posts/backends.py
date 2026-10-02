@@ -1,6 +1,6 @@
 """Feed backend contract — poll an external platform for public posts.
 
-A :class:`~angee.posts.models.Feed` (an ``integrate.Integration`` child + ``Bridge``)
+A :class:`~angee.posts.models.Feed` (a ``messaging.Channel`` child and ``Bridge``)
 selects one ``FeedBackend`` by registry key. The backend does the per-platform
 *transport* + *parse* — ``fetch_posts`` returns neutral :class:`ParsedPost` rows.
 Each post's *core* (thread/message/parts) reuses messaging's neutral
@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
-from angee.messaging.backends import ParsedHandle, ParsedMessage
+from angee.messaging.backends import ManualChannelBackend, ParsedHandle, ParsedMessage
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
     and ``self.bridge.credential`` authenticates — and ``self.http`` is the shared
     SSRF-pinned client. Incremental state lives on ``self.bridge.cursor``.
     """
+    registry_setting = "ANGEE_POSTS_FEED_BACKEND_CLASSES"
 
     category = "feed"
     label = "Feed"
@@ -119,3 +120,12 @@ class ManualFeedBackend(FeedBackend):
         """Return no posts — a manual feed is populated by hand."""
 
         return []
+
+
+class FeedChannelBackend(ManualChannelBackend):
+    """Mark a feed's Channel parent as a content source without a second transport."""
+
+    key = "feed"
+    category = "feed"
+    label = "Feed"
+    icon = "rss"

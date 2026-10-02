@@ -1,13 +1,16 @@
 import * as React from "react";
+import { stableSerialize } from "@angee/refine";
 
 import { useAppRuntime, type WidgetMap } from "../../runtime";
 import {
   isWidgetDefinition,
   type WidgetOption,
 } from "../../widgets";
-import type { MutationDialogField } from "./MutationDialog";
+import type { DescriptorField } from "./DescriptorFieldList";
 import { emptyValueForField } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
+import { statusLabel } from "../../lib/labels";
+import { titleCase } from "../../lib/titleCase";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
 
@@ -23,17 +26,26 @@ export type FormSpecRelationCreate = Pick<
  * Descriptor produced from a backend-emitted JSON form schema.
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
  * vocabulary. Presentation extensions live on each property: string-only
- * `widget`/`label`/`description`/`placeholder`, list `addLabel`/`removeLabel`,
+ * `widget`/`label`/`description`/`placeholder` (`label` overrides JSON Schema
+ * `title`; an undeclared label is humanized from the field name), list
+ * `addLabel`/`removeLabel`,
  * `readOnly`, `hidden` (retained in values without a control), JSON `defaultValue`
  * (overriding the standard schema `default` when both are supplied),
- * string-labelled `options`, and the pure-data `relation` config. A property's
+ * string-labelled `options` (or `oneOf` constant titles, then humanized enum
+ * values), and the pure-data `relation` config. The backend supplies relation
+ * model names as titles when no field title is declared. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
- * Arrays of objects resolve to the registered fixed-N `rows` view composer.
+ * Arrays of objects default to the registered fixed-N `rows` view composer;
+ * a named widget must declare that it accepts their parsed row template.
  * Properties and items may reference root-local `$defs` or `definitions`;
  * reference siblings override presentation metadata on the referenced schema.
+ * A nullable `anyOf` with one non-null alternative projects that alternative's
+ * controls while retaining the outer annotations and nullability.
+ * String-valued choice widgets use a descriptor codec for JSON-valued choices;
+ * the form retains the original JSON types throughout editing and submission.
  */
-export interface FormSpecFieldDescriptor extends MutationDialogField {
-  /** Approval layout intent; ordinary forms and unspecified fields remain inputs. */
+export interface FormSpecFieldDescriptor extends DescriptorField {
+  /** Form layout intent; ordinary forms and unspecified fields remain inputs. */
   layout?: "context" | "input";
   rowTemplate?: readonly FormSpecFieldDescriptor[];
   objectTemplate?: readonly FormSpecFieldDescriptor[];
@@ -168,25 +180,44 @@ export function normalizeFormSpecValues(
   }));
 }
 
-/** Resolve only projected nodes: opaque context schemas need no finite template. */
-function resolveFieldReferences(
+/** Resolve a root-local definition; callers decide how to present missing or recursive references. */
+export function resolveSchemaReference<T>(
+  reference: string,
+  root: { $defs?: Readonly<Record<string, T>>; definitions?: Readonly<Record<string, T>> },
+  path = "schema",
+): T {
+  const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec(reference);
+  if (!match) throw new Error(`Invalid ${path}: unsupported reference "${reference}".`);
+  const definitions = match[1] === "$defs" ? root.$defs : root.definitions;
+  const name = decodeURIComponent(match[2]!).replace(/~1/g, "/").replace(/~0/g, "~");
+  if (!definitions || !Object.hasOwn(definitions, name)) {
+    throw new Error(`Invalid ${path}: missing reference "${reference}".`);
+  }
+  return definitions[name]!;
+}
+
+/** Resolve references and unambiguous nullable wrappers only for projected nodes. */
+function resolveFieldSchema(
   field: FormSpecWire,
   root: FormSpecWire,
   path: string,
   references: readonly FormSpecWire[],
 ): { field: FormSpecWire; references: readonly FormSpecWire[] } {
   const chain: FormSpecWire[] = [];
-  while (field.$ref !== undefined) {
-    const { $ref, ...siblings } = field;
-    const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec($ref);
-    if (!match) throw new Error(`Invalid ${path}: unsupported reference "${$ref}".`);
-    const definitions = match[1] === "$defs" ? root.$defs : root.definitions;
-    const name = decodeURIComponent(match[2]!).replace(/~1/g, "/").replace(/~0/g, "~");
-    const target = definitions && Object.hasOwn(definitions, name) ? definitions[name] : undefined;
-    if (!target) throw new Error(`Invalid ${path}: missing reference "${$ref}".`);
-    if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
-    chain.push(target);
-    field = { ...target, ...siblings };
+  while (true) {
+    if (field.$ref !== undefined) {
+      const { $ref, ...siblings } = field;
+      const target = resolveSchemaReference($ref, root, path);
+      if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
+      chain.push(target);
+      field = { ...target, ...siblings };
+      continue;
+    }
+    if (!field.anyOf?.some((alternative) => alternative.type === "null")) break;
+    const alternatives = field.anyOf.filter((alternative) => alternative.type !== "null");
+    if (alternatives.length !== 1) break;
+    const { anyOf: _alternatives, ...siblings } = field;
+    field = { ...alternatives[0], ...siblings, nullable: true };
   }
   return { field, references: [...references, ...chain] };
 }
@@ -228,7 +259,7 @@ function deserializeField(
   ancestors: readonly FormSpecWire[],
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
-  const { field, references } = resolveFieldReferences(schema, root, path, ancestors);
+  const { field, references } = resolveFieldSchema(schema, root, path, ancestors);
   const type = formSpecFieldType(field.type, field.anyOf);
   const nullable = field.nullable
     || field.type === "null"
@@ -236,13 +267,15 @@ function deserializeField(
     || field.anyOf?.some((alternative) => alternative.type === "null");
   const variableList = type === "array" && field.widget === "list";
   const items = type === "array" && field.items && field.layout !== "context"
-    ? resolveFieldReferences(field.items, root, `${path}[]`, references)
+    ? resolveFieldSchema(field.items, root, `${path}[]`, references)
     : undefined;
   const rowTemplate = items && !variableList
     && formSpecFieldType(items.field.type, items.field.anyOf) === "object"
     ? deserializeObjectFields(items.field, widgets, path, root, items.references)
     : undefined;
-  const objectTemplate = type === "object" && field.widget === "object" && field.layout !== "context"
+  const structuredObject = type === "object" && (field.widget === "object"
+    || (field.widget === undefined && field.properties !== undefined));
+  const objectTemplate = structuredObject && field.layout !== "context"
     ? deserializeObjectFields(field, widgets, path, root, references)
     : undefined;
   if (variableList && items) assertFiniteTemplate(references, path);
@@ -250,21 +283,24 @@ function deserializeField(
     ? deserializeField("item", items.field, true, widgets, `${path}[]`, root, items.references)
     : undefined;
   const {
-    relation, widget: authoredWidget, label, addLabel, removeLabel,
+    relation, widget: authoredWidget, addLabel, removeLabel,
     description, placeholder, readOnly, hidden, layout,
   } = field;
-  const options = optionsFrom(field);
-  if (rowTemplate && authoredWidget && authoredWidget !== "rows") {
-    throw new Error(
-      `Invalid form spec field "${path}": an array of objects uses widget "rows".`,
-    );
-  }
+  const label = field.label ?? field.title ?? titleCase(name);
+  const choices = optionsFrom(field);
+  const options = choices?.options;
   const widget = rowTemplate
-    ? "rows"
-    : authoredWidget ?? (relation ? "many2one" : options ? "select" : TYPE_WIDGETS[type]);
-  if (!isWidgetDefinition(widgets[widget])) {
+    ? authoredWidget ?? "rows"
+    : authoredWidget ?? (relation ? "many2one" : options ? "select" : objectTemplate ? "object" : TYPE_WIDGETS[type]);
+  const definition = widgets[widget];
+  if (!isWidgetDefinition(definition)) {
     throw new Error(
       `Unknown form spec widget "${widget}" for field "${path}". Register it in AppRuntime.widgets.`,
+    );
+  }
+  if (rowTemplate && !definition.acceptsRowTemplate) {
+    throw new Error(
+      `Invalid form spec field "${path}": widget "${widget}" does not accept a row template.`,
     );
   }
   return {
@@ -292,6 +328,8 @@ function deserializeField(
     ...(Object.hasOwn(field, "defaultValue") ? { defaultValue: field.defaultValue, hasDefault: true }
       : Object.hasOwn(field, "default") ? { defaultValue: field.default, hasDefault: true } : {}),
     ...(options ? { options } : {}),
+    ...(choices?.valueCodec && (widget === "select" || widget === "selection" || widget === "combobox")
+      ? { valueCodec: choices.valueCodec } : {}),
     ...(relation ? { relation } : {}),
     ...(rowTemplate ? { rowTemplate } : {}),
     ...(objectTemplate ? { objectTemplate } : {}),
@@ -316,11 +354,32 @@ function formSpecFieldType(
   return alternativeTypes.length === 1 ? alternativeTypes[0]! : "any";
 }
 
-function optionsFrom(field: FormSpecWire): readonly WidgetOption[] | undefined {
-  if (field.options) {
-    return field.options.map(({ value, label, disabled }) => ({
-      value, label, ...(disabled ? { disabled: true } : {}),
-    }));
-  }
-  return field.enum?.map((value) => ({ value, label: value }));
+/** Ordinal control tokens distinguish choices such as the number 1 and string "1". */
+function optionsFrom(field: FormSpecWire): Pick<FormSpecFieldDescriptor, "options" | "valueCodec"> | undefined {
+  const choices: readonly { value: unknown; label: string; disabled?: boolean }[] | undefined =
+    field.options ?? (field.oneOf?.length && field.oneOf.every((choice) => Object.hasOwn(choice, "const"))
+    ? field.oneOf.map((choice) => ({ value: choice.const, label: choice.title ?? choiceLabel(choice.const) }))
+    : undefined) ?? field.enum?.map((value) => ({ value, label: choiceLabel(value) }));
+  if (!choices) return undefined;
+  const typed = choices.some(({ value }) => typeof value !== "string");
+  const options: readonly WidgetOption[] = choices.map(({ value, label, disabled }, index) => ({
+    value: !typed && typeof value === "string" ? value : String(index),
+    label, ...(disabled ? { disabled: true } : {}),
+  }));
+  if (!typed) return { options };
+  const keys = choices.map(({ value }) => stableSerialize(value));
+  return { options, valueCodec: {
+    toControl(value) {
+      const index = keys.indexOf(stableSerialize(value));
+      return index < 0 ? undefined : String(index);
+    },
+    fromControl(value) {
+      const index = options.findIndex((option) => option.value === value);
+      return index < 0 ? undefined : structuredClone(choices[index]!.value);
+    },
+  } };
+}
+
+function choiceLabel(value: unknown): string {
+  return typeof value === "string" ? statusLabel(value) : JSON.stringify(value);
 }

@@ -3,10 +3,11 @@
 import { createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
+import { useResourceToolbarProps } from "./resource-toolbar-props";
 import { favoriteFromResourceView } from "./model/favorites";
 import { useResourceViewQueryFacts } from "./surface/table-state";
 import { initialResourceSorting } from "./resource-view-codecs";
-import type { ResourceViewInitialState } from "./resource-view-model";
+import type { ResourceViewFilter, ResourceViewInitialState } from "./resource-view-model";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
@@ -127,9 +128,12 @@ describe("resource-view model", () => {
     expect(resourceViewSearchToState({}, initial).pagination.pageIndex).toBe(2);
   });
 
-  test("round-trips cleared seeded filter, group, and sort through search", () => {
+  test.each<ResourceViewFilter>([
+    { kind: { exact: "lead" } },
+    { NOT: { status: { exact: "DROPPED" } } },
+  ])("round-trips cleared seeded filter %j, group, and sort through search", (filter) => {
     const initial = {
-      filter: { kind: { exact: "lead" } },
+      filter,
       group: { field: "stage" },
       sort: { field: "createdAt", dir: "desc" as const },
     };
@@ -235,11 +239,37 @@ describe("resource-view model", () => {
     expect(result.current.state.rowSelection["note-1"]).toBe(false);
   });
 
+  test("consecutive toolbar filter changes compose against the latest state", () => {
+    const { result } = renderHook(() => {
+      const view = useResourceView();
+      const toolbar = useResourceToolbarProps({
+        resourceView: view,
+        pager: { page: view.state.pagination.pageIndex + 1, pageSize: view.state.pagination.pageSize, total: undefined },
+        filterOptions: [
+          { id: "active", label: "Active", filter: { status: { exact: "ACTIVE" } } },
+          { id: "manual", label: "Manual", filter: { origin: { exact: "MANUAL" } } },
+        ],
+      });
+      return { view, toolbar };
+    }, { wrapper: viewWrapper({ page: 3, selectedIds: ["note-1"] }) });
+    act(() => {
+      result.current.toolbar.onFilterToggle?.("active");
+      result.current.toolbar.onFilterToggle?.("manual");
+      result.current.toolbar.onFilterTextChange?.("review");
+    });
+    expect(result.current.view.state.filter).toEqual({
+      status: { exact: "ACTIVE" }, origin: { exact: "MANUAL" }, title: { iContains: "review" },
+    });
+    expect(result.current.view.state.pagination.pageIndex).toBe(0);
+    expect(result.current.view.state.rowSelection).toEqual({});
+  });
+
   test("registers source-backed view kinds with their applicability", () => {
     expect(RESOURCE_VIEW_KINDS).toEqual([
       "list",
       "board",
       "calendar",
+      "gantt",
       "dashboard",
     ]);
     // The calendar takes only window args in v1: no group-by/pager/columns/filter.

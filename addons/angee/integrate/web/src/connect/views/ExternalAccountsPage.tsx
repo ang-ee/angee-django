@@ -25,7 +25,7 @@ export function ExternalAccountsPage(): React.ReactElement {
   const accountForm = (
     <Form resource={MODEL}>
       <Field name="display_name" title />
-      <Field name="status" widget="statusbar" />
+      <Field name="status" widget="statusbar" status />
       <Group label={t("externalAccounts.group.identity")} columns={2}>
         <Field name="provider_label" label={t("externalAccounts.provider")} readOnly />
         <Field name="external_id" readOnly />

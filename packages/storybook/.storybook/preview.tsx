@@ -1,3 +1,4 @@
+import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
@@ -37,6 +38,8 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+
+import { titleCase } from "@angee/ui/lib/titleCase";
 
 import "../src/storybook.css";
 import "@angee/theme-aurora/styles";
@@ -121,74 +124,90 @@ const storybookRoutes = [
   "/settings/preferences",
 ] as const;
 
+type StoryRenderer = Parameters<Decorator>[0];
+type StoryContext = Parameters<Decorator>[1];
+type StorySnapshot = { Story: StoryRenderer; globals: StoryContext["globals"] };
+
 const withAngeeProviders: Decorator = (Story, context) => {
-  // Full routed application stories own the native router/refine/runtime stack.
-  // Nesting the workshop stack would give them two navigation and toast owners.
+  // Full application stories own their router and runtime.
   if (context.parameters.angeeOwnRuntime === true) return <Story />;
-  // Shell studies supply their own menu/route fixture without nesting a second
-  // Refine or router root. Other stories keep the standard workshop context.
+  return <StoryProviders key={context.id} Story={Story} context={context} />;
+};
+
+function StoryProviders({ Story, context }: { Story: StoryRenderer; context: StoryContext }) {
+  const latest = useRef<StorySnapshot>({ Story, globals: context.globals });
+  const store = useMemo(() => {
+    const listeners = new Set<() => void>();
+    return {
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      getSnapshot: () => latest.current,
+      publish(snapshot: StorySnapshot) {
+        latest.current = snapshot;
+        listeners.forEach((listener) => listener());
+      },
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (latest.current.Story !== Story || latest.current.globals !== context.globals) {
+      store.publish({ Story, globals: context.globals });
+    }
+  }, [Story, context.globals, store]);
+
   const resources: ResourceProps[] = context.parameters.angeeResources ?? previewResources;
-  const extraRoutes: string[] = context.parameters.angeeRoutes ?? [];
-  const rootRoute = createRootRoute({
-    component: () => (
-      <AppRuntimeProvider runtime={previewRuntime}>
-        <AppearanceProvider
-          host={{
-            themeId: typeof context.globals.themeId === "string"
-              ? context.globals.themeId
-              : "angee.stock",
-            colorScheme: context.globals.colorScheme === "dark"
-              ? "dark"
-              : context.globals.colorScheme === "light"
-                ? "light"
-                : "system",
-          }}
-        >
-          <Refine
-            dataProvider={previewDataProviders}
-            resources={resources}
-            routerProvider={tanStackRouterProvider}
-            options={{ syncWithLocation: false }}
-          >
-            <ActiveGraphQLSchemaProvider schema="public">
-              <ModelMetadataProvider>
-                <NuqsTestingAdapter>
-                  <ToastProvider>
-                    <Outlet />
-                  </ToastProvider>
-                </NuqsTestingAdapter>
-              </ModelMetadataProvider>
-            </ActiveGraphQLSchemaProvider>
-          </Refine>
-        </AppearanceProvider>
-      </AppRuntimeProvider>
-    ),
-  });
-  const routes = [...new Set<string>([...storybookRoutes, ...extraRoutes])].map((path) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path,
-      component: Story,
-    }),
-  );
-  const router = createRouter({
-    routeTree: rootRoute.addChildren(routes),
-    history: createMemoryHistory({
-      initialEntries: [
-        typeof context.parameters.route === "string"
-          ? context.parameters.route
-          : "/notes",
-      ],
-    }),
-    defaultPreload: false,
-  });
+  const paths = [...new Set<string>([...storybookRoutes, ...(context.parameters.angeeRoutes ?? [])])];
+  const initialRoute = typeof context.parameters.route === "string" ? context.parameters.route : "/notes";
+  const resourceKey = JSON.stringify(resources);
+  const routeKey = JSON.stringify(paths);
+  const router = useMemo(() => {
+    function StoryContent() {
+      const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+      // Invoke the current renderer inside a stable route component. Treating
+      // the changing Story function as a component type would remount its state.
+      return snapshot.Story();
+    }
+    function StoryRoot() {
+      const { globals } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+      return (
+        <AppRuntimeProvider runtime={previewRuntime}>
+          <AppearanceProvider host={{
+            themeId: typeof globals.themeId === "string" ? globals.themeId : "angee.stock",
+            colorScheme: globals.colorScheme === "dark" ? "dark" : globals.colorScheme === "light" ? "light" : "system",
+          }}>
+            <Refine dataProvider={previewDataProviders} resources={resources}
+              routerProvider={tanStackRouterProvider} options={{ syncWithLocation: false }}>
+              <ActiveGraphQLSchemaProvider schema="public">
+                <ModelMetadataProvider>
+                  <NuqsTestingAdapter>
+                    <ToastProvider><Outlet /></ToastProvider>
+                  </NuqsTestingAdapter>
+                </ModelMetadataProvider>
+              </ActiveGraphQLSchemaProvider>
+            </Refine>
+          </AppearanceProvider>
+        </AppRuntimeProvider>
+      );
+    }
+    const rootRoute = createRootRoute({ component: StoryRoot });
+    return createRouter({
+      routeTree: rootRoute.addChildren(paths.map((path) => createRoute({
+        getParentRoute: () => rootRoute, path, component: StoryContent,
+      }))),
+      history: createMemoryHistory({ initialEntries: [initialRoute] }),
+      defaultPreload: false,
+    });
+    // Serialized declaration keys keep equivalent parameter arrays from
+    // reconstructing the router when args or toolbar globals change.
+  }, [initialRoute, resourceKey, routeKey, store]);
 
   return (
     <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
       <RouterProvider router={router} />
     </div>
   );
-};
+}
 
 function previewMenuResource(
   id: string,
@@ -212,14 +231,10 @@ const preview: Preview = {
       defaultValue: "angee.stock",
       toolbar: {
         icon: "paintbrush",
-        items: [
-          { value: "angee.stock", title: "Stock" },
-          { value: "angee.carbon", title: "Carbon" },
-          { value: "angee.aurora", title: "Aurora" },
-          { value: "angee.midnight", title: "Midnight" },
-          { value: "angee.warm-red", title: "Warm Red" },
-          { value: "angee.brand", title: "Brand" },
-        ],
+        items: previewThemes.map(({ definition }) => ({
+          value: definition.id,
+          title: titleCase(definition.id.replace(/^angee\./, "")),
+        })),
         dynamicTitle: true,
       },
     },

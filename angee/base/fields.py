@@ -36,6 +36,7 @@ from typing import Any, cast
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from django.apps import apps
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
@@ -46,6 +47,59 @@ from django_sqids import SqidsField
 from sqids import Sqids
 
 from angee.base.scoping import system_queryset
+from angee.base.serialization import strip_null_bytes
+
+
+class DiagnosticTextField(models.TextField):
+    """Store bounded diagnostic text without database-invalid NUL characters."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        max_length = kwargs.setdefault("max_length", 8192)
+        if not isinstance(max_length, int) or max_length < 1:
+            raise ValueError("DiagnosticTextField requires a positive max_length.")
+        super().__init__(*args, **kwargs)
+
+    def get_prep_value(self, value: Any) -> Any:
+        value = super().get_prep_value(value)
+        return strip_null_bytes(value)[: self.max_length] if isinstance(value, str) else value
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
+        value = self.get_prep_value(super().pre_save(model_instance, add))
+        setattr(model_instance, self.attname, value)
+        return value
+
+
+class ModelLabelField(models.CharField):
+    """Store Django's canonical ``app_label.ModelName`` for a configured model."""
+
+    @staticmethod
+    def normalize(value: str) -> str:
+        if not value:
+            return ""
+        try:
+            return apps.get_model(value)._meta.label
+        except (LookupError, ValueError) as error:
+            raise ValidationError(f"Unknown model label {value!r}.") from error
+
+    def get_prep_value(self, value: Any) -> Any:
+        value = super().get_prep_value(value)
+        if isinstance(value, str):
+            try:
+                return self.normalize(value)
+            except ValidationError:
+                # Django also passes substring operands through field prep.
+                return value
+        return value
+
+    def get_db_prep_save(self, value: Any, connection: Any) -> Any:
+        if isinstance(value, str):
+            value = self.normalize(value)
+        return super().get_db_prep_save(value, connection)
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
+        value = self.normalize(super().pre_save(model_instance, add))
+        setattr(model_instance, self.attname, value)
+        return value
 
 
 def _derive_fernet(label: str) -> Fernet:
@@ -226,9 +280,20 @@ class StateField(TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Reject blank-string state declarations on active concrete models."""
+        """Reject unreconstructable enum values and non-null optional states."""
 
         errors = super().check(**kwargs)
+        reserved = {"names", "values", "labels", "choices"}
+        collisions = sorted(reserved.intersection(str(value) for value, _ in self.flatchoices))
+        if collisions:
+            errors.append(
+                checks.Error(
+                    f"StateField values collide with Django ChoicesType attributes: {', '.join(collisions)}.",
+                    hint="Choose stored values that can be reconstructed by django-choices-field.",
+                    obj=self,
+                    id="angee.E028",
+                )
+            )
         model = getattr(self, "model", None)
         if self.blank and not self.null and model is not None and not model._meta.abstract:
             errors.append(

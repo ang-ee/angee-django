@@ -1,10 +1,31 @@
 // @rebac_package: spaces
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 8
 
 definition messaging/thread {
-    relation group: spaces/group
     relation selected_group: spaces/group // rebac:field=groups
 
-    permission read = group->read + selected_group->read
-    permission write = group->post + selected_group->post
+    permission read = selected_group->read
+    permission write = selected_group->post
+}
+
+definition integrate/integration {
+    relation channel_team: spaces/group // rebac:field=channel__team
+
+    permission read = channel_team->post
+    permission write = channel_team->write
+    permission delete = channel_team->write
+}
+
+definition messaging/channel {
+    permission write__team = integration->owner + admin->member
+}
+
+// A team's vault: the roster reads through the group's post and writes through
+// its write; rebinding the team hands the vault to another roster, so share gates it.
+definition knowledge/vault {
+    relation team: spaces/group // rebac:field=team
+
+    permission read = team->post
+    permission write = team->write
+    permission write__team = share
 }

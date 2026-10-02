@@ -30,11 +30,12 @@ import {
   relationFieldInfoForDescriptor,
   relationListFieldInfo,
 } from "./model-metadata-defaults";
-const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { relationFilterFields } from "../relation/relation-filter";
+import { buildColumns } from "./resource-view-list-body";
 
+const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
   kind: "date", server: { input: field.toUpperCase(), key: field },
@@ -86,6 +87,21 @@ const STATUS_OPTIONS = [
 ];
 
 describe("resource metadata defaults", () => {
+  test("scoped vocabulary overrides authored shared form and column labels", () => {
+    const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
+      ...NOTE_METADATA.fields, title: { ...NOTE_METADATA.fields.title!, label: "Subject" },
+    } };
+    expect(columnsWithMetadataDefaults([{ field: "title", header: "Title" }], scoped)[0]?.header).toBe("Subject");
+    expect(fieldsWithMetadataDefaults([{ name: "title", label: "Title" }], scoped)[0]?.label).toBe("Subject");
+    expect(NOTE_METADATA.fields.title?.label).toBeUndefined();
+  });
+  test("bare enum columns use the badge with metadata labels and scoped tones", () => {
+    const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
+      ...NOTE_METADATA.fields, status: { ...NOTE_METADATA.fields.status!, tones: { IN_REVIEW: "warning" } },
+    } };
+    const [column] = columnsWithMetadataDefaults([{ field: "status" }], scoped);
+    expect(column).toMatchObject({ widget: "statusBadge", options: STATUS_OPTIONS, tone: { IN_REVIEW: "warning" } });
+  });
   const columns: readonly ColumnDescriptor<Row>[] = [
     { field: "title" },
     { field: "status", widget: "statusBadge" },
@@ -267,6 +283,20 @@ describe("resource metadata defaults", () => {
       options: [],
     }]);
     expect(buildFilterOptions([{ field: "status" }], rows, filterFields)).toEqual([]);
+  });
+
+  test("uses field enum labels when query filter values omit descriptions", () => {
+    const values = [{ value: "MANUAL", description: "Manual" }, { value: "WORKFLOW", description: "Workflow" }];
+    const metadata = canonicalModel({ origin: { name: "origin", kind: "enum", values } },
+      testDataResource("workflows.Run", { query: testResourceQuery({ fields: {
+        origin: testQueryField("origin", { kind: "enum", filter: {
+          field: "origin", scalar: "Enum", values: values.map(({ value }) => ({ value })), operators: ["exact"],
+        } }),
+      } }) }));
+    const fields = buildFilterFields([{ field: "origin" }], [], metadata);
+    expect(fields[0]?.options).toEqual(values.map(({ value, description }) => ({ value, label: description })));
+    expect(buildFilterOptions([{ field: "origin" }], [], fields).map(({ chipLabel }) => chipLabel))
+      .toEqual(["Manual", "Workflow"]);
   });
 
   test("keeps relation query capabilities and augments them with the lazy picker seam", () => {
@@ -601,14 +631,15 @@ describe("money currencyField plumbing", () => {
     expect(column?.widget).toBe("float");
   });
 
-  test("a bare column for an enum/boolean field inherits no kind-derived widget", () => {
-    // List cells render enums, relations, and plain scalars natively; only an
-    // explicit backend widget (like `money`) is inherited onto a column.
+  test("a bare enum column renders as a status badge; a boolean inherits no widget", () => {
+    // An enum reads as a toned chip with its option label; relations and plain
+    // scalars render natively, and only an explicit backend widget (like `money`)
+    // is inherited otherwise.
     const resolved = columnsWithMetadataDefaults<Row>(
       [{ field: "status" }, { field: "isStarred" }],
       NOTE_METADATA,
     );
-    expect(resolved[0]?.widget).toBeUndefined();
+    expect(resolved[0]?.widget).toBe("statusBadge");
     expect(resolved[1]?.widget).toBeUndefined();
   });
 
@@ -702,6 +733,8 @@ describe("relation column read expansion", () => {
       schema,
     );
     expect(column?.field).toBe("product.display_name");
+    expect(column?.id).toBe("product");
+    expect(buildColumns([column!], {})[0]?.id).toBe("product");
     expect(column?.selectionPaths).toEqual([
       "product.id",
       "product.display_name",
@@ -709,6 +742,15 @@ describe("relation column read expansion", () => {
     // The label renders as a scalar, so the relation's many2one edit widget drops.
     expect(column?.widget).toBeUndefined();
     expect(column?.header).toBe("Product");
+  });
+
+  test("a relation column also selects its declared scalar paths", () => {
+    const [column] = columnsWithMetadataDefaults<Row>(
+      [{ field: "product", render: () => null, selectionPaths: ["title"] }],
+      metadata,
+      schema,
+    );
+    expect(column?.selectionPaths).toEqual(["product.id", "product.display_name", "title"]);
   });
 
   test("finalized relation paths work without target resource metadata", () => {
@@ -720,6 +762,38 @@ describe("relation column read expansion", () => {
   test("a relation without finalized selectable paths fails with a named error", () => {
     const broken = { ...metadata, resource: { ...metadata.resource, query: testResourceQuery() } };
     expect(() => columnsWithMetadataDefaults<Row>([{ field: "product" }], broken)).toThrow(RelationRepresentationError);
+  });
+
+  test("a to-many relation selects related record identities and labels for linked chips", () => {
+    const seat = testDataResource("decisions.Seat", {
+      fields: [{ name: "assignees", kind: "list", scalar: null, relationModelLabel: "iam.User",
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+      query: testResourceQuery({ fields: { assignees: testQueryField("assignees", {
+        kind: "list", scalar: null, row: null,
+      }) } }),
+    });
+    const user = testDataResource("iam.User", {
+      recordRepresentation: "display_name",
+      fields: [{ name: "display_name", kind: "scalar", scalar: "String", readable: true,
+        aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    });
+    const schema = schemaFieldMetadataFromDataResources([seat, user]);
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "assignees" }], schema.labels["decisions.Seat"]!, schema);
+    expect(column).toMatchObject({
+      field: "assignees", interactive: true,
+      selectionPaths: ["assignees.id", "assignees.display_name"],
+      relationList: { model: "iam.User", identityPath: "id", labelPath: "display_name" },
+    });
+    expect(refineFieldsFromPaths(requestedFieldPaths([column!], undefined, schema.labels["decisions.Seat"]!)))
+      .toEqual(["id", { assignees: ["id", "display_name"] }]);
+  });
+
+  test("an object-list column without a related resource stays a value column", () => {
+    const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
+      testDataResource("parties.PartyHandle"));
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "evidence_refs" }], handle);
+    expect(column?.field).toBe("evidence_refs");
+    expect(column && "relationList" in column).toBe(false);
   });
 
   test("a to-one FK projected as a public-id scalar stays a leaf (not sub-selected)", () => {
@@ -747,6 +821,16 @@ describe("relation column read expansion", () => {
       "project.product.display_name",
       "quantity",
     ]);
+  });
+
+  test("nested form fields inherit target metadata without editing a related record", () => {
+    const fields = fieldsWithMetadataDefaults([
+      { name: "project.product" }, { name: "project.product.display_name" },
+    ], metadata, schema);
+    expect(fields[0]).toMatchObject({ name: "project.product", widget: "many2one", readOnly: true });
+    expect(fields[1]).toMatchObject({ name: "project.product.display_name", readOnly: true });
+    expect(relationFieldInfoForDescriptor(fields[0]!, metadata, schema))
+      .toMatchObject({ resource: "catalog.ProductVariant", labelField: "display_name" });
   });
 
   test("keeps an explicit scalar path structural when an intermediate relation target has no metadata", () => {

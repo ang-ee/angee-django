@@ -11,6 +11,10 @@ describe("intake addon manifest", () => {
 
   test("contributes one form-section pane to project and task records", () => {
     expect((intake.slots ?? []).map(({ id, model, slot }) => [id, model, slot])).toEqual([
+      ["intake.requester", TASK_MODEL, "access.roles"],
+      ["intake.people-rail", TASK_MODEL, "form-view.rail"],
+      ["decisions.subject.intake.Need", NEED_MODEL, "form-view.sections"],
+      ["intake.task-access-decisions", TASK_MODEL, "form-view.sections"],
       ["intake.project-needs", PROJECT_MODEL, "form-view.sections"],
       ["intake.task-needs", TASK_MODEL, "form-view.sections"],
     ]);
@@ -21,5 +25,9 @@ describe("intake addon manifest", () => {
   test("exports the canonical Need resource key and its pane glyph", () => {
     expect(NEED_MODEL).toBe("intake.Need");
     expect(intake.icons?.["intake-needs"]).toBeDefined();
+  });
+
+  test("offers the same actor-scoped access projection in the record aside", () => {
+    expect(intake.chatter?.map(({ id }) => id)).toContain("intake.access-decisions");
   });
 });

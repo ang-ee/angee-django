@@ -1,9 +1,10 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Button, Column, ResourceList, Field, Form, Glyph, List, MutationDialog, mutationDialogValueCodecs, registerForm, type MutationDialogField, type MutationDialogValues, type RegisteredFormProps } from "@angee/ui";
-import { IntegrationSyncColumns, IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
+import { Button, Column, ResourceList, Glyph, List, MutationDialog, mutationDialogValueCodecs, type DescriptorField, type MutationDialogValues } from "@angee/ui";
+import { IntegrationSyncColumns } from "@angee/integrate";
 
 import { ConnectCardDavDirectory } from "./documents";
+import { directoryForm } from "./DirectoryForm";
 import { usePartiesT } from "./i18n";
 
 const MODEL = "parties.Directory";
@@ -30,24 +31,6 @@ export function DirectoriesPage(): React.ReactElement {
     </ResourceList>
   );
 }
-
-function DirectoryForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
-  const t = usePartiesT();
-  const syncAction = useIntegrationSyncAction("sync_integration", t("directory.action.sync"));
-  return (
-      <Form {...props} resource={MODEL}>
-        <Field name="display_name" title readOnly />
-        <Field name="lifecycle" readOnly />
-        <Field name="runtime_status" widget="colorDot" readOnly />
-        <Field name="backend_class" readOnly />
-        <Field name="config" readOnly />
-        {IntegrationSyncFields({ label: t("directory.group.lastSync") })}
-        {syncAction}
-      </Form>
-  );
-}
-
-export const directoryForm = registerForm(MODEL, DirectoryForm);
 
 /** Button + dialog that connects a CardDAV account, for the list toolbar slot. */
 function ConnectCardDav(): React.ReactElement {
@@ -76,7 +59,7 @@ function ConnectDialog({
     invalidateModels: [MODEL],
   });
   const t = usePartiesT();
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "name",
@@ -116,7 +99,7 @@ function ConnectDialog({
       submittingLabel={t("directory.connect.submitting")}
       errorFallback={t("directory.connect.error")}
       parseValues={parseDirectoryValues}
-      onSubmit={connect}
+      onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
     />
   );
 }

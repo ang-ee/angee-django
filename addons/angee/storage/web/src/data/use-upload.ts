@@ -1,17 +1,16 @@
-import { useAuthoredMutation } from "@angee/refine";
-import { refineResourceName, useModelMetadata } from "@angee/metadata";
-import { useInvalidate } from "@refinedev/core";
+import { useAuthoredMutation, useInvalidateAuthoredModels, type DocumentVariables } from "@angee/refine";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { useCallback, useRef, useState } from "react";
 
-import { errorMessage } from "@angee/ui";
+import { errorMessage, useRuntimeViewAs } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
 
 const DEFAULT_MIME = "application/octet-stream";
 const FILE_MODEL = "storage.File";
+const UPLOAD_MODELS = [FILE_MODEL, "storage.FileAttachment"] as const;
 
 /**
  * Lowercase SHA-256 hex of a file's bytes — the content address the begin step
@@ -43,6 +42,8 @@ export interface UploadTarget {
   driveId?: string | null;
   driveSlug?: string;
   folderId?: string | null;
+  visibility?: DocumentVariables<typeof StorageFileUploadBegin>["input"]["visibility"];
+  record?: DocumentVariables<typeof StorageFileUploadBegin>["input"]["record"];
 }
 
 const FINISHED: ReadonlySet<UploadStatus> = new Set(["done", "deduped", "failed"]);
@@ -70,12 +71,14 @@ export interface UploadedFile {
 export function useStorageUpload(
   options: { onUploaded?: (files: readonly UploadedFile[], completionContext?: unknown) => void } = {},
 ): StorageUpload {
+  const preview = useRuntimeViewAs();
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
   const { onUploaded } = options;
   const t = useStorageT();
   const [beginUpload] = useAuthoredMutation(StorageFileUploadBegin);
   const [finalizeUpload] = useAuthoredMutation(StorageFileUploadFinalize);
-  const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
-  const invalidate = useInvalidate();
+  const invalidateModels = useInvalidateAuthoredModels();
   const [tasks, setTasks] = useState<readonly UploadTask[]>([]);
   const sources = useRef(new Map<string, { file: File; target: UploadTarget; completionContext?: unknown }>());
 
@@ -87,8 +90,13 @@ export function useStorageUpload(
 
   const runOne = useCallback(
     async (taskId: string, file: File, target: UploadTarget): Promise<UploadedFile | null> => {
+      const checkPreview = () => {
+        if (previewRef.current.viewAs || previewRef.current.pending) throw new Error(t("upload.error.viewAs"));
+      };
       try {
+        checkPreview();
         const contentHash = await sha256Hex(file);
+        checkPreview();
         const begun = await beginUpload({
           input: {
             filename: file.name,
@@ -98,9 +106,12 @@ export function useStorageUpload(
             drive_slug: target.driveSlug ?? "",
             folder: target.folderId ?? null,
             content_hash: contentHash,
+            visibility: target.visibility ?? "INHERITED",
+            record: target.record ?? null,
           },
         });
         const payload = begun?.file_upload_begin;
+        checkPreview();
         if (!payload || payload.error) {
           patch(taskId, {
             status: "failed",
@@ -126,6 +137,7 @@ export function useStorageUpload(
           });
           return null;
         }
+        checkPreview();
         patch(taskId, { status: "finalizing" });
         const finalized = await finalizeUpload({
           input: {
@@ -135,6 +147,7 @@ export function useStorageUpload(
           },
         });
         const result = finalized?.file_upload_finalize;
+        checkPreview();
         if (!result || result.error) {
           patch(taskId, {
             status: "failed",
@@ -158,6 +171,7 @@ export function useStorageUpload(
 
   const upload = useCallback(
     (files: readonly File[], target: UploadTarget = {}, completionContext?: unknown): void => {
+      if (previewRef.current.viewAs || previewRef.current.pending) return;
       const started = files.map((file) => ({
         file,
         task: {
@@ -170,39 +184,32 @@ export function useStorageUpload(
       setTasks((current) => [...current, ...started.map((entry) => entry.task)]);
       void Promise.allSettled(
         started.map((entry) => runOne(entry.task.id, entry.file, target)),
-      ).then(async (results) => {
+      ).then((results) => {
         const uploaded = results
           .map((result) => (result.status === "fulfilled" ? result.value : null))
           .filter((file): file is UploadedFile => file !== null);
-        if (uploaded.length > 0 && fileResource) {
-          await invalidate({
-            resource: refineResourceName(fileResource),
-            dataProviderName: fileResource.schemaName,
-            invalidates: ["list", "many", "detail"],
-          });
+        if (uploaded.length > 0) {
+          invalidateModels([...UPLOAD_MODELS, ...(target.record ? [target.record.model_label] : [])]);
         }
         onUploaded?.(uploaded, completionContext);
       });
     },
-    [fileResource, invalidate, onUploaded, runOne],
+    [invalidateModels, onUploaded, runOne],
   );
 
   const retry = useCallback((taskId: string): void => {
+    if (previewRef.current.viewAs || previewRef.current.pending) return;
     const source = sources.current.get(taskId);
     if (!source) return;
     patch(taskId, { status: "hashing", error: undefined, fileId: undefined });
-    void runOne(taskId, source.file, source.target).then(async (uploaded) => {
+    void runOne(taskId, source.file, source.target).then((uploaded) => {
       if (!uploaded) return;
-      if (fileResource) {
-        await invalidate({
-          resource: refineResourceName(fileResource),
-          dataProviderName: fileResource.schemaName,
-          invalidates: ["list", "many", "detail"],
-        });
-      }
+      invalidateModels([
+        ...UPLOAD_MODELS, ...(source.target.record ? [source.target.record.model_label] : []),
+      ]);
       onUploaded?.([uploaded], source.completionContext);
     });
-  }, [fileResource, invalidate, onUploaded, patch, runOne]);
+  }, [invalidateModels, onUploaded, patch, runOne]);
 
   const clearFinished = useCallback(() => {
     const finishedIds = new Set(tasks.filter((task) => FINISHED.has(task.status)).map((task) => task.id));

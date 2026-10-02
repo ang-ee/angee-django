@@ -20,14 +20,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, NamedTuple
+from typing import Any, NamedTuple
 
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core import checks
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import ObjectRef, to_object_ref
 from rebac.resources import model_resource_type
 
-from angee.base.identity import public_id_for
+from angee.base.identity import public_data_id_field, public_id_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +116,73 @@ def canonical_record_model(model: type[models.Model]) -> type[models.Model]:
     return typed[-1] if typed else concrete
 
 
+def is_record_target_model(model: type[models.Model]) -> bool:
+    """Whether rows of ``model`` can be targets of a polymorphic record edge.
+
+    Edges that name a record by canonical target (knowledge bindings, decision
+    evidence) admit only records with a REBAC type, so only such models — and their
+    MTI children and proxies — need delete-time care for those edges. A model with
+    several concrete MTI parents has no canonical target, so it carries none.
+    """
+
+    try:
+        return model_resource_type(canonical_record_model(model)) is not None
+    except ValueError:
+        return False
+
+
+def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models.Model], ...]:
+    """Return direct, installed MTI children in stable model-label order."""
+
+    return tuple(
+        sorted(
+            (
+                model
+                for model in parent_model._meta.apps.get_models()
+                if model._meta.managed and not model._meta.proxy and tuple(model._meta.parents) == (parent_model,)
+            ),
+            key=lambda model: model._meta.label_lower,
+        )
+    )
+
+
+def concrete_child_accessor(parent_model: type[models.Model], child_model: type[models.Model]) -> str:
+    """Return Django's reverse accessor for a direct MTI parent link."""
+
+    parent_link = child_model._meta.parents.get(parent_model)
+    if parent_link is None:
+        raise ImproperlyConfigured(f"{child_model._meta.label} is not a direct child of {parent_model._meta.label}.")
+    return str(parent_link.remote_field.get_accessor_name())
+
+
+def concrete_child(
+    parent: models.Model,
+    child_model: type[models.Model],
+    *,
+    queryset: models.QuerySet[Any] | None = None,
+    cache_attr: str | None = None,
+) -> models.Model | None:
+    """Read one child through a prefetch cache or its supplied base/scoped queryset.
+
+    The caller owns access policy. The default base manager reads structural MTI
+    identity; an actor-scoped queryset can instead restrict the returned row.
+    """
+
+    if queryset is None and isinstance(parent, child_model):
+        return parent
+    parent_model = next((model for model in child_model._meta.parents if isinstance(parent, model)), type(parent))
+    accessor = concrete_child_accessor(parent_model, child_model)
+    if cache_attr is not None and hasattr(parent, cache_attr):
+        cached = getattr(parent, cache_attr)
+        if isinstance(cached, (list, tuple)):
+            return cached[0] if cached else None
+        return cached
+    if queryset is None and accessor in parent._state.fields_cache:
+        return parent._state.fields_cache[accessor]
+    rows = queryset if queryset is not None else child_model._base_manager.all()
+    return rows.filter(pk=parent.pk).first()
+
+
 def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]]:
     """Yield ``model`` then each concrete MTI ancestor it shares its primary key with.
 
@@ -135,28 +205,90 @@ def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]
 
 
 class RecordRefMixin(models.Model):
-    """Project a contenttypes-backed row reference from model-owned fields."""
-
-    record_ref_field_prefix: ClassVar[str] = "target"
-    """Reference field prefix; ``target`` maps to ``content_type``/``object_id``."""
+    """Project a row reference from the model's single declared generic foreign key."""
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
 
         abstract = True
 
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Reject ambiguous generic pointers and the obsolete prefix declaration."""
+
+        errors = super().check(**kwargs)
+        references = [field for field in cls._meta.private_fields if isinstance(field, GenericForeignKey)]
+        if len(references) != 1:
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label} must declare exactly one GenericForeignKey for RecordRefMixin; "
+                    f"found {len(references)}.",
+                    obj=cls,
+                    id="angee.E029",
+                )
+            )
+        if hasattr(cls, "record_ref_field_prefix"):
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label}.record_ref_field_prefix is obsolete; "
+                    "the GenericForeignKey owns its field names.",
+                    obj=cls,
+                    id="angee.E030",
+                )
+            )
+        return errors
+
     @property
     def record_ref(self) -> RecordRef:
         """Return this row's referenced record identity without loading the target."""
 
-        content_type_id = getattr(self, self._record_ref_content_type_id_attr(), None)
-        object_id = getattr(self, self._record_ref_object_id_field_name(), None)
+        reference = self.record_ref_field()
+        content_type_id = getattr(self, reference.ct_field_attname)
+        object_id = getattr(self, reference.fk_field)
         if content_type_id in (None, "") or object_id in (None, ""):
             return _empty_record_ref(object_id)
         model = ContentType.objects.get_for_id(content_type_id).model_class()
         if model is None:
             return _empty_record_ref(object_id)
         return _record_ref_from_model(model, object_id)
+
+    @classmethod
+    def record_ref_field(cls) -> GenericForeignKey:
+        """Return the generic pointer that owns this model's record reference."""
+
+        references = [field for field in cls._meta.private_fields if isinstance(field, GenericForeignKey)]
+        if len(references) != 1:
+            raise ImproperlyConfigured(f"{cls._meta.label} must declare exactly one GenericForeignKey.")
+        return references[0]
+
+    @classmethod
+    def record_public_id_operand(cls, value: str) -> models.Case:
+        """Decode a public ID to a SQL operand bound to the pointer's model.
+
+        Generic references carry both a content type and an object ID. Decode
+        through each target's existing identity field, retaining its content type
+        in a native CASE expression so equal numeric keys on different models
+        cannot alias. No target rows or content types are fetched to filter rows.
+        """
+
+        reference = cls.record_ref_field()
+        candidates = []
+        for model in sorted(cls._meta.apps.get_models(), key=lambda item: item._meta.label_lower):
+            field = public_data_id_field(model)
+            try:
+                pk = field.public_id_to_value(value) if field else model._meta.pk.to_python(value)
+                if pk is None or public_id_for(model, pk) != value:
+                    continue
+            except (TypeError, ValueError, ValidationError):
+                continue
+            candidates.append(models.When(
+                **{
+                    f"{reference.ct_field}__app_label": model._meta.app_label,
+                    f"{reference.ct_field}__model": model._meta.model_name,
+                },
+                then=models.Value(str(pk)),
+            ))
+        return models.Case(*candidates, default=models.Value(""), output_field=models.CharField())
 
     @property
     def record_model_label(self) -> str:
@@ -169,30 +301,6 @@ class RecordRefMixin(models.Model):
         """Return the referenced record's stable public id."""
 
         return self.record_ref.public_id
-
-    @classmethod
-    def _record_ref_content_type_field_name(cls) -> str:
-        """Return the content-type FK field that backs this reference."""
-
-        prefix = cls.record_ref_field_prefix
-        if prefix == "target":
-            return "content_type"
-        return f"{prefix}_content_type"
-
-    @classmethod
-    def _record_ref_content_type_id_attr(cls) -> str:
-        """Return the stored content-type id attribute name."""
-
-        return f"{cls._record_ref_content_type_field_name()}_id"
-
-    @classmethod
-    def _record_ref_object_id_field_name(cls) -> str:
-        """Return the object-id field that backs this reference."""
-
-        prefix = cls.record_ref_field_prefix
-        if prefix == "target":
-            return "object_id"
-        return f"{prefix}_object_id"
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,22 +15,38 @@ import pytest
 import strawberry
 import strawberry_django
 from django.apps import AppConfig
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
+from django.db.models.functions import Upper
+from django.test import RequestFactory
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLError, GraphQLObjectType, get_named_type
-from rebac import MissingActorError, PermissionDenied, RebacMixin
+from rebac import (
+    MissingActorError,
+    PermissionDenied,
+    RebacMixin,
+    RelationshipTuple,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
+from rebac.middleware import ActorMiddleware
+from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
 from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeModel
+from angee.base.transitions import TransitionNotAllowed
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
@@ -37,7 +54,9 @@ from angee.graphql.schema import (
     AngeeSchema,
     GraphQLSchemas,
 )
+from angee.graphql.view_as import ViewAsReadOnlyExtension
 from tests.conftest import make_addon
+from tests.hierdemo.models import HierNode
 
 
 @strawberry.type
@@ -45,6 +64,62 @@ class HelloQuery:
     @strawberry.field
     def hello(self) -> str:
         return "hi"
+
+
+def test_generated_read_root_conceals_missing_and_hidden_ids(composed_tables: None) -> None:
+    user_model = get_user_model()
+    viewer = user_model.objects.create_user("read-root-viewer")
+    visible = user_model.objects.create_user("read-root-visible")
+    hidden = user_model.objects.create_user("read-root-hidden")
+    write_relationships([
+        RelationshipTuple(to_object_ref(visible), "directory_reader", to_subject_ref(viewer)),
+    ])
+
+    @strawberry_django.type(user_model)
+    class PersonNode(AngeeNode):
+        username: strawberry.auto
+
+    resource = hasura_data.hasura_model_resource(
+        PersonNode, model=user_model, name="people", filterable=[], sortable=["id"], aggregatable=[],
+        insert=False, update=False, delete=False,
+    )
+    schema = GraphQLSchemas([addon(public={"query": [resource.query], "types": resource.types})]).build("public")
+    endpoint = ActorMiddleware(GraphQLView.as_view(schema=schema))
+
+    def read(public_id: str) -> dict[str, Any]:
+        request = RequestFactory().post(
+            "/graphql/public/", content_type="application/json",
+            data={
+                "query": "query($id: String!) { people_by_pk(id: $id) { username } }",
+                "variables": {"id": public_id},
+            },
+        )
+        request.user = viewer
+        response = endpoint(request)
+        assert response.status_code == 200
+        return json.loads(response.content)
+
+    assert read(str(visible.sqid)) == {"data": {"people_by_pk": {"username": visible.username}}}
+    for identity in (str(hidden.sqid), user_model.public_id_from_pk(999999), "malformed", "wrong_123", ""):
+        assert read(identity) == {"data": {"people_by_pk": None}}
+
+
+@pytest.mark.parametrize("refusal", [
+    ValidationError("refusal-canary"), PermissionDenied("refusal-canary"),
+    TransitionNotAllowed("refusal-canary"), ObjectDoesNotExist("refusal-canary"),
+])
+def test_resolver_refusals_do_not_log_errors_or_documents(
+    refusal: Exception, caplog: pytest.LogCaptureFixture,
+) -> None:
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def refuse(self, secret: str) -> str:
+            raise refusal
+
+    result = AngeeSchema(query=Query).execute_sync('{ refuse(secret: "document-canary") }')
+    assert result.errors
+    assert not caplog.records
 
 
 @strawberry.type
@@ -252,7 +327,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         calls["write_model"] = model
         return sentinel_queryset
 
-    def fake_instance_from_public_id(
+    def fake_require_instance_for_id(
         model: type[models.Model],
         value: str,
         *,
@@ -262,7 +337,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         return related
 
     monkeypatch.setattr(hasura_data, "write_queryset", fake_write_queryset)
-    monkeypatch.setattr(hasura_data, "instance_from_public_id", fake_instance_from_public_id)
+    monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
 
@@ -284,7 +359,7 @@ def test_hasura_write_backend_create_delegates_prepared_insertion(
     related = SimpleNamespace(pk=7)
     created: dict[str, Any] = {}
 
-    def fake_instance_from_public_id(
+    def fake_require_instance_for_id(
         model: type[models.Model],
         value: str,
         *,
@@ -307,7 +382,7 @@ def test_hasura_write_backend_create_delegates_prepared_insertion(
         created["row"] = instance
         return instance
 
-    monkeypatch.setattr(hasura_data, "instance_from_public_id", fake_instance_from_public_id)
+    monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
     monkeypatch.setattr(hasura_data.mutation_resolvers, "create", fake_create)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
@@ -531,6 +606,72 @@ def test_type_extension_is_idempotent_across_collections() -> None:
     assert sdl.count("extra: Int!") == 1
 
 
+@strawberry_django.type(HierNode)
+class OptimizedExtensionNode:
+    id: strawberry.auto
+
+
+@strawberry_django.type(HierNode, name="OptimizedExtensionNode", extend=True)
+class OptimizedExtensionFields:
+    @strawberry_django.field(annotate={"_upper_name": lambda info: Upper("name")}, name="upper_name")
+    def annotated(self) -> str:
+        return cast(Any, self)._upper_name
+
+    @strawberry_django.field(only=["name"])
+    def label(self) -> str:
+        return cast(Any, self).name
+
+    @strawberry_django.field(only=["parent__name"], select_related=["parent"])
+    def parent_label(self) -> str:
+        return cast(Any, self).parent.name
+
+    @strawberry_django.field(prefetch_related=["children"])
+    def child_labels(self) -> list[str]:
+        return [child.name for child in cast(Any, self).children.all()]
+
+
+@strawberry.type
+class OptimizedExtensionQuery:
+    @strawberry_django.field
+    def nodes(self) -> list[OptimizedExtensionNode]:
+        return HierNode.objects.filter(name="branch")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("count", [1, 6])
+def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, django_assert_num_queries: Any) -> None:
+    """All four native hint kinds survive extension composition and narrow reads."""
+
+    schemas = GraphQLSchemas([addon(
+        public={"query": [OptimizedExtensionQuery]},
+        console={"query": [OptimizedExtensionQuery], "type_extensions": [OptimizedExtensionFields]},
+    )])
+    schema = schemas.build("console")
+    public = schemas.build("public")
+    assert "upper_name" not in public.as_str()
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 1
+    with system_context(reason="test.graphql.extension_hints"):
+        root = HierNode.objects.create(name="root")
+        for _ in range(count):
+            branch = HierNode.objects.create(name="branch", parent=root)
+            HierNode.objects.create(name="leaf", parent=branch)
+        # An unselected extension field must not install its prefetch.
+        with django_assert_num_queries(1):
+            result = schema.execute_sync("{ nodes { id } }")
+        assert result.errors is None
+        with django_assert_num_queries(2):
+            result = schema.execute_sync("""{
+              nodes { ...Hints }
+            }
+            fragment Hints on OptimizedExtensionNode {
+              value: upper_name label parent_label child_labels
+            }""")
+        assert result.errors is None
+        assert result.data == {"nodes": [
+            {"value": "BRANCH", "label": "branch", "parent_label": "root", "child_labels": ["leaf"]}
+        ] * count}
+
+
 def test_type_extension_rejects_field_collision() -> None:
     """A donor field already declared on the target fails fast."""
 
@@ -639,6 +780,7 @@ def test_build_schema_installs_universal_rebac_extensions() -> None:
     ).build("public")
 
     assert schema.extensions == (
+        ViewAsReadOnlyExtension,
         RebacExtension,
         CustomExtension,
         RebacDjangoOptimizerExtension,

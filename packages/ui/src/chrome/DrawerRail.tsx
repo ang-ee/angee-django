@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useEffect, type ReactElement } from "react";
 
 import { useUiT } from "../i18n";
 import { tv } from "../lib/variants";
@@ -34,12 +34,18 @@ const drawerRailVariants = tv({
  * drawer (`useDrawers(edge)`), toggling the shared `DrawerProvider` state.
  * Renders nothing when the edge has no contributed drawers. JetBrains-style:
  * every drawer toggle lives on the edge stripe (panes toggle from the TopBar).
+ * Route admission closes a drawer whose tab is no longer present.
  */
 export function DrawerRail({ edge }: { edge: DrawerEdge }): ReactElement | null {
   const drawers = useDrawers(edge);
-  const { openId, toggle } = useDrawerState();
+  const { openId, close, toggle } = useDrawerState();
   const t = useUiT();
   const styles = drawerRailVariants({ edge });
+
+  useEffect(() => {
+    const active = openId(edge);
+    if (active && !drawers.some((drawer) => drawer.id === active)) close(edge);
+  }, [close, drawers, edge, openId]);
 
   if (drawers.length === 0) return null;
 

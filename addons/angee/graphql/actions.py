@@ -1,4 +1,8 @@
-"""Shared GraphQL result type, guard, and target preflights for console domain actions."""
+"""Shared GraphQL result type, guard, and target preflights for console domain actions.
+
+In-band refusals preserve the error's declared ``DomainError`` / ``ValidationError``
+code in nullable ``ActionResult.code``; errors without a code project ``None``.
+"""
 
 from __future__ import annotations
 
@@ -10,11 +14,12 @@ from typing import ParamSpec, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
-from django.db import models
+from django.db import models, transaction
 from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
+from angee.base.errors import DomainError
 from angee.base.scoping import read_scoped_queryset
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
@@ -27,6 +32,9 @@ _P = ParamSpec("_P")
 
 logger = logging.getLogger(__name__)
 
+class ActionTargetUnavailable(ValidationError):
+    """A target preflight whose details stay in form errors under a generic banner."""
+
 
 @strawberry.type
 class ActionResult:
@@ -35,17 +43,18 @@ class ActionResult:
     Returned by non-CRUD action mutations (sync, test, discover, open-document,
     …) so the client can surface a toast and refresh the affected record.
 
-    On a *domain* failure the action returns ``ok=False`` and may populate
+    On a guarded failure the action returns ``ok=False`` and may populate
     ``validation_errors`` — a field → messages map keyed by the argument names the
     form binds to (its arg descriptor ``name``s) — which a typed-args action form
     binds to its inputs, keeping the dialog open until ``ok=True``. Keys that match
-    no argument surface at form level. This is the in-band path; a *non-domain*
-    failure still raises a GraphQL error carrying the ``validationErrors``
-    extension instead.
+    no argument surface at form level. Validation refusals remain in band even
+    when also typed as ``DomainError``; other typed domain refusals propagate to
+    the schema's stable-code GraphQL error projection.
     """
 
     ok: bool
     message: str
+    code: str | None = None
     validation_errors: JSON | None = None
     id: strawberry.ID | None = None
     """Public id of the record the verb created, when the action creates one.
@@ -74,26 +83,77 @@ class ActionResult:
         return cast(JSON, field_errors) if field_errors else None
 
     @classmethod
-    def from_error(cls, error: Exception, summary: str) -> ActionResult:
+    def from_error(cls, error: Exception, summary: str, *, camel_case_keys: bool = True) -> ActionResult:
         """Return a failed result from a caught exception.
 
         A Django ``ValidationError`` carrying per-field messages (``error_dict``)
         becomes the in-band ``validation_errors`` map a typed-args action form binds
-        to its inputs: field names are camel-cased to match the GraphQL argument
+        to its inputs: field names default to camel case to match the GraphQL argument
         names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
-        no argument) surfaces at form level. Any other exception — or a
-        ``ValidationError`` with only non-field messages — yields a message-only
-        failure. ``summary`` is the human banner shown either way; the raw exception
-        text is never leaked into it.
+        no argument) surfaces at form level. Other exceptions and validation errors
+        with only non-field messages leave the map empty. ``DomainError`` and
+        ``ValidationError`` codes are preserved when defined. Explicit form-level
+        validation messages supply the banner; target preflights and errors without
+        a field map keep the generic summary without leaking diagnostics.
         """
 
-        validation_errors = cls.validation_error_map(error) if isinstance(error, ValidationError) else None
-        if validation_errors is not None:
-            return cls(ok=False, message=summary, validation_errors=validation_errors)
-        return cls(ok=False, message=summary)
+        validation_errors = (
+            cls.validation_error_map(error, camel_case_keys=camel_case_keys)
+            if isinstance(error, ValidationError) else None
+        )
+        message = summary
+        if validation_errors is not None and not isinstance(error, ActionTargetUnavailable):
+            message = "; ".join(validation_errors.get(NON_FIELD_ERRORS, ())) or summary
+        return cls(
+            ok=False,
+            message=message,
+            code=getattr(error, "code", None) if isinstance(error, (DomainError, ValidationError)) else None,
+            validation_errors=validation_errors,
+        )
 
 
-BASELINE_ACTION_ERRORS: tuple[type[Exception], ...] = (ValidationError, TransitionNotAllowed, ObjectDoesNotExist)
+@strawberry.input
+class ActionSelectionInput:
+    """One selected row and the revision the caller actually observed."""
+
+    id: PublicID
+    expected_revision: int
+
+
+def many_actions(
+    selection: list[ActionSelectionInput], run: Callable[[ActionSelectionInput], ActionResult],
+) -> list[ActionResult]:
+    """Compose single verbs in one transaction, retaining eligible-row successes.
+
+    Refused rows roll back to their savepoint and are returned alongside successes
+    in selection order. A whole-request failure rolls back all rows. Replays use
+    each single verb's eligibility and revision contract, never skip stale checks.
+    """
+
+    if not 1 <= len(selection) <= 100 or len({item.id for item in selection}) != len(selection):
+        raise ValidationError({"selection": "Select between 1 and 100 distinct records."})
+    results: dict[str, ActionResult] = {}
+    refused_errors = BASELINE_ACTION_ERRORS + (DomainError, PermissionDenied)
+    with transaction.atomic():
+        # Acquire row locks in one stable order even when callers select differently.
+        for item in sorted(selection, key=lambda item: str(item.id)):
+            try:
+                with transaction.atomic():
+                    result = run(item)
+                    if not result.ok:
+                        transaction.set_rollback(True)
+            except refused_errors as error:
+                result = ActionResult.from_error(error, "Action refused.")
+            result.id = strawberry.ID(str(item.id))
+            results[str(item.id)] = result
+    return [results[str(item.id)] for item in selection]
+
+
+BASELINE_ACTION_ERRORS: tuple[type[Exception], ...] = (
+    ValidationError,
+    TransitionNotAllowed,
+    ObjectDoesNotExist,
+)
 """Domain exceptions an action guard maps to an in-band :class:`ActionResult`.
 
 An action resolver raises these naturally from the model, manager, or transition it
@@ -108,18 +168,24 @@ def action_guard(
     summary: str,
     *,
     errors: tuple[type[Exception], ...] = (),
+    camel_case_keys: bool = True,
 ) -> Callable[[Callable[_P, ActionResult]], Callable[_P, ActionResult]]:
     """Decorate an action resolver so domain errors return an in-band ``ActionResult``.
 
     Runs the resolver body; a raised baseline domain error
     (:data:`BASELINE_ACTION_ERRORS`) — plus any addon-local ``errors`` — is mapped
-    through :meth:`ActionResult.from_error` with ``summary`` as the human banner, so
+    through :meth:`ActionResult.from_error` with ``summary`` as the fallback banner, so
     the body raises naturally and one owner projects the failure (a Django
     ``ValidationError`` carrying ``error_dict`` becomes the field-keyed in-band
     ``validation_errors`` map a typed-args form binds). Any other exception
-    propagates as a GraphQL error. ``@wraps`` preserves the resolver signature so a
+    propagates as a GraphQL error. Validation errors always remain in band,
+    including typed domain refusals. Other ``DomainError`` refusals propagate
+    to the schema's stable-code projection, even when included in ``errors``.
+    ``@wraps`` preserves the resolver signature so a
     Strawberry field decorated with it keeps its introspected arguments. Every
-    caught failure is logged with the action name and traceback before projection.
+    expected refusal is returned without logging its traceback or submitted values;
+    unexpected exceptions admitted by an addon's broad catch are logged at ERROR.
+    ``camel_case_keys=False`` preserves authored field names for JSON form payloads.
     """
 
     caught = BASELINE_ACTION_ERRORS + tuple(errors)
@@ -129,9 +195,14 @@ def action_guard(
         def guarded(*args: _P.args, **kwargs: _P.kwargs) -> ActionResult:
             try:
                 return resolver(*args, **kwargs)
+            except ValidationError as error:
+                return ActionResult.from_error(error, summary, camel_case_keys=camel_case_keys)
+            except DomainError:
+                raise
             except caught as error:
-                logger.exception("GraphQL action %s failed", resolver.__name__)
-                return ActionResult.from_error(error, summary)
+                if not isinstance(error, (*BASELINE_ACTION_ERRORS, PermissionDenied)):
+                    logger.exception("GraphQL action %s failed", resolver.__name__)
+                return ActionResult.from_error(error, summary, camel_case_keys=camel_case_keys)
 
         return guarded
 
@@ -158,7 +229,7 @@ def authorized_action_target(
     3. The resolved row must grant the per-row REBAC ``permission`` (e.g.
        ``"write"``, ``"write__status"``).
 
-    Not-found and denied raise the non-field ``ValidationError`` shape
+    Not-found and denied raise the non-field ``ActionTargetUnavailable`` shape
     :func:`action_guard` maps to an in-band :class:`ActionResult`: the verb's
     guard ``summary`` banners the toast while the specific reason rides
     ``validation_errors[NON_FIELD_ERRORS]``. The returned row stays bound to the
@@ -186,7 +257,7 @@ def authorized_permission_target(
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     scoped = read_scoped_queryset(model, user, action=permission)
-    instance = instance_for_id(model, id, queryset=scoped) if scoped is not None else None
+    instance = instance_for_id(model, id, queryset=scoped)
     return _require_action_permission(instance, model, id, permission)
 
 
@@ -199,9 +270,13 @@ def _require_action_permission(
     """Preserve the shared not-found and row-permission result contract."""
 
     if instance is None:
-        raise ValidationError({NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]})
+        raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
+            f"{model._meta.object_name} {public_id_value(id)!r} was not found.",
+        ]})
     if not instance.has_access(permission):
-        raise ValidationError({NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]})
+        raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
+            f"You are not allowed to modify this {model._meta.verbose_name}.",
+        ]})
     return cast(_RebacActionTarget, instance)
 
 

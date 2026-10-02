@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type {
@@ -347,16 +348,26 @@ function renderGroupedProbe(
   filter: Record<string, unknown>,
   onListStateChange: (state: ResourceListSnapshot<Row>) => void,
 ): void {
+  // The grouped batch read shares TanStack Query's cache, so it needs a client.
   render(
-    <ToastProvider>
-      <OperationDocumentsProvider
-        documents={{ console: { groups: { "notes.Note": {} } } }}
-      >
-        <ResourceViewProvider resource="notes.Note" scope="local">
-          <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
-        </ResourceViewProvider>
-      </OperationDocumentsProvider>
-    </ToastProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <ToastProvider>
+        <OperationDocumentsProvider
+          documents={{
+            console: {
+              groups: {
+                "notes.Note":
+                  "query NoteGroups { notes_groups { key { status } aggregate { count } } }",
+              },
+            },
+          }}
+        >
+          <ResourceViewProvider resource="notes.Note" scope="local">
+            <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
+          </ResourceViewProvider>
+        </OperationDocumentsProvider>
+      </ToastProvider>
+    </QueryClientProvider>,
   );
 }
 

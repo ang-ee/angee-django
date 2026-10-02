@@ -51,6 +51,7 @@ export interface TreeNode {
 
 export interface TreeProps {
   nodes: readonly TreeNode[];
+  "aria-label"?: string;
   selectedId?: string;
   onSelect?: (id: string) => void;
   /**
@@ -137,6 +138,7 @@ function flattenTree(
 
 export function Tree({
   nodes,
+  "aria-label": ariaLabel,
   selectedId,
   onSelect,
   onExpand,
@@ -302,7 +304,7 @@ export function Tree({
 
   return (
     <div className={cn("min-h-0 overflow-auto text-13", className)}>
-      <div role="tree" onKeyDown={handleKeyDown}>
+      <div role="tree" aria-label={ariaLabel} onKeyDown={handleKeyDown}>
         {mainFlat.map(renderRow)}
         {smartFlat.length ? (
           <div className="mt-4" role="group">

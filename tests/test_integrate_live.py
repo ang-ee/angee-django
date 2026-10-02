@@ -22,8 +22,8 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
+from angee.messaging.testing.models import Message
 from tests.conftest import make_integration
-from tests.test_messaging import Message
 from tests.test_messaging_graphql import Channel
 
 
@@ -1262,7 +1262,7 @@ def test_pairing_clears_a_previous_runs_sync_failure(live_tables: Any) -> None:
         )
     channel.refresh_from_db()
     assert channel.sync_error == "Integration operation failed."
-    assert channel.last_sync_status == "error"
+    assert channel.sync_stage == channel.SyncStage.FAILED
     assert "error" in channel.sync_progress
 
     class PairingSession(FakeLiveSession):
@@ -1290,7 +1290,7 @@ def test_pairing_clears_a_previous_runs_sync_failure(live_tables: Any) -> None:
     with system_context(reason="test pairing clears failure verify"):
         fresh = type(channel).objects.get(pk=channel.pk)
     assert fresh.sync_error == ""
-    assert fresh.last_sync_status == "ok"
+    assert fresh.sync_stage == fresh.SyncStage.IDLE
     assert "error" not in fresh.sync_progress
     assert fresh.sync_progress["details"]["pairing"]["state"] == PairingState.PAIRED
 

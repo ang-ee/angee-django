@@ -2,25 +2,14 @@
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { AppRuntimeProvider } from "@angee/ui/runtime";
+import type { ReactNode } from "react";
 
 const uploadMocks = vi.hoisted(() => ({
   begin: vi.fn(),
   finalize: vi.fn(),
   invalidate: vi.fn(async () => undefined),
   useAuthoredMutation: vi.fn(),
-}));
-
-vi.mock("@angee/metadata", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/metadata")>()),
-  refineResourceName: () => "files",
-  useModelMetadata: () => ({
-    resource: { schemaName: "console", modelLabel: "storage.File" },
-  }),
-}));
-
-vi.mock("@refinedev/core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@refinedev/core")>()),
-  useInvalidate: () => uploadMocks.invalidate,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
@@ -41,12 +30,24 @@ vi.mock("@angee/ui", async (importOriginal) => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: uploadMocks.useAuthoredMutation,
+  useInvalidateAuthoredModels: () => uploadMocks.invalidate,
 }));
 
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
 import { useStorageUpload } from "./use-upload";
 
 describe("useStorageUpload", () => {
+  test("preview blocks programmatic uploads and retries before starting transport", () => {
+    const { result } = renderHook(() => useStorageUpload(), { wrapper: ({ children }: { children: ReactNode }) =>
+      <AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
+        viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+      } }}>{children}</AppRuntimeProvider>,
+    });
+    act(() => { result.current.upload([new File(["hello"], "hello.txt")]); result.current.retry("old-upload"); });
+    expect(result.current.tasks).toEqual([]);
+    expect(uploadMocks.begin).not.toHaveBeenCalled();
+    expect(uploadMocks.finalize).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     uploadMocks.begin.mockReset();
     uploadMocks.finalize.mockReset();
@@ -96,6 +97,8 @@ describe("useStorageUpload", () => {
         drive: null,
         drive_slug: "",
         folder: null,
+        visibility: "INHERITED",
+        record: null,
         content_hash: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
       },
     });
@@ -114,11 +117,7 @@ describe("useStorageUpload", () => {
     expect(onUploaded).toHaveBeenCalledWith([
       { id: "fil_ready", filename: "note.txt" },
     ], undefined);
-    expect(uploadMocks.invalidate).toHaveBeenCalledWith({
-      resource: "files",
-      dataProviderName: "console",
-      invalidates: ["list", "many", "detail"],
-    });
+    expect(uploadMocks.invalidate).toHaveBeenCalledWith(["storage.File", "storage.FileAttachment"]);
   });
 
   test("passes explicit drive and folder targets through the begin request", async () => {
@@ -129,7 +128,10 @@ describe("useStorageUpload", () => {
     await act(async () => {
       result.current.upload(
         [new File(["body"], "brief.txt", { type: "" })],
-        { driveId: "drv_assets", folderId: "fld_cases" },
+        {
+          driveId: "drv_assets", folderId: "fld_cases", visibility: "RECORD",
+          record: { model_label: "projects.Task", record_id: "task_7" },
+        },
         completionContext,
       );
     });
@@ -142,6 +144,8 @@ describe("useStorageUpload", () => {
         drive: "drv_assets",
         drive_slug: "",
         folder: "fld_cases",
+        visibility: "RECORD",
+        record: { model_label: "projects.Task", record_id: "task_7" },
       }),
     });
     expect(onUploaded).toHaveBeenCalledWith([

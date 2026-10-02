@@ -153,9 +153,9 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   const mergedFilter = React.useMemo(
     () => filterForResourceTextSearch(
       modelMetadata,
-      Filter.combineOptional(filter, resourceView.state.filter),
+      Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
     ),
-    [resourceView.state.filter, filter, modelMetadata],
+    [filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () => {
@@ -208,8 +208,8 @@ export function useResourceViewTableState<TRow extends Row>({
       buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
     [columns, groupStack, modelMetadata, clientOperations, query],
   );
-  const [columnVisibility, setColumnVisibility] =
-    React.useState<VisibilityState>({});
+  const columnVisibility = resourceView.state.columnVisibility;
+  const setColumnVisibility = resourceView.setColumnVisibility;
   const effectiveColumnVisibility = React.useMemo(
     () => withQueryOnlyColumnsHidden(tableColumns, columnVisibility),
     [tableColumns, columnVisibility],

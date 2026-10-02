@@ -77,7 +77,7 @@ function useNavCommands(): readonly SpotlightCommand[] {
           icon: item.iconName,
           group: root.displayLabel,
           run: () => {
-            void navigate({ to: target });
+            void navigate({ href: target });
           },
         })),
     [menuTree, navigate],

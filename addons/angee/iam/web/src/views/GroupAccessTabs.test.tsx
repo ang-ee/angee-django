@@ -2,7 +2,7 @@
 
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { RecordPanelContext } from "@angee/ui";
+import type { FormSubmitResult, RecordPanelContext } from "@angee/ui";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,17 +12,15 @@ const mocks = vi.hoisted(() => ({
   queryData: undefined as unknown,
 }));
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({ data: mocks.queryData, isFetching: false, error: null }),
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   Button: ({ children }: { children?: ReactNode }) => <button type="button">{children}</button>,
   Code: ({ children }: { children?: ReactNode }) => <code>{children}</code>,
-  createNamespaceT: (
-    _namespace: string,
-    fallback: Record<string, string>,
-  ) => () => (key: string) => fallback[key] ?? key,
   MutationDialog: (props: Record<string, unknown>) => {
     mocks.mutationProps = props;
     return null;
@@ -32,10 +30,6 @@ vi.mock("@angee/ui", () => ({
     return <>{props.toolbarActions as ReactNode}</>;
   },
   SubjectPicker: () => null,
-  defineRowAction: (value: Record<string, unknown>) => value,
-  mutationDialogValueCodecs: {
-    requiredString: (value: unknown) => String(value),
-  },
   useAuthoredResourceMutation: () => [mocks.add],
 }));
 
@@ -89,12 +83,23 @@ describe("group access tabs", () => {
   test("adds the selected canonical subject with an explicit empty caveat", async () => {
     mocks.add.mockResolvedValue({ add_group_member: true });
     render(<GroupMembersTab {...recordPanelContext("igr_1")} />);
-    const submit = mocks.mutationProps?.onSubmit as (values: { subject: string }) => Promise<void>;
-    await submit({ subject: "auth/user:9" });
+    const submit = mocks.mutationProps?.onSubmit as (values: { subject: string }) => Promise<FormSubmitResult<unknown>>;
+    await expect(submit({ subject: "auth/user:9" })).resolves.toEqual({
+      status: "ok", data: { add_group_member: true },
+    });
     expect(mocks.add).toHaveBeenCalledWith({
       group_id: "igr_1",
       subject: "auth/user:9",
       caveat_name: "",
+    });
+  });
+
+  test("keeps a refused member addition available as form validation", async () => {
+    mocks.add.mockResolvedValue({ add_group_member: false });
+    render(<GroupMembersTab {...recordPanelContext("igr_1")} />);
+    const submit = mocks.mutationProps?.onSubmit as (values: { subject: string }) => Promise<FormSubmitResult<unknown>>;
+    await expect(submit({ subject: "auth/user:9" })).resolves.toEqual({
+      status: "invalid", issues: { fieldErrors: {}, formErrors: ["Could not add member."] },
     });
   });
 });

@@ -4,9 +4,17 @@ import * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { floatWidget } from "./number";
+import { floatWidget, integerWidget } from "./number";
 
 afterEach(cleanup);
+
+test("number list cells show an em dash for missing values while preserving zero", () => {
+  const IntegerCell = integerWidget.cell!;
+  const FloatCell = floatWidget.cell!;
+  render(<><IntegerCell value={null} /><FloatCell value={0} /></>);
+  expect(screen.getByText("—")).toBeTruthy();
+  expect(screen.getByText("0")).toBeTruthy();
+});
 
 test("a cleared decimal stays editable and publishes blank form state", () => {
   const FloatEdit = floatWidget.edit!;

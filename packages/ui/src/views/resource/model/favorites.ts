@@ -1,17 +1,31 @@
 import * as v from "valibot";
+import { GroupSpecsSchema, ResourceQuery, type ModelMetadata, type QueryFilter } from "@angee/metadata";
+import type { VisibilityState } from "@tanstack/react-table";
 import { RESOURCE_VIEW_KINDS, RESOURCE_VIEW_SORT_DIRECTIONS } from "./capabilities";
 import type { ResourceViewKind } from "./capabilities";
 import { Filter } from "./filter";
-import type { ResourceViewSort } from "./filter";
+import type { ResourceViewSort, ResourceViewInitialState } from "./filter";
 export interface ResourceViewFavorite {
   id: string;
   label: string;
+  /** Put this saved filter in the list's quick filter row. */
+  pinned?: boolean;
   pageSize?: number;
   sort?: ResourceViewSort | null;
   /** Opaque persisted intent; parsed by its query owner when applied. */
   filter?: unknown;
   groupStack?: unknown;
   view?: ResourceViewKind;
+  /** Named preset whose fixed filter accompanies this saved view. */
+  preset?: string;
+  columnVisibility?: VisibilityState;
+}
+
+/** Code-owned view, sharing the saved-view state contract and query owner. */
+export interface ResourceViewPreset extends ResourceViewFavorite {
+  resource: string;
+  /** Immutable while this preset is selected; never enters editable filter state. */
+  fixedFilter?: QueryFilter;
 }
 
 const ResourceViewSortSchema = v.object({
@@ -23,12 +37,64 @@ const ResourceViewSortSchema = v.object({
 export const ResourceViewFavoriteSchema = v.object({
   id: v.string(),
   label: v.string(),
-  pageSize: v.optional(v.pipe(v.number(), v.finite())),
+  pinned: v.optional(v.boolean()),
+  pageSize: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
   sort: v.optional(v.nullable(ResourceViewSortSchema)),
   filter: v.optional(v.unknown()),
   groupStack: v.optional(v.unknown()),
   view: v.optional(v.picklist(RESOURCE_VIEW_KINDS)),
+  preset: v.optional(v.string()),
+  columnVisibility: v.optional(v.record(v.string(), v.boolean())),
 });
+
+/** Validate shipped query intent eagerly, using the same owner as URL/favorite state. */
+export function validateResourceViewPreset(preset: ResourceViewPreset, model: ModelMetadata): void {
+  v.parse(ResourceViewFavoriteSchema, preset);
+  if (!preset.label.trim()) throw new Error(`Resource view "${preset.id}" has an empty label.`);
+  const query = ResourceQuery.from(model);
+  query.filterFrom(preset.filter);
+  query.filterFrom(preset.fixedFilter);
+  query.groupsFrom(preset.groupStack ?? []);
+  query.sortFrom(preset.sort ? [{ field: preset.sort.field, direction: preset.sort.dir === "desc" ? "DESC" : "ASC" }] : []);
+  for (const field of Object.keys(preset.columnVisibility ?? {})) {
+    if (!model.fields[field] && !model.resource.query.fields[field]) {
+      throw new Error(`Resource view "${preset.id}" references unknown column "${field}".`);
+    }
+  }
+}
+
+/** Resolve a shipped preset only for the collection it declares. */
+export function resourceViewPreset(
+  presets: Readonly<Record<string, ResourceViewPreset>>,
+  id: string | undefined,
+  resource: string | undefined,
+  allowedIds?: readonly string[],
+): ResourceViewPreset | undefined {
+  if (!id) return undefined;
+  const preset = presets[id];
+  if (!preset || preset.resource !== resource || (allowedIds && !allowedIds.includes(id))) {
+    throw new Error(`Unknown resource view "${id}" for "${resource}".`);
+  }
+  return preset;
+}
+
+/** A selected shipped view seeds editable state; fixed filters stay on the declaration. */
+export function resourceViewPresetDefaults(
+  initial: ResourceViewInitialState | undefined,
+  preset: ResourceViewPreset | undefined,
+): ResourceViewInitialState {
+  if (!preset) return initial ?? {};
+  return {
+    ...initial,
+    preset: preset.id,
+    ...(preset.pageSize === undefined ? {} : { pageSize: preset.pageSize }),
+    ...(preset.view === undefined ? {} : { view: preset.view }),
+    ...(preset.sort === undefined ? {} : { sort: preset.sort }),
+    ...(preset.filter === undefined ? {} : { filter: Filter.from(preset.filter).value }),
+    ...(preset.groupStack === undefined ? {} : { groupStack: v.parse(GroupSpecsSchema, preset.groupStack) }),
+    ...(preset.columnVisibility === undefined ? {} : { columnVisibility: preset.columnVisibility }),
+  };
+}
 
 export function resourceViewFavoritesFromJson(
   raw: string | null,
@@ -85,6 +151,8 @@ export function favoriteFromResourceView(
     id: nextResourceViewFavoriteId(label, existing),
     label,
     pageSize: state.pagination.pageSize,
+    ...(state.preset ? { preset: state.preset } : {}),
+    ...(Object.keys(state.columnVisibility).length ? { columnVisibility: state.columnVisibility } : {}),
     ...(sort ? { sort: { field: sort.id, dir: sort.desc ? "desc" as const : "asc" as const } } : {}),
     ...(Filter.from(state.filter).hasEntries() ? { filter: state.filter } : {}),
     ...(state.groupStack.length > 0 ? { groupStack: state.groupStack } : {}),

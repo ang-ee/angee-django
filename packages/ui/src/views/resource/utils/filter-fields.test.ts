@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
-import type { ResourceToolbarFilterField } from "../../../toolbars";
+import type { FilterClauseField } from "../../../toolbars";
 import { mergeFilterFields } from "./filter-mutations";
 
-const inferred: readonly ResourceToolbarFilterField[] = [{
+const inferred: readonly FilterClauseField[] = [{
   id: "status", field: "status", label: "Status", type: "selection",
   operators: ["exact", "inList", "isNull", "isNotNull"],
 }];

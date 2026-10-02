@@ -16,6 +16,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, SystemCheckError
 from django.db import OperationalError, models
+from rebac import schema_changes
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
@@ -221,6 +222,26 @@ def test_runtime_rejects_conflicting_donor_grant_authority() -> None:
     )
     with pytest.raises(ImproperlyConfigured, match="conflicting rebac_grantable"):
         ModelComposition({"tests": (source,)}, {"tests.grantsource": (donor,)}, model_owners={donor: module.__name__})
+
+
+def test_runtime_rejects_conflicting_donor_managers() -> None:
+    """Two same-row donors cannot silently shadow one another's manager."""
+
+    module = ModuleType("tests.manager_conflict")
+    source = _source_model(module, "ManagerSource", "tests", runtime=True)
+    first = _source_model(
+        module, "FirstManagerDonor", "tests", extends="tests.ManagerSource", objects=models.Manager(),
+    )
+    second = _source_model(
+        module, "SecondManagerDonor", "tests", extends="tests.ManagerSource", objects=models.Manager(),
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="composes manager 'objects'"):
+        ModelComposition(
+            {"tests": (source,)},
+            {"tests.managersource": (first, second)},
+            model_owners={first: module.__name__, second: module.__name__},
+        )
 
 
 @pytest.mark.parametrize("invalid", [None, [], {"": "write"}, {"reviewer": 42}])
@@ -1121,7 +1142,7 @@ def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes"],
-        ["check"],
+        ["check", "--database", "default"],
         ["resources", "load"],
         ["schema"],
     ]
@@ -1165,7 +1186,7 @@ def test_provision_plan_combines_every_flag() -> None:
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
-        ["check"],
+        ["check", "--database", "default"],
         ["resources", "load", "--include-demo"],
         ["schema"],
         ["bootstrap_admin"],
@@ -1198,9 +1219,9 @@ def test_provision_defers_checks_only_across_the_schema_identity_transition() ->
     assert (
         plan.index(["migrate", "--noinput", "--skip-checks"])
         < plan.index(["rebac", "--skip-checks", "sync", "--yes"])
-        < plan.index(["check"])
+        < plan.index(["check", "--database", "default"])
     )
-    assert plan.index(["check"]) < plan.index(["resources", "load"])
+    assert plan.index(["check", "--database", "default"]) < plan.index(["resources", "load"])
 
 
 @pytest.mark.django_db
@@ -1218,10 +1239,9 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
         definition__resource_type="agents/skill",
         name="source",
     )
-    source.allowed_subjects = [{"type": "integrate/source", "relation": "", "wildcard": False}]
-    source.save(update_fields=["allowed_subjects"])
-
-    with pytest.raises(SystemCheckError, match=r"rebac\.E009"):
+    with pytest.raises(SystemCheckError, match=r"rebac\.E009"), schema_changes():
+        source.allowed_subjects = [{"type": "integrate/source", "relation": "", "wildcard": False}]
+        source.save(update_fields=["allowed_subjects"])
         call_command("check", "--tag", "rebac", verbosity=0)
 
     plan = Command._provision_plan(_provision_options())
@@ -1230,7 +1250,7 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes"],
-        ["check"],
+        ["check", "--database", "default"],
     ]
 
 
@@ -1714,6 +1734,111 @@ def test_project_env_file_is_optional(tmp_path: Path) -> None:
     from angee.compose.project import ProjectContract
 
     ProjectContract({})._read_project_env(tmp_path)
+
+
+def test_database_pool_follows_project_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from angee.compose.project import ProjectContract
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
+    project_settings = ModuleType("test_project_settings")
+    project_settings.BASE_DIR = tmp_path
+    development: dict[str, Any] = {}
+    ProjectContract(development)._apply_defaults(project_settings, tmp_path)
+    database = development["DATABASES"]["default"]
+    assert "pool" not in database["OPTIONS"]
+    assert "CONN_MAX_AGE" not in database
+
+    monkeypatch.setenv("ANGEE_DB_POOL", "true")
+    monkeypatch.setenv("ANGEE_DB_POOL_MAX_SIZE", "3")
+    monkeypatch.setenv("ANGEE_DB_POOL_TIMEOUT", "7")
+    production: dict[str, Any] = {}
+    ProjectContract(production)._apply_defaults(project_settings, tmp_path)
+    database = production["DATABASES"]["default"]
+    assert database["OPTIONS"]["pool"] == {"min_size": 0, "max_size": 3, "timeout": 7.0}
+    assert "CONN_MAX_AGE" not in database
+    assert "CONN_HEALTH_CHECKS" not in database
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db?conn_max_age=600")
+    with pytest.raises(ImproperlyConfigured, match="ANGEE_DB_POOL.*DATABASE_URL CONN_MAX_AGE"):
+        ProjectContract({})._apply_defaults(project_settings, tmp_path)
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db?conn_max_age=0")
+    zero_age: dict[str, Any] = {}
+    ProjectContract(zero_age)._apply_defaults(project_settings, tmp_path)
+    assert zero_age["DATABASES"]["default"]["CONN_MAX_AGE"] == 0
+    assert zero_age["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 3
+
+    monkeypatch.setenv("ANGEE_DB_POOL", "false")
+    disabled: dict[str, Any] = {}
+    ProjectContract(disabled)._apply_defaults(project_settings, tmp_path)
+    assert "pool" not in disabled["DATABASES"]["default"]["OPTIONS"]
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
+    monkeypatch.delenv("ANGEE_DB_POOL")
+    project_settings.ANGEE_DB_POOL = "false"
+    disabled_from_settings: dict[str, Any] = {}
+    ProjectContract(disabled_from_settings)._apply_defaults(project_settings, tmp_path)
+    assert "pool" not in disabled_from_settings["DATABASES"]["default"]["OPTIONS"]
+    project_settings.ANGEE_DB_POOL = True
+    project_settings.ANGEE_DB_POOL_MAX_SIZE = 4
+    from_settings: dict[str, Any] = {}
+    ProjectContract(from_settings)._apply_defaults(project_settings, tmp_path)
+    assert from_settings["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 3
+    monkeypatch.delenv("ANGEE_DB_POOL_MAX_SIZE")
+    ProjectContract(from_settings)._apply_defaults(project_settings, tmp_path)
+    assert from_settings["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 4
+
+    explicit_database = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": tmp_path / "app.sqlite3"}}
+    project_settings.DATABASES = explicit_database
+    namespace = {}
+    ProjectContract(namespace)._apply_defaults(project_settings, tmp_path)
+    assert namespace["DATABASES"] == explicit_database
+
+
+@pytest.fixture
+def postgres_pool_connection() -> Any:
+    from django.db import connections
+
+    alias = "angee_pool_probe"
+    connections.databases[alias] = {
+        **connections.databases["default"],
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "unreachable",
+        "HOST": "127.0.0.1",
+        "PORT": "1",
+        "USER": "probe",
+        "PASSWORD": "probe",
+        "CONN_MAX_AGE": 0,
+        "OPTIONS": {"pool": {"min_size": 0, "max_size": 2, "timeout": 0.2}},
+    }
+    connection = connections[alias]
+    try:
+        yield connection
+    finally:
+        connection.close_pool()
+        del connections[alias]
+        del connections.databases[alias]
+
+
+def test_postgres_connection_builds_native_pool(postgres_pool_connection: Any) -> None:
+    from psycopg_pool import ConnectionPool
+
+    pool = postgres_pool_connection.pool
+    assert isinstance(pool, ConnectionPool)
+    assert pool.min_size == 0
+    assert pool.max_size == 2
+    assert pool.timeout == 0.2
+
+
+def test_postgres_pool_timeout_is_explicit(postgres_pool_connection: Any, django_db_blocker: Any) -> None:
+    from psycopg_pool import PoolTimeout
+
+    with django_db_blocker.unblock(), pytest.raises(
+        OperationalError, match="couldn't get a connection after 0.20 sec"
+    ) as error:
+        postgres_pool_connection.ensure_connection()
+    assert isinstance(error.value.__cause__, PoolTimeout)
 
 
 def test_runtime_boot_repair_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2,10 +2,23 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 
+export { SchemaPathPicker, type SchemaPathPickerProps, type SchemaPath, type SchemaPathSchema } from "./SchemaPathPicker";
+export { useFormHistory, type FormHistory } from "./form/use-form-history";
+export {
+  keyedCollectionFromRecord,
+  createKeyedEntry,
+  keyedCollectionToRecord,
+  type KeyedEntry,
+  type KeyedCollection,
+  type KeyedCollectionSnapshot,
+} from "./form/keyed-collection";
+
 export { List, type ListComponent, type ListProps } from "./resource/List";
 export {
   ListView,
   type ListViewProps,
+  type BoardCardSpec,
+  type ListChrome,
   type CardActionContext,
   type ListEmptyAction,
   type ListEmptyContent,
@@ -41,6 +54,7 @@ export {
 } from "./resource/collection-source";
 export {
   defineRowAction,
+  useDescriptorRowActions,
   rowIdVariables,
   type AuthoredRowActionDeclaration,
   type PageRowActionDeclaration,
@@ -63,14 +77,9 @@ export {
   type ImplementationDetailContext,
 } from "./relation/implementation-details";
 export {
-  LabeledDescriptorField,
   MutationDialog,
-  type MutationDialogControlProps,
-  type MutationDialogField,
   type MutationDialogParseValues,
   type MutationDialogProps,
-  type MutationDialogRelation,
-  type MutationDialogValidationResult,
   type MutationDialogValues,
   mutationDialogValueCodecs,
 } from "./form/MutationDialog";
@@ -79,6 +88,7 @@ export {
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
+  resolveSchemaReference,
   useFormSpecFields,
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,
@@ -96,14 +106,23 @@ export {
   ActionFormDialog,
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
+export { RecordActionBar } from "./form/RecordActionBar";
+export { useWatch, type ResolverResult } from "react-hook-form";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
-  formLevelMessage,
   useActionForm,
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
+export { ActionFormProvider } from "./form/ActionFormProvider";
 export {
+  actionFormSubmitResult,
+  actionOutcomeSubmitResult,
+  invalidFormSubmit,
+  formSubmitError,
+  savedFormSubmitResult,
+  applyFormErrors,
+  type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
   lineRowErrorsFromDottedPaths,
@@ -115,6 +134,14 @@ export {
   type DottedPathFieldErrors,
   type ValidationErrors,
 } from "./form/validation-errors";
+export {
+  DescriptorFieldList,
+  LabeledDescriptorField,
+  type DescriptorFieldListProps,
+  type DescriptorField,
+  type DescriptorFieldRelation,
+  type DescriptorFieldControlProps,
+} from "./form/DescriptorFieldList";
 export { fieldErrorMessages, isCompositeFieldDescriptor } from "./form/form-view-model";
 export {
   FieldDescriptorControl,
@@ -134,14 +161,25 @@ export {
   type GraphViewActivation,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
-  type GraphViewGeometry,
   type GraphViewLayout,
   type GraphViewNode,
   type GraphViewNodeStyle,
   type GraphViewProps,
   type GraphViewConnection,
   type GraphViewPosition,
+  type GraphViewPort,
+  type GraphViewStatus,
 } from "./GraphView";
+export {
+  GraphEditor,
+  type GraphEditorNode,
+  type GraphEditorLink,
+  type GraphEditorLayout,
+  type GraphEditorSelection,
+  type GraphEditorNodeAction,
+  type GraphEditorProps,
+} from "./GraphEditor";
+export { layoutGraph, findFreeGraphPosition, placeGraphNodeBeside } from "./graph-layout";
 export {
   DashboardView,
   type DashboardViewProps,
@@ -151,6 +189,7 @@ export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
 } from "./relation/RelationFieldWidget";
+export { RecordReference, type RecordReferenceProps } from "./relation/RecordReference";
 export {
   CollectionTreeView,
   type CollectionTreeViewProps,
@@ -209,13 +248,20 @@ export {
 } from "./form/registered-form";
 export {
   FormView,
+  SectionHeading,
+  RecordRailGroup,
   acknowledgeFormSubmit,
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  FORM_VIEW_RAIL_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  formViewRailSlot,
   formViewRecordActionsSlot,
   formViewSectionsSlot,
   type FormViewProps,
+  type SectionHeadingProps,
+  type RecordRailField,
+  type RecordRailGroupProps,
   type FormSubmit,
   type FormSubmitAcknowledgement,
   type FormSubmitContext,
@@ -228,10 +274,12 @@ export {
   type RecordToolbarContext,
   type RecordTabDescriptor,
 } from "./form/FormView";
+export { type RecordActionDescriptor } from "./form/RecordActionBar";
 export {
   RecordChrome,
   RecordChromeProvider,
   useRecordChromeContext,
+  useRecordChromeContextMaybe,
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
 export {
@@ -266,6 +314,7 @@ export {
   DrawerResourceList,
   REFINE_CREATE_ID,
   type ResourceListProps,
+  type ListCreateAction,
   type ResourceRecordRenderContext,
   type ResourceListSplitLayout,
   type ResourceListCalendarSpec,
@@ -303,7 +352,6 @@ export {
   type UseDeleteWithPreviewResult,
 } from "./resource/resource-operations";
 export {
-  recordActionId,
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,
@@ -369,15 +417,18 @@ export {
 } from "./page";
 export type {
   ActionArg,
+  ActionArgs,
   ActionConfirm,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
   ColumnAggregate,
   ColumnDescriptor,
   ColumnProps,
@@ -395,5 +446,12 @@ export type {
   TabProps,
 } from "./page";
 
-export { ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry } from "./access/ManageAccessDialog";
+export {
+  ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry,
+  type AccessPerson, type AccessRole, type AccessVisibility,
+} from "./access/ManageAccessDialog";
 export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
+
+export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";
+export { GanttLane, type GanttLaneDetails, type GanttLanePerson } from "./gantt/gantt-lane";
+export type { GanttViewSpec } from "./resource/resource-view-types";

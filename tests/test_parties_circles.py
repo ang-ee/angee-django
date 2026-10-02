@@ -14,14 +14,10 @@ from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
-from angee.parties.backends import ParsedContact
-from angee.parties.connections import ParsedConnection, ingest_connection
-from angee.parties.mixins import LinkSource
-from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from tests.messaging_models import Folder
-from tests.test_messaging import (
+from angee.messaging.testing.models import (
     Circle,
     CircleMember,
+    Folder,
     Handle,
     Organization,
     Party,
@@ -29,8 +25,12 @@ from tests.test_messaging import (
     Person,
     Relationship,
     RelationshipKind,
-    _grant,
 )
+from angee.parties.backends import ParsedContact
+from angee.parties.connections import ParsedConnection, ingest_connection
+from angee.parties.mixins import LinkSource
+from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from tests.test_messaging import _grant
 
 User = get_user_model()
 
@@ -481,7 +481,7 @@ def test_claim_own_records_a_contested_identity_without_reassigning_control(comp
     del composed_tables
     with system_context(reason="test contested claim_own"):
         first_user = User.objects.create_user(username="first", email="shared@example.com", password="x")
-        competing_user = User.objects.create_user(username="competing", email="shared@example.com", password="x")
+        competing_user = User.objects.create_user(username="competing", email="competing@example.com", password="x")
         handle = Handle.objects.claim_own(
             first_user,
             platform=Handle.Platform.EMAIL,

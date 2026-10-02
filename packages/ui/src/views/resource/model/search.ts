@@ -9,6 +9,8 @@ import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, R
 import { createResourceViewState, type ResourceViewState } from "./state";
 import { normalisePageSize } from "../page-size";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
+  preset: undefined as string | undefined,
+  columns: undefined as string | undefined,
   page: undefined as number | undefined,
   pageSize: undefined as number | undefined,
   sort: undefined as string | undefined,
@@ -33,6 +35,8 @@ export function resourceViewStateToSearch(
 ): ResourceViewSearch {
   const search: ResourceViewSearch = {};
   const base = createResourceViewState(initial);
+  if (state.preset !== base.preset) search.preset = state.preset;
+  if (stableSerialize(state.columnVisibility) !== stableSerialize(base.columnVisibility)) search.columns = JSON.stringify(state.columnVisibility);
   if (state.pagination.pageIndex !== base.pagination.pageIndex) search.page = state.pagination.pageIndex + 1;
   if (state.pagination.pageSize !== defaultResourceViewPageSize(initial)) search.pageSize = state.pagination.pageSize;
   const sort = state.sorting?.[0];
@@ -84,6 +88,9 @@ export function resourceViewSearchToState(
     const page = parseSearchInteger(search.page);
     return {
       ...base,
+      ...(typeof search.preset === "string" ? { preset: search.preset } : {}),
+      columnVisibility: search.columns === undefined ? base.columnVisibility
+        : v.parse(v.record(v.string(), v.boolean()), JSON.parse(String(search.columns))),
       pagination: {
         pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
         pageSize: normalisePageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),

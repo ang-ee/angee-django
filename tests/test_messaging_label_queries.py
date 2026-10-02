@@ -9,8 +9,8 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
+from angee.messaging.testing.models import Fragment, Message, Thread
 from tests.conftest import execute_schema, result_data
-from tests.test_messaging import Fragment, Message, Thread
 from tests.test_messaging_graphql import _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -41,15 +41,18 @@ def test_narrow_messaging_labels_have_constant_queries_and_preserve_permissions(
             order = "last_message_at"
             type_name = "ThreadType"
         else:
+            thread = Thread.objects.create(owner=owner, created_by=owner)
+            hidden_thread = Thread.objects.create(owner=outsider, created_by=outsider)
             rows = [
                 Message.objects.create(
+                    thread=thread,
                     created_by=owner,
                     sent_at=at - timedelta(minutes=index),
                     preview="" if index == 1 else f"Message preview {index:02}",
                 )
                 for index in range(25)
             ]
-            hidden = Message.objects.create(created_by=outsider, sent_at=at + timedelta(days=1))
+            hidden = Message.objects.create(thread=hidden_thread, created_by=outsider, sent_at=at + timedelta(days=1))
             order = "sent_at"
             type_name = "MessageType"
         expected = [{"id": str(row.sqid), "display_name": str(row)} for row in rows]

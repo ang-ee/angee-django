@@ -10,7 +10,7 @@ import type { RelationOption } from "../../widgets/RelationField";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 
 export interface SubjectPickerProps extends Pick<RelationPickerProps,
-  "id" | "controlRef" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-required" | "readOnly"
+  "id" | "controlRef" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-required" | "aria-invalid" | "readOnly"
 > {
   resource: string;
   value: string;

@@ -14,6 +14,8 @@ export interface ResourceViewUtilityContext {
   refresh: () => void;
   /** Public ids selected by the collection owner. */
   selectedIds?: ReadonlySet<string>;
+  /** Whether this collection exposes selection to contributed utilities. */
+  selectable: boolean;
   /** Saved record enclosing this collection, for actions that explicitly target the parent. */
   record?: RecordChromeContext | null;
 }
@@ -46,12 +48,12 @@ export function ResourceViewUtilities({
 }: {
   value: ResourceViewUtilityContext;
 }): React.ReactElement | null {
-  const { resource, filter, fields, refresh, selectedIds } = value;
+  const { resource, filter, fields, refresh, selectedIds, selectable } = value;
   const entries = useResourceViewUtilities(resource);
   const record = useRecordChromeContextMaybe();
   const context = React.useMemo(
-    () => ({ resource, filter, fields, refresh, selectedIds, record }),
-    [resource, filter, fields, refresh, selectedIds, record],
+    () => ({ resource, filter, fields, refresh, selectedIds, selectable, record }),
+    [resource, filter, fields, refresh, selectedIds, selectable, record],
   );
   if (entries.length === 0) return null;
   return (

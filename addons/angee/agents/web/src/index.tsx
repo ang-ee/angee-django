@@ -7,7 +7,7 @@ import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "l
 
 import { enAgentsMessages } from "./i18n";
 import { AgentChatterPane } from "./views/AgentChatterPane";
-import { inferenceProviderForm } from "./views/InferencePage";
+import { inferenceProviderForm } from "./views/InferenceProviderForm";
 import { AGENT_CHAT_SLOT } from "./chat-slot";
 
 const AcpAgentChat = lazy(() => import("./views/AgentChat").then((module) => ({ default: module.AcpAgentChat })));

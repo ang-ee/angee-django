@@ -1,11 +1,11 @@
-import { createApp, defineBaseAddon } from "@angee/app";
+import { bootApp, createApp, defineBaseAddon } from "@angee/app";
 import { IamLoginPage } from "@angee/iam";
 import { ConsoleLayout } from "@angee/ui";
 import { appearance } from "virtual:angee-appearance";
 
-import { composedAddons, schemas } from "../../runtime/web/app";
+import { composedAddons, loadComposedSchemas } from "../../runtime/web/app";
 
-createApp({
+const create = (schemas: Awaited<ReturnType<typeof loadComposedSchemas>>) => createApp({
   addons: [
     defineBaseAddon({
       id: "host-auth",
@@ -26,6 +26,17 @@ createApp({
   },
   schemas,
   defaultSchema: "console",
-  home: "platform.graph",
+{% if home %}
+  home: {{ home | tojson }},
+{% endif %}
+{% if confine_to %}
+  confineTo: {{ confine_to | tojson }},
+{% endif %}
   appearance,
-}).mount("#root");
+});
+
+await bootApp({
+  target: "#root",
+  loadSchemas: loadComposedSchemas,
+  create,
+});

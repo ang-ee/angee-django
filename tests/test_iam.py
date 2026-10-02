@@ -179,7 +179,8 @@ def test_kind_mutation_to_service_clears_password_and_blocks_auth() -> None:
     with system_context(reason="test.service_password.kind_mutation"):
         user.save(update_fields=["kind"])
 
-    assert authenticate(username="mutated-service", password="secret") is None
+    request = RequestFactory().post("/login/")
+    assert authenticate(request, username="mutated-service", password="secret") is None
     with system_context(reason="test.service_password.reload"):
         user.refresh_from_db()
     assert not user.has_usable_password()

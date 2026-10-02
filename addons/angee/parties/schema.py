@@ -8,7 +8,7 @@ contact is created as a person or an organisation and deleted through the party
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, cast
 
 import strawberry
@@ -47,6 +47,7 @@ Circle = apps.get_model("parties", "Circle")
 CircleMember = apps.get_model("parties", "CircleMember")
 MergeVeto = apps.get_model("parties", "MergeVeto")
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
+strawberry.enum(cast(Any, RelationshipKind.PartyKind))
 Relationship = apps.get_model("parties", "Relationship")
 
 _PARTY_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Party, "hasura_updatable_fields")
@@ -78,15 +79,15 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a party (the unified contact)."""
 
     display_name: auto
-    notes: auto
-    handle_count: auto
-    first_met_note: auto
-    introduced_by: "PartyType | None"
+    notes: str | None
+    handle_count: int | None
+    first_met_note: str | None
+    introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
     created_at: auto
     updated_at: auto
 
     @strawberry.field
-    def concrete_kind(self) -> str | None:
+    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 
         return Party.concrete_kind.fget(self)
@@ -108,10 +109,10 @@ class PersonType(PartyType):
     additional_name: auto
     family_name: auto
     name_suffix: auto
-    nickname: auto
+    nickname: str | None
     birthday: auto
     anniversary: auto
-    folder: "ContactFolderType | None"
+    folder: "ContactFolderType | None" = actor_scoped_to_one("folder")
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -345,7 +346,7 @@ class DuplicatePartyCandidateType:
 
 
 @strawberry.enum
-class PeopleWorkbenchScope(Enum):
+class PeopleWorkbenchScope(StrEnum):
     """The bounded smart-view vocabulary for the People workbench."""
 
     ALL = "all"
@@ -604,12 +605,11 @@ _PARTY_RESOURCE = hasura_model_resource(
     ),
     sortable=[
         "display_name",
-        "handle_count",
         "created_at",
         "updated_at",
         *declared_hasura_resource_fields(Party, "hasura_sortable_fields"),
     ],
-    aggregatable=["id", "handle_count"],
+    aggregatable=["id"],
     groupable=list(
         dict.fromkeys(
             [
@@ -633,10 +633,7 @@ _PERSON_RESOURCE = hasura_model_resource(
                 "display_name",
                 "given_name",
                 "family_name",
-                "nickname",
                 "folder",
-                "birthday",
-                "anniversary",
                 "created_at",
                 "updated_at",
                 *declared_hasura_resource_fields(Person, "hasura_filterable_fields"),
@@ -932,14 +929,13 @@ _DIRECTORY_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
     ],
     sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "sync_stage"],
     insert=False,
     update=False,
     delete=False,

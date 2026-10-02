@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from enum import Enum
 from typing import Any, cast
 
 import strawberry
@@ -13,13 +12,16 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
-from rebac import PermissionDenied
+from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id
-from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
+from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -31,18 +33,20 @@ Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")
 
 
-@strawberry.enum
-class DashboardScope(Enum):
-    PERSONAL = "personal"
-    ADDON = "addon"
-    RESOURCE = "resource"
+@strawberry.input
+class DashboardTargetInput:
+    scope: Dashboard.DashboardScope
+    key: str | None = None
+    id: PublicID | None = None
 
 
 @strawberry.input
-class DashboardTargetInput:
-    scope: DashboardScope
-    key: str | None = None
-    id: PublicID | None = None
+class DashboardWidgetVisibilityInput:
+    """A stable listing-scope address, separate from a widget's result filter."""
+
+    resource: str
+    key: str
+    value: str
 
 
 @strawberry_django.type(DashboardWidget)
@@ -55,6 +59,7 @@ class DashboardWidgetType(AngeeNode):
     title: auto
     data: auto
     options: auto
+    visibility: auto
     x: auto
     y: auto
     w: auto
@@ -99,6 +104,7 @@ class DashboardPayload:
     name: str | None = None
     description: str | None = None
     snapshot: JSON | None = None
+    declaration_revision: str = ""
     can_edit: bool = False
     can_reset: bool = False
     can_archive: bool = False
@@ -109,7 +115,7 @@ class DashboardPayload:
 @strawberry.type
 class DashboardSummaryType:
     id: PublicID
-    scope: DashboardScope
+    scope: Dashboard.DashboardScope
     scope_key: str | None
     name: str
     description: str
@@ -118,6 +124,7 @@ class DashboardSummaryType:
     revision: int
     is_archived: bool
     resources: list[str]
+    presets: list[str]
     can_edit: bool
     can_archive: bool
 
@@ -132,16 +139,25 @@ class DashboardSummaryPageType:
 
 
 def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
+    permissions = held_permissions(row, ("write", "archive"))
+    widgets = row.widgets.all()
     sources = {
         str(widget.data.get("source", {}).get("resource"))
-        for widget in row.widgets.all()
+        for widget in widgets
         if isinstance(widget.data, dict)
         and isinstance(widget.data.get("source"), dict)
         and widget.data["source"].get("resource")
     }
+    presets = {
+        str(widget.data["preset"])
+        for widget in widgets
+        if isinstance(widget.data, dict)
+        and widget.data.get("shape") == "resourceView"
+        and isinstance(widget.data.get("preset"), str)
+    }
     return DashboardSummaryType(
         id=cast(PublicID, require_public_id(Dashboard, row.pk)),
-        scope=DashboardScope(row.scope),
+        scope=Dashboard.DashboardScope(row.scope),
         scope_key=row.scope_key,
         name=row.name,
         description=row.description,
@@ -150,8 +166,9 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         revision=row.revision,
         is_archived=row.is_archived,
         resources=sorted(sources),
-        can_edit=row.has_access("write"),
-        can_archive=row.scope == "personal" and row.has_access("archive"),
+        presets=sorted(presets),
+        can_edit="write" in permissions,
+        can_archive=row.scope == "personal" and "archive" in permissions,
     )
 
 
@@ -187,6 +204,7 @@ def _summary_offset(user: Any, version: str, cursor: str | None) -> int:
 
 
 def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
+    permissions = held_permissions(dashboard, ("write", "reset", "archive"))
     return DashboardPayload(
         status=status,
         id=cast(PublicID, require_public_id(Dashboard, dashboard.pk)),
@@ -194,15 +212,16 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         name=dashboard.name,
         description=dashboard.description,
         snapshot=cast(JSON, dashboard.snapshot()),
-        can_edit=dashboard.has_access("write"),
-        can_reset=dashboard.scope != "personal" and dashboard.has_access("reset"),
-        can_archive=dashboard.scope == "personal" and dashboard.has_access("archive"),
+        declaration_revision=dashboard.declaration_revision,
+        can_edit="write" in permissions,
+        can_reset=dashboard.scope != "personal" and "reset" in permissions,
+        can_archive=dashboard.scope == "personal" and "archive" in permissions,
     )
 
 
 def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any | None:
     user = session_user(info)
-    if target.scope is DashboardScope.PERSONAL:
+    if target.scope is Dashboard.DashboardScope.PERSONAL:
         if target.id is None:
             raise ValidationError({"target": "A personal dashboard id is required."})
         row = instance_from_public_id(Dashboard, str(target.id))
@@ -213,7 +232,7 @@ def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any 
 
 
 def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[str, str | None]:
-    if target.scope is DashboardScope.PERSONAL:
+    if target.scope is Dashboard.DashboardScope.PERSONAL:
         if existing is None:
             raise ValidationError({"target": "The personal dashboard was not found."})
         return "personal", None
@@ -225,10 +244,27 @@ def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[s
 @strawberry.type
 class DashboardQuery:
     @strawberry.field
+    def dashboard_widget_visibility(self, policies: list[DashboardWidgetVisibilityInput]) -> list[bool]:
+        """Resolve declared listing policies under the effective actor."""
+
+        if len(policies) > 100:
+            raise ValidationError("At most 100 widget policies may be resolved together.")
+        return widget_visibility_answers([strawberry.asdict(policy) for policy in policies], current_actor())
+
+    @strawberry.field
     def dashboard(self, info: strawberry.Info, target: DashboardTargetInput) -> DashboardPayload:
         row = _resolve_target(info, target)
         if row is None:
-            return DashboardPayload(status="absent" if target.scope is not DashboardScope.PERSONAL else "unavailable")
+            if target.scope is Dashboard.DashboardScope.PERSONAL:
+                return DashboardPayload(status="unavailable")
+            if current_actor() is None:
+                return DashboardPayload(status="absent")
+            try:
+                Dashboard.objects.check_create({"owner": (session_user(info),)})
+                can_edit = True
+            except PermissionDenied:
+                can_edit = False
+            return DashboardPayload(status="absent", can_edit=can_edit)
         return _payload(row)
 
     @strawberry.field
@@ -244,6 +280,7 @@ class DashboardQuery:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
             Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(owner__isnull=True))
+            .annotate(**permission_annotations(Dashboard, ("write", "archive")))
             .select_related("owner")
             .prefetch_related("widgets")
             .order_by("sqid")[:5_001]
@@ -280,12 +317,17 @@ class DashboardMutation:
         description: str = "",
     ) -> DashboardPayload:
         user = session_user(info)
-        row = Dashboard.objects.create_personal(
-            user,
-            name=name,
-            description=description,
-            client_creation_key=client_creation_key,
-        )
+        try:
+            row = Dashboard.objects.create_personal(
+                user,
+                name=name,
+                description=description,
+                client_creation_key=client_creation_key,
+            )
+        except CreationKeyConflict as error:
+            return DashboardPayload(status="conflict", message=str(error))
+        except (ValidationError, PermissionDenied) as error:
+            return DashboardPayload(status="error", message=str(error))
         return _payload(row)
 
     @strawberry.mutation
@@ -303,7 +345,7 @@ class DashboardMutation:
         user = session_user(info)
         existing = (
             _resolve_target(info, target)
-            if persisted_id is not None or target.scope is DashboardScope.PERSONAL
+            if persisted_id is not None or target.scope is Dashboard.DashboardScope.PERSONAL
             else None
         )
         if persisted_id is not None:
@@ -329,6 +371,8 @@ class DashboardMutation:
                 name=name,
                 description=description,
             )
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision, message=str(error))
         except (ValidationError, PermissionDenied) as error:
@@ -349,9 +393,11 @@ class DashboardMutation:
             return DashboardPayload(status="conflict", message="The persisted dashboard identity is no longer current.")
         try:
             Dashboard.objects.reset_snapshot(row, expected_revision=expected_revision)
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision, message=str(error))
-        except PermissionDenied as error:
+        except (ValidationError, PermissionDenied) as error:
             return DashboardPayload(status="error", message=str(error))
         return DashboardPayload(status="absent")
 
@@ -369,9 +415,11 @@ class DashboardMutation:
             return DashboardPayload(status="unavailable")
         try:
             locked = row.set_personal_archived(archived=archived, expected_revision=expected_revision)
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision)
-        except PermissionDenied as error:
+        except (ValidationError, PermissionDenied) as error:
             return DashboardPayload(status="error", message=str(error))
         return _payload(locked)
 
@@ -382,38 +430,48 @@ class DashboardMutation:
         target: DashboardTargetInput,
         name: str,
         client_creation_key: str,
+        snapshot: JSON,
     ) -> DashboardPayload:
         user = session_user(info)
         source = _resolve_target(info, target)
         if source is None:
             return DashboardPayload(status="unavailable")
-        created = Dashboard.objects.create_personal(
-            user,
-            name=name,
-            client_creation_key=client_creation_key,
-        )
-        snapshot = source.snapshot()
-        duplicated_widgets = []
-        for index, widget in enumerate(snapshot["widgets"]):
-            if widget["isArchived"]:
-                continue
-            duplicate = {**widget, "id": f"copy-{index + 1}"}
-            duplicate.pop("definitionRef", None)
-            duplicated_widgets.append(duplicate)
-        snapshot["widgets"] = duplicated_widgets
-        canonical = canonical_dashboard_snapshot(snapshot)
         try:
-            saved = Dashboard.objects.save_snapshot(
-                user,
-                scope="personal",
-                scope_key=None,
-                persisted_id=created.pk,
-                expected_revision=created.revision,
-                snapshot=canonical,
-                name=created.name,
-            )
+            visible = canonical_dashboard_snapshot(snapshot)
+            duplicated_widgets = []
+            for index, widget in enumerate(visible["widgets"]):
+                if widget["isArchived"]:
+                    continue
+                duplicate = {**widget, "id": f"copy-{index + 1}"}
+                duplicate.pop("definitionRef", None)
+                duplicated_widgets.append(duplicate)
+            visible["widgets"] = duplicated_widgets
+            canonical = canonical_dashboard_snapshot(visible)
+            with transaction.atomic():
+                created = Dashboard.objects.create_personal(
+                    user,
+                    name=name,
+                    client_creation_key=client_creation_key,
+                )
+                if created.revision > 1:
+                    return _payload(created)
+                saved = Dashboard.objects.save_snapshot(
+                    user,
+                    scope="personal",
+                    scope_key=None,
+                    persisted_id=created.pk,
+                    expected_revision=created.revision,
+                    snapshot=canonical,
+                    name=created.name,
+                )
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision)
+        except CreationKeyConflict as error:
+            return DashboardPayload(status="conflict", message=str(error))
+        except (ValidationError, PermissionDenied) as error:
+            return DashboardPayload(status="error", message=str(error))
         return _payload(saved)
 
 
@@ -452,7 +510,7 @@ _BUCKET = {
         DashboardSummaryType,
         DashboardSummaryPageType,
         DashboardTargetInput,
-        DashboardScope,
+        Dashboard.DashboardScope,
         *_DASHBOARD_RESOURCE.types,
         *_WIDGET_RESOURCE.types,
     ],

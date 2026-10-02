@@ -1,36 +1,27 @@
 // Authorization schema for the tags addon.
 // @rebac_package: tags
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 5
 
-// Roles-as-namespace anchor, mirroring money/sequence/role: `includes` lets one
-// tags role imply another, and resources gate on `effective_member` so granted +
-// implied members both resolve. Platform admins (angee/role:admin) reach every
-// tags role through the const-backed `admin` relation — synthetic, no per-object
-// tuple — the same universal-admin path the resource types below use.
+// Named roles grant membership directly; platform admins reach every role.
 definition tags/role {
     relation member:   auth/user | auth/group#member | angee/role:admin#member
-    relation includes: tags/role
     relation admin:    angee/role // rebac:const=admin
 
-    permission effective_member = member + includes->effective_member + admin->member
+    permission effective_member = member + admin->member
 }
 
-// A base tag is shared vocabulary. `shared` is a wildcard-subject relation: a
-// shared tag carries one `shared@auth/user:*` tuple (written by `Tag.save`) that
-// opens it to every authenticated actor — the same mechanism `storage/drive`
-// uses to open a drive to everyone. Downstream addons may contribute additional
-// scope relations through `permissions.extends.zed`.
+// Tags are reference vocabulary readable by every non-anonymous actor, without
+// per-row wildcard grants.
 // Configuration is admin-only: a `tags_admin` (const-backed, the framework canon)
 // writes the vocabulary, everyone else only reads. The candidate-aware pre-save
 // gate admits an admin/manager and denies everyone else on creation.
 definition tags/tag {
-    relation shared:   auth/user:*
     relation admin:    angee/role  // rebac:const=admin
     relation manager:  tags/role   // rebac:const=tags_admin
 
     permission create = admin->member + manager->effective_member
-    permission read   = shared + admin->member + manager->effective_member
+    permission read   = authenticated + admin->member + manager->effective_member
     permission write  = admin->member + manager->effective_member
     permission delete = admin->member + manager->effective_member
 }

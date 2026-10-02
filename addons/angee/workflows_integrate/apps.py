@@ -1,10 +1,9 @@
-"""App identity for the bridge execution composition."""
+"""Django application for integration workflow declarations."""
 
 from django.apps import AppConfig
 
 
 class WorkflowsIntegrateConfig(AppConfig):
-    """No models or runtime registration: declarations compose through settings."""
+    """Register the integration workflow satellite."""
 
-    default = True
     name = "angee.workflows_integrate"

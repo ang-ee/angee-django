@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { parse } from "graphql";
-import type { AngeeLiveResource } from "./provider";
+import type { AngeeLiveResource, GraphQLWsClient } from "./provider";
 
 import {
   ANGEE_HASURA_PROVIDER_OPTIONS,
@@ -19,12 +19,69 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
+function invalidationClient(invalidateQueries: QueryClient["invalidateQueries"]) {
+  const client = new QueryClient();
+  return {
+    invalidateQueries,
+    cancelQueries: vi.fn(async () => undefined),
+    getQueryCache: () => client.getQueryCache(),
+  };
+}
+
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
 });
 
 describe("Angee Hasura provider defaults", () => {
+  test("sends typed creation and revision arguments through native CRUD documents", async () => {
+    const requests: { query: string; variables: Record<string, unknown> }[] = [];
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql", auth: (request) => request,
+      mutations: { notes: {
+        create: { root: "insert_notes_one", inputType: "notes_insert_input", arguments: [{ name: "client_creation_key", type: "String!" }] },
+        update: { root: "update_notes_by_pk", inputType: "notes_set_input", arguments: [{ name: "expected_revision", type: "Int!" }] },
+      } },
+      fetch: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ insert_notes_one: { id: "note-1" }, update_notes_by_pk: { id: "note-1", revision: 4 } });
+      },
+    });
+    const created = await provider.create({ resource: "notes", variables: { title: "New" },
+      meta: { fields: ["id"], gqlVariables: { client_creation_key: "session-key", expected_revision: 99 } } });
+    expect(created.data.id).toBe("note-1");
+    const updated = await provider.update({ resource: "notes", id: "note-1", variables: { title: "Changed" },
+      meta: { fields: ["id", "revision"], gqlVariables: { expected_revision: 3 } } });
+    expect(updated.data.revision).toBe(4);
+    expect(requests[0]?.variables).toMatchObject({ object: { title: "New" }, client_creation_key: "session-key" });
+    expect(requests[0]?.query).toContain("$client_creation_key: String!");
+    expect(requests[0]?.variables).not.toHaveProperty("expected_revision");
+    expect(requests[1]?.variables).toMatchObject({ object: { title: "Changed" }, pk_columns: { id: "note-1" }, expected_revision: 3 });
+    expect(requests[1]?.query).toContain("$expected_revision: Int!");
+    expect(requests[1]?.query).toContain("expected_revision: $expected_revision");
+  });
+
+  test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT", "VIEW_AS_READ_ONLY"])("preserves the public %s code", (code) => {
+    const error = boundedGraphQLTransportError({ response: { errors: [{ message: "Write refused.", extensions: { code } }] } });
+    expect(error).toMatchObject({ graphQLErrors: [{ extensions: { code } }] });
+  });
+
+  test("fails on an unknown advertised argument before sending a write", async () => {
+    const fetch = vi.fn();
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql",
+      auth: (request) => request,
+      mutations: { notes: { create: {
+        root: "insert_notes_one", inputType: "notes_insert_input",
+        arguments: [{ name: "unknown_argument", type: "String" }],
+      } } },
+      fetch,
+    });
+    await expect(async () => provider.create({ resource: "notes", variables: {} }))
+      .rejects.toThrow('Unknown mutation root argument "unknown_argument"');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -248,7 +305,7 @@ describe("Angee Hasura provider defaults", () => {
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "decisionChanged", list: "workflow_decisions", model: "workflows.Decision" })],
-      { queryClient: { invalidateQueries, cancelQueries: vi.fn(async () => undefined) } },
+      { queryClient: invalidationClient(invalidateQueries) },
     );
 
     provider.subscribe({
@@ -300,7 +357,7 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  test("revalidates native authored data on socket reconnect and removes its listener with the last consumer", async () => {
+  test("revalidates retained authored data on socket reconnect and removes its listener with the last consumer", async () => {
     const client = new QueryClient();
     let rows = ["survivor", "revoked"];
     const queryFn = vi.fn(async () => rows);
@@ -321,16 +378,9 @@ describe("Angee Hasura provider defaults", () => {
     await client.fetchQuery({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
     const observer = new QueryObserver(client, noteQuery);
     const unsubscribeObserver = observer.subscribe(() => undefined);
-    const listeners = new Set<() => void>();
-    const stopListening = vi.fn();
-    const on = vi.fn((event: string, listener: () => void) => {
-      expect(event).toBe("connected");
-      listeners.add(listener);
-      return () => { listeners.delete(listener); stopListening(); };
-    });
-    const { subscribe } = recordingClient();
+    const socket = connectingClient();
     const provider = createAngeeChangeLiveProvider(
-      { subscribe, on } as never,
+      socket.client,
       [resource({ changes: "noteChanged" }), resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" })],
       { queryClient: client },
     );
@@ -341,29 +391,250 @@ describe("Angee Hasura provider defaults", () => {
     const first = subscription();
     const second = subscription();
     try {
-      expect(on).toHaveBeenCalledTimes(1);
-      // The initial connection also closes the gap between HTTP and subscribing.
-      listeners.forEach((connected) => connected());
-      await vi.waitFor(() => expect(queryFn).toHaveBeenCalledTimes(3));
+      expect(socket.client.on).toHaveBeenCalledTimes(1);
+      socket.connect(false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(queryFn).toHaveBeenCalledTimes(2);
       rows = ["survivor"];
-      listeners.forEach((connected) => connected());
+      socket.connect(true);
       await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["survivor"]));
+      expect(queryFn).toHaveBeenCalledTimes(3);
       expect(client.getQueryState(["message-feed", "inactive"])?.isInvalidated).toBe(true);
       expect(unrelated.queryFn).toHaveBeenCalledTimes(1);
       expect(client.getQueryState(unrelated.queryKey)?.isInvalidated).toBe(false);
       provider.unsubscribe(first);
-      expect(listeners.size).toBe(1);
       provider.unsubscribe(second);
-      expect(listeners.size).toBe(0);
-      expect(stopListening).toHaveBeenCalledTimes(1);
+      expect(socket.connect(false)).toBe(0);
       const next = subscription();
-      expect(on).toHaveBeenCalledTimes(2);
+      expect(socket.client.on).toHaveBeenCalledTimes(2);
+      rows = ["latest"];
+      socket.connect(false);
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["latest"]));
+      expect(queryFn).toHaveBeenCalledTimes(4);
       provider.unsubscribe(next);
-      expect(listeners.size).toBe(0);
+      expect(socket.connect(false)).toBe(0);
     } finally {
       provider.unsubscribe(first);
       provider.unsubscribe(second);
       unsubscribeObserver();
+      client.clear();
+    }
+  });
+
+  test("keeps first loads running across first and idle-reopened connections", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let resolveNote!: (rows: string[]) => void;
+    let resolveTag!: (rows: string[]) => void;
+    const noteRequest = new Promise<string[]>((resolve) => { resolveNote = resolve; });
+    const tagRequest = new Promise<string[]>((resolve) => { resolveTag = resolve; });
+    const noteQuery = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      expect(signal.aborted).toBe(false);
+      return noteRequest;
+    });
+    const tagQuery = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      expect(signal.aborted).toBe(false);
+      return tagRequest;
+    });
+    const notes = new QueryObserver(client, {
+      queryKey: ["notes"], queryFn: noteQuery, meta: { angeeModels: ["notes.Note"] },
+    });
+    const tags = new QueryObserver(client, {
+      queryKey: ["tags"], queryFn: tagQuery, meta: { angeeModels: ["notes.Tag"] },
+    });
+    const stopNotes = notes.subscribe(() => undefined);
+    const cancelQueries = vi.spyOn(client, "cancelQueries");
+    const socket = connectingClient();
+    const provider = createAngeeChangeLiveProvider(
+      socket.client,
+      [resource({ changes: "noteChanged" }), resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" })],
+      { queryClient: client },
+    );
+    const first = provider.subscribe({
+      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
+    });
+    try {
+      socket.connect(false);
+      socket.connect(true);
+      expect(noteQuery).toHaveBeenCalledOnce();
+      expect(cancelQueries).not.toHaveBeenCalled();
+      provider.unsubscribe(first);
+      const stopTags = tags.subscribe(() => undefined);
+      const second = provider.subscribe({
+        channel: "tags", types: ["*"], callback: vi.fn(), params: { resource: "tags" },
+      });
+      try {
+        // graphql-ws reports an idle-close reopening as a non-retry connection.
+        resolveTag(["tag"]);
+        await vi.waitFor(() => expect(tags.getCurrentResult().data).toEqual(["tag"]));
+        socket.connect(false);
+        expect(tagQuery).toHaveBeenCalledOnce();
+        expect(cancelQueries).not.toHaveBeenCalled();
+        resolveNote(["note"]);
+        await vi.waitFor(() => expect(notes.getCurrentResult().data).toEqual(["note"]));
+      } finally {
+        provider.unsubscribe(second);
+        stopTags();
+      }
+    } finally {
+      resolveNote([]);
+      resolveTag([]);
+      provider.unsubscribe(first);
+      stopNotes();
+      client.clear();
+    }
+  });
+
+  test.each(["first", "idle"])("keeps a cached query's mount refetch across a %s socket connection", async (connection) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryKey = ["notes", "revisited"];
+    client.setQueryData(queryKey, ["cached"], { updatedAt: Date.now() - 31_000 });
+    let finish!: (rows: string[]) => void;
+    const request = new Promise<string[]>((resolve) => { finish = resolve; });
+    let signal!: AbortSignal;
+    const queryFn = vi.fn(({ signal: requestSignal }: { signal: AbortSignal }) => {
+      signal = requestSignal;
+      return request;
+    });
+    const observer = new QueryObserver(client, {
+      queryKey, queryFn, staleTime: 30_000, meta: { angeeModels: ["notes.Note"] },
+    });
+    const socket = connectingClient();
+    const provider = createAngeeChangeLiveProvider(
+      socket.client,
+      [resource({ changes: "noteChanged" })],
+      { queryClient: client },
+    );
+    const subscription = () => provider.subscribe({
+      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
+    });
+    if (connection === "idle") {
+      const first = subscription();
+      socket.connect(false);
+      provider.unsubscribe(first);
+    }
+    const stopObserver = observer.subscribe(() => undefined);
+    const second = subscription();
+    try {
+      expect(queryFn).toHaveBeenCalledOnce();
+      socket.connect(false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(queryFn).toHaveBeenCalledOnce();
+      expect(signal.aborted).toBe(false);
+      finish(["fresh"]);
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["fresh"]));
+    } finally {
+      finish([]);
+      provider.unsubscribe(second);
+      stopObserver();
+      client.clear();
+    }
+  });
+
+  test("restarts a data-holding refetch on a genuine socket retry", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryKey = ["notes", "retry"];
+    client.setQueryData(queryKey, ["cached"]);
+    const attempts: { signal: AbortSignal; resolve: (rows: string[]) => void }[] = [];
+    const queryFn = vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<string[]>((resolve) => {
+      attempts.push({ signal, resolve });
+    }));
+    const observer = new QueryObserver(client, {
+      queryKey, queryFn, staleTime: Infinity, meta: { angeeModels: ["notes.Note"] },
+    });
+    const stopObserver = observer.subscribe(() => undefined);
+    const socket = connectingClient();
+    const provider = createAngeeChangeLiveProvider(
+      socket.client,
+      [resource({ changes: "noteChanged" })],
+      { queryClient: client },
+    );
+    const subscription = provider.subscribe({
+      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
+    });
+    try {
+      socket.connect(false);
+      void client.refetchQueries({ queryKey, exact: true });
+      expect(queryFn).toHaveBeenCalledOnce();
+      socket.connect(true);
+      await vi.waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
+      expect(attempts[0]?.signal.aborted).toBe(true);
+      attempts[0]?.resolve(["obsolete"]);
+      expect(observer.getCurrentResult().data).toEqual(["cached"]);
+      attempts[1]?.resolve(["fresh"]);
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["fresh"]));
+    } finally {
+      attempts.forEach((attempt) => attempt.resolve([]));
+      provider.unsubscribe(subscription);
+      stopObserver();
+      client.clear();
+    }
+  });
+
+  test("catches up reads loaded while subscriptions were disabled", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let rows = ["before-enable"];
+    const queryFn = vi.fn(async () => rows);
+    const observer = new QueryObserver(client, {
+      queryKey: ["notes"], queryFn, staleTime: Infinity, meta: { angeeModels: ["notes.Note"] },
+    });
+    const socket = connectingClient();
+    const provider = createAngeeChangeLiveProvider(
+      socket.client,
+      [resource({ changes: "noteChanged" })],
+      { queryClient: client },
+    );
+    const subscription = () => provider.subscribe({
+      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
+    });
+    const first = subscription();
+    socket.connect(false);
+    provider.unsubscribe(first);
+    provider.setEnabled(false);
+    const second = subscription();
+    const stopObserver = observer.subscribe(() => undefined);
+    try {
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["before-enable"]));
+      rows = ["after-enable"];
+      provider.setEnabled(true);
+      socket.connect(false);
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["after-enable"]));
+      expect(queryFn).toHaveBeenCalledTimes(2);
+    } finally {
+      provider.unsubscribe(second);
+      stopObserver();
+      client.clear();
+    }
+  });
+
+  test("clears an unused enable catch-up before a later first connection", async () => {
+    const client = new QueryClient();
+    const queryFn = vi.fn(async () => ["cached"]);
+    const query = {
+      queryKey: ["notes", "enable"], queryFn, staleTime: Infinity,
+      meta: { angeeModels: ["notes.Note"] },
+    };
+    await client.fetchQuery(query);
+    const observer = new QueryObserver(client, query);
+    const stopObserver = observer.subscribe(() => undefined);
+    const socket = connectingClient();
+    const provider = createAngeeChangeLiveProvider(
+      socket.client, [resource({ changes: "noteChanged" })], { queryClient: client },
+    );
+    const subscribe = () => provider.subscribe({
+      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
+    });
+    provider.setEnabled(false);
+    const first = subscribe();
+    provider.setEnabled(true);
+    provider.unsubscribe(first);
+    const second = subscribe();
+    try {
+      socket.connect(false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(queryFn).toHaveBeenCalledOnce();
+    } finally {
+      provider.unsubscribe(second);
+      stopObserver();
       client.clear();
     }
   });
@@ -429,6 +700,33 @@ describe("Angee Hasura provider defaults", () => {
       params: { resource: "notes" },
     });
     expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
+  test("pauses existing and newly mounted consumers, drops late events, then reopens once", () => {
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
+      [resource({ changes: "noteChanged" })],
+    );
+    const callback = vi.fn();
+    const params = { channel: "resources/notes", types: ["*"], callback, params: { resource: "notes" } };
+    const first = provider.subscribe(params);
+    provider.setEnabled(false);
+    const second = provider.subscribe(params);
+    expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    const event = { data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } } };
+    nthSink(sinks, 0).next(event);
+    expect(callback).not.toHaveBeenCalled();
+    provider.setEnabled(true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    nthSink(sinks, 0).next(event);
+    expect(callback).not.toHaveBeenCalled();
+    nthSink(sinks, 1).next(event);
+    expect(callback).toHaveBeenCalledTimes(2);
+    provider.unsubscribe(first);
+    provider.unsubscribe(second);
+    expect(nthSink(sinks, 1).dispose).toHaveBeenCalledTimes(1);
   });
 
   test("logs and drops errored subscriptions so the next subscriber reconnects", () => {
@@ -530,7 +828,7 @@ describe("Angee Hasura provider defaults", () => {
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
-      { queryClient: { invalidateQueries, cancelQueries: vi.fn(async () => undefined) } },
+      { queryClient: invalidationClient(invalidateQueries) },
     );
 
     provider.subscribe({
@@ -563,7 +861,7 @@ describe("Angee Hasura provider defaults", () => {
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged", list: "notes", model: "notes.Note" })],
-      { queryClient: { invalidateQueries, cancelQueries: vi.fn(async () => undefined) } },
+      { queryClient: invalidationClient(invalidateQueries) },
     );
     const callbacks = [vi.fn(), vi.fn(), vi.fn()];
     provider.subscribe({ channel: "resources/notes", types: ["*"], callback: callbacks[0]!, params: { resource: "notes" } });
@@ -652,6 +950,26 @@ function recordingClient(): {
     return dispose;
   });
   return { subscribe, sinks };
+}
+
+function connectingClient(): {
+  client: Pick<GraphQLWsClient, "subscribe" | "on">;
+  connect: (wasRetry: boolean) => number;
+} {
+  const listeners = new Set<(socket: unknown, payload: unknown, wasRetry: boolean) => void>();
+  const on: GraphQLWsClient["on"] = (event, listener) => {
+    if (event !== "connected") throw new Error(`Unexpected socket event: ${event}`);
+    const connected = listener as (socket: unknown, payload: unknown, wasRetry: boolean) => void;
+    listeners.add(connected);
+    return () => { listeners.delete(connected); };
+  };
+  return {
+    client: { subscribe: () => () => undefined, on: vi.fn(on) },
+    connect(wasRetry) {
+      listeners.forEach((connected) => connected(null, undefined, wasRetry));
+      return listeners.size;
+    },
+  };
 }
 
 function nthSink(sinks: readonly RecordedSink[], index: number): RecordedSink {

@@ -77,7 +77,7 @@ function isCompactOptionalScalar(field: FieldDescriptor): boolean {
 
 function presentValue(field: FieldDescriptor, useDefault: boolean): unknown {
   if (!useDefault && isNumericInput(field)) {
-    return "";
+    return 0;
   }
   return initialFormSpecValue({
     ...field,

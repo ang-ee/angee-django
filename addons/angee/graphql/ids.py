@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 import strawberry
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
@@ -72,15 +72,19 @@ def require_instance_for_id(
     queryset: models.QuerySet[_ModelT] | None = None,
     not_found: str | None = None,
 ) -> _ModelT:
-    """Resolve within the supplied queryset or raise, without changing its policy.
+    """Resolve within the supplied queryset or raise a typed validation refusal.
 
     ``not_found`` preserves a domain surface's established error wording. This
-    helper never elevates; action-specific authorization belongs to the action.
+    helper never elevates; hidden and unknown rows have the same refusal when
+    the caller supplies its authorized queryset. It is for required action and
+    write targets. Nullable read roots use optional identity resolution and
+    return null without errors for hidden, absent, or malformed identities.
+    Action-specific authorization belongs to the action.
     """
 
     instance = instance_for_id(model, value, queryset=queryset)
     if instance is None:
-        raise ValueError(not_found or f"{model._meta.object_name} {public_id_value(value)!r} was not found")
+        raise ValidationError(not_found or "The requested record was not found.", code="not_found")
     return instance
 
 

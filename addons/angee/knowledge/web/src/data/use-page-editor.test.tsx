@@ -18,6 +18,8 @@ import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
 
+const hoistedInvalidate = vi.hoisted(() => vi.fn());
+
 const sdkMocks = vi.hoisted(() => ({
   updatePage: vi.fn(),
   updateBody: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   return {
     ...actual,
     useAuthoredMutation: sdkMocks.useAuthoredMutation,
+    useInvalidateAuthoredModels: () => hoistedInvalidate,
   };
 });
 
@@ -58,6 +61,7 @@ import { KnowledgeUpdatePageBody } from "./documents";
 describe("usePageEditor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    hoistedInvalidate.mockClear();
     sdkMocks.updatePage.mockReset();
     sdkMocks.updateBody.mockReset();
     sdkMocks.useAuthoredMutation.mockReset();
@@ -82,13 +86,11 @@ describe("usePageEditor", () => {
     vi.useRealTimers();
   });
 
-  test("debounces body saves to the latest draft without refreshing the tree", async () => {
-    const onTitleSaved = vi.fn();
+  test("debounces body saves to the latest draft without explicit invalidation", async () => {
     const { result } = renderHook(() =>
       usePageEditor(
         "pag_1",
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
-        onTitleSaved,
       ),
       { wrapper: MetadataWrapper },
     );
@@ -112,17 +114,15 @@ describe("usePageEditor", () => {
       body: "Latest draft",
       expected_hash: "hash-old",
     });
-    expect(onTitleSaved).not.toHaveBeenCalled();
+    expect(hoistedInvalidate).not.toHaveBeenCalled();
     expect(result.current.status).toBe("saved");
   });
 
   test("cancels a pending body save when the draft returns to the saved body", async () => {
-    const onTitleSaved = vi.fn();
     const { result } = renderHook(() =>
       usePageEditor(
         "pag_1",
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
-        onTitleSaved,
       ),
       { wrapper: MetadataWrapper },
     );
@@ -140,16 +140,14 @@ describe("usePageEditor", () => {
     });
 
     expect(sdkMocks.updateBody).not.toHaveBeenCalled();
-    expect(onTitleSaved).not.toHaveBeenCalled();
+    expect(hoistedInvalidate).not.toHaveBeenCalled();
   });
 
   test("commits title changes through the SDK page update mutation", async () => {
-    const onTitleSaved = vi.fn();
     const { result } = renderHook(() =>
       usePageEditor(
         "pag_1",
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
-        onTitleSaved,
       ),
       { wrapper: MetadataWrapper },
     );
@@ -174,17 +172,15 @@ describe("usePageEditor", () => {
       id: "pag_1",
       values: { title: "Renamed page" },
     });
-    expect(onTitleSaved).toHaveBeenCalledTimes(1);
+    expect(hoistedInvalidate).toHaveBeenCalledExactlyOnceWith(["knowledge.Page"]);
     expect(result.current.status).toBe("saved");
   });
 
-  test("flushes the pending body save on unmount without refreshing the tree", async () => {
-    const onTitleSaved = vi.fn();
+  test("flushes the pending body save on unmount without explicit invalidation", async () => {
     const { result, unmount } = renderHook(() =>
       usePageEditor(
         "pag_2",
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
-        onTitleSaved,
       ),
       { wrapper: MetadataWrapper },
     );
@@ -205,7 +201,7 @@ describe("usePageEditor", () => {
       body: "Leaving now",
       expected_hash: "hash-old",
     });
-    expect(onTitleSaved).not.toHaveBeenCalled();
+    expect(hoistedInvalidate).not.toHaveBeenCalled();
   });
 });
 

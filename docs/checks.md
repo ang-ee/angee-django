@@ -35,8 +35,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Python/addon/template handoff; required for core changes | `uv run --locked python -m pytest -q` |
-| Parallel SQLite suite (CI scheduling) | `uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Python/addon/template handoff: full SQLite suite; required for core changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python types | `uv run --locked python -m mypy angee addons` |
@@ -46,9 +45,24 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 boundaries and optional state-field declarations. See the
 [Database routing rule](backend/guidelines.md#rules) for persistence checks.
 
-PostgreSQL concurrency behavior also needs the database-backed lane in
-[reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not
-substitute for that coverage; report database-dependent skips explicitly.
+The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
+covers workflow definition, publication, execution,
+[settlement recovery](../tests/test_workflows_fix_round.py), authorization, concurrency,
+test-harness and composed-consumer contracts, plus decision
+[lifecycle](../tests/test_decisions_lifecycle.py) and
+[concurrency](../tests/test_decisions_concurrency.py). This named file selection
+also covers [review waiters](../tests/test_workflows_review.py), their
+[locking races](../tests/test_workflows_review_concurrency.py),
+[execution links](../tests/test_workflows_review_graphql.py), and
+[inbox predicates](../tests/test_decisions_inbox.py). The selection
+runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
+and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
+for each worker. The composed-host subprocess tests use Django's test runner to
+create separate worker-named secondary test databases. The full
+suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
+apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
+skip explicitly on SQLite. Report those skips separately from the PostgreSQL
+lane's executed coverage.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
@@ -61,14 +75,28 @@ host fixtures must use process-local connections or pytest's worker-local
 ### Source-addon Test Models
 
 Share source-addon compositions through their owning test apps:
-[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py) and
+[`angee.resources.testing`](../addons/angee/resources/testing/__init__.py),
+[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py), and
 [`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
-package docstrings own the adoption contract. The framework-generic
+package docstrings own the adoption contract. Other reusable concrete
+compositions, including [`decisions`](../addons/angee/decisions/testing/models.py)
+and [`messaging`](../addons/angee/messaging/testing/models.py), register once
+through imports in the root conftest before database setup. The framework-generic
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
 Verify adopting modules individually as well as in the full suite so collection
 order cannot hide missing models.
+
+Workflow tests reach execution states through the shared `load_workflow`,
+`start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
+production admission and transition verbs; do not fabricate step runs or attempts
+to stand in for execution. The scoped `capture_tasks` and `observe(model)`
+helpers capture task sends and publications; `trigger_source(model)` opts a
+declared source into signal capture. Decisions-only suites use
+`angee.decisions.testing` drivers with central concrete models. Name Python
+test modules `test_<concern>.py` and tests
+`test_<behavior>` so native discovery and focused file selection agree.
 
 ## Agent Methodology And Documentation
 
@@ -133,6 +161,14 @@ the stack's dependency owner before codegen; never install in the source slot.
 The stack's JS dependencies must already be installed. Framework packages are
 schema-independent; addon fragments need the composed host's generated documents.
 
+Name frontend test files `<owner>[.<concern>].test.ts` (or `.tsx` for JSX), beside
+the owner, and name each test for observable behavior. Use `.native.test.tsx`
+when a separate suite exercises real provider integration; compose the existing
+[`createUiTestProviders`](../packages/ui/src/testing.tsx) or
+[`createRefineTestProviders`](../packages/refine/src/testing.tsx) harness instead
+of copying provider setup. These names share the same Vitest discovery and
+focused-file selection convention.
+
 | Scope | Working directory | Command |
 |---|---|---|
 | Focused package test/typecheck/build | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter <package-name> run <script>` |
@@ -178,9 +214,11 @@ database, and these commands do not create one.
 pushes to `main`. The current tiers are:
 
 - **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
-  and the 25 slowest test durations. Structural tests remain part of this suite.
-- **PostgreSQL:** the existing workflow-concurrency selection runs serially,
-  followed by a check that it did not skip tests.
+  and the 25 slowest test durations, with migrations enabled and `DATABASE_URL`
+  unset. Structural tests remain part of this suite.
+- **PostgreSQL:** the named workflow and decision selection runs with
+  `-n 4 --dist loadfile --nomigrations`, writes JUnit output, and checks that it
+  did not skip tests.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents

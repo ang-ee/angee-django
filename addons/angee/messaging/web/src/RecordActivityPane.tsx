@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, DatePopover, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, formatDateTime, textRoleVariants, useActionForm } from "@angee/ui";
+import { Button, DatePopover, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, formatDateTime, textRoleVariants, useActionForm, useUiT, useWatch, type ResolverResult } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 import { userDisplayName } from "@angee/iam";
 
@@ -31,6 +31,7 @@ interface ScheduleValues {
  * conversation to Comments while reusing the same stored thread. */
 export function RecordActivityPane({ context }: RecordActivityPaneProps): React.ReactElement {
   const t = useMessagingT();
+  const uiT = useUiT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
   const enabled = Boolean(modelLabel && recordId);
@@ -54,9 +55,6 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.cancel_record_activity,
   });
-  const [summary, setSummary] = React.useState("");
-  const [note, setNote] = React.useState("");
-  const [dueDate, setDueDate] = React.useState("");
   const [dateOpen, setDateOpen] = React.useState(false);
   const [feedbackById, setFeedbackById] = React.useState<Record<string, string>>({});
   // `error` carries the imperative complete/cancel failures; the schedule form's
@@ -66,6 +64,13 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
   // mutation, surface a thrown failure as `formError`, and clear the fields on
   // success. No toast — the scheduled activity appears in the list via invalidation.
   const scheduleForm = useActionForm<ScheduleValues>({
+    defaultValues: { summary: "", note: "", dueDate: "" },
+    resolver: (values): ResolverResult<ScheduleValues> => {
+      const summary = values.summary.trim();
+      return summary
+        ? { values: { ...values, summary }, errors: {} }
+        : { values: {}, errors: { summary: { type: "required", message: uiT("form.required") } } };
+    },
     submit: async ({ summary, note, dueDate }) => {
       await scheduleActivity({
         modelLabel: modelLabel ?? "",
@@ -75,16 +80,16 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
         dueDate: dueDate || null,
         activityType: "todo",
       });
-      return { ok: true, message: "" };
+      return { status: "ok", data: undefined };
     },
     onSuccess: () => {
-      setSummary("");
-      setNote("");
-      setDueDate("");
+      scheduleForm.form.reset();
     },
     toastSuccess: false,
     genericErrorMessage: t("activity.errorSchedule"),
   });
+  const dueDate = useWatch({ control: scheduleForm.form.control, name: "dueDate" });
+  const summaryError = scheduleForm.form.formState.errors.summary;
   const threadPayload = threadQuery.data?.record_thread;
   const activities = React.useMemo(
     () => [...(threadPayload?.activities ?? [])].sort(compareActivities),
@@ -119,9 +124,8 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
 
   async function handleSchedule(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const nextSummary = summary.trim();
-    if (!nextSummary || !modelLabel || !recordId) return;
-    await scheduleForm.run({ summary: nextSummary, note, dueDate });
+    if (!modelLabel || !recordId) return;
+    await scheduleForm.run();
   }
 
   async function handleComplete(activityId: string): Promise<void> {
@@ -199,17 +203,16 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
         onSubmit={handleSchedule}
         className="mt-auto space-y-2 border-t border-border-subtle pt-3"
       >
-        <FieldRoot>
+        <FieldRoot invalid={Boolean(summaryError)}>
           <FieldRoot.Label className="sr-only">{t("activity.summary")}</FieldRoot.Label>
           <FieldRoot.Control
-            value={summary}
-            onChange={(event) => setSummary(event.currentTarget.value)}
+            {...scheduleForm.form.register("summary")}
             placeholder={t("activity.summary")}
           />
+          {summaryError ? <FieldRoot.Error match>{summaryError.message}</FieldRoot.Error> : null}
         </FieldRoot>
         <Textarea
-          value={note}
-          onChange={(event) => setNote(event.currentTarget.value)}
+          {...scheduleForm.form.register("note")}
           rows={2}
           resize="none"
           aria-label={t("activity.notes")}
@@ -223,7 +226,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
               ariaLabel={t("activity.dueDate")}
               open={dateOpen}
               onOpenChange={setDateOpen}
-              onSelectDate={(date) => setDueDate(formatDateStorage(date) ?? "")}
+              onSelectDate={(date) => scheduleForm.form.setValue("dueDate", formatDateStorage(date) ?? "", { shouldDirty: true })}
               footer={
                 dueDate ? (
                   <Button
@@ -232,7 +235,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
                     size="sm"
                     className="mt-2 w-full"
                     onClick={() => {
-                      setDueDate("");
+                      scheduleForm.form.setValue("dueDate", "", { shouldDirty: true });
                       setDateOpen(false);
                     }}
                   >
@@ -247,7 +250,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
             type="submit"
             variant="primary"
             size="sm"
-            disabled={scheduleForm.submitting || summary.trim() === ""}
+            disabled={scheduleForm.submitting}
           >
             <Glyph name="calendar" />
             {t("activity.schedule")}
@@ -336,10 +339,11 @@ function ActivityItem({
             <h3 className="truncate text-13 font-medium text-fg">{activity.summary}</h3>
           </div>
           <p className={cn(textRoleVariants({ role: "caption" }), "pl-6")}>
-            {userDisplayName(activity.user, "")}
-            {activity.due_date ? ` · ${formatDate(activity.due_date)}` : ""}
-            {" · "}
-            {activityStateLabel(activity, t)}
+            {[
+              activity.user ? userDisplayName(activity.user, "") : "",
+              activity.due_date ? formatDate(activity.due_date) : "",
+              activityStateLabel(activity, t),
+            ].filter(Boolean).join(" · ")}
           </p>
         </div>
         {!closed ? (

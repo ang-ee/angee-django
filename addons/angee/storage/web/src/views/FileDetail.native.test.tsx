@@ -14,7 +14,7 @@ import { FileDetail } from "./FileDetail";
 const resource = testDataResource("storage.File", {
   recordRepresentation: "title",
   updateFields: ["title"],
-  fields: ["title", "filename", "created_by_label", "upload_state", "created_at", "updated_at"].map((name) => ({
+  fields: ["title", "filename", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
     name, kind: "scalar", scalar: "String", readable: true, filterable: false,
     sortable: false, aggregatable: false, groupable: false, creatable: false,
     updatable: name === "title", requiredOnCreate: false,

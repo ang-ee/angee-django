@@ -24,11 +24,23 @@ const sdk = vi.hoisted(() => {
     calls: unknown[];
     options: Record<string, unknown>;
   };
+  const invalidated: unknown[] = [];
   return {
     refineMutations: [] as RefineMutation[],
     invalidations: [] as unknown[],
+    createPage: vi.fn(),
+    invalidatedModels: invalidated,
+    invalidateModels: (models: unknown) => {
+      invalidated.push(models);
+    },
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredMutation: () => [sdk.createPage, { fetching: false, error: null }],
+  useInvalidateAuthoredModels: () => sdk.invalidateModels,
+}));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
@@ -59,7 +71,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     };
   return {
     ...actual,
-    useCreate: mutation("create", () => ({ id: "pag_new", title: "New page" })),
     useUpdate: mutation("update", (input) => ({
       id: (input as { id?: string }).id,
       ...(input as { values?: Record<string, unknown> }).values,
@@ -86,23 +97,16 @@ describe("knowledge page actions", () => {
   beforeEach(() => {
     sdk.refineMutations.length = 0;
     sdk.invalidations.length = 0;
+    sdk.createPage.mockReset();
+    sdk.createPage.mockResolvedValue({ create_page: { id: "pag_new" } });
+    sdk.invalidatedModels.length = 0;
   });
 
   test("uses refine mutations and preserves returned page id", async () => {
-    const onChanged = vi.fn();
-    const { result } = renderHook(() => usePageActions({ onChanged }), {
+    const { result } = renderHook(() => usePageActions(), {
       wrapper: MetadataWrapper,
     });
-    const [createPage, updatePage, deletePage] = sdk.refineMutations;
-
-    expect(createPage).toMatchObject({
-      kind: "create",
-      options: {
-        resource: "pages",
-        dataProviderName: "console",
-        meta: { fields: ["id", "title"] },
-      },
-    });
+    const [updatePage, deletePage] = sdk.refineMutations;
     expect(deletePage).toMatchObject({
       kind: "deletePreview",
     });
@@ -116,7 +120,7 @@ describe("knowledge page actions", () => {
       createdId = await result.current.createPage({
         vault: "vlt_1",
         title: "New page",
-        kind: "page",
+        kind: "note",
         parent: null,
       });
       await result.current.movePage("pag_1", "pag_parent");
@@ -124,16 +128,9 @@ describe("knowledge page actions", () => {
     });
 
     expect(createdId).toBe("pag_new");
-    expect(createPage?.calls).toEqual([
-      {
-        values: {
-          vault: "vlt_1",
-          title: "New page",
-          kind: "page",
-          parent: null,
-        },
-      },
-    ]);
+    expect(sdk.createPage).toHaveBeenCalledWith({
+      vault: "vlt_1", title: "New page", kind: "note", parent: null,
+    });
     expect(updatePage?.calls).toEqual([
       { id: "pag_1", values: { parent: "pag_parent" } },
     ]);
@@ -151,13 +148,16 @@ describe("knowledge page actions", () => {
         invalidates: ["list", "many", "detail"],
       }),
     ]);
-    expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(sdk.invalidatedModels).toEqual([
+      ["knowledge.Page"],
+      ["knowledge.Page"],
+      ["knowledge.Page"],
+    ]);
   });
 
   test("keeps navigator verbs stable across rerenders", () => {
-    const onChanged = vi.fn();
     const { result, rerender } = renderHook(
-      () => usePageActions({ onChanged }),
+      () => usePageActions(),
       { wrapper: MetadataWrapper },
     );
     const first = result.current;
@@ -188,7 +188,6 @@ const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
 
         roots: {
           list: "pages",
-          create: "createPage",
           update: "updatePage",
           deletePreview: "deletePagePreview",
         },

@@ -6,17 +6,17 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from django.core.exceptions import FieldError, ValidationError
+from django.core.exceptions import FieldError
 from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
+from rebac.managers import TrackedQuerySet
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
-from angee.base.scoping import system_queryset
-from angee.workflows.managers import StepAttemptQuerySet
-from angee.workflows.testing.models import StepAttempt, StepRun
+from angee.base.scoping import aggregate_scoped_queryset, lock_if_supported, read_scoped_queryset, system_queryset
+from angee.decisions.testing.models import DecisionEvidence
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
 
@@ -84,10 +84,27 @@ class ThirdPartySystemQueryThing(RebacMixin):
         """Django model options for the test model."""
 
         app_label = "tests"
-        base_manager_name = "objects"
 
 
-@pytest.mark.parametrize("model", [Drive, File, Integration, StepRun, StepAttempt])
+def test_read_scope_preserves_permission_naive_manager_predicates() -> None:
+    """No row policy keeps the default manager's selection without requiring an actor."""
+
+    rows = read_scoped_queryset(GuardedSystemQueryThing, None)
+    assert type(rows) is type(GuardedSystemQueryThing.objects.all())
+    assert rows.query.where == GuardedSystemQueryThing.objects.all().query.where
+
+
+@pytest.mark.parametrize("model", (Drive, DecisionEvidence))
+def test_read_scope_without_actor_is_empty_without_querying(model) -> None:
+    """An empty protected scope can be consumed without an ambient actor or a database."""
+
+    rows = read_scoped_queryset(model, None)
+    assert rows.query.is_empty()
+    assert list(rows) == []
+    assert list(aggregate_scoped_queryset(rows)) == []
+
+
+@pytest.mark.parametrize("model", [Drive, File, Integration])
 def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model: type[models.Model]) -> None:
     """Native base managers expose backend-gated locks without replacing actor managers."""
 
@@ -99,14 +116,8 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
     assert queryset._db == "default"
     assert queryset.query.select_for_update is True
     assert queryset.query.select_for_update_of == ("self",)
-    if model is StepAttempt:
-        assert manager is model.system_objects
-        assert isinstance(queryset, StepAttemptQuerySet)
-        with pytest.raises(ValidationError, match="StepAttempt rows cannot be edited"):
-            queryset.update(status="bypassed")
-    else:
-        assert isinstance(manager, AngeeUnscopedManager)
-        assert isinstance(queryset, AngeeUnscopedQuerySet)
+    assert isinstance(manager, AngeeUnscopedManager)
+    assert isinstance(queryset, AngeeUnscopedQuerySet)
 
 
 @pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
@@ -126,6 +137,21 @@ def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryse
     assert locked._for_write is True
     assert locked.query.select_for_update is True
     assert locked.query.select_for_update_of == ("self",)
+
+
+@pytest.mark.parametrize("queryset_class", [models.QuerySet, AngeeQuerySet, AngeeUnscopedQuerySet])
+def test_lock_forwards_skip_locked_and_no_key(queryset_class: Any) -> None:
+    """Both native and Angee querysets preserve the requested Django lock mode."""
+
+    original = queryset_class(model=SystemQueryThing)
+    if queryset_class is models.QuerySet:
+        locked = lock_if_supported(original, skip_locked=True, no_key=True)
+    else:
+        locked = original.lock_if_supported(skip_locked=True, no_key=True)
+
+    assert locked.query.select_for_update_skip_locked is True
+    assert locked.query.select_for_no_key_update is True
+    assert original.query.select_for_update is False
 
 
 @pytest.fixture
@@ -149,6 +175,26 @@ def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: Non
 
     assert rows == [instance]
     assert any("FOR UPDATE" in query["sql"].upper() for query in captured.captured_queries)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_queryset_lock_facade_executes_skip_locked_no_key(system_query_tables: None) -> None:
+    """The public facade executes PostgreSQL lock options and SQLite's unlocked floor."""
+
+    instance = SystemQueryThing._base_manager.create(name="facade")
+    with transaction.atomic(), CaptureQueriesContext(connection) as captured:
+        rows = list(
+            SystemQueryThing.system_queryset()
+            .lock_if_supported(of=("self",), skip_locked=True, no_key=True)
+            .filter(pk=instance.pk)
+        )
+
+    assert rows == [instance]
+    statements = [query["sql"].upper() for query in captured.captured_queries]
+    if connection.vendor == "postgresql":
+        assert any("FOR NO KEY UPDATE OF" in sql and "SKIP LOCKED" in sql for sql in statements)
+    else:
+        assert all("FOR UPDATE" not in sql and "FOR NO KEY UPDATE" not in sql for sql in statements)
 
 
 @override_settings(REBAC_ALLOW_SUDO=False)
@@ -194,7 +240,7 @@ def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables:
         assert set(queryset.values_list("pk", flat=True)) == {selected.pk, excluded.pk}
         assert manager.db_manager("default").locked_get(pk=excluded.pk) == excluded
 
-    assert type(GuardedSystemQueryThing._base_manager) is models.Manager
+    assert isinstance(GuardedSystemQueryThing._base_manager.all(), TrackedQuerySet)
     assert list(GuardedSystemQueryThing.system_queryset()) == [selected]
 
 
@@ -239,3 +285,12 @@ def test_system_queryset_keeps_sqlite_unlocked(system_query_tables: None, model:
 
     assert rows == [instance]
     assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_readable_count_subquery_without_actor_is_zero(system_query_tables: None) -> None:
+    row = SystemQueryThing._base_manager.create(name="private")
+    projected = SystemQueryThing._base_manager.annotate(
+        visible_count=SystemQueryThing.objects.filter(pk=OuterRef("pk")).readable_count_subquery(),
+    ).get(pk=row.pk)
+    assert projected.visible_count == 0

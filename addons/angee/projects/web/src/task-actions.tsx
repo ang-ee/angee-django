@@ -9,14 +9,18 @@ import {
   useActionResultMutation,
   useActionOutcomeMutation,
   useEnumOptions,
+  useActionResultRun,
+  useRecordAction,
   useRecordActionMutation,
   type ActionDescriptor,
   type RowActionDeclaration,
   type StringIdRow,
   type WidgetOption,
+  type FormProps,
 } from "@angee/ui";
 import * as React from "react";
 
+import { SetTaskVisibilityDocument } from "./documents";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
@@ -63,9 +67,26 @@ export function useTaskRowActions<
   );
 }
 
-/** One Form declaration reused by the routed task page and personal board create flow. */
-export function useTaskFormDeclaration(): React.ReactElement {
+export interface TaskFormSelection {
+  groups?: readonly ("placement" | "assignment" | "details")[];
+  verbs?: readonly ("complete" | "drop" | "reopen" | "promote")[];
+  contextLine?: FormProps["contextLine"];
+  returning?: FormProps["returning"];
+  /**
+   * The statusbar: the task's own `status` (default), or another owner's field
+   * rendered by that owner's widget (e.g. a queue stage contributed by work).
+   */
+  statusField?: "status" | { name: string; widget: string };
+  /** The visibility control beside the title; a host that states audiences per section drops it. */
+  visibility?: boolean;
+  extraFields?: React.ReactNode;
+  extraActions?: React.ReactNode;
+}
+
+/** Shared task form for collection routes and board create flows. */
+export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React.ReactElement {
   const t = useProjectsT();
+  const visibilityOptions = useEnumOptions(TASK_MODEL, "visibility", { casing: "upper" });
   const statusOptions = useEnumOptions(TASK_MODEL, "status");
   const priorityOptions = useEnumOptions(TASK_MODEL, "priority");
   const dropReasonOptions = useEnumOptions(TASK_MODEL, "dropped_reason", { casing: "upper" });
@@ -77,14 +98,13 @@ export function useTaskFormDeclaration(): React.ReactElement {
     invalidateModels: [TASK_MODEL],
     settle: true,
   });
-  const [promote] = useRecordActionMutation<ActionFieldName>(
-    "promote_task_to_project",
-    {
-      invalidateModels: [TASK_MODEL, PROJECT_MODEL],
-      linkTo: PROJECT_MODEL,
-      settle: true,
-    },
-  );
+  const [promoteTask] = useActionOutcomeMutation<ActionFieldName>("promote_task_to_project", {
+    invalidateModels: [TASK_MODEL, PROJECT_MODEL],
+  });
+  const settlePromotion = useActionResultRun({ linkTo: PROJECT_MODEL });
+  const promote = useRecordAction(async (id, context) => {
+    await settlePromotion(() => promoteTask(id, { expected_revision: context.record?.revision }));
+  });
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
   });
@@ -103,71 +123,57 @@ export function useTaskFormDeclaration(): React.ReactElement {
     [dropReasonOptions, dropTask, t],
   );
 
+  const standardActions = <>
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("complete") ? <Action
+      id="complete" placement="toolbar" label={t("task.action.complete")} permission="write"
+      icon="check" run={complete} visibleWhen={isOpenTask} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("drop") ? <Action
+      id="drop" label={t("task.action.drop")} permission="write" icon="circle-x" danger
+      args={[{ name: "reason", label: t("task.action.reason"), widget: "select", options: dropReasonOptions }]}
+      submit={dropSubmit} visibleWhen={isOpenTask} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("reopen") ? <Action
+      id="reopen" label={t("task.action.reopen")} permission="write"
+      icon="activity" run={reopen} visibleWhen={(record) => !isOpenTask(record)} /> : null}
+    {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
+      id="promote" label={t("task.action.promote")} permission="write"
+      icon="projects" run={promote} /> : null}
+  </>;
   return (
-    <Form resource={TASK_MODEL} layout="tabs">
+    <Form resource={TASK_MODEL} layout="tabs" contextLine={selection.contextLine} returning={selection.returning}>
       <Field name="title" title />
-      <Field name="status" widget="statusbar" options={statusOptions} createOnly />
-      <Group label={t("task.group.placement")} columns={2}>
+      <Field name="allowed_visibility" hidden readOnly />
+      <Field name="audience_label" hidden readOnly />
+      <Field name="revision" readOnly hidden />
+      {selection.visibility === false ? null
+        : <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
+          visibilityAction={{ document: SetTaskVisibilityDocument, resultField: "set_task_visibility",
+            idArgument: "id", revisionArgument: "expected_revision", audienceField: "audience_label" }} />}
+      {selection.statusField && selection.statusField !== "status"
+        ? <Field name={selection.statusField.name} widget={selection.statusField.widget} status readOnly />
+        : <Field name="status" widget="statusbar" status options={statusOptions} createOnly />}
+      {(selection.groups ?? ["placement", "assignment", "details"]).includes("placement") ? <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />
         <Field name="milestone" />
         <Field name="parent" />
-      </Group>
-      <Group label={t("task.group.assignment")} columns={2}>
+      </Group> : null}
+      {(selection.groups ?? ["placement", "assignment", "details"]).includes("assignment") ? <Group label={t("task.group.assignment")} columns={2}>
         <Field name="assignee" />
         <Field name="delegate" />
         <Field name="priority" options={priorityOptions} />
         <Field name="due_date" />
         <Field name="recurrence" />
-      </Group>
-      <Group label={t("task.group.ordering")} columns={2}>
+      </Group> : null}
+      {(selection.groups ?? ["placement", "assignment", "details"]).includes("details") ? <Group label={t("task.group.details")} columns={2} collapsible defaultOpen={false}>
         <Field name="sort_order" label={t("common.order")} createOnly />
-        <Field
-          name="sub_sort_order"
-          label={t("common.subtaskOrder")}
-          createOnly
-        />
+        <Field name="sub_sort_order" label={t("common.subtaskOrder")} createOnly />
         <Field name="dropped_reason" readOnly />
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />
-      </Group>
+      </Group> : null}
       <Field name="note" widget="markdown.editor" body />
-      <Action
-        id="complete"
-        label={t("task.action.complete")}
-        icon="check"
-        run={complete}
-        visibleWhen={isOpenTask}
-      />
-      <Action
-        id="drop"
-        label={t("task.action.drop")}
-        icon="circle-x"
-        danger
-        args={[
-          {
-            name: "reason",
-            label: t("task.action.reason"),
-            widget: "select",
-            options: dropReasonOptions,
-          },
-        ]}
-        submit={dropSubmit}
-        visibleWhen={isOpenTask}
-      />
-      <Action
-        id="reopen"
-        label={t("task.action.reopen")}
-        icon="activity"
-        run={reopen}
-        visibleWhen={(record) => !isOpenTask(record)}
-      />
-      <Action
-        id="promote"
-        label={t("task.action.promote")}
-        icon="projects"
-        run={promote}
-        visibleWhen={() => true}
-      />
+      {selection.extraFields}
+      {standardActions}
+      {selection.extraActions}
     </Form>
   );
 }

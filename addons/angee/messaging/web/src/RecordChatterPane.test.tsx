@@ -51,6 +51,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 vi.mock("@angee/storage", () => ({
+  useStorageT: () => (key: string) => key,
+  StorageUploadTasks: () => null,
   useStorageUpload: () => ({ tasks: [], upload: vi.fn(), clearFinished: vi.fn() }),
 }));
 
@@ -68,6 +70,10 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
     message_type: "COMMENT",
     can_edit: false,
     can_delete: false,
+    author_label: "Ada Lovelace",
+    is_self: false,
+    is_reply: false,
+    edited_at: null,
     sender: { id: "hdl_1", display_name: "Ada Lovelace", value: "ada@example.com" },
     parent: null,
     subtype: null,
@@ -83,10 +89,14 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
 function threadPayload(messages: RecordMessageRow[]): unknown {
   return {
     record_thread: {
+      thread_post_access: "write",
+      permissions: ["write"],
       error: null,
       error_code: null,
       thread: { id: "thr_1", title: { text: "Rec" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
+      audience_label: null,
+      post_kinds: ["COMMENT", "NOTE"],
       messages,
       follower_count: 3,
       is_following: false,
@@ -139,11 +149,23 @@ describe("RecordChatterPane", () => {
 
     expect(screen.getByText("Hello there")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
-    // Server-resolved follower count, interpolated through the namespace.
-    expect(screen.getByText(/3 following/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Following" }).getAttribute("aria-pressed")).toBe("false");
     // The composer send affordance.
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Follow" })).toBeTruthy();
+  });
+
+  test("passes the host's submit key to its record conversation", () => {
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordChatterPane context={context} submitKey="mod-enter" />);
+    const input = screen.getByLabelText("Message");
+    fireEvent.change(input, { target: { value: "Next step" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.mutateCalls).toHaveLength(0);
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(mocks.mutateCalls).toEqual([expect.objectContaining({
+      op: "MessagingPostRecordMessage",
+      vars: expect.objectContaining({ body: "Next step" }),
+    })]);
   });
 
   test("gates edit/delete on the server can_edit/can_delete flags", () => {

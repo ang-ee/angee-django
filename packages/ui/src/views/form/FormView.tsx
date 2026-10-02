@@ -9,12 +9,15 @@ import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
-import { LoadingPanel } from "../../fragments/LoadingPanel";
+import { EmptyState } from "../../fragments/EmptyState";
+import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
+import { errorMessage } from "../../feedback";
 import {
   RecordChrome,
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
+import { ActionFormProvider } from "./ActionFormProvider";
 import type {
   FieldDescriptor,
   PageFieldKind,
@@ -23,6 +26,7 @@ import {
   FORM_VIEW_OVERVIEW_TAB_ID,
   useFormViewSurface,
   type RecordPanelContext,
+  type RecordTabDescriptor,
   type OverviewTabOptions,
   type RecordPresentation,
   type RecordToolbarContext,
@@ -31,10 +35,20 @@ import {
 import {
   FORM_VIEW_COLUMN_CLASS,
   FormViewOverview,
+  FormViewRail,
   FormViewRecordHeader,
 } from "./form-view-body";
 import type { EditableLineSupplementalColumn, EditableLinesProps } from "./EditableLines";
 import { recordRepresentationValue, titleText } from "./form-view-model";
+import { useRuntimeViewAs } from "../../runtime";
+import { useAppRuntime } from "../../runtime";
+import { resolveTabLabel } from "../page";
+import { SectionHeading } from "./SectionHeading";
+import { RecordRailGroup } from "./form-view-rail";
+import { formViewRailSlot } from "./form-view-slots";
+
+export { SectionHeading, type SectionHeadingProps } from "./SectionHeading";
+export { RecordRailGroup, type RecordRailField, type RecordRailGroupProps } from "./form-view-rail";
 
 export {
   acknowledgeFormSubmit,
@@ -43,7 +57,9 @@ export {
 export {
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  FORM_VIEW_RAIL_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  formViewRailSlot,
   formViewRecordActionsSlot,
   formViewSectionsSlot,
 } from "./form-view-slots";
@@ -82,6 +98,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Compact read-only content rendered with the record heading. */
   headerExtras?: (context: RecordToolbarContext) => React.ReactNode;
+  /** One concise domain context line under the record title. */
+  contextLine?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
   /** Place the first two unlabeled groups side by side within one form overview. */
@@ -112,7 +130,7 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
  * Thin form shell. `useFormViewSurface` owns declarations through submit/diff;
  * the section owners below only bind that view model to shared UI primitives.
  */
-export function FormView(props: FormViewProps): React.ReactElement {
+function FormViewComponent(props: FormViewProps): React.ReactElement {
   const model = useModelMetadata(props.resource);
   const identity = `${model?.resource?.schemaName ?? "default"}:${model?.resource?.modelLabel ?? props.resource}:${props.id ?? "create"}`;
   return <FormViewInstance
@@ -121,30 +139,26 @@ export function FormView(props: FormViewProps): React.ReactElement {
   />;
 }
 
+/** Existing public FormView export also exposes form-owned declaration seams. */
+export const FormView = Object.assign(FormViewComponent, {
+  RailGroup: RecordRailGroup,
+  SectionHeading,
+  railSlot: formViewRailSlot,
+});
+
 function FormViewInstance(props: FormViewProps): React.ReactElement {
+  const surface = useFormViewSurface({ ...props, overviewHidden: props.overviewTab?.hidden });
+  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+}
+
+function FormViewContent({ surface, ...props }: FormViewProps & {
+  surface: ReturnType<typeof useFormViewSurface>;
+}): React.ReactElement {
+  const { i18n } = useAppRuntime();
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const {
-    resource,
-    id,
     readOnly = false,
-    fields,
-    groups,
-    children,
-    actions,
-    returning,
-    defaultValues,
-    acknowledgedSource,
-    onSaved,
-    submit,
-    createSubmit,
-    readOnlyWhen,
-    onFieldInteractionStart,
-    onFieldInteractionCommit,
-    onDiscarded,
-    recordTabs,
-    recordTab,
-    onRecordTabChange,
-    deleteAction,
-    deleteVisibleWhen,
     submitLabel,
     toolbarStart,
     toolbar,
@@ -152,6 +166,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     recordExtras,
     formExtras,
     headerExtras,
+    contextLine,
     layout = "stacked",
     groupLayout = "stacked",
     bodyTabs,
@@ -160,36 +175,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     lineSupplementalColumns,
     lineRelationFilters,
     recordPresentation = "document",
-    defaultRecordTab,
     overviewTab,
     publishBreadcrumbLabel = false,
     className,
   } = props;
-  const surface = useFormViewSurface({
-    resource,
-    id,
-    readOnly,
-    fields,
-    groups,
-    children,
-    actions,
-    returning,
-    defaultValues,
-    acknowledgedSource,
-    onSaved,
-    submit,
-    createSubmit,
-    readOnlyWhen,
-    onFieldInteractionStart,
-    onFieldInteractionCommit,
-    onDiscarded,
-    recordTabs,
-    recordTab,
-    onRecordTabChange,
-    defaultRecordTab,
-    deleteAction,
-    deleteVisibleWhen,
-  });
   const {
     t,
     activeRecordTab,
@@ -198,8 +187,11 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     formReadOnly,
     formIsDirty,
     displayRecord,
+    loadError,
     saveError,
+    saveConflict,
     declaredActions,
+    actionsBlocked,
     recordChromeContext,
     recordActions,
     recordPanelContext,
@@ -222,6 +214,9 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     () => recordActions.filter((entry) => entry.recordActionPlacement === "menu"),
     [recordActions],
   );
+  const availableDeclaredActions = readOnly
+    ? declaredActions.filter((action) => action.run || action.submit)
+    : declaredActions;
   useBreadcrumbLeafLabel(
     titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
@@ -229,13 +224,22 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     ) || null,
     publishBreadcrumbLabel && !isCreate,
   );
+  const awaitingRecord = !isCreate && displayRecord == null && loading;
+  if (!isCreate && !awaitingRecord && displayRecord == null) {
+    if (loadError) return <ErrorBanner title={t("form.loadFailed")}
+      description={errorMessage(loadError, t("form.loadFailed"))}
+      actions={<Button type="button" size="sm" onClick={() => void reload()}>{t("collection.retry")}</Button>} />;
+    return <EmptyState icon="lock" title={t("form.recordUnavailable")} className="min-h-64 p-8" />;
+  }
   const toolbarStartNode =
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const awaitingRecord = !isCreate && displayRecord == null && loading;
   const overview = awaitingRecord ? (
-    <LoadingPanel message={t("form.loading")} />
+    <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
+      <Skeleton shape="text" className="h-6 w-2/3" />
+      <Skeleton className="h-32 w-full" />
+    </SkeletonStatus>
   ) : (
     <FormViewOverview
       surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
@@ -245,39 +249,57 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     />
   );
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
-  const orderedTabs = overviewTab?.position === "last"
-    ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
-    : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
-  const overviewBody = recordChromeContext ? (
-    <RecordChromeProvider value={recordChromeContext}>
-      {overview}
-    </RecordChromeProvider>
-  ) : overview;
+  const orderedTabs = overviewTab?.hidden && recordTabList.length > 0 ? recordTabList
+    : overviewTab?.position === "last"
+      ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
+      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
   const recordExtrasPanel =
     !awaitingRecord && recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
         {recordExtras(recordPanelContext)}
       </div>
     ) : null;
-  const overviewWithFormExtras = (
-    <>
-      {overviewBody}
-      {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
-    </>
-  );
-  const formTitle = awaitingRecord
-    ? t("form.loading")
-    : typeof title === "function" ? title(recordToolbarContext) : title;
+  const withRail = (body: React.ReactNode, active: boolean, workspace = false) => <div className={cn("@container w-full", workspace && "h-full min-h-0")}>
+    <div className={cn("grid gap-6", workspace && "min-h-full grid-rows-[minmax(0,1fr)_auto] @min-[52rem]:h-full @min-[52rem]:grid-rows-none", active && surface.railGroups.length > 0 && "@min-[52rem]:grid-cols-[minmax(0,1fr)_14rem]")}>
+      <div className={cn("min-w-0", workspace && "min-h-0")}>{body}</div>
+      {active ? <FormViewRail surface={surface} /> : null}
+    </div>
+  </div>;
+  const overviewContent = withRail(<>
+    {overview}
+    {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
+  </>, !tabbed || activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID);
+  const overviewWithFormExtras = recordChromeContext
+    ? <RecordChromeProvider value={recordChromeContext}>{overviewContent}</RecordChromeProvider>
+    : overviewContent;
+  const renderRecordPanel = (tab: RecordTabDescriptor) => {
+    if (!recordPanelContext || awaitingRecord) return null;
+    const content = withRail(tab.render(recordPanelContext), activeRecordTab === tab.id, recordPresentation === "workspace");
+    return recordChromeContext
+      ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
+      : content;
+  };
+  const formTitle = awaitingRecord ? t("form.loading") : typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
+  // A declared context line replaces the generic subtitle even when it says nothing for this record.
+  const headerContextLine = awaitingRecord ? undefined : contextLine ? (contextLine(recordToolbarContext) ?? <></>) : undefined;
+  const recordHeader = (compact = false) => {
+    const header = <FormViewRecordHeader surface={surface} compact={compact} awaiting={awaitingRecord} title={formTitle}
+      extra={headerExtra} contextLine={headerContextLine} />;
+    return recordChromeContext
+      ? <RecordChromeProvider value={recordChromeContext}>{header}</RecordChromeProvider>
+      : header;
+  };
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
+    const titleEditor = event.target instanceof HTMLTextAreaElement
+      && event.target.dataset.formTitle === "true";
     if (
-      !isCreate ||
+      (!isCreate && !titleEditor) ||
       event.key !== "Enter" ||
       event.defaultPrevented ||
       event.nativeEvent.isComposing ||
-      !(event.target instanceof HTMLInputElement) ||
-      event.target.type !== "text"
+      (!titleEditor && (!(event.target instanceof HTMLInputElement) || event.target.type !== "text"))
     ) {
       return;
     }
@@ -306,7 +328,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
               variant="primary"
               size="sm"
               loading={pending}
-              disabled={formReadOnly}
+              disabled={formReadOnly || previewBlocked}
               onClick={() => {
                 void submitForm();
               }}
@@ -315,28 +337,28 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (
-          declaredActions.length > 0 ||
+        {!awaitingRecord && (
+          availableDeclaredActions.length > 0 ||
           visibleDeleteAction !== undefined ||
-          menuRecordActions.length > 0
+          (!readOnly && menuRecordActions.length > 0)
         ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
-            actions={declaredActions}
+            actions={availableDeclaredActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
             contributedActions={
-              recordChromeContext && menuRecordActions.length > 0 ? (
+              !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (
                 <RecordChromeProvider value={recordChromeContext}>
                   <SlotOutlet entries={menuRecordActions} />
                 </RecordChromeProvider>
               ) : undefined
             }
-            blocked={formIsDirty || pending}
+            blocked={actionsBlocked}
           />
         ) : null}
-        {!readOnly && recordChromeContext ? (
+        {!awaitingRecord && !readOnly && recordChromeContext ? (
           <RecordChromeProvider value={recordChromeContext}>
             <SlotOutlet entries={primaryRecordActions} />
           </RecordChromeProvider>
@@ -351,6 +373,21 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       </div>
     </ControlBand>
   );
+
+  const errorBanners = <>
+    {loadError ? <ErrorBanner title={t("form.loadFailed")}
+      description={errorMessage(loadError, t("form.loadFailed"))}
+      actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
+    <ErrorBanner
+      description={saveError}
+      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      actions={saveConflict ? (
+        <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
+          {t("form.reloadSaved")}
+        </Button>
+      ) : undefined}
+    />
+  </>;
 
   const formElement = (
     <form
@@ -370,8 +407,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
-        <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+        {recordHeader()}
+        {errorBanners}
         {tabbed ? (
           <>
             <Tabs.List>
@@ -381,10 +418,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                   value={tab.id}
                   icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
                 >
-                  {tab.label}
-                  {"badge" in tab && tab.badge != null ? (
-                    <Tabs.Count>{tab.badge}</Tabs.Count>
-                  ) : null}
+                  <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
+                    count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
                 </Tabs.Tab>
               ))}
             </Tabs.List>
@@ -415,8 +450,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            {recordHeader(true)}
+            {errorBanners}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>
@@ -446,8 +481,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            {recordHeader(true)}
+            {errorBanners}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (
                 <Tabs.Tab
@@ -455,8 +490,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                   value={tab.id}
                   icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
                 >
-                  {tab.label}
-                  {"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : null}
+                  <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
+                    count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
                 </Tabs.Tab>
               ))}
             </Tabs.List>
@@ -473,10 +508,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             key={tab.id}
             value={tab.id}
             keepMounted={tab.keepMounted}
-            className="min-h-0 flex-1 overflow-hidden pt-0"
+            className="min-h-0 flex-1 overflow-auto pt-0"
           >
             <ControlBandProvider host={undefined}>
-              {recordPanelContext ? (recordChromeContext ? <RecordChromeProvider value={recordChromeContext}>{tab.render(recordPanelContext)}</RecordChromeProvider> : tab.render(recordPanelContext)) : null}
+              {renderRecordPanel(tab)}
             </ControlBandProvider>
           </Tabs.Panel>
         ))}
@@ -507,15 +542,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
           className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}
         >
           <ControlBandProvider host={undefined}>
-            {recordPanelContext ? (
-              recordChromeContext ? (
-                <RecordChromeProvider value={recordChromeContext}>
-                  {tab.render(recordPanelContext)}
-                </RecordChromeProvider>
-              ) : (
-                tab.render(recordPanelContext)
-              )
-            ) : null}
+            {renderRecordPanel(tab)}
           </ControlBandProvider>
         </Tabs.Panel>
       ))}

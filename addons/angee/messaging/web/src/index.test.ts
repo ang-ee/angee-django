@@ -1,7 +1,8 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import type { ChatterViewContext } from "@angee/ui/runtime";
 import { describe, expect, test } from "vitest";
 
-import messaging from "./index";
+import messaging, { defineMessagingAddon } from "./index";
 
 describe("messaging addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -29,5 +30,14 @@ describe("messaging addon manifest", () => {
       "messaging.threads",
       "messaging.channels",
     ]);
+  });
+
+  test("passes the app's submit key into the built-in Comments tab", () => {
+    const configured = defineMessagingAddon({ submitKey: "mod-enter" });
+    expect(() => expectValidBaseAddon(configured)).not.toThrow();
+    expect(configured.chatter?.[0]?.render?.({} as ChatterViewContext))
+      .toMatchObject({ props: { submitKey: "mod-enter" } });
+    expect(messaging.chatter?.[0]?.render?.({} as ChatterViewContext))
+      .toMatchObject({ props: { submitKey: "enter" } });
   });
 });

@@ -130,6 +130,7 @@ describe("group operation codegen", () => {
     expect(generated).toMatch(
       /"value": "item"[\s\S]{0,2000}"value": "id"[\s\S]{0,2000}"value": "name"/,
     );
+    expect(generated.match(/"value": "expected_revision"/g)).toHaveLength(3);
   });
 
   test("validates an axis-backed scalar relation as a leaf selection", () => {
@@ -212,7 +213,7 @@ const SDL = `
     extra_required_arg(id: ID!, password: String!, keep: ConflictKeep): ActionResult!
     optional_only(keep: ConflictKeep): ActionResult!
     no_arguments: ActionResult!
-    document_save(pk: ID!, lines: [DocumentLineInput!]): DocumentType!
+    document_save(pk: ID!, lines: [DocumentLineInput!], expected_revision: Int): DocumentType!
   }
   input WorkflowObjectRefInput { model: String!, id: ID! }
   enum RoundOutcome { AWARDED NO_AWARD }
@@ -284,6 +285,7 @@ const SAVE_METADATA = {
                 "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
         roots: { save: "document_save" },
+        saveArguments: [{ name: "expected_revision", type: "Int" }],
         fields: [
           resourceField({
             name: "owner",

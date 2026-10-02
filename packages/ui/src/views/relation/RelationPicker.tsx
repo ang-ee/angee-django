@@ -1,21 +1,18 @@
-import { createElement, useState, type ReactElement, type ReactNode, type Ref } from "react";
+import { useState, type ReactElement, type ReactNode, type Ref } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { modelLabelSegment, rowPublicId, type Row } from "@angee/metadata";
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
-import { ControlBandProvider } from "../../layouts/ControlBand";
 import { Button } from "../../ui/button";
-import { Dialog } from "../../ui/dialog";
 import { TextLink } from "../../ui/text-link";
 import {
   RelationField,
   type RelationSearchState,
   type RelationOption,
 } from "../../widgets/RelationField";
-import { FormView, type FormSubmit } from "../form/FormView";
-import { RegisteredFormView, useRegisteredForm } from "../form/registered-form";
+import type { FormSubmit } from "../form/FormView";
 import type { FieldDescriptor } from "../page";
+import { RelationRecordDialog, type RelationDialogState } from "./RelationRecordDialog";
 
 /** What the inline create form needs to make a new related record. */
 export interface RelationCreateConfig {
@@ -68,6 +65,7 @@ export interface RelationPickerProps {
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
   "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
   readOnly?: boolean;
   /**
    * Enables native in-place creation. A no-match typed query always offers the
@@ -102,11 +100,6 @@ export interface RelationPickerProps {
   followHref?: string;
 }
 
-/** The open inline-form dialog: a create prefilled with the typed query, or an edit of a record. */
-type DialogState =
-  | { mode: "create"; query: string }
-  | { mode: "edit"; id: string };
-
 /**
  * A `RelationField` backed by inline create/edit forms and a "follow" arrow. The
  * caller supplies the options (and, to enable an affordance, the related model +
@@ -128,6 +121,7 @@ export function RelationPicker({
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   "aria-required": ariaRequired,
+  "aria-invalid": ariaInvalid,
   readOnly,
   create,
   onCreated,
@@ -138,13 +132,9 @@ export function RelationPicker({
   searchState,
   followHref,
 }: RelationPickerProps): ReactElement {
-  const registeredForm = useRegisteredForm(
-    create?.resource ?? edit?.resource ?? "",
-  );
   const t = useUiT();
   // The open inline-form dialog; `null` means closed.
-  const [dialog, setDialog] = useState<DialogState | null>(null);
-  const prefillField = create?.prefillField ?? "name";
+  const [dialog, setDialog] = useState<RelationDialogState | null>(null);
   const canCreate = Boolean(create?.actionLabel) && !readOnly;
   const canEdit = Boolean(edit) && !readOnly && Boolean(value);
 
@@ -167,6 +157,7 @@ export function RelationPicker({
             aria-labelledby={ariaLabelledBy}
             aria-describedby={ariaDescribedBy}
             aria-required={ariaRequired}
+            aria-invalid={ariaInvalid}
             readOnly={readOnly}
             onCreate={
               create
@@ -203,98 +194,20 @@ export function RelationPicker({
         ) : null}
         {followHref ? <FollowRecordLink href={followHref} /> : null}
       </div>
-      <Dialog.Root
-        open={dialog !== null}
-        onOpenChange={(open) => {
-          if (!open) setDialog(null);
+      <RelationRecordDialog
+        dialog={dialog}
+        create={create}
+        edit={edit}
+        onClose={() => setDialog(null)}
+        onCreated={(id) => {
+          onChange?.(id);
+          onCommit?.();
+          onCreated?.(id);
         }}
-      >
-        <Dialog.Portal>
-          <Dialog.Backdrop />
-          <Dialog.Content size="lg">
-            <Dialog.Header>
-              <div className="flex items-start gap-3">
-                <div className="min-w-0 flex-1">
-                  <Dialog.Title>
-                    {dialogTitle(dialog, create, edit, t)}
-                  </Dialog.Title>
-                </div>
-                <Dialog.Close />
-              </div>
-            </Dialog.Header>
-            <Dialog.Body>
-              {/* Force the form's control band inline so Save lands in the dialog
-                  instead of portaling to the layout's top band. */}
-              {dialog?.mode === "create" && create ? (
-                <ControlBandProvider host={undefined}>
-                  {createElement(
-                    registeredForm ? RegisteredFormView : FormView,
-                    {
-                      resource: create.resource,
-                      id: null,
-                      ...(registeredForm
-                        ? {}
-                        : {
-                            fields: create.fields,
-                            ...(create.submit ? { submit: create.submit } : {}),
-                          }),
-                      defaultValues: dialog.query
-                        ? {
-                            ...create.defaultValues,
-                            [prefillField]: dialog.query,
-                          }
-                        : create.defaultValues,
-                      onSaved: (row: Row) => {
-                        const id = rowPublicId(row);
-                        if (id) {
-                          onChange?.(id);
-                          onCommit?.();
-                          onCreated?.(id);
-                        }
-                        setDialog(null);
-                      },
-                    },
-                  )}
-                </ControlBandProvider>
-              ) : null}
-              {dialog?.mode === "edit" && edit ? (
-                <ControlBandProvider host={undefined}>
-                  {createElement(
-                    registeredForm ? RegisteredFormView : FormView,
-                    {
-                      resource: edit.resource,
-                      id: dialog.id,
-                      ...(registeredForm ? {} : { fields: edit.fields }),
-                      onSaved: (row: Row) => {
-                        onEdited?.(rowPublicId(row) || dialog.id);
-                        setDialog(null);
-                      },
-                    },
-                  )}
-                </ControlBandProvider>
-              ) : null}
-            </Dialog.Body>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+        onEdited={onEdited}
+      />
     </>
   );
-}
-
-function dialogTitle(
-  dialog: DialogState | null,
-  create: RelationCreateConfig | undefined,
-  edit: RelationEditConfig | undefined,
-  t: ReturnType<typeof useUiT>,
-): ReactNode {
-  if (dialog?.mode === "edit") {
-    return edit?.title ?? t("relation.editTitle", {
-      model: modelLabelSegment(edit?.resource ?? "").toLowerCase() || "record",
-    });
-  }
-  return create?.title ?? t("relation.createTitle", {
-    model: modelLabelSegment(create?.resource ?? "").toLowerCase() || "record",
-  });
 }
 
 /**

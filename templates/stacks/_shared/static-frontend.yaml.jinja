@@ -1,0 +1,68 @@
+
+  # Browser-facing ingress. Caddy serves the built SPA and proxies only backend
+  # endpoints over internal routes; SPA pages fall through to index.html.
+  {% if stack_flavor == "framework" %}frontend{% else %}caddy{% endif %}:
+    runtime: container
+    image: {{ caddy_image }}
+    mounts:
+      - source://app:/srv/project
+    command:
+      - sh
+      - "-c"
+      - |-
+{% if stack_flavor == "framework" and ingress_domain_value != "localhost" %}        until EDGE_IP=$$(getent hosts edge | awk 'NR==1 {print $$1}') && test -n "$$EDGE_IP"; do sleep 1; done
+        EDGE_PROXY_CIDRS=$$(ip -4 route | awk '$$2 == "dev" && index($$1, "/") {printf "%s%s", sep, $$1; sep=" "}')
+        test -n "$$EDGE_PROXY_CIDRS" || exit 1
+{% endif %}
+        cat >/etc/caddy/Caddyfile <<'CADDY'
+{% if stack_flavor == "framework" and ingress_domain_value != "localhost" %}        {
+          servers {
+            trusted_proxies static EDGE_PROXY_CIDRS
+            trusted_proxies_strict
+          }
+        }
+{% endif %}
+        :80 {
+          encode zstd gzip
+
+          @django path /graphql/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/* /mcp /mcp/*
+          handle @django {
+            reverse_proxy django:8000 {
+              header_up X-Forwarded-For {client_ip}
+            }
+          }
+
+          @operator_graphql path /operator/graphql /operator/graphql/*
+          handle @operator_graphql {
+            uri strip_prefix /operator
+            reverse_proxy operator:9000
+          }
+
+{% if effective_serve_mode == "development" %}          @operator_logs path_regexp operator_logs ^/operator/services/[^/]+/logs/stream$
+          handle @operator_logs {
+            uri strip_prefix /operator
+            reverse_proxy operator:9000
+          }{% endif %}
+
+          handle {
+            root * /srv/project/{{ web_path }}/dist
+            try_files {path} /index.html
+            file_server
+          }
+        }
+        CADDY
+{% if stack_flavor == "framework" and ingress_domain_value != "localhost" %}        sed -i "s|EDGE_PROXY_CIDRS|$$EDGE_PROXY_CIDRS|" /etc/caddy/Caddyfile
+{% endif %}
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    # Caddy normalizes the client IP before forwarding to Django. Public ingress
+    # waits for the edge alias. The edge shares both default and ingress networks
+    # with this frontend; trust their CIDRs so a restart cannot stale an IP.
+    after: [frontend-build]
+    ready:
+      http: { port: 80, path: / }
+{% if stack_flavor == "framework" and ingress_domain_value == "localhost" %}    ports:
+      - "${ports.ui}:80"
+{% endif %}{% if stack_flavor == "framework" and ingress_domain_value == "localhost" %}{% else %}{% if stack_flavor == "framework" %}    route: { port: 80, path: /, auth: none }
+{% endif %}{% endif %}{% if stack_flavor == "instance" %}    ports:
+      - "{{ ui_port }}:80"
+{% endif %}

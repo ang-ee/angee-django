@@ -45,13 +45,26 @@ class ProjectContract:
         self._project_apps: object = ()
 
     def compose(self) -> None:
-        """Populate ``namespace`` from project settings, defaults, and addon contracts."""
+        """Publish project defaults and addon settings only after composition succeeds.
+
+        Django may inspect the importing settings module during app discovery.
+        Keeping work private prevents it from capturing a partial app graph, and
+        a failed reload leaves the previously published settings intact.
+        """
 
         from angee.compose.composer import Composer
 
-        root = self.load()
-        prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
-        Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+        published = self.namespace
+        self.namespace = {}
+        try:
+            root = self.load()
+            prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
+            Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+            composed = self.namespace
+        finally:
+            self.namespace = published
+        self._reset_settings()
+        self.namespace.update(composed)
 
     def load(self) -> Path:
         """Load project settings and defaults without composing the Django app graph.
@@ -156,7 +169,33 @@ class ProjectContract:
         seed.setdefault("BASE_DIR", root)
 
         if "DATABASE_URL" in os.environ:
-            seed.setdefault("DATABASES", {"default": self.env.db()})
+            database = self.env.db()
+            if "postgresql" in database.get("ENGINE", ""):
+                # Permission reads may embed many index lookups; fresh-table
+                # estimates can make PostgreSQL JIT slower than the query.
+                options = database.setdefault("OPTIONS", {})
+                options.setdefault("options", "-c jit=off")
+                pool_default = environ.Env.parse_value(seed.get("ANGEE_DB_POOL", False), bool)
+                if self.env.bool("ANGEE_DB_POOL", default=pool_default):
+                    # Mirror Django's "Pooling doesn't support persistent connections"
+                    # check while loading settings, before the connection is opened.
+                    if database.get("CONN_MAX_AGE"):
+                        raise ImproperlyConfigured("ANGEE_DB_POOL cannot be used with DATABASE_URL CONN_MAX_AGE")
+                    # One thread-sensitive sync GraphQL call uses one connection
+                    # per worker; a second slot permits concurrent async/Channels
+                    # database work. Measure bursts with a live subscription.
+                    options["pool"] = {
+                        "min_size": self.env.int(
+                            "ANGEE_DB_POOL_MIN_SIZE", default=int(seed.get("ANGEE_DB_POOL_MIN_SIZE", 0))
+                        ),
+                        "max_size": self.env.int(
+                            "ANGEE_DB_POOL_MAX_SIZE", default=int(seed.get("ANGEE_DB_POOL_MAX_SIZE", 2))
+                        ),
+                        "timeout": self.env.float(
+                            "ANGEE_DB_POOL_TIMEOUT", default=float(seed.get("ANGEE_DB_POOL_TIMEOUT", 5))
+                        ),
+                    }
+            seed.setdefault("DATABASES", {"default": database})
         if "CACHE_URL" in os.environ:
             seed.setdefault("CACHES", {"default": self.env.cache()})
         if "EMAIL_BACKEND" in os.environ:

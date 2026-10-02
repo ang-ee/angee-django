@@ -7,7 +7,7 @@ import {
   PageBody,
   PageHeader,
   useRouteParam,
-  useRouteHref,
+  useResourceRecordHref,
 } from "@angee/ui";
 import * as React from "react";
 import { TASK_MODEL } from "@angee/projects";
@@ -21,7 +21,7 @@ import { useTriageRowActions } from "../triage-actions";
 export function TriageInboxPage(): React.ReactElement {
   const queueId = useRouteParam("queueId") ?? "";
   const t = useWorkT();
-  const routeHref = useRouteHref();
+  const recordHref = useResourceRecordHref(TASK_MODEL);
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   // Never send a placeholder sqid to the server — an unknown id makes the
@@ -70,7 +70,7 @@ export function TriageInboxPage(): React.ReactElement {
           }
           order={{ started_triage_at: "ASC" }}
           rowActions={actions.rowActions}
-          rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+          rowHref={recordHref ? (row) => recordHref(row.id, row) ?? "" : undefined}
           emptyContent={{
             title: t("triage.empty"),
             description: t("triage.empty.description"),

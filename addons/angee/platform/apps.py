@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.apps import AppConfig
+from django.core import checks
 
 
 class PlatformConfig(AppConfig):
@@ -24,7 +25,8 @@ class PlatformConfig(AppConfig):
         """Register the reconcile receiver + the installer-backend system check."""
 
         super().ready()
-        from angee.platform import installer, signals
+        from angee.platform import signals
+        from angee.platform.installer import check_installer_backend_selection
 
-        installer.register_checks()
+        checks.register(check_installer_backend_selection)
         signals.connect()

@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
+import type { UiTranslate } from "../../../i18n";
 import { modelLabelSegment } from "@angee/metadata";
 import { dedupeBy } from "../../../lib/dedupe";
-import type { ResourceToolbarCustomFilterOperator, ResourceToolbarFilterField, ResourceToolbarFilterOption } from "../../../toolbars";
+import type { FilterClauseOperator, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { Filter, type ResourceViewLookup, type ResourceViewLookupOperator, type FilterFacet } from "../resource-view-model";
 import { groupFieldLabel } from "../resource-view-list-body";
-export function createLabelForResource(resource: string): string {
-  const name = modelLabelSegment(resource) || "record";
-  return `New ${groupFieldLabel(name).toLowerCase()}`;
+export function createLabelForResource(resource: string, t: UiTranslate, vocabularyLabel?: string): string {
+  const name = vocabularyLabel ?? groupFieldLabel(modelLabelSegment(resource) || "record").toLowerCase();
+  return t("resourceToolbar.createResource", { resource: name });
 }
 
 export function mergeById<TOption extends { id: string }>(
@@ -47,7 +48,7 @@ export function customFilterChipLabel({
   fieldLabel: ReactNode;
   operator: ResourceViewLookupOperator;
   value: unknown;
-  options?: ResourceToolbarFilterField["options"];
+  options?: FilterClauseField["options"];
 }): ReactNode {
   if (operator === "isNull") {
     return `${labelText(fieldLabel) ?? "Field"} is ${
@@ -60,7 +61,7 @@ export function customFilterChipLabel({
 }
 
 export function filterOperatorLabel(
-  operator: ResourceViewLookupOperator | ResourceToolbarCustomFilterOperator,
+  operator: FilterClauseOperator,
 ): string {
   switch (operator) {
     case "ne": return "is not";
@@ -111,7 +112,7 @@ export function filterOperatorLabel(
   }
 }
 
-function filterValueLabel(value: unknown, options: ResourceToolbarFilterField["options"]): string {
+function filterValueLabel(value: unknown, options: FilterClauseField["options"]): string {
   if (Array.isArray(value)) return value.map(item => filterValueLabel(item, options)).join(", ");
   const raw = String(value ?? "");
   return labelText(options?.find(option => option.value === raw)?.label) ?? raw;

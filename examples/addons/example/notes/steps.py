@@ -1,163 +1,165 @@
-"""Concrete workflow operations owned by the example Notes addon."""
+"""Note publication steps with an optional, independently assigned review."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections import Counter
 from typing import Any
 
 from django.apps import apps
-from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from pydantic import BaseModel
-from rebac import actor_context, system_context, to_object_ref, to_subject_ref
-from rebac.backends import backend as rebac_backend
+from pydantic import BaseModel, Field
 
-from angee.workflows.attempts import ArtifactSpec, RecoveryCapability, RecoveryMode
-from angee.workflows.steps import StepEffect, StepImpl, StepOutcome, StepResult
+from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
+from angee.decisions.forms import Action
+from angee.decisions.states import Verdict
+from angee.workflows.awaits import AwaitRunInput
+from angee.workflows.maps import MapItem
+from angee.workflows.reviews import ReviewStep
+from angee.workflows.steps import Done, EmptyOutput, Step, Wait
 
 
 class NotePublicationOutput(BaseModel):
-    """Safe Note identity and lifecycle state emitted to the workflow journal."""
+    """Safe note identity and lifecycle state emitted by publication steps."""
 
     id: str
     title: str
     status: str
 
 
-class NoteWorkflowStep(StepImpl):
-    """Workflow operation base owning current Note subject and actor resolution."""
+class NoteReviewBasis(NotePublicationOutput):
+    """The complete text and lifecycle state presented for one review round."""
 
-    deterministic = False
-    output_model = NotePublicationOutput
-    subject_declaration = "notes.note"
-
-    def writable_note_subject(
-        self,
-        step_run: Any,
-        *,
-        actions: tuple[str, ...] = ("write",),
-    ) -> tuple[Any, Any]:
-        """Resolve the current durable subject and recheck the run creator's write access."""
-
-        run = step_run.run
-        owner_id = getattr(run, "created_by_id", None)
-        if owner_id is None:
-            raise ValidationError({"run": "Note workflow steps require a run creator."})
-        user_model = get_user_model()
-        note_model = apps.get_model("notes", "Note")
-        try:
-            with system_context(reason="notes.workflow.subject"):
-                actor = user_model._base_manager.get(pk=owner_id)
-                subject = run.subject
-                if subject is not None and isinstance(subject, note_model):
-                    subject = note_model._base_manager.get(pk=subject.pk)
-        except user_model.DoesNotExist as error:
-            raise ValidationError({"run": "Note workflow run creator was not found."}) from error
-        except note_model.DoesNotExist as error:
-            raise ValidationError({"subject": "Note workflow subject was not found."}) from error
-        if subject is None or not isinstance(subject, note_model):
-            raise ValidationError({"subject": "Note workflow steps require a notes.Note subject."})
-        actor_ref = to_subject_ref(actor)
-        resource_ref = to_object_ref(subject)
-        for action in actions:
-            allowed = rebac_backend().check_access(
-                subject=actor_ref,
-                action=action,
-                resource=resource_ref,
-            )
-            if not allowed.allowed:
-                raise ValidationError(
-                    {"subject": "The run creator no longer has permission to write this note."}
-                )
-        return subject, actor
+    body: str
 
 
-class NoteValidateForPublicationStep(NoteWorkflowStep):
-    """Validate the current Note subject before requesting approval."""
+class ValidateNotePublication(Step[None, NotePublicationOutput, None]):
+    """Check publication readiness through the note's own contract."""
 
     key = "note_validate_publication"
     label = "Validate note"
     category = "Activity"
-    description = "Check that the current note is ready for publication review."
-    outcomes = (
-        StepOutcome("needs_review", "Needs review", "The note is ready for human approval."),
-    )
-    effect = StepEffect.READ
-    effect_description = "Reads the current note and its publication readiness."
-    idempotent = True
+    subject = "notes.note"
+    outcomes = {"needs_review": "Needs review", "ok": "Ready"}
 
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Return a safe review summary for a currently writable Note."""
+    def run(self, ctx: Any) -> Done:
+        """Return the note's safe publication summary under the run actor."""
 
-        del now
-        note, _actor = self.writable_note_subject(step_run)
-        return StepResult.done(output=note.publication_summary(), outcome="needs_review")
+        note = ctx.subject
+        return ctx.done(note.publication_summary(), outcome="needs_review" if note.reviewer_id else "ok")
 
 
-class NotePublishStep(NoteWorkflowStep):
-    """Publish an approved Note through the Note lifecycle owner."""
+class AwaitNoteReview(Step[None, NotePublicationOutput, None]):
+    """Observe note saves until its owner moves it into review."""
+
+    key = "note_await_review"
+    label = "Await note review"
+    category = "Activity"
+    subject = "notes.note"
+
+    def run(self, ctx: Any) -> Done | Wait:
+        """Lock the predicate and watch registration in the same body transaction."""
+        note = ctx.subject_for_update()
+        if note.status == note.Status.IN_REVIEW:
+            return ctx.done(note.publication_summary())
+        ctx.watch(note)
+        return ctx.wait()
+
+
+class ApproveNote(Action, key="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):
+    """Approve publication with an optional retained explanation."""
+
+    note: str = ""
+
+
+class RejectNote(Action, key="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
+    """Decline publication with an explanation for the author."""
+
+    reason: str = Field(min_length=3)
+
+
+class ReviewNotePublication(ReviewStep[NotePublicationOutput, NotePublicationOutput, None, NoteReviewBasis]):
+    """Review the input note, independently of a containing run's subject."""
+
+    key = "note_review_publication"
+    label = "Review note"
+    category = "Activity"
+    kind = "note_publication"
+    actions = (ApproveNote, RejectNote)
+
+    def ask(self, ctx: Any) -> Any:
+        """Freeze the summary and retain a link covered by standing reviewer access."""
+
+        note = ctx.load(apps.get_model("notes", "Note"), ctx.input.id)
+        return ctx.ask(DecisionRequest(
+            kind=self.kind, subject=note, assignees=(note.reviewer,), actions=self.actions,
+            basis={**note.publication_summary(), "body": note.body},
+            context=DecisionContext(references=(
+                DecisionRecordReference(model="notes.note", id=note.sqid, label=note.title),
+            )),
+        ), policy="first")
+
+    def apply(self, ctx: Any, settled: Any) -> Done:
+        """Re-ask changed text before routing the answer under the run actor."""
+
+        answer = settled[0]
+        note = ctx.load(apps.get_model("notes", "Note"), ctx.input.id, lock=True)
+        if answer.basis.body != note.body:
+            raise ValidationError({"body": "The note changed after review; review its body again."})
+        return ctx.done(answer.basis, outcome=answer.action.outcome)
+
+
+class CollectNoteReviews(Step[list[MapItem[NotePublicationOutput | EmptyOutput]], dict[str, int], None]):
+    """Count each mapped review's outcome, including failed or unanswered items."""
+
+    key = "note_collect_reviews"
+    label = "Summarize note reviews"
+    category = "Activity"
+
+    def run(self, ctx: Any) -> Done:
+        """Consume the map owner's typed, ordered results without reloading notes."""
+        return ctx.done(dict(Counter(item.outcome for item in ctx.input)))
+
+
+class PublishNote(Step[NotePublicationOutput, NotePublicationOutput, None]):
+    """Publish a ready note through its audited lifecycle owner."""
 
     key = "note_publish"
     label = "Publish note"
     category = "Activity"
-    description = "Publish an approved note that is still ready and writable."
-    outcomes = (
-        StepOutcome("published", "Published", "The note was moved to the active state."),
-    )
-    effect = StepEffect.WRITE
-    effect_description = "Changes the current note from in review to active."
-    idempotent = False
+    subject = "notes.note"
+    outcomes = {"published": "Published"}
 
-    @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        """Reconcile publication state without assuming the earlier write failed."""
+    def run(self, ctx: Any) -> Done:
+        """Lock the current note and publish through its actor-scoped save path."""
 
-        del attempt
-        return RecoveryCapability(mode=RecoveryMode.RECONCILE)
+        note = ctx.subject_for_update()
+        return ctx.done(note.publish(), outcome="published")
 
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Recheck access and atomically move an in-review Note to active."""
 
-        del now
-        note, actor = self.writable_note_subject(
-            step_run,
-            actions=("write", "write__status"),
-        )
-        with actor_context(to_subject_ref(actor)):
-            output = note.publish()
-        return StepResult.done(
-            output=output,
-            outcome="published",
-            artifacts=[ArtifactSpec(target=note, label="Published note")],
-        )
+class StartNotePublication(Step[None, AwaitRunInput, None]):
+    """Start one owned publication through the workflow context's admission owner."""
 
-    def run_recovery(
-        self,
-        step_run: Any,
-        *,
-        now: datetime,
-        source_attempt: Any,
-        mode: RecoveryMode,
-    ) -> StepResult:
-        """Reconcile an uncertain publication before attempting another write."""
+    key = "note_start_publication"
+    label = "Start note publication"
+    category = "Activity"
+    subject = "notes.note"
 
-        if mode is not RecoveryMode.RECONCILE:
-            return super().run_recovery(
-                step_run,
-                now=now,
-                source_attempt=source_attempt,
-                mode=mode,
-            )
-        note, _actor = self.writable_note_subject(step_run)
-        if note.status == note.Status.ACTIVE:
-            output = {
-                "id": str(note.sqid),
-                "title": note.title,
-                "status": str(note.status),
-            }
-            return StepResult.done(
-                output=output,
-                outcome="published",
-                artifacts=[ArtifactSpec(target=note, label="Published note")],
-            )
-        return self.run(step_run, now=now)
+    def run(self, ctx: Any) -> Done:
+        """Keep the note and actor, using the step's derived child request key."""
+
+        workflow = apps.get_model("workflows", "Workflow").objects.with_actor(ctx.actor).get(key="note-publish")
+        child = ctx.start_run(workflow, subject=ctx.subject, relation="owned")
+        return ctx.done({"run_id": child.sqid})
+
+
+class NotePublicationResult(Step[None, NotePublicationOutput | EmptyOutput, None]):
+    """Finish the parent with the child's safe result, including empty terminal output."""
+
+    key = "note_publication_result"
+    label = "Note publication result"
+    category = "Activity"
+
+    def run(self, ctx: Any) -> Done:
+        """Preserve the child output; its exact outcome remains on the await step."""
+
+        return ctx.done(ctx.input)

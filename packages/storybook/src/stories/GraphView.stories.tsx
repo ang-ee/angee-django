@@ -8,26 +8,26 @@ import {
   type GraphViewNodeStyle,
 } from "@angee/ui";
 
-type NodeKind = "handler" | "gate" | "publish";
-type EdgeKind = "default" | "success" | "reject";
+type NodeKind = "node" | "junction" | "terminal";
+type EdgeKind = "default" | "primary" | "secondary";
 
 const nodeStyles = {
-  handler: {
+  node: {
     width: 180,
-    height: 76,
+    height: 100,
     borderColor: "var(--border-subtle)",
     badgeTone: "brand",
   },
-  gate: {
+  junction: {
     width: 180,
-    height: 76,
+    height: 100,
     borderColor: "var(--warning)",
     background: "var(--warning-soft)",
     badgeTone: "warning",
   },
-  publish: {
+  terminal: {
     width: 180,
-    height: 76,
+    height: 100,
     borderColor: "var(--success)",
     background: "var(--success-soft)",
     badgeTone: "success",
@@ -36,42 +36,44 @@ const nodeStyles = {
 
 const initialNodes = [
   {
-    id: "draft",
-    kind: "handler",
-    title: "Prepare Draft",
-    code: "handler",
-    detail: "Build the candidate payload.",
+    id: "a",
+    kind: "node",
+    title: "Alpha",
+    detail: "First node.",
+    ports: [{ id: "next", label: "Next" }],
   },
   {
-    id: "review",
-    kind: "gate",
-    title: "Review",
-    code: "gate",
-    detail: "Wait for a human decision.",
+    id: "b",
+    kind: "junction",
+    title: "Beta",
+    detail: "Middle node.",
+    ports: [{ id: "next", label: "Next" }],
   },
   {
-    id: "publish",
-    kind: "publish",
-    title: "Publish",
-    code: "handler",
-    detail: "Finalize the workflow output.",
+    id: "c",
+    kind: "terminal",
+    title: "Gamma",
+    detail: "Last node.",
+    ports: [],
   },
 ] satisfies GraphViewNode<NodeKind>[];
 
 const initialEdges = [
   {
-    id: "draft-review",
-    source: "draft",
-    target: "review",
-    kind: "success",
-    label: "ready",
+    id: "a-b",
+    source: "a",
+    sourceHandle: "next",
+    target: "b",
+    kind: "primary",
+    label: "First link",
   },
   {
-    id: "review-publish",
-    source: "review",
-    target: "publish",
-    kind: "success",
-    label: "approved",
+    id: "b-c",
+    source: "b",
+    sourceHandle: "next",
+    target: "c",
+    kind: "primary",
+    label: "Second link",
   },
 ] satisfies GraphViewEdge<EdgeKind>[];
 
@@ -93,6 +95,7 @@ export const ReadOnly: Story = {
         nodes={initialNodes}
         edges={initialEdges}
         nodeStyles={nodeStyles}
+        status={{ b: { label: "Selected", tone: "info" } }}
       />
     </div>
   ),
@@ -109,11 +112,11 @@ function EditableGraphFixture(): React.ReactElement {
     React.useState<GraphViewEdge<EdgeKind>[]>(initialEdges);
   const [selected, setSelected] = React.useState<string>("None");
 
-  const updateNodePosition = React.useCallback(
-    (node: GraphViewNode<NodeKind>, position: { x: number; y: number }) => {
+  const updateNodePositions = React.useCallback(
+    (positions: Readonly<Record<string, { x: number; y: number }>>) => {
       setNodes((current) =>
         current.map((entry) =>
-          entry.id === node.id ? { ...entry, position } : entry,
+          positions[entry.id] ? { ...entry, position: positions[entry.id] } : entry,
         ),
       );
     },
@@ -126,6 +129,8 @@ function EditableGraphFixture(): React.ReactElement {
         id: `${connection.source}-${connection.target}-${current.length}`,
         source: connection.source,
         target: connection.target,
+        sourceHandle: connection.sourceHandle,
+        targetHandle: connection.targetHandle,
         kind: "default",
       },
     ]);
@@ -143,9 +148,9 @@ function EditableGraphFixture(): React.ReactElement {
         edges={edges}
         nodeStyles={nodeStyles}
         nodesDraggable
-        onNodeDragEnd={updateNodePosition}
+        onNodesPositionChange={updateNodePositions}
         onConnect={createEdge}
-        onNodeSelect={(node) => setSelected(node?.title?.toString() ?? "None")}
+        onNodesSelect={(nodes) => setSelected(nodes.map((node) => node.title).join(", "))}
         onEdgeSelect={(edge) => setSelected(edge?.id ?? "None")}
       />
     </div>

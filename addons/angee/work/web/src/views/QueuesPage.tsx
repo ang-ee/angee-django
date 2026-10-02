@@ -13,10 +13,10 @@ import {
   useRouteRecordId,
   type RecordPanelContext,
   type RecordSmartButtonDescriptor,
-  type RecordTabDescriptor,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
+import { useQueueRecordTabs } from "../queue-record-tabs";
 
 import { useWorkT } from "../i18n";
 import { QUEUE_MODEL, STAGE_MODEL } from "../resources";
@@ -37,16 +37,7 @@ export function QueuesPage(): React.ReactElement {
   const recordId = useRouteRecordId();
   const visibilityOptions = useEnumOptions(QUEUE_MODEL, "visibility");
   const estimateOptions = useEnumOptions(QUEUE_MODEL, "estimate_scale");
-  const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
-    () => [
-      {
-        id: "stages",
-        label: t("queue.stages.tab"),
-        render: (context) => <QueueStagesTab {...context} />,
-      },
-    ],
-    [t],
-  );
+  const recordTabs = useQueueRecordTabs();
   const smartButtons = React.useMemo<readonly RecordSmartButtonDescriptor[]>(
     () =>
       ([
@@ -119,7 +110,7 @@ export function QueuesPage(): React.ReactElement {
   );
 }
 
-function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
+export function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useWorkT();
   const categoryOptions = useEnumOptions(STAGE_MODEL, "category").filter((option) =>
     CUSTOM_STAGE_CATEGORIES.includes(
@@ -145,6 +136,8 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
           <Column field="category" header={t("common.category")} />
           <Column field="tone" header={t("common.tone")} />
           <Column field="position" header={t("common.order")} />
+          <Column field="rule_owned" header={t("common.ruleOwned")} />
+          <Column field="conceals" header={t("common.conceals")} />
         </List>
       </SettingsSection>
       <SettingsSection
@@ -167,6 +160,8 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
             <Column field="category" header={t("common.category")} />
             <Column field="tone" header={t("common.tone")} />
             <Column field="position" header={t("common.order")} />
+            <Column field="rule_owned" header={t("common.ruleOwned")} />
+            <Column field="conceals" header={t("common.conceals")} />
           </List>
           <Form resource={STAGE_MODEL}>
             <Field name="name" title />
@@ -174,9 +169,12 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
             <Field name="category" options={categoryOptions} />
             <Field name="tone" />
             <Field name="position" />
+            <Field name="rule_owned" />
+            <Field name="conceals" label={t("common.conceals")} />
           </Form>
         </DrawerResourceList>
       </SettingsSection>
     </SettingsShell>
   );
 }
+

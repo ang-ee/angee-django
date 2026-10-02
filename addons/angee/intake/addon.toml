@@ -4,6 +4,8 @@ description = "External-request evidence captured onto project tasks and project
 keywords = ["intake", "requests", "needs", "triage", "customers"]
 category = "Productivity"
 depends_on = [
+  "angee.iam",
+  "angee.decisions",
   "angee.messaging",
   "angee.parties",
   "angee.projects",

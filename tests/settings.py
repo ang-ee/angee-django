@@ -8,10 +8,7 @@ from pathlib import Path
 import environ
 from django.apps import AppConfig
 
-from angee.base.autoconfig import SETTINGS as BASE_SETTINGS
-from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
-from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
-from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
+from angee.compose.autoconfig import AutoConfig
 
 
 class BareComposeConfig(AppConfig):
@@ -32,6 +29,8 @@ SECRET_KEY = "angee-tests"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
+    "django.contrib.sessions",
+    "axes",
     "rebac",
     "reversion",
     "simple_history",
@@ -47,10 +46,15 @@ INSTALLED_APPS = [
     "angee.integrate_iphone",
     "angee.iam_integrate_oidc",
     "angee.agents",
+    "angee.agents_integrate_anthropic",
+    "angee.agents_integrate_openai",
+    "angee.agents_integrate_ollama",
+    "angee.agents_runtime_pydantic",
     "angee.workflows",
-    "angee.workflows_agents",
-    "angee.workflows_parties",
+    "angee.decisions",
+    "angee.extraction",
     "angee.workflows_extraction",
+    "angee.workflows_integrate",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -87,6 +91,7 @@ INSTALLED_APPS = [
     "angee.operator",
     "angee.parties_integrate_carddav",
     "angee.platform_integrate_operator",
+    "angee.resources.testing",
     "angee.integrate.testing",
     "angee.workflows.testing",
     "tests.linesdemo",
@@ -95,6 +100,7 @@ INSTALLED_APPS = [
     "tests.extcontrib.apps.ExtContribConfig",
     "tests.mtidemo",
     "tests.hierdemo",
+    "tests",
 ]
 # Checkout- and process-local so concurrent pytest runs never share one SQLite
 # file. Threads within a run still share its file-backed database. `.test-db/`
@@ -121,140 +127,12 @@ else:
         }
     }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-AUTH_USER_MODEL = "iam.User"
-# Bare tests use the job owner's defaults without running composition.
-CELERY_TASK_SOFT_TIME_LIMIT = JOB_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"]
-
-# Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.
-REBAC_UNIVERSAL_ADMIN_ROLE = IAM_SETTINGS["REBAC_UNIVERSAL_ADMIN_ROLE"]
-SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD = BASE_SETTINGS[
-    "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD"
-]
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
-ANGEE_STORAGE_DEFAULT_DRIVE = "assets"
-ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
-ANGEE_STORAGE_DRAFT_TTL_HOURS = 24
-ANGEE_STORAGE_TRASH_TTL_DAYS = 30
-# Bare test settings do not run the composer, so the ImplClassField registries
-# (normally supplied by each addon's autoconfig) are declared explicitly here;
-# the enum field requires each to be non-empty at model-import time.
-ANGEE_STORAGE_BACKEND_CLASSES = {
-    "local": "angee.storage.backends.LocalBackend",
-    "local_folder": "angee.storage_integrate.backends.LocalFolderBackend",
-    "iphone_backup": "angee.storage_integrate_iphone.backends.IphoneBackupStorageBackend",
-}
-ANGEE_STORAGE_MOUNT_BACKEND_CLASSES = {
-    "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",
-    "iphone_backup": "angee.storage_integrate_iphone.mounts.IphoneBackupMountBackend",
-}
-ANGEE_RESOURCE_SOURCE_CLASSES = {
-    "path": "angee.resources.sources.path_source",
-    "url": "angee.integrate.resource_source.url_source",
-}
-ANGEE_VCS_BACKEND_CLASSES = {
-    "local": "angee.integrate_vcs.backend.LocalVCSBackend",
-    "stub": "tests.conftest.StubVCSBackend",
-}
-ANGEE_INFERENCE_BACKEND_CLASSES = {
-    "manual": "angee.agents.backends.ManualInferenceBackend",
-    "anthropic": "angee.agents_integrate_anthropic.backend.AnthropicInferenceBackend",
-    "ollama": "angee.agents_integrate_ollama.backend.OllamaInferenceBackend",
-    "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
-    "stub_inference": "tests.conftest.StubInferenceBackend",
-}
-ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
-ANGEE_AGENT_RUNTIME_CLASSES = {
-    "none": "angee.agents.runtimes.NoRuntime",
-    "claude_code": "angee.agents.runtimes.ClaudeCodeRuntime",
-    "opencode": "angee.agents.runtimes.OpenCodeRuntime",
-    "pydantic": "angee.agents_runtime_pydantic.runtime.PydanticAIRuntime",
-}
-ANGEE_WORKFLOW_STEP_CLASSES = {
-    "wait": "angee.workflows.steps.WaitStep",
-    "gate": "angee.workflows.steps.GateStep",
-    "map": "angee.workflows.steps.MapStep",
-    "call_workflow": "angee.workflows.steps.CallWorkflow",
-    "join_continuation": "angee.workflows.steps.JoinContinuation",
-    "emit": "angee.workflows.steps.EmitStep",
-    "fixture": "tests.workflows.FixtureStep",
-    "archive_probe": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_probe"],
-    "archive_gate": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_gate"],
-    "archive_execute": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_execute"],
-    "integrate_stream": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.integrate_stream"],
-    "integrate_coverage": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.integrate_coverage"],
-    "infer": "angee.workflows_agents.steps.InferStepImpl",
-    "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
-    "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
-    "parties_identity_review": "angee.workflows_parties.steps.IdentityReviewStepImpl",
-    "parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
-    "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
-    "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
-    "prepare_pages": "angee.workflows_extraction.steps.PreparePagesStepImpl",
-    "recognize_page": "angee.workflows_extraction.steps.RecognizePageStepImpl",
-    "collect_carriers": "angee.workflows_extraction.steps.CollectCarriersStepImpl",
-    "process_evidence": "angee.workflows_extraction.steps.ProcessEvidenceStepImpl",
-    "infer_evidence": "angee.workflows_extraction.steps.InferEvidenceStepImpl",
-}
-ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
-ANGEE_EXTRACTION_PROFILE_CLASSES = {
-    "none": "angee.workflows_extraction.profiles.UnconfiguredExtractionProfile",
-    "fake_document": "tests.extraction_profiles.FakeDocumentProfile",
-    "record_carrier": "tests.extraction_profiles.RecordCarrierProfile",
-}
-ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
-ANGEE_EXTRACTION_TIMEOUT_SECONDS = 120
-ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
-    "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
-}
-# The AddonInstaller backend registry (normally platform's autoconfig contributes
-# these). Bare test settings skip the composer, so the row-less ImplClassField-style
-# registry is declared explicitly here; ``local`` is the dev/test default.
-ANGEE_ADDON_INSTALLER_BACKEND = "local"
-ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
-    "local": "angee.platform.installer.LocalInstallerBackend",
-    "operator": "angee.platform_integrate_operator.installer.OperatorInstallerBackend",
-}
-# Directory/channel backends each addon's autoconfig normally contributes; declared
-# here so the ImplClassField registries are non-empty at model-import time.
-ANGEE_DIRECTORY_BACKEND_CLASSES = {
-    "manual": "angee.parties.backends.ManualDirectoryBackend",
-    "carddav": "angee.parties_integrate_carddav.backend.CardDavDirectoryBackend",
-}
-ANGEE_CHANNEL_BACKEND_CLASSES = {
-    "manual": "angee.messaging.backends.ManualChannelBackend",
-    "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
-    "slack": "angee.messaging_integrate_slack.backend.SlackChannelBackend",
-    "fake_live": "tests.pairing_backend.FakePairingBackend",
-}
-# Feed backends a ``posts.Feed`` may select (posts' autoconfig normally
-# contributes these). ``stub`` returns canned posts queued by the posts tests.
-ANGEE_POSTS_FEED_BACKEND_CLASSES = {
-    "manual": "angee.posts.backends.ManualFeedBackend",
-    "stub": "tests.conftest.StubFeedBackend",
-}
-# OAuth provider types (normally each addon's autoconfig contributes these); the
-# ImplClassField enum requires a non-empty registry at model-import time.
-ANGEE_OAUTH_PROVIDER_TYPES = {
-    "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
-    "generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
-    "google": "angee.iam_integrate_oidc.providers.GoogleType",
-}
-ANGEE_WORK_MERGE_CONTRIBUTORS = ("angee.intake.merge.move_task_needs",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
 ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
-# The agents-supplied bearer→actor verifier is composer autoconfig (angee.agents); a
-# bare test settings module that skips the composer declares it so the verifier is
-# wired. The MCP actor is bracketed around each tool call by
-# angee.mcp.middleware.ActorMiddleware and read via rebac's ambient current_actor
-# (no REBAC_MCP_ACTOR_RESOLVER override needed).
-ANGEE_MCP_ACTOR_VERIFIER = "angee.agents.mcp_verifier.resolve_actor"
-STRAWBERRY_DJANGO = {
-    # Mirror the composer-owned public ID contract for source-addon tests that
-    # bypass compose settings.
-    "DEFAULT_PK_FIELD_NAME": "sqid",
-    "MAP_AUTO_ID_AS_GLOBAL_ID": False,
-}
+
+AutoConfig.apply_installed(globals(), environment=False)

@@ -1,7 +1,7 @@
 """Authorization behaviour of the composed notes addon.
 
 These exercise the real runtime model against the permission schema: demo
-resources seed users and notes, field-backed ownership lets creators read their
+resources seed users and notes, field-backed ownership lets owners read their
 rows, and field permissions redact owner-only fields from other readers.
 """
 
@@ -64,15 +64,15 @@ class NotesAuthorizationTests(TransactionTestCase):
         with override_settings(REBAC_STRICT_MODE=False):
             self.assertEqual(Note.objects.all().scoped_for_aggregate().count(), 0)
 
-    def test_demo_load_uses_created_by_field_backed_ownership(self) -> None:
-        # created_by drives the owner relation: a user reaches only their notes.
+    def test_demo_load_uses_owner_field_backed_ownership(self) -> None:
+        # Ownership is independent of attribution: a user reaches their owned notes.
         alice_notes = list(Note.objects.as_user(self.alice))
         bob_notes = list(Note.objects.as_user(self.bob))
 
         self.assertTrue(alice_notes)
         self.assertTrue(bob_notes)
-        self.assertTrue(all(note.created_by_id == self.alice.pk for note in alice_notes))
-        self.assertTrue(all(note.created_by_id == self.bob.pk for note in bob_notes))
+        self.assertTrue(all(note.owner_id == self.alice.pk for note in alice_notes))
+        self.assertTrue(all(note.owner_id == self.bob.pk for note in bob_notes))
         self.assertFalse({note.sqid for note in alice_notes} & {note.sqid for note in bob_notes})
         relationship_model = active_relationship_model()
         self.assertFalse(
@@ -87,8 +87,8 @@ class NotesAuthorizationTests(TransactionTestCase):
         owner = next(relation for relation in definition.relations if relation.name == "owner")
         backing = owner.backing
         if backing is None:
-            self.fail("notes/note#owner must be field-backed by created_by")
-        self.assertEqual(backing.attname, "created_by")
+            self.fail("notes/note#owner must be field-backed by owner")
+        self.assertEqual(backing.path, "owner")
 
     def test_platform_admin_reaches_all_notes(self) -> None:
         with system_context(reason="test"):

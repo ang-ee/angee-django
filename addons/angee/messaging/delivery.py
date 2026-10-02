@@ -45,14 +45,9 @@ def queue_message_delivery(message: Any) -> bool:
             return False
         row.status = row.MessageStatus.QUEUED
         row.save(update_fields=("status", "updated_at"))
-        model_label = row._meta.label_lower
-        pk = row.pk
-        external_id = str(row.external_id)
-        transaction.on_commit(
-            lambda: enqueue_task(
-                DELIVER_MESSAGE_TASK,
-                kwargs={"model_label": model_label, "pk": pk, "external_id": external_id},
-            ),
+        enqueue_task(
+            DELIVER_MESSAGE_TASK,
+            kwargs={"model_label": row._meta.label_lower, "pk": row.pk, "external_id": str(row.external_id)},
         )
     message.status = message.MessageStatus.QUEUED
     return True

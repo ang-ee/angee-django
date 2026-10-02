@@ -1,46 +1,60 @@
 """Source models for the knowledge addon.
 
 A :class:`Vault` is the permission and namespace boundary; every
-addressable thing inside it is a :class:`Page` — a thin identity row
-whose kind-specific content lives in one-to-one sidecars. This addon
-ships :class:`MarkdownPage`, the body sidecar for markdown-based kinds;
-extension addons contribute further kinds by writing new ``kind``
-values and their own sidecar model with a one-to-one to
-``knowledge.Page``.
+addressable thing inside it is a :class:`Page`. A :class:`MarkdownPage`
+is the concrete child for pages with a versioned markdown body; extension
+addons contribute their own child models for other content shapes.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
+from graphlib import CycleError, TopologicalSorter
 from typing import Any, ClassVar, cast
 
-from django.conf import settings
+import reversion
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import models, transaction
+from django.db.models.signals import post_save
 from markdown_it import MarkdownIt
 from rebac import (
     MissingActorError,
     ObjectRef,
     PermissionDenied,
+    SubjectRef,
     current_actor,
     system_context,
-    to_object_ref,
     to_subject_ref,
 )
 from rebac.backends import backend as rebac_backend
+from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
-from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
+from angee.base.mixins import AuditMixin, CreationKeyMixin, CreationKeyQuerySet, HistoryMixin, OwnerMixin, RevisionMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.refs import (
+    RecordRef,
+    RecordRefMixin,
+    canonical_record_target,
+    concrete_child,
+    concrete_child_accessor,
+    concrete_child_models,
+)
 from angee.knowledge.retrieval import RetrievalBackend
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
+logger = logging.getLogger(__name__)
 
 # CommonMark tokenizer reused for every outline parse; we only consume block
 # tokens' source line spans (``.map``) and the heading inline ``.content``, so a
@@ -85,7 +99,11 @@ def parse_wikilinks(body: str) -> dict[str, str]:
     return found
 
 
-class VaultManager(AngeeManager):
+class VaultQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+    """Actor-scoped vault reads with caller-scoped creation replay."""
+
+
+class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[misc]
     """Factories for actor-owned vault writes."""
 
     def create_for(self, owner: Any, **fields: Any) -> Any:
@@ -98,35 +116,127 @@ class VaultManager(AngeeManager):
         actor = self.check_create()
         if owner is None or to_subject_ref(owner) != actor:
             raise PermissionDenied(f"Denied: {actor} cannot create a vault owned by {owner!r}")
-        vault = self.model(owner=owner, **fields)
+        return self._create_for_actor(actor, **fields)
+
+    def create_from(
+        self,
+        template: Vault,
+        *,
+        name: str,
+        owned: bool = True,
+        client_creation_key: str | None = None,
+    ) -> Vault:
+        """Clone a readable vault's page tree and markdown bodies for the actor.
+
+        Requires vault create and, for a new clone, template read. New identities and attribution
+        belong to the actor; grants and record bindings are never copied. Unknown
+        page kinds are refused rather than copied without their content.
+        ``owned=False`` inserts the clone without an owner. A replay
+        key belongs to the creating actor, even after ownership is transferred or
+        cleared; changing template, name or ownership intent conflicts. Template
+        edits, loss of access or deletion do not change an already completed clone.
+        """
+
+        actor = self.check_create()
+        user_id = actor_user_id(actor)
+        if user_id is None:
+            raise PermissionDenied("Cloning a vault requires a user actor.")
+        fingerprint = self.model.creation_fingerprint_for([template.pk, name, owned])
+        # A successful ownerless clone is not necessarily readable by its caller.
+        # Resolve only this actor's creation receipt, then rebind the returned row.
+        replays = self.system_context(reason="knowledge.vault.clone.replay")
+
+        def insert() -> Vault:
+            source = self.with_actor(actor).get(pk=template.pk)
+            page_model = apps.get_model("knowledge", "Page")
+            markdown_model = apps.get_model("knowledge", "MarkdownPage")
+            pages = {
+                page.pk: page
+                for page in (
+                    page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk").prefetch_related(
+                        *(
+                            models.Prefetch(
+                                concrete_child_accessor(page_model, child_model),
+                                queryset=child_model._base_manager.only(
+                                    "pk", *("kind",) if child_model is markdown_model else (),
+                                ),
+                            )
+                            for child_model in concrete_child_models(page_model)
+                        )
+                    )
+                )
+            }
+            for page in pages.values():
+                if page.kind not in (Page.PageKind.NOTE, Page.PageKind.TEMPLATE, Page.PageKind.FOLDER):
+                    raise UnsupportedPageKindError(f"Cannot clone pages of kind {page.kind!r}.")
+            bodies = list(markdown_model._default_manager.with_actor(actor).filter(pk__in=pages))
+            if {body.pk for body in bodies} != {
+                page.pk for page in pages.values() if page.kind != Page.PageKind.FOLDER
+            }:
+                raise UnsupportedPageKindError("Cannot clone a page whose content is unavailable.")
+            vault = self._create_for_actor(
+                actor,
+                owned=owned,
+                name=name,
+                description=source.description,
+                icon=source.icon,
+                accent=source.accent,
+                retrieval_class=source.retrieval_class,
+                client_creation_key=client_creation_key,
+                creation_fingerprint=fingerprint,
+            )
+            copies = page_model._default_manager._copy_tree_in(vault, pages, actor=actor)
+            markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
+            return cast(Vault, vault)
+
+        vault, _created = replays.replay_or_insert(user_id, client_creation_key, fingerprint, insert)
+        return cast(Vault, vault.with_actor(actor))
+
+    def _create_for_actor(self, actor: SubjectRef, *, owned: bool = True, **fields: Any) -> Any:
+        """Persist a vault after its caller's create preflight."""
+
+        owner_id = actor_user_id(actor)
+        if owner_id is None:
+            raise PermissionDenied("An actor-owned vault requires a user actor.")
+        vault = self.model(
+            owner_id=owner_id if owned else None,
+            created_by_id=owner_id,
+            updated_by_id=owner_id,
+            **fields,
+        )
         vault.full_clean()
-        vault.sudo(reason="knowledge.vault.create").save()
+        if owned:
+            vault.sudo(reason="knowledge.vault.create").save()
+        else:
+            # Native bulk insertion bypasses OwnerMixin's insert default. As for
+            # the cloned pages, explicit audit stamps and the save notification
+            # retain history without assigning a temporary owner.
+            self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
+            post_save.send(
+                sender=self.model, instance=vault, created=True, raw=False, using=self.db, update_fields=None,
+            )
         return vault.with_actor(actor)
 
 
-class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Vault(OwnerMixin, CreationKeyMixin, AngeeDataModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
     Deleting a vault cascade-deletes every page inside it; the crud delete
-    mutation previews that blast radius before confirming. ``owner`` is
-    protected so deleting a user account never silently wipes their vaults.
+    mutation previews that blast radius before confirming. Ownership can be
+    transferred or cleared without changing attribution; deleting a user clears
+    ownership and retains their vaults. Whoever may ``share`` the vault manages
+    its direct ``viewer`` shares; editor and role reach stay administrative.
     """
 
     runtime = True
+    rebac_grantable = {"viewer": "share"}
 
     sqid_prefix = "vlt_"
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="owned_vaults",
-    )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
     icon = models.CharField(max_length=64, blank=True, default="")
     accent = models.CharField(max_length=32, blank=True, default="")
-    retrieval_class = ImplClassField(
-        base_class=RetrievalBackend,
-        registry_setting="ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES",
+    retrieval_class = ImplClassField(RetrievalBackend,
         default="lexical",
     )
     """Registry key for the retrieval backend this vault searches through."""
@@ -139,7 +249,10 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "knowledge/vault"
-        constraints = (models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),)
+        constraints = (
+            models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),
+            CreationKeyMixin.creation_key_constraint(),
+        )
 
     def __str__(self) -> str:
         """Return the vault name for Django displays."""
@@ -191,31 +304,90 @@ class PageManager(AngeeManager):
         if parent is not None:
             relationships["parent"] = (parent,)
         actor = self.check_create(relationships)
-        page = self.model(vault=vault, **fields)
+        kind = fields.pop("kind", self.model.PageKind.NOTE)
+        page_model = self.model
+        if kind != self.model.PageKind.FOLDER:
+            if kind not in (self.model.PageKind.NOTE, self.model.PageKind.TEMPLATE):
+                raise ValueError(f"Unsupported page kind: {kind!r}")
+            page_model = self.model._meta.apps.get_model("knowledge", "MarkdownPage")
+            fields["kind"] = kind
+        page = page_model(vault=vault, **fields)
         page.full_clean()
         page.sudo(reason="knowledge.page.create").save()
-        return page.with_actor(actor)
+        return self.model._base_manager.get(pk=page.pk).with_actor(actor)
+
+    def _copy_tree_in(
+        self, vault: Vault, pages: Mapping[Any, Page], *, actor: SubjectRef,
+    ) -> dict[Any, Page]:
+        """Copy template pages within the authorized vault-cloning transaction.
+
+        The clone owner supplies actor-readable source pages. Their unchanged
+        scalar values retain source validation; tree edges are checked here and
+        database constraints still apply. Insert all pages, restore their parent
+        links, and batch native history before notifying the remaining subscribers.
+        """
+
+        user_id = actor_user_id(actor)
+        for page in pages.values():
+            if page.parent_id is not None and page.parent_id not in pages:
+                raise ValidationError("A template page's parent is unavailable or unreadable in this vault.")
+        tree = TopologicalSorter({
+            pk: (page.parent_id,) if page.parent_id is not None else ()
+            for pk, page in pages.items()
+        })
+        try:
+            tree.prepare()
+        except CycleError as error:
+            raise ValidationError("Template page parents must form a tree.") from error
+        copies = {
+            pk: self.model(
+                vault=vault,
+                title=page.title,
+                icon=page.icon,
+                created_by_id=user_id,
+                updated_by_id=user_id,
+            )
+            for pk, page in pages.items()
+        }
+        batch = list(copies.values())
+        elevated = self.sudo(reason="knowledge.page.clone")
+        elevated.bulk_create(batch)
+        children = []
+        for pk, page in copies.items():
+            page.with_actor(actor)
+            if pages[pk].parent_id is not None:
+                page.parent = copies[pages[pk].parent_id]
+                children.append(page)
+        if children:
+            elevated.bulk_update(children, ["parent"])
+        self.model.history.db_manager(self.db).bulk_history_create(batch)
+        for page in batch:
+            page.skip_history_when_saving = True
+            try:
+                post_save.send(
+                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
+                )
+            finally:
+                del page.skip_history_when_saving
+        return copies
 
 
-class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Page(AuditMixin, AngeeDataModel, HistoryMixin):
     """Universal addressable content node inside a vault.
 
-    A page is thin identity — title, hierarchy, and the ``kind``
-    discriminator. Kind-specific content lives in one-to-one sidecar
-    models; this addon ships :class:`MarkdownPage` for markdown-based
-    kinds.
+    A page owns title and hierarchy. A concrete child owns each content shape;
+    a parent row without a child is a folder.
     """
 
     runtime = True
+    rebac_grantable = {"viewer": "write"}
 
     sqid_prefix = "pg_"
 
-    class Kind(models.TextChoices):
+    class PageKind(models.TextChoices):
         """Built-in page kinds.
 
-        ``kind`` itself is an open ``CharField`` — extension addons store
-        their own kind values and pair them with their own sidecar model
-        (a one-to-one to ``knowledge.Page``) without touching this model.
+        Note and template share the markdown shape and differ only in intent.
         """
 
         NOTE = "note", "Note"
@@ -234,7 +406,6 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         blank=True,
         related_name="children",
     )
-    kind = models.CharField(max_length=16, default=Kind.NOTE, db_index=True)
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
 
@@ -253,15 +424,25 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 
         return self.title
 
+    @property
+    def kind(self) -> str:
+        """Project the page's kind from its concrete child."""
+
+        for child_model in concrete_child_models(self._meta.apps.get_model("knowledge", "Page")):
+            child = concrete_child(self, child_model)
+            if child is not None:
+                if child_model is self._meta.apps.get_model("knowledge", "MarkdownPage"):
+                    return str(child.kind)
+                return child._meta.model_name
+        return str(self.PageKind.FOLDER)
+
 
 class RecordBindingManager(AngeeManager):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
-    Django/Zed cannot field-back a relation through ``GenericForeignKey``. The
-    model's own Zed definition is therefore deliberately fail-closed; these
-    authored methods are the only read/write surface and gate every operation on
-    the target's canonical REBAC identity. Returned querysets are exact-filtered
-    system querysets, never a general bypass.
+    Record owners contribute two-ended read permissions through reverse generic
+    relations. Both read directions use that same REBAC scope; writes separately
+    require permission on the knowledge owner and canonical target.
     """
 
     DEFAULT_ROLE = "related"
@@ -294,7 +475,7 @@ class RecordBindingManager(AngeeManager):
 
         knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
         canonical = canonical_record_target(self._saved(target, "target"))
-        self._require_access(knowledge, "write", "Write access to the knowledge owner is required.")
+        cast(Any, knowledge).require_access("write")
         self._require_target_access(
             canonical,
             "write",
@@ -324,7 +505,7 @@ class RecordBindingManager(AngeeManager):
 
         knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
         canonical = canonical_record_target(self._saved(target, "target"))
-        self._require_access(knowledge, "write", "Write access to the knowledge owner is required.")
+        cast(Any, knowledge).require_access("write")
         self._require_target_access(
             canonical,
             "write",
@@ -344,11 +525,10 @@ class RecordBindingManager(AngeeManager):
     def teardown_for_record(self, record: models.Model) -> None:
         """Delete every binding to ``record`` before the target row disappears.
 
-        Canonical targets have no reverse ``GenericRelation`` because knowledge can
-        bind any current or future REBAC model. The global knowledge-owned
+        Targets may omit a reverse ``GenericRelation``. The global knowledge-owned
         ``pre_delete`` receiver therefore delegates here so primary-key reuse cannot
         make an old binding resolve to a new row. Deleting the bindings normally keeps
-        their ``post_delete`` change publisher and target read anchor intact.
+        their normal ``post_delete`` lifecycle intact.
         """
 
         if record.pk is None:
@@ -366,14 +546,13 @@ class RecordBindingManager(AngeeManager):
             bindings.delete()
 
     def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
-        """Return bindings on one actor-readable canonical record."""
+        """Return actor-readable bindings on one canonical record."""
 
         canonical = canonical_record_target(self._saved(record, "record"))
-        if not self._target_has_access(canonical, "read"):
-            return self.system_context(reason="knowledge.record_binding.for_record.denied").none()
-        queryset = self.system_context(reason="knowledge.record_binding.for_record").filter(
+        queryset = self.get_queryset().filter(
             content_type=canonical.content_type, object_id=canonical.object_id
         )
+        queryset = queryset.select_related("page", "vault")
         return queryset if role is None else queryset.filter(role=self._role(role))
 
     def pages_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
@@ -395,27 +574,8 @@ class RecordBindingManager(AngeeManager):
         """Return bindings from one readable page/vault to actor-readable targets."""
 
         knowledge, owner_field = self._knowledge_owner_instance(knowledge)
-        self._require_access(knowledge, "read", "Read access to the knowledge owner is required.")
-        actor = self._actor()
-        candidates = self.system_context(reason="knowledge.record_binding.for_knowledge.candidates").filter(
-            **{owner_field: knowledge}
-        )
-        if role is not None:
-            candidates = candidates.filter(role=self._role(role))
-        pairs = list(candidates.values_list("content_type_id", "object_id"))
-        allowed = models.Q(pk__in=())
-        content_types = ContentType.objects.in_bulk({content_type_id for content_type_id, _ in pairs})
-        for content_type_id, object_ids in _object_ids_by_content_type(pairs).items():
-            content_type = content_types.get(content_type_id)
-            model = None if content_type is None else content_type.model_class()
-            if model is None or model_resource_type(model) is None:
-                continue
-            readable_ids = list(
-                model._default_manager.with_actor(actor).filter(pk__in=object_ids).values_list("pk", flat=True)
-            )
-            if readable_ids:
-                allowed |= models.Q(content_type_id=content_type_id, object_id__in=readable_ids)
-        return candidates.filter(allowed)
+        queryset = self.get_queryset().filter(**{owner_field: knowledge})
+        return queryset if role is None else queryset.filter(role=self._role(role))
 
     def records_for_page(self, page: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
         """Return public refs for actor-readable records bound from ``page``."""
@@ -469,44 +629,26 @@ class RecordBindingManager(AngeeManager):
         return actor
 
     @classmethod
-    def _require_access(cls, instance: models.Model, action: str, message: str) -> None:
-        actor = cls._actor()
+    def _require_target_access(cls, canonical: Any, action: str, message: str) -> None:
         if (
             not rebac_backend()
-            .check_access(
-                subject=actor,
-                action=action,
-                resource=to_object_ref(instance),
-            )
-            .allowed
-        ):
-            raise PermissionDenied(message)
-
-    @classmethod
-    def _target_has_access(cls, canonical: Any, action: str) -> bool:
-        return (
-            rebac_backend()
             .check_access(
                 subject=cls._actor(),
                 action=action,
                 resource=_canonical_object_ref(canonical.content_type, canonical.object_id),
             )
             .allowed
-        )
-
-    @classmethod
-    def _require_target_access(cls, canonical: Any, action: str, message: str) -> None:
-        if not cls._target_has_access(canonical, action):
+        ):
             raise PermissionDenied(message)
 
 
-class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
-    edge never grants access to either side: authored reads ride target ``read``
-    while a returned page/vault id must still be resolved through that knowledge
-    row's own REBAC policy before content is available.
+    edge grants access to neither side. Its REBAC read permission requires both
+    the knowledge row and target to be readable. A target whose owner contributes
+    no permission arm has unreadable bindings, including for administrators.
     """
 
     runtime = True
@@ -568,12 +710,6 @@ class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         content_type = cast(ContentType, self.content_type)
         _canonical_object_ref(content_type, self.object_id)
 
-    def change_read_resource(self) -> ObjectRef:
-        """Gate binding changes on the canonical target's read permission."""
-
-        content_type = cast(ContentType, self.content_type)
-        return _canonical_object_ref(content_type, self.object_id)
-
     def __str__(self) -> str:
         """Return a readable knowledge-to-record edge label."""
 
@@ -591,21 +727,12 @@ def _canonical_object_ref(content_type: ContentType, object_id: Any) -> ObjectRe
     return ObjectRef(resource_type, str(object_id))
 
 
-def _object_ids_by_content_type(pairs: list[tuple[int, Any]]) -> dict[int, set[Any]]:
-    """Group canonical object ids by content type for actor-scoped reverse reads."""
-
-    grouped: dict[int, set[Any]] = {}
-    for content_type_id, object_id in pairs:
-        grouped.setdefault(content_type_id, set()).add(object_id)
-    return grouped
-
-
 class StaleBodyError(ValueError):
     """Raised when a body write expects a hash the stored body no longer has."""
 
 
 class UnsupportedPageKindError(ValueError):
-    """Raised when a body write targets a page kind without a markdown sidecar."""
+    """Raised when a body write targets a page without a markdown child."""
 
 
 class StructuredEditError(ValueError):
@@ -623,41 +750,53 @@ class AmbiguousMatchError(StructuredEditError):
 class MarkdownPageManager(AngeeManager):
     """Factories for actor-scoped markdown body writes."""
 
+    def _copy_bodies(
+        self,
+        bodies: Iterable[MarkdownPage],
+        pages: Mapping[Any, Page],
+        *,
+        actor: SubjectRef,
+    ) -> None:
+        """Insert child bodies for pages admitted by the vault clone preflight."""
+
+        copies = []
+        with system_context(reason="knowledge.vault.clone.markdown"):
+            for source in bodies:
+                page = pages[source.pk]
+                body = self.model(
+                    **{field.attname: getattr(page, field.attname) for field in page._meta.concrete_fields},
+                    page_ptr=page,
+                    kind=source.kind,
+                    body=source.body,
+                    body_hash=source.body_hash,
+                    word_count=source.word_count,
+                )
+                body.save_base(raw=True, force_insert=True, using=self.db)
+                copies.append(body.with_actor(actor))
+        apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
+        for body in copies:
+            post_save.send(
+                sender=self.model, instance=body, created=True,
+                raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
+            )
+
     def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:
-        """Create or update ``page``'s markdown body, last-write-wins.
+        """Update ``page``'s markdown body, last-write-wins.
 
         ``expected_hash`` is an optimistic-concurrency token: when supplied
         and the stored ``body_hash`` differs, the write is rejected with
         :class:`StaleBodyError` so the caller can reload and retry.
         """
 
-        if page.kind not in self.model.page_kinds:
+        if page.kind == Page.PageKind.FOLDER:
             raise UnsupportedPageKindError(f"Pages of kind {page.kind!r} carry no markdown body.")
         with transaction.atomic():
-            markdown = self.select_for_update().filter(page=page).first()
-            if markdown is None:
-                markdown = self._create_body(page, body)
-                if markdown is not None:
-                    return markdown
-                # A concurrent first writer won the insert race; lock its row.
-                markdown = self.select_for_update().get(page=page)
+            markdown = self.select_for_update().get(pk=page.pk)
             if expected_hash is not None and expected_hash != markdown.body_hash:
                 raise StaleBodyError("Body hash is stale; reload the page and retry.")
             markdown.body = body
             markdown.save(update_fields=("body",))
             return markdown
-
-    def _create_body(self, page: Any, body: str) -> Any:
-        """Insert the first body row, or ``None`` when a concurrent writer won."""
-
-        actor = self.check_create({"page": (page,)})
-        markdown = self.model(page=page, body=body)
-        try:
-            with transaction.atomic():
-                markdown.sudo(reason="knowledge.markdown_page.create").save()
-        except IntegrityError:
-            return None
-        return markdown.with_actor(actor)
 
     # -- structure-aware edits --------------------------------------------
     # Thin write-orchestrators: read the current body (actor-scoped), splice it
@@ -724,12 +863,20 @@ class MarkdownPageManager(AngeeManager):
         authority — this read only computes candidate text, never the checked hash.
         """
 
-        markdown = self.filter(page=page).first()
+        markdown = self.filter(pk=page.pk).first()
         return "" if markdown is None else markdown.body
 
 
-class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
-    """Markdown body sidecar for markdown-based page kinds.
+class SectionOp(StrEnum):
+    """How a markdown section is spliced; member names are GraphQL wire values."""
+
+    REPLACE = "replace"
+    APPEND = "append"
+    PREPEND = "prepend"
+
+
+class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
+    """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
     ``word_count`` are derived on save. Body edits are versioned through
@@ -737,26 +884,14 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
     """
 
     runtime = True
+    extends = "knowledge.Page"
 
     revisioned_fields = ("body",)
-
-    sqid_prefix = "mdp_"
-
-    page_kinds: ClassVar[tuple[str, ...]] = cast("tuple[str, ...]", (Page.Kind.NOTE, Page.Kind.TEMPLATE))
-    """Page kinds that carry a markdown body sidecar."""
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
 
-    SECTION_OPS: ClassVar[tuple[str, ...]] = ("replace", "append", "prepend")
-    """Section splice operations accepted by :meth:`spliced_section`."""
-
-    page = models.OneToOneField(
-        "knowledge.Page",
-        on_delete=models.CASCADE,
-        related_name="markdown",
-        limit_choices_to={"kind__in": page_kinds},
-    )
+    kind = StateField(choices_enum=Page.PageKind, default=Page.PageKind.NOTE)
     body = models.TextField(blank=True, default="")
     body_hash = models.CharField(max_length=64, blank=True, default="", editable=False)
     word_count = models.PositiveIntegerField(default=0, db_index=True)
@@ -767,12 +902,17 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         """Django model options."""
 
         abstract = True
+        # Django creates the concrete MTI page_ptr; preserve Page.markdown.
+        default_related_name = "markdown"
         rebac_resource_type = "knowledge/markdown_page"
+        constraints = (
+            models.CheckConstraint(condition=~models.Q(kind=Page.PageKind.FOLDER), name="ck_markdown_page_not_folder"),
+        )
 
     def __str__(self) -> str:
-        """Return the owning page id for Django displays."""
+        """Return the inherited page title for Django displays."""
 
-        return f"markdown:{self.page_id}"
+        return self.title
 
     @staticmethod
     def hash_body(body: str) -> str:
@@ -862,10 +1002,10 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         return matches[0]
 
     @staticmethod
-    def spliced_section(body: str, heading_path: str | list[str], op: str, content: str) -> str:
+    def spliced_section(body: str, heading_path: str | list[str], op: SectionOp | str, content: str) -> str:
         """Return ``body`` with one section's content spliced, never re-rendered.
 
-        ``op`` is one of :attr:`SECTION_OPS`: ``replace`` swaps the section body,
+        ``op`` is a :class:`SectionOp`: ``replace`` swaps the section body,
         ``append``/``prepend`` add ``content`` after/before it (after nested
         children for ``append`` — the range is section-inclusive). The heading
         line and everything outside the section are byte-identical (after CRLF
@@ -874,14 +1014,20 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         — e.g. inside a code block — are untouched.
         """
 
-        if op not in MarkdownPage.SECTION_OPS:
-            raise StructuredEditError(f"Unknown section op {op!r}; expected one of {MarkdownPage.SECTION_OPS}.")
+        try:
+            op = SectionOp(op)
+        except ValueError as error:
+            raise StructuredEditError(f"Unknown section op {op!r}; expected one of {tuple(SectionOp)}.") from error
         normalized = MarkdownPage._normalize_newlines(body)
         start, end = MarkdownPage.section_range(normalized, heading_path)
         lines = normalized.split("\n")
         existing = lines[start + 1 : end]
         addition = MarkdownPage._normalize_newlines(content).split("\n")
-        blocks = {"replace": [addition], "prepend": [addition, existing], "append": [existing, addition]}[op]
+        blocks = {
+            SectionOp.REPLACE: [addition],
+            SectionOp.PREPEND: [addition, existing],
+            SectionOp.APPEND: [existing, addition],
+        }[op]
         section_body = MarkdownPage._join_blocks(blocks)
         spliced = [lines[start]]
         if section_body:
@@ -974,11 +1120,16 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
             joined.extend(block)
         return joined
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the body together with its derived hash and word count."""
+    def refresh_body_metadata(self) -> None:
+        """Derive hash and word count for both single and batch body writes."""
 
         self.body_hash = self.hash_body(self.body)
         self.word_count = len(self.body.split())
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the body together with its derived hash and word count."""
+
+        self.refresh_body_metadata()
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             field_names = set(update_fields)
@@ -986,6 +1137,9 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
                 field_names |= {"body_hash", "word_count", "updated_at"}
                 kwargs["update_fields"] = field_names
         super().save(*args, **kwargs)
+        if reversion.is_active():
+            # django-reversion follows MTI parent links when reading field_dict.
+            reversion.add_to_revision(self.page_ptr)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,29 +1160,41 @@ class LinkManager(AngeeManager):
         created after the link still resolves on the source page's next save.
         """
 
-        page = markdown.page
-        assert page is not None
-        wanted = parse_wikilinks(markdown.body)
-        pages = type(page)._base_manager
+        self.rebuild_many((markdown,))
+
+    def rebuild_many(self, bodies: Iterable[MarkdownPage]) -> None:
+        """Replace a batch's wikilinks, resolving titles once per source vault."""
+
+        batch = list(bodies)
+        if not batch:
+            return
+        page_model = apps.get_model("knowledge", "Page")
+        vault_ids = {body.vault_id for body in batch}
         links = self.model._base_manager
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
-            resolved = dict(pages.filter(vault_id=page.vault_id).exclude(pk=page.pk).values_list("title", "pk"))
-            links.filter(source_page=page).delete()
-            links.bulk_create(
-                [
-                    self.model(
-                        source_page=page,
-                        target_page_id=resolved.get(target),
+            resolved = {
+                (vault_id, title): pk
+                for vault_id, title, pk in page_model._base_manager.filter(vault_id__in=vault_ids)
+                .values_list("vault_id", "title", "pk")
+            }
+            links.filter(source_page_id__in=[body.pk for body in batch]).delete()
+            rows = []
+            for body in batch:
+                for target, display in parse_wikilinks(body.body).items():
+                    target_id = resolved.get((body.vault_id, target))
+                    if target_id == body.pk:
+                        target_id = None
+                    rows.append(self.model(
+                        source_page_id=body.pk,
+                        target_page_id=target_id,
                         target_text=target,
                         display_text=display,
-                        is_resolved=target in resolved,
-                    )
-                    for target, display in wanted.items()
-                ]
-            )
+                        is_resolved=target_id is not None,
+                    ))
+            links.bulk_create(rows)
 
 
-class Link(SqidMixin, AngeeModel):
+class Link(AngeeDataModel):
     """Wikilink edge from one page to another, derived from the source body.
 
     Indexer-authored (see :class:`LinkManager`) — no user-facing mutation,

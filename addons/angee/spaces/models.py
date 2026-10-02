@@ -1,41 +1,37 @@
-"""Shared groups, their canonical role-bearing roster, and group-thread binding.
+"""Group ownership, live roster audiences, and members' notification preferences.
 
-``Group`` is a shared tree rather than a user-scoped organising list. Its
-``visibility`` is a persisted fact whose owner maintains the public
-wildcard reader tuple. ``Membership`` is the one canonical roster edge;
-confirmed rows reach platform users live through the schema's filtered relation
-paths. A party without a platform user remains valid and grants nothing.
-
-``ThreadSpace`` contributes the group audience onto the existing
-``messaging.Thread`` row through a same-row many-to-many field. It is an abstract
-extension, never another first-class runtime model.
-
-Group visibility remains an explicit wildcard tuple. Roster and thread-group
-reach are live field-backed facts, so bulk edits, cascades, and identity changes
-cannot leave mirrored relationship rows stale.
+``Group`` composes transferable ownership and messaging's audience contract.
+``Membership`` owns each party's role, confirmation and notification preference;
+only confirmed, non-dismissed rows grant roster access. ``ThreadSpace`` binds
+threads to groups; ``ChannelSpace`` and ``VaultSpace`` bind channels and
+knowledge vaults to a team on their own rows. REBAC reads these facts live,
+including public visibility from the group column.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable, Sequence
+from typing import Any, Self
 
+from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils.text import slugify
+from rebac import PermissionDenied, current_actor
 
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.mixins import AuditMixin, HierarchyMixin, OwnerMixin
+from angee.base.models import AngeeDataModel
+from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
 
-class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
+class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
     runtime = True
     sqid_prefix = "grp_"
-    shared_reader_relation = "reader"
-    shared_reader_policy_fields = ("visibility",)
 
     class GroupVisibility(models.TextChoices):
         """Whether membership is required to read the group and its threads."""
@@ -65,14 +61,33 @@ class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin,
 
         return self.name
 
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Make public groups readable by every authenticated actor."""
+    def thread_audience(self) -> Iterable[AudienceMember]:
+        """Read participating roster parties; messaging owns delivery and read checks."""
 
-        return self.visibility == self.GroupVisibility.PUBLIC
+        membership_model = apps.get_model("spaces", "Membership")
+        rows = (
+            membership_model.system_queryset()
+            .confirmed()
+            .filter(
+                group_id=self.pk,
+                role__in=(
+                    membership_model.MembershipRole.OWNER,
+                    membership_model.MembershipRole.MODERATOR,
+                    membership_model.MembershipRole.MEMBER,
+                ),
+            )
+            .only("party_id", "notification_policy", "subtype_keys")
+            .order_by("pk")
+        )
+        for row in rows.iterator():
+            yield AudienceMember(
+                party_id=row.party_id,
+                notification_policy=NotificationPolicy(row.notification_policy),
+                subtype_keys=tuple(row.subtype_keys),
+            )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the group with a unique slug and reconcile its reader tuple."""
+        """Persist the group with a unique slug."""
 
         with transaction.atomic():
             if not self.slug:
@@ -102,7 +117,7 @@ class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin,
         return candidate
 
 
-class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
+class Membership(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     """One party's role-bearing roster row in a shared group.
 
     Confirmation resolves live through the canonical ``Person.user`` identity
@@ -132,7 +147,27 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         related_name="space_memberships",
     )
     role = StateField(choices_enum=MembershipRole, default=MembershipRole.MEMBER)
+    notification_policy = StateField(
+        choices_enum=NotificationPolicy, default=NotificationPolicy.INBOX, db_index=False,
+    )
+    subtype_keys = models.JSONField(blank=True, default=list)
     objects = MembershipManager()
+
+    @transaction.atomic
+    def dismiss(self) -> None:
+        """End follows whose team read disappears with this roster seat."""
+
+        super().dismiss()
+        apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_party(self.party)
+
+    @transaction.atomic
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Apply the same read cleanup when removing the seat altogether."""
+
+        party = self.party
+        result = super().delete(*args, **kwargs)
+        apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_party(party)
+        return result
 
     class Meta:
         """Django options for the canonical group roster edge."""
@@ -152,6 +187,37 @@ class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
 
         return f"{self.party_id}∈{self.group_id} ({self.role})"
 
+    def set_notifications(self, policy: NotificationPolicy, subtype_keys: Sequence[str]) -> Self:
+        """Set this holder's preference after checking its live identity under a row lock."""
+
+        actor = self.actor() or current_actor()
+        if actor is None:
+            raise PermissionDenied("An acting user is required to set notification preferences.")
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk).with_actor(actor)
+            if not locked.has_access("set_notifications"):
+                raise PermissionDenied("Only the membership holder can set notification preferences.")
+            locked.notification_policy = policy
+            locked.subtype_keys = list(subtype_keys)
+            locked.full_clean(validate_unique=False, validate_constraints=False)
+            if any(not isinstance(key, str) or not key for key in locked.subtype_keys):
+                raise ValidationError({"subtype_keys": "Select nonempty message subtype keys."})
+            keys = set(locked.subtype_keys)
+            if len(keys) != len(locked.subtype_keys):
+                raise ValidationError({"subtype_keys": "Select each message subtype only once."})
+            subtype_model = apps.get_model("messaging", "MessageSubtype")
+            declared = set(subtype_model.builtin_options())
+            declared.update(
+                subtype_model.system_queryset().filter(key__in=keys).values_list("key", flat=True),
+            )
+            if keys - declared:
+                raise ValidationError({"subtype_keys": "Select declared message subtype keys."})
+            locked.sudo(reason="spaces.membership.set_notifications").save(
+                update_fields=["notification_policy", "subtype_keys", "updated_at"],
+            )
+            self.refresh_from_db()
+        return self
+
 
 class ThreadSpace(models.Model):
     """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
@@ -166,5 +232,57 @@ class ThreadSpace(models.Model):
 
     class Meta:
         """Abstract same-row extension composed into ``messaging.Thread``."""
+
+        abstract = True
+
+
+class ChannelSpace(models.Model):
+    """Bind a messaging channel to a team through its integration parent."""
+
+    extends = "messaging.Channel"
+    hasura_readable_fields = ("team",)
+    hasura_filterable_fields = hasura_readable_fields
+    hasura_insertable_fields = hasura_readable_fields
+    hasura_updatable_fields = hasura_readable_fields
+
+    team = models.ForeignKey(
+        "spaces.Group",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="channels",
+    )
+
+    class Meta:
+        """Same-row contribution owned by the addon that knows channels and teams."""
+
+        abstract = True
+
+
+class VaultSpace(models.Model):
+    """Bind a knowledge vault's access to the roster of an optional team.
+
+    The column is the one record of the binding: the roster reads the vault
+    through the group's ``post`` and writes it through ``write``; rebinding the
+    team is gated by the vault's ``share``, because it hands the vault to another
+    roster. Group viewers and public readers gain nothing through it.
+    """
+
+    extends = "knowledge.Vault"
+    hasura_readable_fields = ("team",)
+    hasura_filterable_fields = hasura_readable_fields
+    hasura_insertable_fields = hasura_readable_fields
+    hasura_updatable_fields = hasura_readable_fields
+
+    team = models.ForeignKey(
+        "spaces.Group",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="vaults",
+    )
+
+    class Meta:
+        """Same-row contribution owned by the addon that knows vaults and teams."""
 
         abstract = True

@@ -124,7 +124,8 @@ class _LazyApplication:
     Tests import this module's routing helpers without a composed runtime. The
     server-facing ``application`` object is still a normal ASGI callable, but the
     expensive Django/app/addon composition happens only when a server dispatches
-    a scope.
+    a scope. With uvicorn workers, each process builds its own application and
+    keeps its own in-memory state; shared fanout and cache state belong in Redis.
     """
 
     def __init__(self) -> None:
@@ -185,6 +186,8 @@ class _Lifespan:
     (uvicorn) sends: it enters every mount's lifespan at ``startup`` and holds the
     task groups open via a retained ``AsyncExitStack`` until ``shutdown``. A
     startup failure is reported to the server, never swallowed.
+    Each uvicorn worker enters and exits its own mounted lifespan, so MCP
+    session managers remain process-local and all workers can serve the mount.
     """
 
     def __init__(self, mounts: list[Any]) -> None:

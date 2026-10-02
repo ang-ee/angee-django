@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
-import { createRef, type ReactNode } from "react";
+import { act, cleanup, render } from "@testing-library/react";
+import { type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GraphView, graphNodeStyle } from "./GraphView";
 
 const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
-  zeroBounds: false,
 }));
 const dagreMock = vi.hoisted(() => ({ layouts: 0 }));
 
@@ -32,25 +31,10 @@ vi.mock("@xyflow/react", async () => {
     Position: { Bottom: "bottom", Top: "top" },
     ReactFlow: (props: Record<string, unknown> & { children?: ReactNode }) => {
       reactFlowMock.lastProps = props;
-      const nodes = props.nodes as Array<{ id: string; position: { x: number; y: number }; style: { width: number; minHeight: number } }>;
-      const bounds = (selected: typeof nodes) => {
-        const left = Math.min(...selected.map((node) => node.position.x));
-        const top = Math.min(...selected.map((node) => node.position.y));
-        const right = Math.max(...selected.map((node) => node.position.x + node.style.width));
-        const bottom = Math.max(...selected.map((node) => node.position.y + node.style.minHeight));
-        return { x: left, y: top, width: right - left, height: bottom - top };
-      };
-      const intersects = (node: typeof nodes[number], rect: { x: number; y: number; width: number; height: number }) => node.position.x < rect.x + rect.width && node.position.x + node.style.width > rect.x && node.position.y < rect.y + rect.height && node.position.y + node.style.minHeight > rect.y;
+      const nodes = props.nodes as Array<{ id: string }>;
       (props.onInit as ((instance: object) => void) | undefined)?.({
         getNode: (id: string) => nodes.find((node) => node.id === id),
         getEdge: (id: string) => (props.edges as Array<{ id: string }>).find((edge) => edge.id === id),
-        getNodes: () => nodes,
-        getNodesBounds: (selected: Array<string | typeof nodes[number]>) => {
-          const resolved = selected.map((item) => typeof item === "string" ? nodes.find((node) => node.id === item)! : item);
-          const value = bounds(resolved);
-          return reactFlowMock.zeroBounds ? { ...value, width: 0, height: 0 } : value;
-        },
-        getIntersectingNodes: (rect: { x: number; y: number; width: number; height: number }) => nodes.filter((node) => intersects(node, rect)),
       });
       return React.createElement(
         "div",
@@ -64,7 +48,6 @@ vi.mock("@xyflow/react", async () => {
 afterEach(() => {
   cleanup();
   reactFlowMock.lastProps = undefined;
-  reactFlowMock.zeroBounds = false;
   dagreMock.layouts = 0;
 });
 
@@ -169,33 +152,46 @@ describe("GraphView", () => {
     expect(props.nodesDraggable).toBe(false);
     expect(props.nodesConnectable).toBe(false);
     expect(props.elementsSelectable).toBe(false);
+    expect(props.deleteKeyCode).toBe(null);
   });
 
-  test("exposes native rendered bounds and always finds a nonintersecting lane", () => {
-    const geometry = createRef<import("./GraphView").GraphViewGeometry<"handler" | "blocker">>();
-    render(<GraphView
-      geometryRef={geometry}
-      nodes={[
-        { ...nodes[0], kind: "blocker", position: { x: 0, y: 0 } },
-        { ...nodes[1], kind: "handler", position: { x: 1100, y: 0 } },
-      ]}
-      edges={[]}
-      nodeStyles={{ ...nodeStyles, blocker: { ...nodeStyles.handler, width: 1000 } }}
-    />);
-    expect(geometry.current?.nodeBounds("draft")).toEqual({ x: 0, y: 0, width: 1000, height: 72 });
-    const position = geometry.current!.firstFreePosition("handler", { x: 100, y: 0 });
-    expect(geometry.current!.intersects({ ...position, width: 160, height: 72 })).toBe(false);
+  test("ignores native remove intent and reports multi-node positions in one batch", () => {
+    const onNodesPositionChange = vi.fn();
+    render(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} onNodesPositionChange={onNodesPositionChange} />);
+    act(() => (currentProps().onNodesChange as (changes: unknown[]) => void)([
+      { type: "remove", id: "draft" },
+      { type: "position", id: "draft", position: { x: 1, y: 2 } },
+      { type: "position", id: "review", position: { x: 3, y: 4 } },
+    ]));
+    expect(currentProps().nodes).toHaveLength(2);
+    expect(onNodesPositionChange).toHaveBeenCalledExactlyOnceWith({ draft: { x: 1, y: 2 }, review: { x: 3, y: 4 } });
   });
 
-  test("uses declared dimensions while native measurement is pending", () => {
-    reactFlowMock.zeroBounds = true;
-    const geometry = createRef<import("./GraphView").GraphViewGeometry<"handler" | "gate">>();
-    render(<GraphView geometryRef={geometry} nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
+  test("reports one settled drag batch and does not run layout for positions", () => {
+    const changed = vi.fn();
+    const view = render(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} onNodesPositionChange={changed} />);
+    const layouts = dagreMock.layouts;
+    for (const x of [10, 20, 30]) {
+      act(() => (currentProps().onNodesChange as (changes: unknown[]) => void)([
+        { type: "position", id: "draft", position: { x, y: 40 }, dragging: true },
+      ]));
+    }
+    expect(changed).not.toHaveBeenCalled();
+    act(() => (currentProps().onNodesChange as (changes: unknown[]) => void)([
+      { type: "position", id: "draft", position: { x: 30, y: 40 }, dragging: false },
+    ]));
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ draft: { x: 30, y: 40 } });
+    view.rerender(<GraphView nodes={nodes.map((node) => ({ ...node, position: { x: 30, y: 40 } }))} edges={edges} nodeStyles={nodeStyles} />);
+    expect(dagreMock.layouts).toBe(layouts);
+  });
 
-    expect(geometry.current?.nodeBounds("draft")).toEqual(expect.objectContaining({
-      width: nodeStyles.handler.width,
-      height: nodeStyles.handler.height,
-    }));
+  test("clears uncontrolled selection when the node set changes, including reused IDs", () => {
+    const view = render(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
+    act(() => (currentProps().onNodesChange as (changes: unknown[]) => void)([{ type: "select", id: "draft", selected: true }]));
+    expect(currentProps().nodes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "draft", selected: true })]));
+    view.rerender(<GraphView nodes={[nodes[1]]} edges={[]} nodeStyles={nodeStyles} />);
+    view.rerender(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
+    expect(currentProps().nodes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "draft", selected: false })]));
   });
 
   test("lays out self-loops and dangling edges instead of crashing", () => {
@@ -259,9 +255,8 @@ describe("GraphView", () => {
   });
 
   test("adapts editable canvas callbacks to graph records", () => {
-    const onNodeDragEnd = vi.fn();
     const onConnect = vi.fn();
-    const onNodeSelect = vi.fn();
+    const onNodesSelect = vi.fn();
     const onEdgeSelect = vi.fn();
     const onEdgeClick = vi.fn();
 
@@ -271,9 +266,8 @@ describe("GraphView", () => {
         edges={edges}
         nodeStyles={nodeStyles}
         nodesDraggable
-        onNodeDragEnd={onNodeDragEnd}
         onConnect={onConnect}
-        onNodeSelect={onNodeSelect}
+        onNodesSelect={onNodesSelect}
         onEdgeSelect={onEdgeSelect}
         onEdgeClick={onEdgeClick}
       />,
@@ -294,13 +288,6 @@ describe("GraphView", () => {
     expect(props.nodesConnectable).toBe(true);
     expect(props.elementsSelectable).toBe(true);
 
-    (
-      props.onNodeDragStop as (
-        event: unknown,
-        node: (typeof flowNodes)[number],
-      ) => void
-    )(undefined, { ...flowNodes[0]!, position: { x: 44, y: 88 } });
-    expect(onNodeDragEnd).toHaveBeenCalledWith(nodes[0], { x: 44, y: 88 });
 
     (props.onConnect as (connection: unknown) => void)({
       source: "draft",
@@ -321,7 +308,7 @@ describe("GraphView", () => {
         edges: typeof flowEdges;
       }) => void
     )({ nodes: [flowNodes[0]!], edges: [] });
-    expect(onNodeSelect).toHaveBeenLastCalledWith(nodes[0]);
+    expect(onNodesSelect).toHaveBeenLastCalledWith([nodes[0]]);
     expect(onEdgeSelect).toHaveBeenLastCalledWith(null);
 
     (
@@ -330,7 +317,7 @@ describe("GraphView", () => {
         edges: typeof flowEdges;
       }) => void
     )({ nodes: [], edges: [flowEdges[0]!] });
-    expect(onNodeSelect).toHaveBeenLastCalledWith(null);
+    expect(onNodesSelect).toHaveBeenLastCalledWith([]);
     expect(onEdgeSelect).toHaveBeenLastCalledWith(edges[0]);
 
     (props.onEdgeClick as (event: unknown, edge: (typeof flowEdges)[number]) => void)(

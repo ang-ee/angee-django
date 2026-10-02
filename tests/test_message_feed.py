@@ -10,28 +10,27 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
-from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
-from tests.test_messaging import (
+from angee.messaging.testing.models import (
     Circle,
     CircleMember,
     Fragment,
     Handle,
     Message,
+    MessageEdge,
     Part,
     Participant,
     Party,
     Reaction,
     Thread,
-    ThreadAttachment,
-    ThreadedTicket,
 )
+from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
+from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _grant, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -40,11 +39,12 @@ T0 = datetime(2026, 1, 10, 12, tzinfo=UTC)
 User = get_user_model()
 
 
-def _messages(owner: Any, *, size: int = 5) -> tuple[Any, list[Any]]:
-    """Seed one owner-visible inbox thread with equal send times."""
+def _messages(owner: Any, *, size: int = 5, thread: Any = None) -> tuple[Any, list[Any]]:
+    """Seed equal send times in an existing thread or a new owner-visible one."""
 
     with system_context(reason="test message feed seed"):
-        thread = Thread._base_manager.create(created_by=owner, platform="email")
+        if thread is None:
+            thread = Thread._base_manager.create(created_by=owner, platform="email")
         rows = [
             Message._base_manager.create(
                 thread=thread,
@@ -232,8 +232,8 @@ def test_each_page_rechecks_message_and_root_permissions() -> None:
     second = _page("thread", owner, thread, before=first["older_cursor"])
     assert _ids(second) == [str(rows[1].sqid), str(rows[0].sqid)]
     assert second["count"] == 4
-    with system_context(reason="test feed root permission loss"):
-        Thread._base_manager.filter(pk=thread.pk).update(created_by=other)
+    thread.with_actor(owner).transfer_ownership(other)
+    assert thread.created_by_id == owner.pk
     assert _query("thread", owner, thread, before=first["older_cursor"]).errors
 
 
@@ -241,15 +241,10 @@ def test_record_chatter_never_enters_the_inbox_thread_feed() -> None:
     """Even a readable record-attached thread stays behind its record gate."""
 
     owner = User.objects.create_user(username="feed-record")
-    thread, _ = _messages(owner)
-    with system_context(reason="test feed record attachment"):
-        record = ThreadedTicket._base_manager.create(title="Private record", created_by=owner)
-        ThreadAttachment._base_manager.create(
-            thread=thread,
-            content_type=ContentType.objects.get_for_model(ThreadedTicket),
-            object_id=record.pk,
-            created_by=owner,
-        )
+    with actor_context(owner):
+        record = ThreadedTicket.objects.create(title="Private record", created_by=owner)
+        thread, _ = _messages(owner, thread=record.message_thread())
+        assert Thread.objects.filter(pk=thread.pk).exists()
     assert _query("thread", owner, thread).errors
 
 
@@ -314,10 +309,15 @@ def test_party_participant_and_handle_visibility_are_not_bypassed() -> None:
     owner = User.objects.create_user(username="feed-party-edges")
     other = User.objects.create_user(username="feed-party-edges-other")
     thread, rows = _messages(owner)
-    party, _, _ = _party_scope(owner, rows)
-    with system_context(reason="test hidden party feed edge"):
+    _, private_rows = _messages(other, size=1)
+    party, _, _ = _party_scope(owner, [*rows, *private_rows])
+    with system_context(reason="test participant attribution retains parent access"):
         Participant._base_manager.filter(message=rows[-1]).update(created_by=other)
-    assert _ids(_page("party", owner, party)) == [str(rows[3].sqid), str(rows[2].sqid)]
+        hidden_edge = MessageEdge._base_manager.create(src=rows[-1], dst=private_rows[0], created_by=owner)
+    assert _ids(_page("party", owner, party)) == [str(rows[4].sqid), str(rows[3].sqid)]
+    assert _page("party", owner, party)["count"] == 5
+    assert not Participant.objects.with_actor(owner).scoped().filter(message=private_rows[0]).exists()
+    assert not MessageEdge.objects.with_actor(owner).scoped().filter(pk=hidden_edge.pk).exists()
     with system_context(reason="test hidden party feed handle"):
         Handle._base_manager.filter(party=party).update(created_by=other)
     assert not _page("party", owner, party)["messages"]
@@ -429,8 +429,12 @@ def test_revalidation_partitions_current_scope_search_and_moved_rows(kind: str) 
     assert [row["feed_order_key"] for row in result["messages"]] == sorted(
         [row["feed_order_key"] for row in result["messages"]], reverse=True
     )
-    with system_context(reason="test revalidation root denial"):
-        type(root)._base_manager.filter(pk=root.pk).update(created_by=other)
+    if kind == "thread":
+        root.with_actor(owner).transfer_ownership(other)
+        assert root.created_by_id == owner.pk
+    else:
+        with system_context(reason="test revalidation root denial"):
+            type(root)._base_manager.filter(pk=root.pk).update(created_by=other)
     assert _revalidate(kind, owner, root, ids).errors
 
 
@@ -438,12 +442,19 @@ def test_revalidation_rechecks_circle_membership_and_visible_participant_edges()
     owner = User.objects.create_user(username="feed-revalidate-edges")
     other = User.objects.create_user(username="feed-revalidate-edges-other")
     thread, rows = _messages(owner)
-    party, circle, member = _party_scope(owner, rows)
+    _, private_rows = _messages(other, size=1)
+    party, circle, member = _party_scope(owner, [*rows, *private_rows])
     ids = [str(row.sqid) for row in rows]
-    with system_context(reason="test retained participant visibility"):
+    with system_context(reason="test retained participant attribution"):
         Participant._base_manager.filter(message=rows[-1]).update(created_by=other)
     result = result_data(_revalidate("party", owner, party, ids))["result"]
-    assert result["absent_ids"] == [ids[-1]]
+    assert result["absent_ids"] == []
+    assert _ids(result) == list(reversed(ids))
+    private_id = str(private_rows[0].sqid)
+    result = result_data(_revalidate("party", owner, party, [*ids, private_id]))["result"]
+    assert result["absent_ids"] == [private_id]
+    assert _ids(result) == list(reversed(ids))
+    assert not Participant.objects.with_actor(owner).scoped().filter(message=private_rows[0]).exists()
     with system_context(reason="test retained handle visibility"):
         Handle._base_manager.filter(party=party).update(created_by=other)
     assert result_data(_revalidate("party", owner, party, ids))["result"]["absent_ids"] == ids
@@ -488,7 +499,7 @@ def test_revalidation_sql_cost_with_native_authorization(size: int, capsys: Any)
         handle = Handle._base_manager.create(
             platform="email", value=f"cost-{size}@example.com", party=party, created_by=owner
         )
-        fragment = Fragment.objects.upsert(text=f"Cost fragment {size}", owner_id=owner.pk)
+        fragment = Fragment.objects.upsert(text=f"Cost fragment {size}", created_by_id=owner.pk)
         thread.title = fragment
         thread.save(update_fields=["title"])
         rows = Message._base_manager.bulk_create(
@@ -622,44 +633,49 @@ def test_revalidation_sql_cost_with_native_authorization(size: int, capsys: Any)
 
 
 def test_revalidation_projection_prefetch_preserves_related_permissions() -> None:
-    """Parts inherit the readable message; reactions retain their own read gate."""
+    """Parts and reactions inherit the readable message regardless of attribution."""
 
     owner = User.objects.create_user(username="feed-prefetch-owner")
     other = User.objects.create_user(username="feed-prefetch-other")
     thread, rows = _messages(owner, size=1)
+    _, private_rows = _messages(other, size=1)
     with system_context(reason="test mixed visibility message children"):
-        fragment = Fragment.objects.upsert(text="Shared text", owner_id=owner.pk)
+        fragment = Fragment.objects.upsert(text="Shared text", created_by_id=owner.pk)
         visible = Part._base_manager.create(message=rows[0], fragment=fragment, created_by=owner)
         inherited = Part._base_manager.create(message=rows[0], fragment=fragment, position=1, created_by=other)
         handle = Handle._base_manager.create(platform="email", value="reaction@example.com", created_by=owner)
         Reaction._base_manager.create(message=rows[0], handle=handle, reaction="visible", created_by=owner)
-        Reaction._base_manager.create(message=rows[0], handle=handle, reaction="hidden", created_by=other)
+        Reaction._base_manager.create(message=rows[0], handle=handle, reaction="inherited", created_by=other)
+        hidden = Part._base_manager.create(message=private_rows[0], fragment=fragment, created_by=owner)
+        hidden_reaction = Reaction._base_manager.create(
+            message=private_rows[0], handle=handle, reaction="hidden", created_by=owner
+        )
     result = result_data(
         _revalidate(
             "thread",
             owner,
             thread,
-            [str(rows[0].sqid)],
+            [str(rows[0].sqid), str(private_rows[0].sqid)],
             selection="id parts { id fragment { text } } reaction_groups { reaction count }",
         )
     )["result"]
-    assert result["absent_ids"] == []
+    assert result["absent_ids"] == [str(private_rows[0].sqid)]
+    assert not Part.objects.with_actor(owner).scoped().filter(pk=hidden.pk).exists()
+    assert not Reaction.objects.with_actor(owner).scoped().filter(pk=hidden_reaction.pk).exists()
     assert result["messages"][0]["parts"] == [
         {"id": str(visible.sqid), "fragment": {"text": "Shared text"}},
         {"id": str(inherited.sqid), "fragment": {"text": "Shared text"}},
     ]
-    assert result["messages"][0]["reaction_groups"] == [{"reaction": "visible", "count": 1}]
+    assert result["messages"][0]["reaction_groups"] == [
+        {"reaction": "visible", "count": 1},
+        {"reaction": "inherited", "count": 1},
+    ]
 
 
 def test_revalidation_keeps_record_attached_chatter_behind_its_record_gate() -> None:
     owner = User.objects.create_user(username="feed-retained-record")
-    thread, rows = _messages(owner)
-    with system_context(reason="test retained attached record"):
-        record = ThreadedTicket._base_manager.create(title="Private record", created_by=owner)
-        ThreadAttachment._base_manager.create(
-            thread=thread,
-            content_type=ContentType.objects.get_for_model(ThreadedTicket),
-            object_id=record.pk,
-            created_by=owner,
-        )
+    with actor_context(owner):
+        record = ThreadedTicket.objects.create(title="Private record", created_by=owner)
+        thread, rows = _messages(owner, thread=record.message_thread())
+        assert Thread.objects.filter(pk=thread.pk).exists()
     assert _revalidate("thread", owner, thread, [str(row.sqid) for row in rows]).errors

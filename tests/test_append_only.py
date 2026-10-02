@@ -11,7 +11,14 @@ from django.db import models
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, audit_set_null
+from angee.base.mixins import (
+    AppendOnlyBaseQuerySet,
+    AppendOnlyModel,
+    AppendOnlyQuerySet,
+    AuditMixin,
+    audit_set_null,
+    retained_set_null,
+)
 from angee.base.models import AngeeQuerySet
 from tests.conftest import create_user
 
@@ -20,7 +27,7 @@ class RetainedEvidenceQuerySet(AppendOnlyQuerySet["RetainedEvidence"], AngeeQuer
     """Compose append-only policy with the ordinary authorization chain."""
 
 
-class RetainedEvidence(AuditMixin, models.Model):
+class RetainedEvidence(AppendOnlyModel, AuditMixin, models.Model):
     """Minimal audited row exercising the shared collection policy."""
 
     name = models.CharField(max_length=64)
@@ -29,7 +36,23 @@ class RetainedEvidence(AuditMixin, models.Model):
     class Meta:
         app_label = "base"
         db_table = "test_append_only_evidence"
-        base_manager_name = "objects"
+
+
+def test_append_only_base_manager_and_instance_writes_are_guarded(transactional_db: Any) -> None:
+    """The declared base manager keeps ordinary writes closed."""
+    del transactional_db
+    with system_context(reason="test append-only base manager"):
+        row = RetainedEvidence.objects.create(name="retained")
+        assert isinstance(RetainedEvidence._base_manager.get_queryset(), AppendOnlyBaseQuerySet)
+        for write in (
+            lambda: RetainedEvidence._base_manager.filter(pk=row.pk).update(name="changed"),
+            lambda: RetainedEvidence._base_manager.filter(pk=row.pk).delete(),
+            row.save,
+            row.delete,
+        ):
+            with pytest.raises(ValidationError):
+                write()
+        assert RetainedEvidence._base_manager.get(pk=row.pk).name == "retained"
 
 
 def test_audit_foreign_keys_declare_serializable_materialized_nullification() -> None:
@@ -37,19 +60,19 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
     for name in ("created_by", "updated_by"):
         on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
-        assert on_delete is audit_set_null
+        assert on_delete is retained_set_null is audit_set_null
         serialized, imports = MigrationWriter.serialize(on_delete)
-        assert serialized == "angee.base.mixins.audit_set_null"
+        assert serialized == "angee.base.mixins.retained_set_null"
         assert imports == {"import angee.base.mixins"}
 
 
 def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(
-    transactional_db: Any,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The audit FK policy bypasses a queryset whose update path stays closed."""
 
-    del transactional_db
+    del composed_tables
     with pytest.raises(ValidationError, match="contenttypes.ContentType rows cannot be edited"):
         AppendOnlyQuerySet(model=ContentType).update(created_by=None)
     actor = create_user("append-only-auditor")

@@ -1,5 +1,5 @@
 import { senderDisplayName } from "@angee/parties";
-import { IntegrationSyncColumns, IntegrationSyncFields } from "@angee/integrate";
+import { IntegrationSyncColumns } from "@angee/integrate";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import {
@@ -7,9 +7,6 @@ import {
   Column,
   EmptyState,
   ErrorBanner,
-  Field,
-  Form,
-  Group,
   List,
   ListView,
   LoadingPanel,
@@ -21,11 +18,9 @@ import {
   avatarInitials,
   errorMessage,
   reactionsFromGroups,
-  registerForm,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
-  type RegisteredFormProps,
   type StringIdRow,
 } from "@angee/ui";
 
@@ -34,6 +29,7 @@ import {
   FeedMessagesDocument,
   type FeedMessageRow,
 } from "./documents";
+import { feedForm } from "./FeedForm";
 import { usePostsT, type PostsT } from "./i18n";
 import { postsReactionCopy } from "./reaction-copy";
 
@@ -174,14 +170,14 @@ export function FeedsPage(): React.ReactElement {
     <ResourceList resource={FEED_MODEL} form={feedForm} placement="inline" routed hideCreate recordTabs={tabs}>
       <List resource={FEED_MODEL}>
         <Column field="display_name" header={t("feed.name")} />
-        <Column field="backend_class" header={t("feed.backend")} />
+        <Column field="feed_backend_class" header={t("feed.backend")} />
         <Column field="handle.display_name" header={t("feed.handle")} />
         <Column field="lifecycle" header={t("feed.lifecycle")} widget="statusBadge" />
         <Column field="runtime_status" header={t("feed.runtime")} widget="statusBadge" />
         {IntegrationSyncColumns({
-          fields: ["last_sync_status", "last_sync_completed_at"],
+          fields: ["sync_stage", "last_sync_completed_at"],
           labels: {
-            last_sync_status: t("feed.sync"),
+            sync_stage: t("feed.sync"),
             last_sync_completed_at: t("feed.syncedAt"),
           },
         })}
@@ -189,33 +185,3 @@ export function FeedsPage(): React.ReactElement {
     </ResourceList>
   );
 }
-
-function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
-  const t = usePostsT();
-  return (
-      <Form {...props} resource={FEED_MODEL}>
-        <Field name="display_name" label={t("feed.name")} title readOnly />
-        <Group label={t("feed.details")} columns={2}>
-          <Field name="backend_class" label={t("feed.backend")} readOnly />
-          <Field name="external_id" label={t("feed.externalId")} readOnly />
-          <Field name="handle" label={t("feed.handle")} readOnly />
-          <Field name="lifecycle" label={t("feed.lifecycle")} readOnly />
-          <Field name="runtime_status" label={t("feed.runtime")} readOnly />
-        </Group>
-        <Field name="config" label={t("feed.config")} readOnly />
-        {IntegrationSyncFields({
-          label: t("feed.sync"),
-          fields: ["last_sync_status", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error"],
-          labels: {
-            last_sync_status: t("feed.sync"),
-            last_sync_completed_at: t("feed.syncedAt"),
-            last_sync_items: t("feed.items"),
-            sync_progress: t("feed.progress"),
-            sync_error: t("feed.error"),
-          },
-        })}
-      </Form>
-  );
-}
-
-export const feedForm = registerForm(FEED_MODEL, FeedForm);

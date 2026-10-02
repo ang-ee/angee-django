@@ -20,6 +20,7 @@ import {
   useRuntimeUserPreferences,
 } from "@angee/ui";
 import type { DashboardTarget } from "@angee/ui/dashboard/headless";
+import { visibleDashboardSnapshot } from "@angee/ui/dashboard/surface";
 import { useDashboardsT } from "./i18n";
 
 export function PersonalDashboardPage(): React.ReactElement {
@@ -38,13 +39,15 @@ export function AddonDashboardPage(): React.ReactElement {
 }
 
 function DashboardPage({ target }: { target: DashboardTarget }): React.ReactElement {
-  const store = useDashboardRegistry().store;
+  const registry = useDashboardRegistry();
+  const store = registry.store;
   if (!store) return <DashboardSurface target={target} />;
-  return <StoredDashboardPage target={target} store={store} />;
+  return <StoredDashboardPage target={target} registry={registry} store={store} />;
 }
 
-function StoredDashboardPage({ target, store }: {
+function StoredDashboardPage({ target, registry, store }: {
   target: DashboardTarget;
+  registry: ReturnType<typeof useDashboardRegistry>;
   store: NonNullable<ReturnType<typeof useDashboardRegistry>["store"]>;
 }): React.ReactElement {
   const binding = store.useDashboard(target);
@@ -79,6 +82,7 @@ function StoredDashboardPage({ target, store }: {
       const result = await binding.duplicate(target, {
         name: `${state.name} copy`,
         clientCreationKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
+        snapshot: visibleDashboardSnapshot(registry, target, state),
       });
       await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
     } catch (cause) {
@@ -97,6 +101,7 @@ function StoredDashboardPage({ target, store }: {
         target,
         persistedId: state.persistedId,
         expectedRevision: state.revision,
+        declarationRevision: state.declarationRevision,
         name: dashboardName.trim(),
         description: dashboardDescription,
         snapshot: state.snapshot,

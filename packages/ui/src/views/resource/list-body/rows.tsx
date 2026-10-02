@@ -156,6 +156,7 @@ function LinkedRecordRow<TRow extends Row>({
   return (
     <TableRow
       {...dragProps}
+      className="group/record"
       interactive
       aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
@@ -253,6 +254,7 @@ function PlainRecordRow<TRow extends Row>({
   return (
     <TableRow
       {...dragProps}
+      className="group/record"
       interactive={interactive}
       aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}

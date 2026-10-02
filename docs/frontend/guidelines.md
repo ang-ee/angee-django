@@ -43,6 +43,11 @@ depend on addons or a composed project's generated schema.
 | [`@angee/app`](../../packages/app/README.md) | Compose addon declarations, routes, providers, registries and the application shell |
 | Addon / composed project | Domain pages and schema-dependent generated documents |
 
+Knowledge's role-scoped notes compose messaging's `RecordThreadStream` through
+its child item and inline composer contracts. Knowledge owns page creation, body
+writes, binding, and vault permission reads; record hosts declare the role and
+public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.md).
+
 ### Ownership boundaries
 
 - Auth, preferences, and runtime i18n are app-owned providers under
@@ -58,6 +63,13 @@ depend on addons or a composed project's generated schema.
   The shared `createAngeeI18nInstance` initializer in `@angee/ui/runtime`
   configures that instance and the provider-less binding's English defaults;
   i18next owns plural selection and interpolation in both cases.
+- App copy belongs to manifest `vocabulary` scopes: a menu root, optionally a
+  route whose descendants inherit the override. The app validates existing
+  message, model, field and menu keys; metadata projects presentation labels
+  without changing query or model identity. Use host `createApp.i18n` for global
+  copy, and scoped vocabulary for another addon's copy within an app. Native
+  i18next scopes retain one locale across navigation. See the
+  [manifest example](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - Record display representation is a backend-emitted metadata fact in the
   `angee.resources` artifact. Frontend code reads that field and keeps only the
   `id` floor; it does not probe candidate display fields.
@@ -95,6 +107,14 @@ compose TanStack Table row models. Angee keeps the thin lookup evaluator that le
 TanStack apply the URL-owned filter object to in-memory rows. Infinite message
 history uses native Query pages with domain-owned
 [window reads and retained-ID revalidation](upstream-reuse.md#history-retention).
+
+### Reserved translation namespace
+
+`ui` is reserved for the shared rendered binding. Addons contribute
+namespace-relative messages under their own namespace; even an empty `ui`
+bundle is rejected by [`composeAddons`](../../packages/app/src/define-addon.ts).
+Use the owning addon's namespace with `createNamespaceT`; do not override
+shared UI copy through an addon bundle.
 
 ## Rules
 
@@ -157,6 +177,12 @@ history uses native Query pages with domain-owned
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
 - React does not own business logic, permissions, models, or persistence.
+- Dashboard widget visibility is declared separately from its data filter.
+  [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
+  the resource scope that authorizes listing; the dashboards backend answers
+  for the current actor before the UI mounts queries and packs visible widgets.
+  An authorized empty result remains visible. Built-in query widgets put Refresh
+  in their options menu; authored widgets own their refresh controls.
 - **React state has one owner.** Keep canonical facts in the smallest owner:
   route/search facts in TanStack Router/nuqs, server facts in Refine core reads
   and TanStack Query, native controlled table state in `ResourceViewProvider`,
@@ -178,6 +204,11 @@ history uses native Query pages with domain-owned
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
   described under [Package Layering](#package-layering).
+- **Product identity is declared once.** At most one addon declares
+  `brand: { name, mark }`, with `mark` a registered glyph; composition rejects a
+  second claim. Rail, login, public mark and document title read it through
+  `useRuntimeBrand`; shell components hard-code no identity. See
+  [`AddonManifest.brand`](../../packages/app/src/define-addon.ts).
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native
@@ -228,13 +259,16 @@ history uses native Query pages with domain-owned
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
   tabs and composer intact. Chatter stays in the shell's right pane. Consumers
-  do not mount their own chatter or filter its contributed tabs to change
-  placement.
+  do not mount their own chatter. The inherited app and route `surface`
+  declaration owns contribution admission and aside visibility; the shell
+  applies it before mounting tabs. Only named slot, aside and drawer lists
+  restrict contributions; omitted addresses retain their defaults, including
+  in a confined app. Public and sign-in routes are unfiltered. App-keyed route
+  scopes can narrow a route owned by another addon. A tab without a model scope
+  appears only on record routes. See the [route policy](../../packages/app/src/route-policy.ts) and
+  [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
-  paging, record selection, and URL state. The workflows Decision inbox keeps
-  `ApprovalTask` as the sole form and mutation owner and specializes only its
-  content slot by Decision action; resolving closes the stale row so the native
-  filtered collection refreshes before selecting the next current record.
+  paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
   routed page `component: lazyRouteComponent(() => import("./views/Page"),
   "Page")` (the stack-native helper from `@tanstack/react-router`, already a
@@ -245,7 +279,10 @@ history uses native Query pages with domain-owned
   inside its layout's `<Outlet/>`, so the chrome stays mounted. Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
   around a route's `<Outlet/>`. Lighter manifest content (slot/section content,
-  forms, glyphs) stays eager. A heavy optional surface may use `React.lazy` inside
+  forms, glyphs) stays eager. Keep a registered form and its descriptor in an
+  eager form module when its routed page is lazy; the manifest must not import or
+  re-export the page module. A page may import its form, and form callers import
+  the form module directly. A heavy optional surface may use `React.lazy` inside
   the shared `LazyBoundary` when its dependency tree otherwise enters the boot
   bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
   and its transport slots defer assistant-ui, streamdown and its code renderer
@@ -297,7 +334,10 @@ history uses native Query pages with domain-owned
   `statusBadge`, `colorDot`, and form headers.
   The pure `statusTone` resolver remains for non-React transforms with explicit
   vocabulary. An explicit `<Column tone>` map wins, then addon tones, then the shared
-  convention, else `brand`. A run
+  convention, else `brand`. Scoped `resources.<model>.fields.<field>.tones`
+  colors one column without claiming a global status word; its option label
+  remains the displayed text. Bare enum columns use `statusBadge`, and scalar
+  stages can declare it. A run
   state — stopped/running/error/warning — renders as `colorDot` (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
@@ -339,6 +379,19 @@ history uses native Query pages with domain-owned
   or local copies of shared resource-view state.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
+  Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
+  because a verb must remain understandable without recognizing its icon.
+  Mark the state's next descriptor `primary`; keep infrequent descriptors at
+  `placement: "menu"`. Secondary inline verbs appear on hover and focus.
+- A list route declares its shipped `presetIds`, `filterRow` quick filter and facet
+  ids, `createAction`, and `boardCard` fields on `ResourceList`/`List` rather than
+  building parallel controls. The route default preset is included automatically.
+  Quick filter ids may name shipped presets or filter options. A scoped create verb
+  uses a server-projected parent record for its permission; the create label comes
+  from resource vocabulary. `chrome` may hide the view switcher, pager, or column
+  chooser without changing query state; `chrome.heading` declares label, hint,
+  and audience around the live count. A nonselectable list hides Share but keeps
+  other contributed utilities.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
   A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
   `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
@@ -378,6 +431,15 @@ history uses native Query pages with domain-owned
   and child paging. Do not register a fictional model, infer available choices
   from one server page, or filter/group that page in the browser. Bounded
   in-memory fixtures still use `RowsListView`.
+- Named addon `resourceViews` compose the existing favorites and ResourceView
+  query state. A route or menu `defaultResourceView` selects a shipped preset;
+  `presetIds` adds only the other presets declared for that collection route.
+  Menu presets are admitted only on their target route. URL edits override the
+  route default's editable query; toolbar Clear restores that default and its
+  fixed filter. The switcher includes shipped views even without
+  writable preferences. Columns use native TanStack visibility keyed by the
+  authored field; relation display-path projection preserves that identity.
+  See the [manifest contract](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - **Card presentation does not change the query boundary.** An ordinary grouped
   board over a server resource uses the same server groups, exact counts and
   per-group record pages as the grouped list. Deriving its lanes from a flat
@@ -385,7 +447,27 @@ history uses native Query pages with domain-owned
   surface owns discovery and paging; board components render its results.
   Explicit `laneSource` boards retain their relation-catalogue contract for empty
   lanes, drag ordering and lane creation; bounded local collections keep native
-  client grouping.
+  client grouping. The read-only `gantt` view kind composes both owners: a
+  `ListView` declaring `gantt` and `laneSource` pages its rows, empty ones
+  included, through the board's relation-options owner and loads their bars
+  through the list's resource query and batch transport. See
+  [`GanttCollectionSurface`](../../packages/ui/src/views/gantt/gantt-collection-surface.tsx).
+  `GanttViewSpec.current` names the lane field holding its current bar identity;
+  the collection selects it and emphasizes that bar independently of selection.
+  `GanttViewSpec.lane` selects its own fields and returns a linked title, optional
+  secondary line, named people, and a short note after the last scheduled bar.
+  Empty parts are omitted; the lane heading uses the lane resource vocabulary.
+  Human dates, ranges, relative times and durations come from the shared
+  [`date-format`](../../packages/ui/src/widgets/date-format.ts) owner. The app
+  runtime i18n provider sets the default language for pure formatters; explicit
+  locales override it. Gantt passes its configured time zone to date ranges
+  and week headers. Lane links use router navigation on plain clicks, with
+  `onRowClick` taking precedence when the host supplies it.
+  Optional `markers` declares a second resource's date and lane relation. Both
+  sources load every record on the current lane page through their own query
+  contracts; marker filters are independent of bar filters. Due dates render as
+  the vendored grid's zero-duration diamonds, with no inferred task duration or
+  write gestures. See the [spec](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Resolve resource queries before adapting them to a library.** Use the
   resource's `ResourceQuery` for allowed comparisons, group identities, drill
   predicates and required selections. Hand-building a resource view's Hasura
@@ -428,6 +510,23 @@ history uses native Query pages with domain-owned
   ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
   are untouched — and reuses the same `<Group>` declarations, so no field metadata is
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+- **The form hero precedes secondary facts.** `FormView` places its status control
+  above the title and its lead body before the overview's groups. A domain-owned
+  status control declares `<Field status widget="…" />` and registers its widget
+  with the addon. Add `fill` when it should use the measured hero width; the
+  widget receives `field.fill` and `field.containerWidth`. Do not repeat that
+  state as another strip.
+  Keep the one metadata-owned subtitle line and place operational fields in a
+  collapsed Details group when their create-default behavior must remain available.
+  Projects exports its [standard declarations](../../addons/angee/projects/README.md)
+  so consumer routes compose the same forms, lists and record tabs.
+- **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
+  steps declared on the path, and a side or terminal state as one muted chip.
+  Server-owned transitions declare `selectable` from eligible choices, and the
+  owner confirms before writing. Plain form options update form state until Save.
+  Use `fill` for record-width bars and pass the slot's available `containerWidth`
+  when it is known. Enum labels for status controls and cells resolve through
+  `canonicalOptionValue`, regardless of GraphQL read casing.
 - **Contribute a saved-record tab from the data view** through
   `formViewSectionsSlot(resource)` with a direct `<Tab>` declaration. Canonical
   parent sections are inherited by concrete child forms; contribute once at the
@@ -438,14 +537,40 @@ history uses native Query pages with domain-owned
   Hasura resource owns filter/order/group/facet capabilities; the list owns
   controls, paging and `rowActions`, including confirmations for generated action
   callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  Declare section and verb ids in the app's `surface.admit.slots` for
+  `form-view.sections` and `form-view.record-actions`; app-keyed route scopes
+  can narrow either list. Omitting a slot keeps all its contributions and `[]`
+  keeps none. [FormView](../../packages/ui/src/views/form/form-view-surface.ts)
+  selects required fields from the route-projected contributions; authored
+  fields and passive chrome remain host-owned.
+- **Record verbs compose the shared action owner.** A slot contribution may render
+  [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
+  with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
+  carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
+  and record-action slot contributions declare a projected `permission` when
+  their verbs require one; unavailable verbs are omitted.
+- **Record rails reuse form fields.** Contribute a `FormView.RailGroup` through
+  `FormView.railSlot(model)` with standard field descriptors and optional
+  group/row permissions. The form selects those fields and binds them to its
+  save state; unreadable rows stay absent. The rail follows the active record
+  tab and stacks beneath the body in a narrow container.
+- **Inline visibility controls bind a server verb.** Declare a
+  `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
+  The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
+  chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
+  and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
+- **Human decision subjects opt into the generic tab.** Compose
+  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/RecordDecisions.tsx);
+  [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
+  subject identity, while each subject addon owns successor admission.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
-  relation widget resolves it through `useResourceRoute(resource)` to show a
-  "follow" arrow to the selected record's detail page. Refine owns the route
+  relation widget resolves its registered record route. Read-only fields render
+  `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
-  no arrow.
+  the retained label without a link.
 - Register a resource's create form once via `defineAddon`'s
   `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
   wherever that resource is created, including the relation-picker inline create. Use
@@ -459,18 +584,45 @@ history uses native Query pages with domain-owned
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
-- Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
-  `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
-  submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling. Decode raw controls at
-  that boundary with `parseValues` and `mutationDialogValueCodecs`; ordinary text
-  trims and maps empty input to `null`, while explicit required/verbatim codecs
-  guard their authored field contracts. A **record action that
-  collects typed args** — relation pickers, a relation list prefilled from the
-  invoking selection/record, scalars — instead declares `args` + `submit` on its
-  `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
-  mutation and binds the in-band `ActionOutcome.validationErrors` to the args,
-  staying open until `ok`. Declare args, don't hand-roll the dialog.
+- Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
+  Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
+  owns controls and requires a native RHF `FormProvider`. Decode raw controls with
+  `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
+  authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
+  `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
+  schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
+  shared form owns branching, validation and draft retention across record refreshes.
+- Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
+  `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
+  preserves edits and offers reload. Adapt wire responses with
+  `actionFormSubmitResult(data, root)` and normalized outcomes with
+  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
+  returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
+  data is an invalid result, never an `ok` null sentinel.
+- Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
+  from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
+  discriminator selection; RHF owns original and transformed values. Keep this
+  opt-in adapter out of the UI main entry so other forms do not load Ajv.
+- A widget that consumes a fixed array of object fields declares
+  `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
+  passes the parsed `rowTemplate` only through that seam and rejects a selected
+  widget that cannot accept it; compose the shared `rows` widget for decision
+  forms with fixed-size tables. Decision-specific presentation contributes
+  `decisionContent(kind, Component)` through the decisions fragment's content
+  slot, with one component per kind; the inbox owns the form and its React Hook
+  Form context.
+- Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
+  consumers own connection policy, selection and persisted layout.
+- Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
+  custom pickers retain their own keyboard interaction.
+- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts);
+  group field interactions and reset history when accepting a saved or reloaded baseline.
+- Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
+  in authored order; client identities survive renaming and own duplicate-key issues.
+- Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)
+  with lazy branches, concrete indices and literal keys; schema owners resolve references.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
@@ -515,6 +667,13 @@ history uses native Query pages with domain-owned
 
 ## Form save contracts
 
+View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
+real identity and permitted people. Compose `useRuntimeViewAs` at shared write
+owners so permitted actions remain visible but disabled, including keyboard,
+submit and upload paths. The app resets actor-bound queries on enter and exit;
+change subscriptions stay closed during preview because WebSockets retain their
+handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
+
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
 still open a creation form. Fixtures must declare the write operations they intend
@@ -550,9 +709,9 @@ Hard-won traps — the wise learn from others' mistakes
   repository-local `.angee/runtime` fallback may be stale in a workspace slot.
 - **Optional operations travel with their owning addon.** Keep documents and their
   transport UI in the addon contributing the schema fields; a base fragment must
-  codegen without optional dependents. Runtime-specific agent chat composes the
-  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from the
-  [workflow session fragment](../../addons/angee/workflows_agents/web/src/index.tsx).
+  codegen without optional dependents. Runtime-specific chat surfaces fill the
+  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from their own
+  addon fragment.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
@@ -637,6 +796,13 @@ Hard-won traps — the wise learn from others' mistakes
   Project TypeScript configs must allow importing `.ts`/`.tsx` extensions because
   the generated runtime imports addon index source files by their package export
   paths.
+- **Generated schema metadata loads before app composition.** The codegen-owned
+  `loadComposedSchemas()` fetches metadata JSON assets in parallel. The host
+  passes it to `@angee/app`'s `bootApp`, which shows the shared loading state and
+  retries fetch failures before calling synchronous `createApp`. Addon manifests
+  still compose synchronously; errors from metadata validation or route creation
+  propagate as programming errors. The `@angee/app/vite` config preloads the
+  metadata assets in built HTML.
 - **Generate operator types from the daemon-owned SDL.** The operator's
   [addon manifest](../../addons/angee/operator/addon.toml) contributes the
   committed SDL and daemon document glob to the shared codegen pass. Do not
@@ -675,6 +841,12 @@ Hard-won traps — the wise learn from others' mistakes
   changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
   stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
   this never applies there.
+- **Vendored third-party UI records its provenance beside the code.** Keep the
+  upstream license and an `UPSTREAM.md` naming the pinned source, original file
+  hashes and every local adaptation, and list both in the package's published
+  `files`. Adapt primitives, glyphs, tokens and types; leave upstream algorithms
+  intact. The [ReUI Gantt](../../packages/ui/src/views/gantt/UPSTREAM.md) is the
+  reference.
 - **Start new addon web packages from `templates/addons/web`.** The Copier template
   owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
   pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
@@ -707,6 +879,10 @@ Hard-won traps — the wise learn from others' mistakes
   activation; modified clicks keep the browser default). Workbench primary
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
+  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
+  app roots: explicit `appRoot` declarations win, otherwise every root is an app,
+  and `appRoot` on a non-root item throws. A branded single-root rail shows the
+  brand and that root's children instead of the app chooser.
   A route referenced by more than one menu item must set `route.menu` (the owning
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the

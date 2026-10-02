@@ -7,26 +7,34 @@ import logging
 import threading
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from functools import partial
+from dataclasses import dataclass, replace
+from functools import lru_cache, partial
 from typing import Any, ClassVar, cast
 
 import strawberry
 from django.apps import AppConfig, apps
-from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
 from rebac import MissingActorError, PermissionDenied, RebacMixin
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
+from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
-from strawberry.types.base import get_object_definition
+from strawberry.types.arguments import convert_argument
+from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
+from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
+from strawberry.types.scalar import ScalarDefinition
+from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
+from angee.base.errors import DomainError
+from angee.base.mixins import StaleRevisionError
+from angee.base.transitions import TransitionNotAllowed
 from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -39,14 +47,23 @@ from angee.graphql.introspection import (
     surface_field_names,
     surface_name,
 )
-from graphql import GraphQLError, GraphQLSchema
+from angee.graphql.view_as import ViewAsReadOnlyExtension
+from graphql import GraphQLError, GraphQLObjectType, GraphQLSchema, assert_input_type, coerce_input_value
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
 
 logger = logging.getLogger(__name__)
 _INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
-_EXPECTED_ERROR_CODES = frozenset({"VALIDATION", "BAD_USER_INPUT", "UNAUTHENTICATED", "PERMISSION_DENIED", "FORBIDDEN"})
+_EXPECTED_ERROR_CODES = frozenset(
+    {
+        "VALIDATION",
+        "BAD_USER_INPUT",
+        "UNAUTHENTICATED",
+        "PERMISSION_DENIED",
+        "FORBIDDEN",
+    }
+)
 
 SCHEMA_PART_KEYS: tuple[str, ...] = (
     "query",
@@ -81,6 +98,31 @@ class AngeeSchema(strawberry.Schema):
     angee_resources: tuple[DataResourceMetadata, ...] = ()
     """Model resource metadata carried by this built schema."""
 
+    @lru_cache
+    def get_type_by_name(
+        self, name: str,
+    ) -> StrawberryObjectDefinition | ScalarDefinition | StrawberryEnumDefinition | StrawberryUnion | None:
+        """Expose final extension fields to native schema/optimizer consumers.
+
+        Strawberry merges extensions in graphql-core, while its type map keeps
+        the primary declaration. Project the executable fields (including their
+        native optimizer stores) onto a schema-local definition. Shared addon
+        declarations remain untouched when another named schema is built.
+        """
+
+        definition = super().get_type_by_name(name)
+        graphql_type = self._schema.get_type(name)
+        if (
+            isinstance(definition, StrawberryObjectDefinition)
+            and isinstance(graphql_type, GraphQLObjectType)
+            and graphql_type.extensions.get(GraphQLCoreConverter.OBJECT_EXTENSIONS_BACKREF)
+        ):
+            return replace(definition, fields=[
+                field.extensions[GraphQLCoreConverter.DEFINITION_BACKREF]
+                for field in graphql_type.fields.values()
+            ])
+        return definition
+
     def process_errors(
         self,
         errors: list[GraphQLError],
@@ -90,6 +132,13 @@ class AngeeSchema(strawberry.Schema):
 
         errors_to_log: list[GraphQLError] = []
         for error in errors:
+            refusal = (
+                isinstance(error.original_error, (
+                    DomainError, MissingActorError, PermissionDenied, TransitionNotAllowed, ObjectDoesNotExist,
+                ))
+                or _unwrap_validation_error(error.original_error) is not None
+                or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
+            )
             if error.path is None and isinstance(error.original_error, GraphQLError):
                 # graphql-core's request coercion errors echo submitted values.
                 # Preserve them for the client without passing them to logging.
@@ -98,7 +147,8 @@ class AngeeSchema(strawberry.Schema):
             self._apply_rebac_code(error)
             self._apply_validation_error(error)
             self._sanitize_unexpected_error(error)
-            errors_to_log.append(error)
+            if not refusal:
+                errors_to_log.append(error)
         super().process_errors(errors_to_log, execution_context)
 
     @staticmethod
@@ -108,7 +158,18 @@ class AngeeSchema(strawberry.Schema):
         original = error.original_error
         if original is None or isinstance(original, MissingActorError | PermissionDenied):
             return
+        if isinstance(original, DomainError):
+            error.message = original.code
+            error.extensions = {"code": original.code}
+            if isinstance(original, StaleRevisionError):
+                error.extensions["current_revision"] = original.current
+            error.original_error = None
+            return
         if _unwrap_validation_error(original) is not None:
+            return
+        if isinstance(original, TransitionNotAllowed | ObjectDoesNotExist):
+            error.message = "The requested operation was refused."
+            error.extensions = {"code": "BAD_USER_INPUT"}
             return
         if isinstance(original, GraphQLError) and (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES:
             extensions = error.extensions or {}
@@ -318,12 +379,45 @@ class GraphQLSchemas:
 
         return cast(AngeeSchema, self.build(name)).angee_resources
 
+    def resource_filter(self, model: type[models.Model], value: Any, *, max_depth: int = 12) -> Any:
+        """Coerce a stored resource condition and return its native queryset filter.
+
+        The console resource is the authoring contract when present. Final input
+        extensions, scalar coercion, public IDs and expression aliases are the
+        same ones used by its GraphQL list field; callers supply their own scope.
+        """
+        pending = [(value, 0)]
+        while pending:
+            node, depth = pending.pop()
+            if depth > max_depth:
+                raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
+            if isinstance(node, dict):
+                pending.extend((child, depth + 1) for child in node.values())
+            elif isinstance(node, list):
+                pending.extend((child, depth + 1) for child in node)
+        for name in sorted(self.names(), key=lambda name: (name != "console", name)):
+            for surface in self.parts[name].query:
+                for contribution in data_resource_contributions(surface):
+                    resource = contribution.native_resource
+                    if contribution.model is not model or resource is None or contribution.compile_filter is None:
+                        continue
+                    schema = self.build(name)
+                    definition = get_object_definition(resource.filter_type, strict=True)
+                    graphql_type = assert_input_type(self.graphql_schema(name).get_type(definition.name))
+                    try:
+                        coerced = coerce_input_value(value, graphql_type)
+                        where = convert_argument(
+                            coerced, definition.origin, schema.schema_converter.scalar_registry, schema.config,
+                        )
+                        return contribution.compile_filter(where)
+                    except (GraphQLError, TypeError, ValueError) as error:
+                        raise ValidationError(str(error)) from error
+        raise ValidationError(f"{model._meta.label} has no filterable resource.")
+
     def change_publisher_models(self) -> tuple[type[models.Model], ...]:
         """Return every model declared into the GraphQL change feed.
 
-        Memoized per instance: the published set is fixed for a process, and
-        both ``Trigger.clean()`` and the workflows system check consume it on
-        every trigger save.
+        Memoized per instance: the published set is fixed for a process.
         """
 
         cached: tuple[type[models.Model], ...] | None = getattr(self, "_change_publisher_models", None)
@@ -414,6 +508,7 @@ class GraphQLSchemas:
             extensions=cast(
                 list[Any],
                 [
+                    ViewAsReadOnlyExtension,
                     RebacExtension,
                     *parts.extensions,
                     RebacDjangoOptimizerExtension,
@@ -542,9 +637,11 @@ class GraphQLSchemas:
         self,
         types: tuple[object, ...],
     ) -> None:
-        """Put Django choice labels on Strawberry enum definitions before build."""
+        """Label Django choices from model fields and explicitly contributed enums."""
 
         for surface in types:
+            if isinstance(surface, type) and issubclass(surface, models.Choices):
+                self._describe_choice_enum(surface)
             model = self._django_model_or_none(surface)
             if model is None:
                 continue

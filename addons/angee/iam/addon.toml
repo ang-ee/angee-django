@@ -10,6 +10,11 @@ dependencies = [
   "django-axes>=8.0",
 ]
 
+[[migrations]]
+name = "normalize_person_emails"
+app_label = "iam"
+module = "runtime_migrations.normalize_person_emails"
+
 [resources]
 demo = [
   { path = "resources/demo/010_iam.user.yaml", adopt = "username" },

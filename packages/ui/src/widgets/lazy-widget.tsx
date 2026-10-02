@@ -17,7 +17,7 @@ type WidgetSlot = "read" | "edit" | "cell";
  */
 export function lazyWidget<TValue = unknown, TRow = unknown>(
   load: () => Promise<WidgetDefinition<TValue, TRow>>,
-  slots: { edit?: boolean; cell?: boolean } = {},
+  slots: { edit?: boolean; cell?: boolean; acceptsRowTemplate?: true } = {},
 ): WidgetDefinition<TValue, TRow> {
   // Resolve the module once and share it across the slots' lazy factories — the
   // dynamic import is cached, so this just avoids re-wrapping it per slot.
@@ -26,6 +26,7 @@ export function lazyWidget<TValue = unknown, TRow = unknown>(
     (pending ??= load());
   const definition: WidgetDefinition<TValue, TRow> = {
     read: lazySlot(loadOnce, "read"),
+    ...(slots.acceptsRowTemplate ? { acceptsRowTemplate: true as const } : {}),
   };
   if (slots.edit) definition.edit = lazySlot(loadOnce, "edit");
   if (slots.cell) definition.cell = lazySlot(loadOnce, "cell");

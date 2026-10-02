@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -94,6 +94,19 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("layoutGraph", "@angee/ui", "src/views/graph-layout.ts"),
+  frameworkCriticalExport("FilterClauseEditor", "@angee/ui", "src/toolbars/FilterClauseEditor.tsx"),
+  frameworkCriticalExport("schemaFieldMetadataWithVocabulary", "@angee/metadata", "src/artifact.ts"),
+  frameworkCriticalExport("validateResourceViewPreset", "@angee/ui", "src/views/resource/model/favorites.ts"),
+  frameworkCriticalExport("RecordActionBar", "@angee/ui", "src/views/form/RecordActionBar.tsx"),
+  frameworkCriticalExport("VisibilityControl", "@angee/ui", "src/widgets/visibility.tsx"),
+  frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),
+  frameworkCriticalExport("DocumentTitle", "@angee/ui", "src/chrome/DocumentTitle.tsx"),
+  frameworkCriticalExport("GanttView", "@angee/ui", "src/views/gantt/GanttView.tsx"),
+  frameworkCriticalExport("useRuntimeViewAs", "@angee/ui", "src/runtime/runtime.ts"),
+  frameworkCriticalExport("ViewAsPicker", "@angee/ui", "src/chrome/ViewAs.tsx"),
+  frameworkCriticalExport("ViewAsBanner", "@angee/ui", "src/chrome/ViewAs.tsx"),
+  frameworkCriticalExport("viewAsAuth", "@angee/refine", "src/transport-auth.ts"),
   frameworkCriticalExport("StatusToneMap", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("statusTone", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("useStatusTone", "@angee/ui", "src/widgets/use-status-tone.ts"),
@@ -102,17 +115,21 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("collectionQuery", "@angee/ui", "src/views/resource/collection-source.ts"),
   frameworkCriticalExport("CollectionTreeView", "@angee/ui", "src/views/tree/CollectionTreeView.tsx"),
   frameworkCriticalExport("RelationFieldWidget", "@angee/ui", "src/views/relation/RelationFieldWidget.tsx"),
+  frameworkCriticalExport("RecordReference", "@angee/ui", "src/views/relation/RecordReference.tsx"),
   frameworkCriticalExport("createAngeeI18nInstance", "@angee/ui", "src/runtime/i18n.ts"),
   frameworkCriticalExport("resourcePageRoutes", "@angee/app", "src/define-base-addon.ts"),
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),
   frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/form/MutationDialog.tsx"),
+  frameworkCriticalExport("DescriptorFieldList", "@angee/ui", "src/views/form/DescriptorFieldList.tsx"),
+  frameworkCriticalExport("ActionFormProvider", "@angee/ui", "src/views/form/ActionFormProvider.tsx"),
+  frameworkCriticalExport("applyFormErrors", "@angee/ui", "src/views/form/validation-errors.ts"),
+  frameworkCriticalExport("jsonSchemaActionArgs", "@angee/ui", "src/views/form/json-schema.ts"),
   frameworkCriticalExport("parseFormSpec", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("isCompositeFieldDescriptor", "@angee/ui", "src/views/form/form-view-model.ts"),
   frameworkCriticalExport("JsonValueSchema", "@angee/ui", "src/widgets/json-value.ts"),
   frameworkCriticalExport("FORM_SPEC_ANNOTATIONS", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("textValue", "@angee/ui", "src/views/form/field-values.ts"),
   frameworkCriticalExport("DISABLED_RESOURCE", "@angee/metadata", "src/resources.ts"),
-  frameworkCriticalExport("GraphViewGeometry", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("graphNodeStyle", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
   frameworkCriticalExport("PrimaryPanePublisher", "@angee/ui", "src/layouts/primary-pane-context.tsx"),
@@ -123,7 +140,6 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("updateRouteSearch", "@angee/ui", "src/views/resource/record-navigation-context.ts"),
   frameworkCriticalExport("useAngeeDeletePreview", "@angee/refine", "src/dialect/hooks.tsx"),
   frameworkCriticalExport("useAuthoredKeysetFeed", "@angee/refine", "src/dialect/keyset-feed.ts"),
-  frameworkCriticalExport("keysetFeedOptions", "@angee/refine", "src/dialect/keyset-feed.ts"),
   frameworkCriticalExport("keysetFeedRows", "@angee/refine", "src/dialect/keyset-feed.ts"),
 ];
 
@@ -184,6 +200,90 @@ describe("React architecture guardrails", () => {
     expect(isApprovedRelativeEscape(pkg, file, "../../../app/src/create-app")).toBe(false);
   });
 
+  test.each(["vi", "vitest"])("scans %s module paths without treating other mock arguments as imports", (binding) => {
+    const methods = ["mock", "doMock", "unmock", "doUnmock", "importActual", "importMock"];
+    const source = ts.createSourceFile(
+      "fixture.test.ts",
+      [
+        ...methods.map((method) => `${binding}.${method}("@angee/gql/${method}");`),
+        `${binding}.mock(import("@angee/ui"), () => ({}));`,
+        `${binding}.mock("../../../app/src/create-app", () => ({ value: "not-a-path" }));`,
+        `${binding}.mocked("not-a-path");`,
+        `${binding}.stubGlobal("not-a-path", {});`,
+        'other.mock("not-a-path");',
+      ].join("\n"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(importSpecifiersFromSource(source)).toEqual([
+      ...methods.map((method) => `@angee/gql/${method}`),
+      "@angee/ui",
+      "../../../app/src/create-app",
+    ]);
+  });
+
+  test.each(["vi", "v"])("reports project-schema mocks through the %s binding in a package", (binding) => {
+    const scratch = join(PACKAGES_ROOT, "app", "test-results");
+    mkdirSync(scratch, { recursive: true });
+    const root = mkdtempSync(join(scratch, "guardrail-"));
+    const file = join(root, "fixture.test.ts");
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@angee/fixture" }));
+      writeFileSync(file, `import { vi as ${binding} } from "vitest";\n${binding}.mock("@angee/gql/fixture");`);
+      expect(importViolations([{ name: "@angee/fixture", root }])).toEqual([
+        `${workspaceRelative(file)} imports project-generated schema package @angee/gql`,
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("critical export consumers exclude imports, barrel exports, and comments", () => {
+    const source = ts.createSourceFile("fixture.ts", `
+      import { Unused, Renamed as Local } from "./owner";
+      export { Unused, BarrelOnly } from "./owner";
+      // CommentOnly is not a use.
+      export const value = Local();
+      type Shape = UsedType;
+    `, ts.ScriptTarget.Latest, true);
+    expect([...consumedIdentifiers(source)].sort()).toEqual(["Renamed", "UsedType"]);
+  });
+
+  test("JSON Schema validation is published only through its opt-in subpath", () => {
+    const root = join(PACKAGES_ROOT, "ui");
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    expect(manifest.exports["./views/json-schema"]).toEqual({
+      types: "./src/views/form/json-schema.ts",
+      import: "./src/views/form/json-schema.ts",
+    });
+    expect(manifest.publishConfig.exports["./views/json-schema"]).toEqual({
+      types: "./dist/views/form/json-schema.d.ts",
+      default: "./dist/views/form/json-schema.js",
+    });
+    const schemaEntry = resolve(root, "src/views/form/json-schema.ts");
+    const visited = new Set<string>();
+    const visit = (file: string): void => {
+      if (visited.has(file)) return;
+      visited.add(file);
+      expect(file).not.toBe(schemaEntry);
+      for (const specifier of importSpecifiers(file)) {
+        expect(specifier).not.toMatch(/^ajv(?:-formats)?(?:\/|$)/);
+        if (angeePackageName(specifier) === "@angee/ui") {
+          const key = specifier === "@angee/ui" ? "." : `.${specifier.slice("@angee/ui".length)}`;
+          for (const target of exportTargets(manifest.exports[key])) visit(resolve(root, target));
+          continue;
+        }
+        if (!specifier.startsWith(".")) continue;
+        const resolved = ts.resolveModuleName(specifier, file, {
+          moduleResolution: ts.ModuleResolutionKind.Bundler,
+        }, ts.sys).resolvedModule?.resolvedFileName;
+        if (resolved) visit(resolved);
+      }
+    };
+    for (const target of exportTargets(manifest.exports["."])) visit(resolve(root, target));
+  });
+
   test(
     "discovers the explicit in-repo addon roots",
     () => {
@@ -234,6 +334,37 @@ describe("React architecture guardrails", () => {
     },
   );
 
+  test(
+    "addon manifests keep lazy route modules out of the eager import graph",
+    () => {
+      const manifests = addonPackageRoots().flatMap((pkg) =>
+        ["index.ts", "index.tsx"]
+          .map((name) => join(pkg.root, "src", name))
+          .filter((file) => existsSync(file)),
+      );
+      expect(manifests.flatMap((file) => lazyRouteImportViolations(
+        file,
+        readFileSync(file, "utf8"),
+      ))).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
+
+  test("lazy route import guard detects runtime imports but ignores type imports", () => {
+    const file = join(MONOREPO_ROOT, "addons", "example", "web", "src", "index.tsx");
+    expect(lazyRouteImportViolations(file, `
+      import type { PageProps } from "./views/Page";
+      import { form } from "./views/../views/Page";
+      import { extra } from "./views/Page.tsx";
+      export { usePage } from "./views/Page";
+      const route = lazyRouteComponent(() => import("./views/Page"), "Page");
+    `)).toEqual([
+      "addons/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
+      "addons/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
+      "addons/example/web/src/index.tsx imports ./views/Page and loads it lazily",
+    ]);
+  });
+
   test("addon cycle detection reports a seeded violation", () => {
     expect(findCycles(new Map([
       ["@angee/a", ["@angee/b"]],
@@ -256,14 +387,16 @@ describe("React architecture guardrails", () => {
       const contents = allPackageRoots().flatMap((pkg) =>
         sourceFiles(pkg.root).map((file) => ({
           file,
-          text: readFileSync(file, "utf8"),
+          consumed: consumedIdentifiers(ts.createSourceFile(
+            file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true,
+          )),
         })),
       );
       const unused = declarations
         .filter((declaration) => !contents.some((candidate) => {
           if (resolve(candidate.file) === resolve(declaration.ownerFile)) return false;
           if (isTestFile(candidate.file) || isStoryFile(candidate.file)) return false;
-          return new RegExp(`\\b${escapeRegExp(declaration.name)}\\b`).test(candidate.text);
+          return candidate.consumed.has(declaration.name);
         }))
         .map((declaration) => declaration.name);
 
@@ -659,7 +792,26 @@ function importSpecifiers(file: string): readonly string[] {
     ts.ScriptTarget.Latest,
     true,
   );
+  const specifiers = importSpecifiersFromSource(source);
+  importSpecifierCache.set(file, specifiers);
+  return specifiers;
+}
+
+function importSpecifiersFromSource(source: ts.SourceFile): string[] {
   const specifiers: string[] = [];
+  const vitestBindings = new Set(["vi", "vitest"]);
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)
+      || !ts.isStringLiteral(statement.moduleSpecifier)
+      || statement.moduleSpecifier.text !== "vitest") continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const binding of bindings.elements) {
+      if (["vi", "vitest"].includes((binding.propertyName ?? binding.name).text)) {
+        vitestBindings.add(binding.name.text);
+      }
+    }
+  }
   const visit = (node: ts.Node): void => {
     let specifier: ts.Node | undefined;
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
@@ -671,7 +823,12 @@ function importSpecifiers(file: string): readonly string[] {
     } else if (
       ts.isCallExpression(node)
       && (node.expression.kind === ts.SyntaxKind.ImportKeyword
-        || (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+        || (ts.isIdentifier(node.expression) && node.expression.text === "require")
+        || (ts.isPropertyAccessExpression(node.expression)
+          && ts.isIdentifier(node.expression.expression)
+          && vitestBindings.has(node.expression.expression.text)
+          && ["mock", "doMock", "unmock", "doUnmock", "importActual", "importMock"]
+            .includes(node.expression.name.text)))
     ) {
       specifier = node.arguments[0];
     }
@@ -681,8 +838,84 @@ function importSpecifiers(file: string): readonly string[] {
     ts.forEachChild(node, visit);
   };
   visit(source);
-  importSpecifierCache.set(file, specifiers);
   return specifiers;
+}
+
+/** References in executable code and types, excluding declarations and barrels. */
+function consumedIdentifiers(source: ts.SourceFile): Set<string> {
+  const aliases = new Map<string, string>();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const binding of bindings.elements) {
+      aliases.set(binding.name.text, (binding.propertyName ?? binding.name).text);
+    }
+  }
+  const consumed = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
+    if (ts.isIdentifier(node)) {
+      const parent = node.parent;
+      const declarationName = (parent as ts.NamedDeclaration).name === node
+        && !ts.isShorthandPropertyAssignment(parent)
+        && !ts.isPropertyAccessExpression(parent);
+      if (!declarationName) consumed.add(aliases.get(node.text) ?? node.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return consumed;
+}
+
+function lazyRouteImportViolations(file: string, text: string): string[] {
+  const source = ts.createSourceFile(
+    file,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const eager: { specifier: string; target: string }[] = [];
+  const lazy = new Set<string>();
+  const target = (specifier: string): string =>
+    ts.resolveModuleName(
+      specifier,
+      file,
+      { moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true },
+      ts.sys,
+    ).resolvedModule?.resolvedFileName
+    ?? resolve(dirname(file), specifier).replace(/\.(?:tsx?|jsx?)$/, "");
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const named = clause?.namedBindings;
+      const typesOnly = clause?.isTypeOnly || (
+        !clause?.name && named && ts.isNamedImports(named)
+        && named.elements.length > 0 && named.elements.every((entry) => entry.isTypeOnly)
+      );
+      if (!typesOnly && node.moduleSpecifier.text.startsWith(".")) {
+        eager.push({ specifier: node.moduleSpecifier.text, target: target(node.moduleSpecifier.text) });
+      }
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const typesOnly = node.isTypeOnly || (
+        node.exportClause && ts.isNamedExports(node.exportClause)
+        && node.exportClause.elements.length > 0
+        && node.exportClause.elements.every((entry) => entry.isTypeOnly)
+      );
+      if (!typesOnly && node.moduleSpecifier.text.startsWith(".")) {
+        eager.push({ specifier: node.moduleSpecifier.text, target: target(node.moduleSpecifier.text) });
+      }
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const specifier = node.arguments[0];
+      if (specifier && ts.isStringLiteralLike(specifier)) lazy.add(target(specifier.text));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return eager
+    .filter(({ target: imported }) => lazy.has(imported))
+    .map(({ specifier }) => `${workspaceRelative(file)} imports ${specifier} and loads it lazily`);
 }
 
 function relativeImportEscapes(packageRootPath: string, file: string, specifier: string): boolean {

@@ -1,0 +1,16 @@
+export const enCatalogueMessages = {
+  "catalogue.title": "Workflows",
+  "catalogue.empty": "No workflows in this view.",
+  "catalogue.key": "Key",
+  "catalogue.name": "Name",
+  "catalogue.description": "Description",
+  "catalogue.subjectModel": "Subject model",
+  "catalogue.publishedVersion": "Published version",
+  "catalogue.versions": "Versions",
+  "catalogue.version": "Version",
+  "catalogue.noVersions": "No visible versions.",
+  "catalogue.created": "Created",
+  "catalogue.publishedBy": "Published by",
+  "catalogue.contentHash": "Content hash",
+  "catalogue.recentRuns": "Recent runs",
+};

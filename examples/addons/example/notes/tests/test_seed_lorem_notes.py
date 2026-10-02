@@ -57,7 +57,7 @@ class SeedLoremNotesTests(TransactionTestCase):
         # Visible to alice via REBAC scope — not merely present in the table.
         alice_notes = list(Note.objects.as_user(self.alice))
         self.assertGreaterEqual(len(alice_notes), 50)
-        self.assertTrue(all(n.created_by_id == self.alice.pk for n in alice_notes))
+        self.assertTrue(all(n.owner_id == self.alice.pk for n in alice_notes))
 
         # created_at landed inside the requested window.
         low = datetime(2021, 1, 1, tzinfo=timezone.utc)
@@ -68,7 +68,7 @@ class SeedLoremNotesTests(TransactionTestCase):
         self._seed(count=5, owner="alice", fresh=True, seed=42, batch=2)
 
         with system_context(reason="test"):
-            notes = list(Note.objects.filter(created_by=self.alice))
+            notes = list(Note.objects.filter(owner=self.alice))
 
         self.assertEqual(len(notes), 5)
         self.assertTrue(any(note.word_count > 0 for note in notes))
@@ -84,10 +84,10 @@ class SeedLoremNotesTests(TransactionTestCase):
     def test_seed_is_deterministic(self) -> None:
         self._seed(count=12, owner="alice", seed=99, fresh=True)
         with system_context(reason="test"):
-            first = sorted(Note.objects.filter(created_by=self.alice).values_list("title", flat=True))
+            first = sorted(Note.objects.filter(owner=self.alice).values_list("title", flat=True))
         self._seed(count=12, owner="alice", seed=99, fresh=True)
         with system_context(reason="test"):
-            second = sorted(Note.objects.filter(created_by=self.alice).values_list("title", flat=True))
+            second = sorted(Note.objects.filter(owner=self.alice).values_list("title", flat=True))
         self.assertEqual(first, second)
 
     def test_unknown_owner_fails_fast(self) -> None:

@@ -24,9 +24,10 @@ cache — never work there.
   `arp.*` consumer addons. Present only when the stack opts in
   (`include_arp` — the repo is private).
 - **`.work/`** — the private work-state repo (plans, notes, memory,
-  handovers), present only when the stack wires a work-state source. Shared
-  across clones: **commit and push continuously**, or the work is invisible
-  everywhere else.
+  handovers), present when the stack wires a work-state source or attaches a
+  Jujutsu workspace of its shared store. Shared across checkouts: **commit and
+  push continuously**, or the work is invisible everywhere else. When
+  `.work/.jj` exists, use `jj` only there and follow `.work/AGENTS.md`.
 
 `hatch-angee` and `strawberry-django-hasura` remain independently published
 repositories, but normal framework development consumes their PyPI releases;
@@ -45,4 +46,5 @@ installed `angee` CLI.
   for every linked framework package.
 - Work inside a slot is governed by that repo's own `AGENTS.md`; run that
   repo's own checks before handing off.
-- Work in `.work/` is shared across clones: **commit and push continuously**.
+- Work in `.work/` is shared across checkouts: **commit and push continuously**,
+  through `jj` when `.work/.jj` exists (`.work/AGENTS.md`).

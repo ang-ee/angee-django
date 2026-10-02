@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
   useCustom,
   useCustomMutation,
@@ -8,6 +8,7 @@ import {
   useKeys,
   useResourceSubscription,
   type BaseRecord,
+  type GetListResponse,
   type HttpError,
 } from "@refinedev/core";
 
@@ -44,8 +45,10 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { authoredQueryMeta, invalidateAuthoredQueries } from "../query-invalidation";
+import { invalidateAuthoredQueries } from "../query-invalidation";
+import { requestAuthoredData, sharedAuthoredMeta, useAuthoredErrorPolicy } from "./authored-query-options";
 import { useAuthoredLiveInterest } from "./authored-hooks";
+import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
 
 type Row = Record<string, unknown>;
@@ -225,38 +228,27 @@ export function useAngeeGroupBy(
 ): UseAngeeGroupByResult {
   const { document, enabled = true, ...query } = options;
   const queryKey = stableKey(query);
-  const canQuery = enabled && target !== null;
-  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
-  useAuthoredLiveInterest(canQuery, models);
-  const request = useMemo(
-    () => (target ? groupByRequest(target, query, { document }) : null),
-    [document, target, queryKey],
+  const scopes = useMemo<readonly GroupByBatchScope[]>(
+    () => [{ key: "single", query }],
+    [queryKey],
   );
-  const run = useCustom<BaseRecord, HttpError>({
-    url: "",
-    method: "post",
-    dataProviderName: request?.dataProviderName,
-    meta: request?.meta,
-    queryOptions: { enabled: canQuery },
-  });
-  const data = run.query.data?.data ?? run.result.data;
+  const run = useGroupByRequestBatch(target, scopes, { document, enabled });
+  const entry = run.get("single");
   let result = EMPTY_GROUP_BY_RESULT;
   let decodeError: Error | null = null;
-  if (request && run.query.isSuccess) {
+  if (target && entry?.data != null) {
     try {
-      result = extractGroupBy(data, request.root);
+      result = extractGroupBy(entry.data, target.root);
     } catch (cause) {
       decodeError = cause instanceof Error ? cause : new Error(String(cause));
     }
   }
   return {
     ...result,
-    fetching: run.query.isFetching,
-    error: run.query.error ?? decodeError,
-    updatedAt: run.query.dataUpdatedAt || null,
-    refetch: () => {
-      void run.query.refetch();
-    },
+    fetching: entry?.fetching ?? false,
+    error: entry?.error ?? decodeError,
+    updatedAt: entry?.updatedAt ?? null,
+    refetch: () => entry?.refetch(),
   };
 }
 
@@ -274,7 +266,7 @@ export function useAngeeFacets(
   const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery });
   const root = target?.root ?? "";
   return useMemo(() => {
-    const values = [...batch.values()];
+    const values = [...new Set(batch.values())];
     return {
       facets: Object.fromEntries(
         activeFacets.map((facet) => [
@@ -313,63 +305,66 @@ function useGroupByRequestBatch(
   useAuthoredLiveInterest(canQuery && activeScopes.length > 0, models);
   const scopesKey = stableKey(activeScopes);
   const dataProvider = useDataProvider();
+  const client = useQueryClient();
   const requests = useMemo(() => {
     if (!canQuery || !target) return [];
-    return activeScopes.map((scope) => ({
-      key: scope.key,
-      queryKey: stableKey(scope.query),
-      request: groupByRequest(target, scope.query, { document }),
-    }));
-  }, [activeScopes, canQuery, document, target, scopesKey]);
-  const queries = useQueries({
-    queries: requests.map(({ key, queryKey, request }) => ({
-      queryKey: [
+    return activeScopes.map((scope) => {
+      const request = groupByRequest(target, scope.query, { document });
+      const { document: documentNode, identity } = graphqlDocumentIdentity(request.meta.gqlQuery);
+      const queryKey = [
         "angee",
         "group-by",
         request.dataProviderName,
-        request.root,
-        key,
-        queryKey,
-      ],
-      queryFn: async () => {
-        const custom = dataProvider(request.dataProviderName).custom;
-        if (!custom) {
-          throw new Error(
-            `Data provider "${request.dataProviderName}" does not support ` +
-              "custom GraphQL requests.",
-          );
-        }
-        const response = await custom<BaseRecord>({
-          url: "",
-          method: "post",
-          meta: request.meta,
-        });
-        return response.data;
-      },
+        identity,
+        request.meta.gqlVariables,
+      ];
+      return { key: scope.key, request, documentNode, queryKey, queryHash: stableKey(queryKey) };
+    });
+  }, [activeScopes, canQuery, document, target, scopesKey]);
+  // useQueries expects unique keys within one batch. Labels only project the
+  // resulting native query back to each caller; they never own a request.
+  const { uniqueRequests, indexByHash } = useMemo(() => {
+    const uniqueRequests = [...new Map(requests.map((item) => [item.queryHash, item])).values()];
+    const indexByHash = new Map(uniqueRequests.map((item, index) => [item.queryHash, index]));
+    return { uniqueRequests, indexByHash };
+  }, [requests]);
+  const queries = useQueries({
+    queries: uniqueRequests.map(({ queryKey, request, documentNode }) => ({
+      queryKey,
+      queryFn: (context) => requestAuthoredData<unknown>(
+        dataProvider, request.dataProviderName, documentNode,
+        request.meta.gqlVariables as Record<string, unknown>, context,
+      ),
       enabled: canQuery,
-      meta: authoredQueryMeta(models),
+      meta: sharedAuthoredMeta(client, queryKey, models, [], []),
     })),
   });
+  useAuthoredErrorPolicy(uniqueRequests.map(({ queryKey }) => queryKey));
   return useMemo(
-    () =>
-      new Map(
-        requests.map(({ key }, index) => {
-          const query = queries[index];
-          return [
-            key,
-            {
+    () => {
+      const entries = new Map<string, GroupByRequestBatchEntry>();
+      return new Map(
+        requests.map(({ key, queryHash }) => {
+          const query = queries[indexByHash.get(queryHash)!];
+          let entry = entries.get(queryHash);
+          if (!entry) {
+            entry = {
               data: query?.data,
               fetching: query?.isFetching ?? false,
               error: (query?.error ?? null) as HttpError | null,
               updatedAt: query?.dataUpdatedAt || null,
-              refetch: () => {
-                void query?.refetch();
-              },
-            },
+              refetch: () => { void query?.refetch(); },
+            };
+            entries.set(queryHash, entry);
+          }
+          return [
+            key,
+            entry,
           ] as const;
         }),
-      ),
-    [requests, queries],
+      );
+    },
+    [requests, queries, indexByHash],
   );
 }
 
@@ -403,6 +398,11 @@ export function useAngeeGroupByBatch(
       ),
     [batch, root],
   );
+}
+
+// Native structural sharing keeps equivalent query results stable between renders.
+function combineListQueries(queries: UseQueryResult<GetListResponse<BaseRecord>>[]) {
+  return queries.map(({ data, error, isFetching, refetch }) => ({ data, error, isFetching, refetch }));
 }
 
 /**
@@ -452,7 +452,9 @@ export function useAngeeListBatch(
     enabled: canQuery,
     meta: { dataProviderName: schemaName },
   });
+  const scopeKeys = useStableArray(requests.map(({ scope }) => scope.key));
   const queries = useQueries({
+    combine: combineListQueries,
     queries: requests.map(({ meta, pagination }) => ({
       queryKey: keys()
         .data(schemaName)
@@ -474,11 +476,11 @@ export function useAngeeListBatch(
   return useMemo(
     () =>
       new Map(
-        requests.map(({ scope }, index) => {
+        scopeKeys.map((key, index) => {
           const query = queries[index];
           const data = query?.data;
           return [
-            scope.key,
+            key,
             {
               refetch: () => { void query?.refetch(); },
               rows: (data?.data ?? []) as readonly Row[],
@@ -489,7 +491,7 @@ export function useAngeeListBatch(
           ] as const;
         }),
       ),
-    [requests, queries],
+    [scopeKeys, queries],
   );
 }
 

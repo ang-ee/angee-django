@@ -1,10 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  authoredQueryMeta,
-  authoredQueryReadsAnyModel,
-} from "../query-invalidation";
 import { authoredOperationData } from "./authored-hooks";
+import { graphqlDocumentIdentity } from "./wire";
 
 describe("authoredOperationData", () => {
   test("unwraps GraphQL response envelopes returned through refine custom hooks", () => {
@@ -38,15 +35,17 @@ describe("authoredOperationData", () => {
       },
     });
   });
-
-
 });
 
-describe("authored query invalidation metadata", () => {
-  test("tags authored query cache entries with model labels", () => {
-    const meta = authoredQueryMeta(["notes.Note", "iam.User"]);
-
-    expect(authoredQueryReadsAnyModel(meta, ["notes.Note"])).toBe(true);
-    expect(authoredQueryReadsAnyModel(meta, ["storage.File"])).toBe(false);
+describe("graphqlDocumentIdentity", () => {
+  test("accepts source text and document ASTs, and rejects other values clearly", () => {
+    const parsed = graphqlDocumentIdentity("query Notes { notes { id } }");
+    expect(parsed.document.kind).toBe("Document");
+    const fromAst = graphqlDocumentIdentity(parsed.document);
+    expect(fromAst.document).toBe(parsed.document);
+    expect(fromAst.identity).toBe(parsed.identity);
+    expect(() => graphqlDocumentIdentity({ kind: "Field" })).toThrowError(
+      'Expected a GraphQL document string or AST with kind "Document".',
+    );
   });
 });

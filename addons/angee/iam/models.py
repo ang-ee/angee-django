@@ -10,28 +10,41 @@ collection owns active-human filtering, search, ordering, and limits.
 
 from __future__ import annotations
 
+import logging
+import secrets
 from collections.abc import Mapping
+from copy import copy
 from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import models, transaction
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
-from rebac import SubjectRef, current_actor, resolve_subjects, system_context
+from rebac import (
+    PermissionDenied,
+    SubjectRef,
+    current_actor,
+    resolve_subjects,
+    system_context,
+    to_subject_ref,
+)
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
+from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
+from angee.iam.events import person_created
 from angee.iam.identity import user_label
+from angee.iam.roles import platform_admin_role
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -39,10 +52,21 @@ VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 VISIBLE_PEOPLE_MAX_LIMIT = 100
 """Upper bound a people-surface caller's ``limit`` is clamped to."""
 
+VIEWABLE_PEOPLE_MAX_LIMIT = 25
+"""Maximum preview results after SQL admission."""
+
 IAMKind = role_anchor("iam/kind", name="IAMKind")
 
+logger = logging.getLogger(__name__)
 
-class Group(SqidMixin, AngeeModel):
+
+def bounded_limit(limit: int, *, maximum: int = VISIBLE_PEOPLE_MAX_LIMIT) -> int:
+    """Clamp a people-picker limit to IAM's supported range."""
+
+    return max(1, min(int(limit), maximum))
+
+
+class Group(AngeeDataModel):
     """Named IAM principal set materialized into composed runtimes."""
 
     runtime = True
@@ -116,6 +140,18 @@ class UserKind(models.TextChoices):
     SERVICE = "service", "Service"
 
 
+class AccountExists(DomainError):
+    """A person email is already claimed; never carries an account's details."""
+
+    code = "ACCOUNT_EXISTS"
+
+
+class AmbiguousAccountEmail(DomainError):
+    """Multiple person accounts claim one email; carries no account details."""
+
+    code = "ACCOUNT_EMAIL_AMBIGUOUS"
+
+
 class UserQuerySet(AngeeQuerySet[Any]):
     """Queryset vocabulary for user-row surfaces."""
 
@@ -158,6 +194,36 @@ class UserQuerySet(AngeeQuerySet[Any]):
             fields.append(pk.name)
         return cast(Self, self.order_by(*(fields or ["pk"])))
 
+    def picker(self, search: str) -> Self:
+        """Apply the common active-person search and ordering pipeline."""
+
+        return self.active_people().search_users(search).ordered_users()
+
+    def preview_candidates(self) -> Self:
+        """Exclude non-human, inactive, staff and platform-admin targets in SQL.
+
+        IAM's platform role admits users and IAM group member sets. Membership
+        exclusions use those declared tuple shapes, including group-held admin.
+        Caveated grants are excluded conservatively: a preview must never gain
+        authority when its context changes.
+        """
+
+        people = self.active_people().filter(is_staff=False, is_superuser=False)
+        role = platform_admin_role()
+        if role is None:
+            return people
+        memberships = active_relationship_model().objects.filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()), relation=ROLE_RELATION,
+        )
+        admins = memberships.filter(resource_type=role.resource_type, resource_id=role.resource_id)
+        groups = admins.filter(subject_type="auth/group", optional_subject_relation="member").values("subject_id")
+        grants = memberships.filter(subject_type=model_resource_type(self.model), optional_subject_relation="").filter(
+            Q(resource_type=role.resource_type, resource_id=role.resource_id)
+            | Q(resource_type="auth/group", resource_id__in=groups)
+        )
+        people = people.alias(_iam_preview_subject=Cast("pk", output_field=TextField()))
+        return people.filter(~Exists(grants.filter(subject_id=OuterRef("_iam_preview_subject"))))
+
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
         """Return users without direct role memberships in the installed schema."""
 
@@ -179,6 +245,54 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
     use_in_migrations = True
 
+    @classmethod
+    def normalize_email(cls, email: str | None) -> str:
+        """Lowercase the whole address for every account kind, unlike Django.
+
+        Django lowercases only the domain. Python owns whitespace stripping and
+        Unicode lowercasing; the stored email is the key, with no SQL transform.
+        ``bulk_create`` and queryset ``update()`` bypass normalization; callers
+        writing emails through them must normalize first.
+        """
+
+        return (email or "").strip().lower()
+
+    def _person_email_matches(self, email: str | None) -> Any:
+        key = self.normalize_email(email)
+        people = self.system_context(reason="iam.person.email_lookup").people()
+        if not key:
+            return people.none()
+        return people.filter(email=key)
+
+    def person_for_email(self, email: str) -> Any | None:
+        """Look up one person by email, including inactive and staff accounts.
+
+        This is a system identity lookup, never a public directory surface.
+        No match returns None; ambiguous legacy matches raise a detail-free
+        domain refusal so callers cannot confuse ambiguity with absence.
+        """
+
+        matches = list(self._person_email_matches(email).order_by("pk")[:2])
+        if len(matches) > 1:
+            raise AmbiguousAccountEmail
+        return matches[0] if matches else None
+
+    def person_email_collisions(self) -> dict[str, list[Any]]:
+        """Group legacy person primary keys by Python-normalized nonempty email.
+
+        The operator inventory reads only primary key and email through the base
+        manager, without system scope or REBAC audit writes. Full user rows may
+        require columns that the database has not yet migrated.
+        """
+
+        groups: dict[str, list[Any]] = {}
+        rows = self.model._base_manager.filter(kind=UserKind.PERSON).order_by("pk")
+        for pk, email in rows.values_list("pk", "email").iterator():
+            key = self.normalize_email(email)
+            if key:
+                groups.setdefault(key, []).append(pk)
+        return {key: groups[key] for key in sorted(groups) if len(groups[key]) > 1}
+
     def get_by_natural_key(self, username: str) -> Any:
         """Return a user for credential checks without row-scope filtering."""
 
@@ -194,6 +308,89 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         return await self.system_context(reason="iam.credentials").aget(**{self.model.USERNAME_FIELD: username})
 
+    def create_person(
+        self,
+        username: str,
+        email: str | None = None,
+        password: str | None = None,
+        *,
+        first_name: str = "",
+        last_name: str = "",
+    ) -> Any:
+        """Create a non-staff person for the actor authorized by ``create``.
+
+        The person event and its dependent identity link commit with the account.
+        Omitting the password creates an account with no usable password.
+        """
+
+        actor = self.check_create()
+        return self._create_person(
+            username, email, password, first_name=first_name, last_name=last_name,
+            actor=actor, reason="iam.person.create",
+        )
+
+    def create_person_as_system(self, username: str, email: str, *, reason: str) -> Any:
+        """Create a passwordless person for a channel-authorized system ingress.
+
+        The channel owner must require channel write and account create when
+        enabling this ingress. The caller supplies its named reason. Nested
+        writes and the person event run in the library's system context.
+        """
+
+        if not reason.strip():
+            raise ValueError("System person creation requires a named reason.")
+        if not self.normalize_email(email):
+            raise ValidationError({"email": ["An email address is required."]})
+        with system_context(reason=reason):
+            user = self._create_person(
+                username, email, None, first_name="", last_name="", actor=None, reason=reason,
+            )
+        logger.info("Created person account %s as system: %s", user.pk, reason)
+        return user
+
+    def _create_person(
+        self,
+        username: str,
+        email: str | None,
+        password: str | None,
+        *,
+        first_name: str,
+        last_name: str,
+        actor: SubjectRef | None,
+        reason: str,
+    ) -> Any:
+        """Own validation, uniqueness, persistence and the transactional event."""
+
+        with transaction.atomic():
+            if self._person_email_matches(email).exists():
+                raise AccountExists
+            user = self.model(
+                username=self.model.normalize_username(username),
+                email=self.normalize_email(email),
+                first_name=first_name,
+                last_name=last_name,
+                kind=UserKind.PERSON,
+                is_staff=False,
+                is_superuser=False,
+                is_active=True,
+            )
+            user.set_password(password)
+            try:
+                with transaction.atomic():
+                    with system_context(reason="iam.person.validate"):
+                        user.full_clean()
+                    user.sudo(reason=reason).save()
+            except (IntegrityError, ValidationError):
+                if self._person_email_matches(email).exists():
+                    raise AccountExists from None
+                raise
+            if actor is not None:
+                user.with_actor(actor)
+            else:
+                user.unsudo()
+            person_created.send(sender=self.model, instance=user)
+        return user
+
     def create_user(
         self,
         username: str,
@@ -201,7 +398,10 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         password: str | None = None,
         **extra_fields: Any,
     ) -> Any:
-        """Create and save a regular user."""
+        """Create a user for trusted system paths such as bootstrap and OIDC.
+
+        Actor-requested accounts use ``create_person`` and its creation gate.
+        """
 
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
@@ -261,14 +461,45 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
     ) -> list[Any]:
         """Return actor-readable active people after search, ordering, and cap."""
 
-        bounded = max(1, min(int(limit), VISIBLE_PEOPLE_MAX_LIMIT))
-        queryset = self.with_actor(actor).active_people().search_users(search).ordered_users()
-        return list(queryset[:bounded])
+        return list(self.with_actor(actor).picker(search)[:bounded_limit(limit)])
 
     def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
         """Resolve one public user id against the same actor-scoped rows as the picker."""
 
         return instance_from_public_id(self.model, str(public_id), queryset=self.with_actor(actor).active_people())
+
+    def viewable_people(
+        self,
+        actor: Any,
+        *,
+        search: str = "",
+        limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
+    ) -> list[Any]:
+        """Return permitted preview targets, applying admission before the cap."""
+
+        bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
+        return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
+
+    def view_as_queryset(self, actor: Any) -> UserQuerySet:
+        """The single admission scope used by the picker and header lookup."""
+
+        subject = to_subject_ref(actor)
+        return self.with_actor(subject).with_action("view_as").preview_candidates().exclude(pk=subject.subject_id)
+
+    def admit_view_as(self, actor: Any, public_id: str) -> Any | None:
+        """Admit a preview identity for both the picker and GraphQL header.
+
+        Admission uses an actor-scoped candidate. REBAC's native copy contract
+        strips its instance actor/elevation before it becomes a request identity;
+        subsequent instance checks therefore follow the preview's ambient actor.
+        """
+
+        candidate = instance_from_public_id(
+            self.model,
+            str(public_id),
+            queryset=self.view_as_queryset(actor),
+        )
+        return copy(candidate) if candidate is not None else None
 
     def active_person_for_subject(self, subject: SubjectRef) -> Any | None:
         """Resolve an accountable human actor from a concrete canonical subject."""
@@ -287,7 +518,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             return None
 
 
-class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
@@ -333,6 +564,13 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         abstract = True
         swappable = "AUTH_USER_MODEL"
         rebac_resource_type = "auth/user"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["email"],
+                condition=Q(kind=UserKind.PERSON) & ~Q(email=""),
+                name="iam_user_person_email_unique",
+            ),
+        ]
 
     def clean(self) -> None:
         """Normalize username and email before validation."""
@@ -341,18 +579,61 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         self.email = type(self).objects.normalize_email(self.email)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist identity while keeping service principals passwordless."""
+        """Normalize email only when saving it; keep service principals passwordless.
+
+        Partial saves excluding email neither load nor rewrite that field.
+        ``bulk_create`` and queryset ``update()`` bypass this normalization;
+        callers writing emails through them must normalize first.
+        """
 
         update_fields = kwargs.get("update_fields")
         update_field_names = None
         if update_fields is not None:
             update_field_names = {update_fields} if isinstance(update_fields, str) else set(update_fields)
+            kwargs["update_fields"] = update_field_names
+        if update_field_names is None or "email" in update_field_names:
+            self.email = type(self).objects.normalize_email(self.email)
         if str(self.kind) == str(UserKind.SERVICE) and self.has_usable_password():
             self.set_unusable_password()
             if update_field_names is not None:
                 update_field_names.add("password")
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
+
+    def password_issue_error(self) -> str | None:
+        """Return the password-issuance eligibility failure, or None."""
+
+        if not self.is_person or not self.is_active or self.is_staff or self.is_superuser:
+            return "Only active, non-staff person accounts can receive a password."
+        if self.has_usable_password():
+            return "This account already has a usable password."
+        return None
+
+    def issue_password(self) -> str:
+        """Set and return one random credential for a passwordless active person.
+
+        Actor presence is required before locking; permission is checked on the
+        locked row. System callers bypass both checks by the REBAC library's
+        contract. Only the hash is stored; later calls refuse, including calls
+        through a stale instance.
+        """
+
+        actor, bypass = self.effective_actor(strict=True)
+        with transaction.atomic():
+            user = type(self).objects.system_context(reason="iam.password.target").lock_if_supported().get(pk=self.pk)
+            if actor is not None:
+                user.with_actor(actor)
+            elif bypass:
+                user.sudo(reason="iam.password.issue")
+            if not user.has_access("issue_password"):
+                raise PermissionDenied("Password issue permission is required.")
+            if error := user.password_issue_error():
+                raise ValidationError(error)
+            password = secrets.token_urlsafe(24)
+            user.set_password(password)
+            user.sudo(reason="iam.password.issue").save(update_fields=["password"])
+            self.password = user.password
+        return password
 
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""

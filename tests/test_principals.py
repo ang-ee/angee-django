@@ -5,18 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
+from angee.agents.testing.models import Agent
 from angee.base.actors import actor_user_id
-from tests import (
-    test_integrate_vcs,  # noqa: F401 -- register the concrete relation graph
-    test_messaging,  # noqa: F401 -- register the concrete relation graph
-    test_parties_graphql,  # noqa: F401 -- register the concrete relation graph
-    test_spaces,  # noqa: F401 -- register the concrete relation graph
-)
-from tests.test_agents_graphql import Agent, User
+
+User = get_user_model()
 
 
 def test_agent_principal_subject_is_its_service_user(composed_tables: None) -> None:
@@ -113,10 +110,10 @@ def test_agent_create_rolls_back_when_service_user_sync_fails(
 
     owner = User.objects.create_user(username="principal-owner-rollback", email="principal-rollback@example.com")
 
-    def fail_sync(manager: Any, agent: object) -> object:
+    def fail_sync(agent: object, *, prefix: str) -> object:
         raise RuntimeError("sync failed")
 
-    monkeypatch.setattr(type(Agent.objects), "sync_service_user", fail_sync)
+    monkeypatch.setattr("angee.agents.models.sync_service_user", fail_sync)
 
     with pytest.raises(RuntimeError, match="sync failed"):
         with system_context(reason="test.agent.service_user.rollback"):

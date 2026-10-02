@@ -35,24 +35,12 @@ from django.db import models
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
-    ConditionalSharedReaderMixin,
-    ConditionalSharedReaderQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
 
 
-class UomCategoryQuerySet(
-    ConditionalSharedReaderQuerySet[Any],
-    AngeeQuerySet[Any],
-):
-    """Guard the conditional reader contract for unit categories."""
-
-
-UomCategoryManager = AngeeManager.from_queryset(UomCategoryQuerySet)
-
-
-class UomCategory(ConditionalSharedReaderMixin, AngeeDataModel):
+class UomCategory(AngeeDataModel):
     """A family of units that measure the same quantity (weight, volume, time)."""
 
     runtime = True
@@ -62,13 +50,13 @@ class UomCategory(ConditionalSharedReaderMixin, AngeeDataModel):
 
     name = models.CharField(max_length=128)
 
-    objects = UomCategoryManager()
-
     class Meta:
         """Django model options for a unit-of-measure category."""
 
         abstract = True
         ordering = ("name",)
+        verbose_name = "unit of measure category"
+        verbose_name_plural = "unit of measure categories"
         rebac_resource_type = "uom/category"
 
     def __str__(self) -> str:
@@ -76,15 +64,8 @@ class UomCategory(ConditionalSharedReaderMixin, AngeeDataModel):
 
         return self.name
 
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Native catalogue categories are shared; source donors may narrow them."""
-
-        return True
-
 
 class UomQuerySet(
-    ConditionalSharedReaderQuerySet[Any],
     ArchiveQuerySet[Any],
     AngeeQuerySet[Any],
 ):
@@ -94,7 +75,7 @@ class UomQuerySet(
 UomManager = AngeeManager.from_queryset(UomQuerySet)
 
 
-class Uom(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
+class Uom(ArchiveMixin, AngeeDataModel):
     """One unit within a category, mapped affinely onto the reference unit.
 
     ``value_in_reference = qty * ratio + offset``: ``ratio`` is the number of
@@ -129,6 +110,8 @@ class Uom(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
 
         abstract = True
         ordering = ("category", "name")
+        verbose_name = "unit of measure"
+        verbose_name_plural = "units of measure"
         rebac_resource_type = "uom/uom"
         constraints = (
             models.UniqueConstraint(
@@ -149,12 +132,6 @@ class Uom(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
         """Return the unit name for Django displays."""
 
         return self.name
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Native catalogue units are shared; source donors may narrow them."""
-
-        return True
 
     @property
     def rounding_places(self) -> int:

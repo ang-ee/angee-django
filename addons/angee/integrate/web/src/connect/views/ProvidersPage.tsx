@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useEnumOptions, useImplPrefill, useRecordActionMutation, useRouteHref, type ActionContext } from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill, useRecordAction, useRecordActionMutation, useRouteHref, type RecordActionRunner } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
@@ -46,18 +46,15 @@ export function ProvidersPage(): React.ReactElement {
   const [connectAccountComplete] = useAuthoredMutation(
     IntegrateConnectAccountComplete,
   );
+  // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(
     "discover_oauth_endpoints",
     { defaultMessage: t("providers.discover.done") },
   );
 
-  // Fill the transport endpoints from the client's discovery URL (no manual entry).
-  // Persists onto the saved row and re-pulls it, so the form shows the resolved
-  // endpoints; available once a discovery URL is set.
-  const connect = React.useCallback(
-    async (ctx: ActionContext) => {
-      const id = recordActionId(ctx);
-      if (typeof window === "undefined" || !id) return;
+  const connectById = React.useCallback<RecordActionRunner>(
+    async (id, ctx) => {
+      if (typeof window === "undefined") return;
       const result = await connectAccountStart({
         id,
         redirectUri: connectCallbackRedirectUri(),
@@ -117,6 +114,7 @@ export function ProvidersPage(): React.ReactElement {
     },
     [connectAccountStart, connectAccountComplete, routeHref, t],
   );
+  const connect = useRecordAction(connectById, { refresh: false });
 
   // Provider type is an ImplClassField (Google / Generic OIDC / Generic OAuth);
   // picking one seeds the client's defaults (endpoints/scopes/icon) on create via

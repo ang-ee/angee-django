@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 7
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -38,6 +38,9 @@ definition knowledge/vault {
     permission delete = owner
                       + vault_admin->member + knowledge_admin->member
                       + admin->member
+    permission transfer = owner + admin->member
+    permission share = owner + admin->member
+    permission write__owner = transfer
 }
 
 // Pages inherit read/write from their vault and from their parent page
@@ -47,25 +50,23 @@ definition knowledge/vault {
 definition knowledge/page {
     relation vault: knowledge/vault // rebac:field=vault
     relation parent: knowledge/page // rebac:field=parent
-    relation owner: auth/user // rebac:field=created_by
     relation viewer: auth/user | auth/group#member
 
     // Preflighted by PageManager.create_in with the vault the row will carry.
     permission create = vault->write
-    permission read   = owner + viewer + parent->read + vault->read
-    permission write  = owner + parent->write + vault->write
+    permission read   = viewer + parent->read + vault->read
+    permission write  = parent->write + vault->write
     // `parent->delete` matches the FK CASCADE: deleting a folder must pass
     // the gate on every cascaded child, so the right to delete the parent
     // carries down the subtree.
-    permission delete = owner + parent->delete + vault->delete
+    permission delete = parent->delete + vault->delete
 }
 
-// The body sidecar has no access surface of its own: everything delegates
-// to the owning page.
+// The concrete markdown child delegates access to its page parent.
 definition knowledge/markdown_page {
-    relation page: knowledge/page // rebac:field=page
+    relation page: knowledge/page // rebac:field=page_ptr
 
-    // Preflighted by MarkdownPageManager.write_body for first-write upserts.
+    // Parent creation is preflighted by PageManager.create_in.
     permission create = page->write
     permission read   = page->read
     permission write  = page->write
@@ -84,12 +85,12 @@ definition knowledge/link {
 
 // A RecordBinding target is a GenericForeignKey to any current or future REBAC
 // type, which Zed cannot express as one field-backed relation without hardcoding
-// downstream addons. Keep the row definition fail-closed. RecordBindingManager's
-// authored surfaces resolve and gate the canonical target under the ambient actor;
-// the change publisher carries that same target ObjectRef as its read anchor.
+// downstream addons. Each record owner contributes a reverse generic relation
+// and intersects its read permission with (page->read + vault->read). Both manager
+// read directions and live-row change events use the binding's own permission.
+// Without a contributed arm the binding remains unreadable, including by admins.
 definition knowledge/record_binding {
-    // Keep both relations even though permissions fail closed: normal model
-    // saves/deletes need them for field-backed FK relationship synchronization.
+    // Record-owner fragments compose this knowledge end of the read boundary.
     relation page: knowledge/page // rebac:field=page
     relation vault: knowledge/vault // rebac:field=vault
 

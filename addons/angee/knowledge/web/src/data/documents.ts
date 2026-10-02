@@ -1,15 +1,50 @@
 // Authored GraphQL for the knowledge wiki. Vaults and pages are read through
 // Hasura-shaped resources (fetched once; the browser scopes to the active vault
 // client-side, see `page-rows.ts`); the open page's body and backlinks load on
-// demand through the public detail query. Standard CRUD mutations are emitted
-// by the SDK; only markdown/body-specific writes are authored here.
+// demand through the public detail query. Concrete page creation and body writes
+// are authored here; ordinary updates use the resource mutation.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
+
+export const KNOWLEDGE_LIST_LIMIT = 500;
+
+export const PAGE_MODEL = "knowledge.Page";
+export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
+export const RECORD_BINDING_MODEL = "knowledge.RecordBinding";
+export const PAGE_READ_MODELS = [PAGE_MODEL, MARKDOWN_PAGE_MODEL] as const;
+
+export const KnowledgeCreatePage = graphql(`
+  mutation KnowledgeCreatePage($vault: ID!, $title: String!, $kind: String!, $parent: ID) {
+    create_page(vault: $vault, title: $title, kind: $kind, parent: $parent) { id }
+  }
+`);
+
+export const KnowledgeCreateVaultFrom = graphql(`
+  mutation KnowledgeCreateVaultFrom(
+    $template: ID!
+    $name: String!
+    $owned: Boolean! = true
+    $client_creation_key: String
+  ) {
+    create_vault_from(
+      template: $template
+      name: $name
+      owned: $owned
+      client_creation_key: $client_creation_key
+    ) {
+      ok
+      message
+      validation_errors
+      id
+    }
+  }
+`);
 
 export const KnowledgeUpdatePageBody = graphql(`
   mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String) {
     update_page_body(page: $page, body: $body, expected_hash: $expected_hash) {
       ok
+      error
       error_code
       markdown {
         body
@@ -32,10 +67,24 @@ export const KnowledgeVaults = graphql(`
   }
 `);
 
+export const KnowledgeVault = graphql(`
+  query KnowledgeVault($id: String!) {
+    vaults_by_pk(id: $id) { id permissions }
+  }
+`);
+
+/** A vault by its declared name, for a host whose vault id differs per stack. */
+export const KnowledgeVaultByName = graphql(`
+  query KnowledgeVaultByName($name: String!) {
+    vaults(where: { name: { _eq: $name } }, limit: 1) { id permissions }
+  }
+`);
+
 export const KnowledgePages = graphql(`
   query KnowledgePages($limit: Int, $offset: Int) {
     pages(limit: $limit, offset: $offset) {
       id
+      permissions
       title
       kind
       icon
@@ -47,10 +96,51 @@ export const KnowledgePages = graphql(`
   }
 `);
 
+export const KnowledgeRecordPages = graphql(`
+  query KnowledgeRecordPages($modelLabel: String!, $recordId: ID!, $role: String) {
+    record_knowledge_bindings(model_label: $modelLabel, record_id: $recordId, role: $role) {
+      id
+      role
+      page
+      page_title
+      page_can_write
+    }
+    record_knowledge_can_bind(model_label: $modelLabel, record_id: $recordId)
+  }
+`);
+
+export const KnowledgeRecordNotes = graphql(`
+  query KnowledgeRecordNotes($modelLabel: String!, $recordId: ID!, $role: String!) {
+    record_knowledge_bindings(model_label: $modelLabel, record_id: $recordId, role: $role) {
+      page_detail {
+        id
+        title
+        created_at
+        created_by_label
+        markdown { body }
+      }
+    }
+    record_knowledge_can_bind(model_label: $modelLabel, record_id: $recordId)
+  }
+`);
+
+export const KnowledgeBindRecord = graphql(`
+  mutation KnowledgeBindRecord($input: RecordBindingInput!) {
+    bind_knowledge_record(input: $input) { id page role }
+  }
+`);
+
+export const KnowledgeUnbindRecord = graphql(`
+  mutation KnowledgeUnbindRecord($input: RecordBindingInput!) {
+    unbind_knowledge_record(input: $input)
+  }
+`);
+
 export const KnowledgePage = graphql(`
   query KnowledgePage($id: String!) {
     pages_by_pk(id: $id) {
       id
+      permissions
       title
       kind
       icon

@@ -11,7 +11,13 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
 
 
-def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) -> _QuerySetT:
+def lock_if_supported(
+    queryset: _QuerySetT,
+    *,
+    of: tuple[str, ...] = ("self",),
+    skip_locked: bool = False,
+    no_key: bool = False,
+) -> _QuerySetT:
     """Declare row-lock intent; Django owns write routing and backend support.
 
     ``"self"`` means the whole row: for a multi-table child it also names every
@@ -20,7 +26,7 @@ def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) 
 
     if "self" in of:
         of = (*of, *(path for path in _parent_link_paths(queryset.model._meta.concrete_model) if path not in of))
-    return queryset.select_for_update(of=of)
+    return queryset.select_for_update(of=of, skip_locked=skip_locked, no_key=no_key)
 
 
 def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str, ...]:
@@ -52,6 +58,8 @@ def bind_actor(instance: models.Model, actor: Any | None) -> None:
 def aggregate_scoped_queryset(queryset: models.QuerySet[_ModelT]) -> models.QuerySet[_ModelT]:
     """Return the aggregate-safe scoped queryset for a REBAC model."""
 
+    if queryset.query.is_empty():
+        return queryset
     if requires_angee_rebac_contract(queryset.model):
         return cast(models.QuerySet[_ModelT], cast(Any, queryset).scoped_for_aggregate())
     if _is_angee_model(queryset.model):
@@ -67,18 +75,23 @@ def read_scoped_queryset(
     actor: Any | None,
     *,
     action: str = "read",
-) -> models.QuerySet[_ModelT] | None:
-    """Return a queryset scoped to ``actor`` for models with a REBAC row policy."""
+) -> models.QuerySet[_ModelT]:
+    """Return readable rows; an absent actor cannot read protected models.
 
-    if not model_resource_type(model) or actor is None:
-        return None
-    if _is_angee_model(model):
-        manager = cast(Any, model._default_manager)
-        return cast(models.QuerySet[_ModelT], manager.with_actor(actor).with_action(action))
+    Models without row policy retain their default queryset. Protected models
+    without an actor or a scoping manager return an empty queryset.
+    """
+
     manager = model._default_manager
+    if not model_resource_type(model):
+        return manager.all()
+    if actor is None:
+        return model._base_manager.none()
+    if _is_angee_model(model):
+        return cast(models.QuerySet[_ModelT], cast(Any, manager).with_actor(actor).with_action(action))
     with_actor = getattr(manager, "with_actor", None)
     if not callable(with_actor):
-        return None
+        return model._base_manager.none()
     queryset = with_actor(actor)
     with_action = getattr(queryset, "with_action", None)
     return cast(models.QuerySet[_ModelT], with_action(action) if callable(with_action) else queryset)

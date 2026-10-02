@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
+from django.test import override_settings
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -20,16 +20,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.nexus.models import Cadence as AbstractCadence
-from angee.nexus.models import Tie as AbstractTie
-from tests import test_messaging_graphql
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
-from tests.conftest import result_data as _data
-from tests.test_messaging import (
+from angee.messaging.testing.models import (
     Handle,
     Message,
     MessageEdge,
@@ -37,34 +28,20 @@ from tests.test_messaging import (
     Party,
     Person,
     Thread,
-    ThreadAttachment,
-    ThreadedTicket,
+    ThreadFollower,
 )
-
-
-class Tie(AbstractTie):
-    """Concrete tie model used by nexus tests."""
-
-    class Meta(AbstractTie.Meta):
-        """Django model options for the canonical test tie."""
-
-        abstract = False
-        app_label = "nexus"
-        db_table = "test_nexus_tie"
-        rebac_resource_type = "nexus/tie"
-
-
-class Cadence(AbstractCadence):
-    """Concrete cadence model used by nexus tests."""
-
-    class Meta(AbstractCadence.Meta):
-        """Django model options for the canonical test cadence."""
-
-        abstract = False
-        app_label = "nexus"
-        db_table = "test_nexus_cadence"
-        rebac_resource_type = "nexus/cadence"
-
+from angee.nexus.models import Cadence as AbstractCadence
+from angee.nexus.models import Tie as AbstractTie
+from angee.nexus.testing.models import Cadence, Tie
+from tests import test_messaging_graphql
+from tests.conftest import (
+    SchemaAddon,
+    assert_private_hasura_insert_access,
+    execute_schema,
+)
+from tests.conftest import result_data as _data
+from tests.test_messaging import ThreadedTicket
+from tests.test_project_access import project_access_schema as project_access_schema
 
 nexus_schema = __import__("angee.nexus.schema", fromlist=["schemas"])
 User = get_user_model()
@@ -332,12 +309,10 @@ def test_recompute_excludes_record_chatter_and_public_threads(composed_tables: N
         alice_handle = _handle(alice, "alice@example.com")
         bob_handle = _handle(bob, "bob@example.com")
         ticket = ThreadedTicket._base_manager.create(title="Private record")
-        chatter = Thread._base_manager.create(platform="email")
-        ThreadAttachment._base_manager.create(
-            thread=chatter,
-            content_type=ContentType.objects.get_for_model(ThreadedTicket),
-            object_id=ticket.pk,
-        )
+        chatter = ticket.message_thread()
+        assert chatter is not None
+        chatter.platform = "email"
+        chatter.save(update_fields=["platform"])
         public = Thread._base_manager.create(
             platform="facebook",
             modality=Thread.Modality.PUBLIC_THREAD,
@@ -651,20 +626,27 @@ def test_party_tie_is_null_without_a_viewer_party_identity(composed_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_party_network_applies_pair_intersection_to_every_edge(composed_tables: None) -> None:
-    """The party network returns only edges whose two endpoints are readable."""
+@override_settings(REBAC_FIELD_READ_MODE="redact")
+def test_party_network_applies_pair_intersection_to_every_edge(
+    project_access_schema: Any,
+) -> None:
+    """The network requires private endpoints and omits redacted node counts."""
 
-    del composed_tables
+    del project_access_schema
     reader = User.objects.create_user(username="network-reader")
+    identity_reader = User.objects.create_user(username="network-identity-reader")
     owner = User.objects.create_user(username="network-owner")
     with system_context(reason="test nexus network seed"):
-        center = Party._base_manager.create(display_name="Center", created_by=owner)
+        center = Party._base_manager.create(display_name="Center", created_by=owner, handle_count=7)
         visible = Party._base_manager.create(display_name="Visible", created_by=owner)
         hidden = Party._base_manager.create(display_name="Hidden", created_by=owner)
         shown = Tie._base_manager.create(party_a=center, party_b=visible)
         Tie._base_manager.create(party_a=center, party_b=hidden)
+        thread = Thread._base_manager.create(created_by=owner)
+        ThreadFollower._base_manager.create(thread=thread, party=center, created_by=owner)
     _grant(center, "reader", reader)
     _grant(visible, "reader", reader)
+    _grant(thread, "reader", identity_reader)
 
     payload = _data(
         execute_schema(
@@ -680,6 +662,24 @@ def test_party_network_applies_pair_intersection_to_every_edge(composed_tables: 
     )["party_network"]
 
     assert payload == [{"id": shown.sqid}]
+
+    query = "query PartyGraph($id: ID!) { party_graph(root_id: $id) { nodes } }"
+    schema = _schema()
+    private_graph = _data(execute_schema(schema, query, {"id": center.sqid}, user=reader))["party_graph"]
+    nodes = {node["id"]: node for node in private_graph["nodes"]}
+    assert nodes[center.sqid]["detail"] == "7 handles"
+    assert nodes[center.sqid]["meta"]["handle_count"] == 7
+    assert nodes[visible.sqid]["detail"] == "0 handles"
+    assert nodes[visible.sqid]["meta"]["handle_count"] == 0
+
+    identity_graph = _data(
+        execute_schema(schema, query, {"id": center.sqid}, user=identity_reader)
+    )["party_graph"]
+    assert len(identity_graph["nodes"]) == 1
+    node = identity_graph["nodes"][0]
+    assert node["id"] == center.sqid
+    assert "detail" not in node
+    assert "handle_count" not in node["meta"]
 
 
 def test_viewer_relative_party_resolvers_remain_objects() -> None:

@@ -9,8 +9,11 @@ import {
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
+import { useResourceRecordMatchFields } from "../../../runtime";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
 import { Filter, availableResourceViewKinds } from "../resource-view-model";
+import { GanttCollectionSurface } from "../../gantt/gantt-collection-surface";
+import { LinkedGanttCollectionSurface } from "../../gantt/linked-gantt-collection-surface";
 import { CalendarCollectionSurface } from "../../calendar/calendar-collection-surface";
 import { type GroupedResourceViewSurface, type ResourceViewSurface, type UseResourceViewSurfaceProps } from "../resource-view-surface";
 import type { ResolvedBoardLaneSource } from "../resource-view-board-lanes";
@@ -32,6 +35,9 @@ import { DashboardCollectionSurface } from "../../../dashboard/surface";
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
+  if (props.boardCard && (!props.boardCard.title || (props.boardCard.fields?.length ?? 0) > 4)) {
+    throw new Error("ListView boardCard needs a title and at most four detail fields.");
+  }
   return <ListViewFrame {...props} />;
 }
 
@@ -63,6 +69,8 @@ function ListViewFrame<TRow extends Row = Row>(
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.source ? undefined : props.resource,
+    baseFilter: props.baseFilter,
+    presetIds: props.presetIds,
     scope: props.scope,
     presentation: props.presentation,
     initialState: initial.state,
@@ -79,15 +87,18 @@ function ValidatedListViewBody<TRow extends Row>(
   const query =
     props.source?.query ?? (metadata ? ResourceQuery.from(metadata) : null);
   let error = props.resourceView.state.queryError;
+  if (!error && props.renderItem && props.resourceView.state.view !== "list") {
+    error = new Error("Ordered item lists support only the flat list view.");
+  }
   if (!error && query) {
     try {
       error = validateResourceViewState(
         props.resourceView.state,
         query,
       ).queryError;
-      query.toWhere(props.baseFilter, props.resourceView.state.filter);
+      query.toWhere(props.resourceView.baseFilter, props.resourceView.state.filter);
       const group =
-        props.resourceView.state.view === "board" && props.laneSource
+        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource
           ? { field: props.laneSource.field }
           : defaultGroupForView(
               props.defaultGroup,
@@ -105,13 +116,16 @@ function ValidatedListViewBody<TRow extends Row>(
         );
       }
       const effectiveGroups =
-        props.resourceView.state.view === "board" && props.laneSource && group
+        (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource && group
           ? [group]
           : groups.length > 0
             ? groups
             : group
               ? [group]
               : [];
+      if (props.renderItem && effectiveGroups.length > 0) {
+        throw new Error("Ordered item lists do not support grouping.");
+      }
       if (effectiveGroups.length > 0) {
         if (
           !isClientRowModel(metadata?.resource) &&
@@ -129,7 +143,10 @@ function ValidatedListViewBody<TRow extends Row>(
     }
   }
   return error ? (
-    <ResourceQueryError error={error} onReset={props.resourceView.resetQuery} />
+    <ResourceQueryError error={error} onReset={() => {
+      if (props.renderItem) props.resourceView.setView("list");
+      props.resourceView.resetQuery();
+    }} />
   ) : (
     <ListViewBody {...props} />
   );
@@ -146,10 +163,12 @@ function ListViewBody<TRow extends Row = Row>({
   headerVisibility,
   selectable,
   renderGroupLabel,
+  renderItem,
   columns,
   fields,
   baseFilter,
   filterOptions: explicitFilterOptions,
+  filterRow,
   facets,
   customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
@@ -158,7 +177,9 @@ function ListViewBody<TRow extends Row = Row>({
   defaultGroups,
   defaultExpandedGroups,
   calendar,
+  gantt,
   laneSource: laneSourceInput,
+  boardCard,
   onCreate,
   onCreateInLane,
   createLabel,
@@ -174,6 +195,7 @@ function ListViewBody<TRow extends Row = Row>({
   emptyContent,
   className,
   presentation = "page",
+  chrome,
   resourceView,
 }: ListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
@@ -201,15 +223,18 @@ function ListViewBody<TRow extends Row = Row>({
     : emptyContent ?? t("list.empty");
   const discoveredMetadata = useModelMetadata(source ? "" : resource);
   const modelMetadata = source ? null : discoveredMetadata;
+  const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
+  const queryFields = useValueStable([...(fields ?? []), ...recordMatchFields, ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : [])]);
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
+  const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
   const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
   const availableViews = React.useMemo(
     () =>
       declaredViews ??
-      availableResourceViewKinds({ calendar: calendarAvailable, dashboard: dashboardAvailable }),
-    [declaredViews, calendarAvailable, dashboardAvailable],
+      availableResourceViewKinds({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable }),
+    [declaredViews, calendarAvailable, ganttAvailable, dashboardAvailable],
   );
   const schemaMetadata = useSchemaFieldMetadata();
   const resolvedLaneSource =
@@ -271,8 +296,8 @@ function ListViewBody<TRow extends Row = Row>({
     [columns, modelMetadata, schemaMetadata],
   );
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(baseFilter, resourceView.state.filter),
-    [resourceView.state.filter, baseFilter],
+    () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
+    [resourceView.state.filter, resourceView.baseFilter],
   );
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
@@ -293,7 +318,7 @@ function ListViewBody<TRow extends Row = Row>({
     [modelMetadata, resolvedLaneSource],
   );
   const boardGroupingPinned =
-    resourceView.state.view === "board" && laneSourceGroup !== null;
+    (resourceView.state.view === "board" || resourceView.state.view === "gantt") && laneSourceGroup !== null;
   const rawActiveDefaultGroup = boardGroupingPinned
     ? laneSourceGroup
     : defaultGroupForView(defaultGroup, defaultGroups, resourceView.state.view);
@@ -317,7 +342,7 @@ function ListViewBody<TRow extends Row = Row>({
     resource,
     source,
     columns: resolvedColumns,
-    fields,
+    fields: queryFields,
     filter: baseFilter,
     order,
     resourceView,
@@ -336,12 +361,13 @@ function ListViewBody<TRow extends Row = Row>({
       resource={resource}
       source={source}
       textFilterField={textFilterField}
-      maxGroupDepth={maxGroupDepth}
+      maxGroupDepth={renderItem ? 0 : maxGroupDepth}
       toolbarWrap={toolbarWrap}
       tableLayout={tableLayout}
       headerVisibility={headerVisibility}
-      selectable={selectable}
+      selectable={renderItem ? false : selectable}
       renderGroupLabel={renderGroupLabel}
+      renderItem={renderItem}
       resolvedColumns={resolvedColumns}
       modelMetadata={modelMetadata}
       resourceView={resourceView}
@@ -355,6 +381,7 @@ function ListViewBody<TRow extends Row = Row>({
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}
       explicitFilterOptions={explicitFilterOptions}
+      filterRow={filterRow}
       explicitCustomFilterFields={explicitCustomFilterFields}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
@@ -371,12 +398,58 @@ function ListViewBody<TRow extends Row = Row>({
       toolbarActions={toolbarActions}
       bulkActions={bulkActions}
       cardActions={cardActions}
+      boardCard={boardCard}
       renderCard={renderCard}
       emptyContent={resolvedEmptyContent}
       className={className}
       presentation={presentation}
+      chrome={chrome}
     />
   );
+  if (resourceView.state.view === "gantt") {
+    if (!ganttAvailable || !gantt || (!resolvedLaneSource && !gantt.linked)) {
+      return <ErrorBanner description={t("gantt.requiresSource")} />;
+    }
+    if (gantt.linked) return <LinkedGanttCollectionSurface
+      surfaceProps={surfaceProps} gantt={gantt} availableViews={availableViews}
+      presentation={presentation} className={className} onCreate={onCreate} createLabel={createLabel}
+      onRowClick={onRowClick} rowHref={rowHref} toolbarActions={toolbarActions} toolbarWrap={toolbarWrap}
+      maxGroupDepth={maxGroupDepth} selectable={selectable}
+      toolbarInputs={{
+        columns: resolvedColumns, modelMetadata, resourceView, groupStack: effectiveGroupStack,
+        defaultGroup, defaultGroups, textFilterField, groupOptions: explicitGroupOptions,
+        declaredFacets, scalarFacets, filterOptions: explicitFilterOptions,
+        customFilterFields: explicitCustomFilterFields,
+      }}
+    />;
+    return (
+      <GanttCollectionSurface
+        surfaceProps={surfaceProps}
+        gantt={gantt}
+        groupingPinned={boardGroupingPinned}
+        laneSource={resolvedLaneSource!}
+        availableViews={availableViews}
+        presentation={presentation}
+        className={className}
+        onCreate={onCreate}
+        createLabel={createLabel}
+        onRowClick={onRowClick}
+        rowHref={rowHref}
+        toolbarActions={toolbarActions}
+        toolbarWrap={toolbarWrap}
+        maxGroupDepth={maxGroupDepth}
+        toolbarInputs={{
+          columns: resolvedColumns, modelMetadata, resourceView,
+          groupStack: effectiveGroupStack, defaultGroup, defaultGroups,
+          textFilterField,
+          groupOptions: explicitGroupOptions,
+          declaredFacets, scalarFacets,
+          filterOptions: explicitFilterOptions,
+          customFilterFields: explicitCustomFilterFields,
+        }}
+      />
+    );
+  }
   if (resourceView.state.view === "dashboard") {
     if (!dashboardAvailable) {
       return <ErrorBanner description="This resource does not expose the aggregate operations required by dashboards." />;

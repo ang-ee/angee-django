@@ -6,6 +6,7 @@
 
 // App composition root + the rendered-addon seam.
 export * from "./create-app";
+export * from "./boot-app";
 
 // Addon composition API (headless manifest authoring + folding).
 export * from "./define-addon";

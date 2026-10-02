@@ -65,7 +65,7 @@ function displayColumns<TRow extends Row>(
   options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
   return columns.map((column) => ({
-    id: column.field,
+    id: column.id ?? column.field,
     accessorFn: (row) => readPath(row, column.field),
     enableSorting:
       column.sortable !== false &&
@@ -116,6 +116,7 @@ export function ListCellContent<TRow extends Row>({
 }): React.ReactNode {
   const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
+  if (column.showWhen && !column.showWhen(row)) return null;
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
     return (

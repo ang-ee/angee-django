@@ -65,8 +65,8 @@ export function MessagingOverviewContribution(): React.ReactElement {
       {channels.length > 0 ? (
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {channels.map((channel) => {
-            const syncStatus = String(channel.last_sync_status ?? "").toLowerCase();
-            const unhealthy = Boolean(channel.sync_error) || syncStatus === "error";
+            const syncStatus = String(channel.sync_stage ?? "").toLowerCase();
+            const unhealthy = Boolean(channel.sync_error) || channel.sync_stage === "FAILED";
             const pairing = pairingHealth(channel.pairing_state, t, statusTone);
             return (
               <MiniCard

@@ -14,7 +14,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -22,6 +22,7 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
+from angee.base.errors import exception_text
 from angee.integrate.http import HttpClient
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
@@ -32,45 +33,47 @@ if TYPE_CHECKING:
 _CACHE_SUBDIR = "resource-cache"
 
 
-def _normalize_url(app_config: AppConfig, value: Any) -> str:
-    """Return the remote URL string as the stored source value."""
+class UrlSource(sources.ResourceSource):
+    """Networked resource files cached through the integrate HTTP client."""
 
-    del app_config
-    return str(value)
+    key = "url"
 
+    @classmethod
+    def normalize(cls, app_config: AppConfig, value: object) -> str:
+        """Return the remote URL string as the stored source value."""
 
-def _materialize_url(entry: ResourceEntry) -> Path:
-    """Return the cached local path for a ``url`` entry, fetching it once.
+        del app_config
+        return str(value)
 
-    The fetch rides the SSRF-pinned :class:`HttpClient` (public-only, redirects
-    re-validated). The SSRF gate (``ValidationError``), a transport failure
-    (``httpx.RequestError`` or ``OSError``), and a non-2xx response all surface
-    as ``ResourceLoadError``.
-    """
+    @classmethod
+    def materialize_entry(cls, entry: ResourceEntry) -> Path:
+        """Fetch a URL once through the SSRF-pinned HTTP client into the cache."""
 
-    url = entry.source_value
-    cache_path = _cache_path(url)
-    if cache_path.exists():
+        url = entry.source_value
+        cache_path = _cache_path(url)
+        if cache_path.exists():
+            return cache_path
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            response = HttpClient().get(url, follow_redirects=True)
+        except ValidationError as error:
+            raise ResourceLoadError(f"{url!r}: {exception_text(error)}") from error
+        except (httpx.RequestError, OSError) as error:
+            raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
+        if not response.is_success:
+            raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status_code}")
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=cache_path.parent, prefix=f".{cache_path.name}.", delete=False
+            ) as output:
+                temporary_path = Path(output.name)
+                output.write(response.content)
+            os.replace(temporary_path, cache_path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
         return cache_path
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        response = HttpClient().get(url, follow_redirects=True)
-    except ValidationError as error:
-        raise ResourceLoadError(f"{url!r}: {'; '.join(error.messages)}") from error
-    except (httpx.RequestError, OSError) as error:
-        raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
-    if not response.is_success:
-        raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status_code}")
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=cache_path.parent, prefix=f".{cache_path.name}.", delete=False) as output:
-            temporary_path = Path(output.name)
-            output.write(response.content)
-        os.replace(temporary_path, cache_path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-    return cache_path
 
 
 def _cache_path(url: str) -> Path:
@@ -79,9 +82,3 @@ def _cache_path(url: str) -> Path:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
     suffix = PurePosixPath(urlparse(url).path).suffix.lower()
     return Path(settings.ANGEE_DATA_DIR) / _CACHE_SUBDIR / f"{digest}{suffix}"
-
-
-def url_source() -> sources.ResourceSource:
-    """Return integrate's networked ``url`` resource source."""
-
-    return sources.ResourceSource(key="url", normalize=_normalize_url, materialize=_materialize_url)

@@ -1,10 +1,13 @@
 import * as React from "react";
 import { DndContext, useDraggable, type DragEndEvent } from "@dnd-kit/core";
 import { useModelMetadata } from "@angee/metadata";
+import { Link } from "@tanstack/react-router";
+import { useAppRuntime, useResourceRoute, useRouteHref } from "../runtime/runtime";
 import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
+import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "../chrome/Glyph";
 import { Input } from "../ui/input";
 import { ErrorBanner } from "../fragments/ErrorBanner";
@@ -29,6 +32,7 @@ import type { DashboardWidgetCatalogueEntry } from "./catalogue";
 import { DashboardWidgetPickerDialog } from "./WidgetPickerDialog";
 import { useDashboardT } from "./i18n";
 import { titleCase } from "../lib/titleCase";
+import { SectionHeading } from "../views/form/SectionHeading";
 
 const ROW_HEIGHT = 56;
 const GRID_GAP = 12;
@@ -63,6 +67,18 @@ function definitionForTarget(registry: DashboardRegistry, target: DashboardTarge
     return key ? registry.definitions[key] : undefined;
   }
   return undefined;
+}
+
+/** The committed layout presented by a ready dashboard, including a newer declaration. */
+export function visibleDashboardSnapshot(
+  registry: DashboardRegistry,
+  target: DashboardTarget,
+  state: Extract<DashboardLoadState, { status: "ready" }>,
+  definition = definitionForTarget(registry, target),
+  baseline = snapshotForDefinition(definition),
+): DashboardSnapshot {
+  return definition && baseline && definition.revision !== state.declarationRevision
+    ? baseline : state.snapshot;
 }
 
 export function DashboardSurface(props: DashboardSurfaceProps): React.ReactElement {
@@ -112,7 +128,7 @@ function StoredDashboardSurface(
       <DashboardEditor
         {...props}
         committed={props.baseline}
-        capabilities={{ canEdit: props.target.scope !== "personal", canReset: false }}
+        capabilities={{ canEdit: state.capabilities.canEdit && props.definition?.editable !== false, canReset: false }}
         onSave={async (snapshot) => {
           await binding.save({
             target: props.target,
@@ -171,17 +187,21 @@ function ReadyDashboardSurface(
   props: DashboardSurfaceProps & {
     registry: DashboardRegistry;
     definition?: DashboardDefinition;
+    baseline: DashboardSnapshot | null;
     state: Extract<DashboardLoadState, { status: "ready" }>;
     binding: DashboardStoreBinding;
   },
 ): React.ReactElement {
   const { state } = props;
+  const visible = visibleDashboardSnapshot(props.registry, props.target, state, props.definition, props.baseline);
+  const declared = visible !== state.snapshot;
+  const canEdit = state.capabilities.canEdit && props.definition?.editable !== false;
   return (
     <DashboardEditor
       {...props}
-      title={props.title ?? state.name}
-      committed={state.snapshot}
-      capabilities={{ canEdit: state.capabilities.canEdit, canReset: state.capabilities.canReset }}
+      title={props.title ?? (declared ? props.definition?.title : state.name)}
+      committed={visible}
+      capabilities={{ canEdit, canReset: state.capabilities.canReset && canEdit }}
       onSave={async (snapshot) => {
         await props.binding.save({
           target: props.target,
@@ -193,7 +213,7 @@ function ReadyDashboardSurface(
           snapshot,
         });
       }}
-      onReset={state.capabilities.canReset ? async () => {
+      onReset={state.capabilities.canReset && canEdit ? async () => {
         await props.binding.reset(props.target, state.persistedId, state.revision);
       } : undefined}
       onReload={props.binding.reload}
@@ -328,19 +348,46 @@ function useResponsiveColumns(canonical: number): [React.RefObject<HTMLDivElemen
   return [ref, columns];
 }
 
-function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onWidgetsChange }: {
+function DashboardGrid(props: React.ComponentProps<typeof DashboardLayout>): React.ReactElement {
+  const policies = props.snapshot.widgets.flatMap((widget) =>
+    !widget.isArchived && widget.visibility ? [{ id: widget.id, policy: widget.visibility }] : [],
+  );
+  const useVisibility = props.registry.store?.useWidgetVisibility;
+  if (policies.length && useVisibility) {
+    return <DashboardVisibility {...props} policies={policies} useVisibility={useVisibility} />;
+  }
+  return <DashboardLayout {...props} visibleIds={props.snapshot.widgets
+    .filter((widget) => !widget.visibility).map(({ id }) => id)} />;
+}
+
+function DashboardVisibility({ policies, useVisibility, ...props }: React.ComponentProps<typeof DashboardLayout> & {
+  policies: readonly { id: string; policy: NonNullable<WidgetSpec["visibility"]> }[];
+  useVisibility: NonNullable<NonNullable<DashboardRegistry["store"]>["useWidgetVisibility"]>;
+}): React.ReactElement {
+  const t = useDashboardT();
+  const visibility = useVisibility(policies.map(({ policy }) => policy));
+  if (visibility.error) return <ErrorBanner description={visibility.error.message} />;
+  if (visibility.loading) return <SkeletonStatus label={t("surface.loading")} />;
+  const permitted = new Set(policies.filter((_, index) => visibility.allowed[index] === true).map(({ id }) => id));
+  return <DashboardLayout {...props} visibleIds={props.snapshot.widgets
+    .filter((widget) => !widget.visibility || permitted.has(widget.id)).map(({ id }) => id)} />;
+}
+
+function DashboardLayout({ snapshot, registry, definition, editing, pageScope, onWidgetsChange, visibleIds }: {
   snapshot: DashboardSnapshot;
   registry: DashboardRegistry;
   definition?: DashboardDefinition;
   editing: boolean;
   pageScope?: DashboardPageScope;
   onWidgetsChange: (widgets: readonly WidgetSpec[]) => void;
+  visibleIds?: readonly string[];
 }): React.ReactElement {
   const t = useDashboardT();
   const sensors = useDndKitSensors(6);
   const [containerRef, responsiveColumns] = useResponsiveColumns(snapshot.columns);
   const columns = editing ? snapshot.columns : responsiveColumns;
-  const active = snapshot.widgets.filter((widget) => !widget.isArchived);
+  const active = snapshot.widgets.filter((widget) => !widget.isArchived && (!visibleIds || visibleIds.includes(widget.id)));
+  const retained = snapshot.widgets.filter((widget) => !active.includes(widget));
   const projected = editing
     ? packDashboardLayout(active, columns)
     : columns < snapshot.columns
@@ -364,7 +411,7 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
       { x: widget.x + Math.round(delta.x / (cellWidth + GRID_GAP)), y: widget.y + Math.round(delta.y / (ROW_HEIGHT + GRID_GAP)) },
       columns,
     );
-    onWidgetsChange([...moved, ...snapshot.widgets.filter((item) => item.isArchived)]);
+    onWidgetsChange([...moved, ...retained]);
   };
   return (
     <div ref={containerRef} className={cn("min-h-0 flex-1 overflow-auto p-3", editing && "min-w-[720px]")}>
@@ -383,11 +430,11 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
                 onUpdate={(patch) => onWidgetsChange(snapshot.widgets.map((item) => item.id === widget.id ? { ...item, ...patch } : item))}
                 onMove={(dx, dy) => onWidgetsChange([
                   ...moveDashboardRect(active, widget.id, { x: widget.x + dx, y: widget.y + dy }, columns),
-                  ...snapshot.widgets.filter((item) => item.isArchived),
+                  ...retained,
                 ])}
                 onResize={(dw, dh) => onWidgetsChange([
                   ...resizeDashboardRect(active, widget.id, { w: widget.w + dw, h: widget.h + dh }, columns),
-                  ...snapshot.widgets.filter((item) => item.isArchived),
+                  ...retained,
                 ])}
               />
             ))}
@@ -399,7 +446,7 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
 }
 
 function responsiveWidgetWidth(widget: WidgetSpec, columns: number): number {
-  if (columns < 4 || widget.data.shape === "rows" || widget.data.shape === "none") return columns;
+  if (columns < 4 || widget.data.shape === "rows" || widget.data.shape === "none" || widget.data.shape === "resourceView") return columns;
   return Math.ceil(columns / 2);
 }
 
@@ -407,6 +454,7 @@ function responsiveWidgetHeight(widget: WidgetSpec, columns: number, canonicalCo
   if (columns >= canonicalColumns) return widget.h;
   if (widget.data.shape === "series") return Math.max(widget.h, 5);
   if (widget.data.shape === "rows") return Math.max(widget.h, 6);
+  if (widget.data.shape === "resourceView") return Math.max(widget.h, 6);
   if (widget.data.shape === "none") return Math.max(widget.h, 4);
   return Math.max(widget.h, 2);
 }
@@ -423,7 +471,15 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
   onResize: (dw: number, dh: number) => void;
 }): React.ReactElement {
   const t = useDashboardT();
-  const sourceResource = widget.data.shape === "none" ? "" : widget.data.source.resource;
+  const [count, setCount] = React.useState<number | null>(null);
+  const { resourceViews } = useAppRuntime();
+  const sourceResource = widget.data.shape === "none" ? ""
+    : widget.data.shape === "resourceView" ? resourceViews[widget.data.preset]?.resource ?? ""
+    : widget.data.source.resource;
+  const resourceRoute = useResourceRoute(sourceResource);
+  const routeHref = useRouteHref();
+  const fullViewRoute = typeof widget.options.fullViewRoute === "string" ? widget.options.fullViewRoute : undefined;
+  const fullViewHref = fullViewRoute ? routeHref.maybe(fullViewRoute) : resourceRoute;
   const sourceMetadata = useModelMetadata(sourceResource);
   const resourceLabel = sourceMetadata?.resource.modelName
     ? titleCase(sourceMetadata.resource.modelName)
@@ -462,8 +518,16 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
         ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
       }}
     >
-      <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
-        <h3 id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1 truncate text-13 font-medium text-fg"}>{visibleTitle}</h3>
+      <header className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1", !editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" && "pr-9")}>
+        <div id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1"}>
+          <SectionHeading
+            label={!editing && fullViewHref ? <Link to={fullViewHref} className="hover:underline">{visibleTitle}</Link> : visibleTitle}
+            count={count == null ? undefined : `· ${count}`}
+            hint={typeof widget.options.hint === "string" ? `· ${widget.options.hint}` : undefined}
+            audience={typeof widget.options.audience === "string" ? widget.options.audience : undefined}
+          />
+        </div>
+        {!editing && fullViewHref ? <Link to={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} className="shrink-0 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring"><Glyph name="arrow-up-right" size={14} /></Link> : null}
         {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
         {editing ? (
           <Input
@@ -483,24 +547,26 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           </>
         ) : null}
       </header>
-      <ResolvedWidget widget={widget} registry={registry} definition={definition} pageScope={pageScope} titleId={titleId} />
+      <ResolvedWidget widget={widget} registry={registry} definition={definition} editing={editing} pageScope={pageScope} titleId={titleId} onCountChange={setCount} />
     </article>
   );
 }
 
-function ResolvedWidget({ widget, registry, definition, pageScope, titleId }: {
+function ResolvedWidget({ widget, registry, definition, editing, pageScope, titleId, onCountChange }: {
   widget: WidgetSpec;
   registry: DashboardRegistry;
   definition?: DashboardDefinition;
+  editing: boolean;
   pageScope?: DashboardPageScope;
   titleId: string;
+  onCountChange: (count: number | null) => void;
 }): React.ReactElement {
   const t = useDashboardT();
   const kind = registry.widgetKinds[widget.kind];
   if (!kind || kind.version !== widget.kindVersion || kind.shape !== widget.data.shape) {
     return <ErrorBanner className="m-3" description={t("surface.widgetKindUnavailable", { kind: widget.kind, version: widget.kindVersion })} />;
   }
-  return <WidgetDataBody widget={widget} kind={kind} definition={definition} pageScope={pageScope} titleId={titleId} />;
+  return <WidgetDataBody widget={widget} kind={kind} definition={definition} editing={editing} pageScope={pageScope} titleId={titleId} onCountChange={onCountChange} />;
 }
 
 function normalizeDashboardWidgetTitle(title: string, resource: string, resourceLabel: string): string {
@@ -510,32 +576,41 @@ function normalizeDashboardWidgetTitle(title: string, resource: string, resource
   return title;
 }
 
-function WidgetDataBody({ widget, kind, definition, pageScope, titleId }: {
+function WidgetDataBody({ widget, kind, definition, editing, pageScope, titleId, onCountChange }: {
   widget: WidgetSpec;
   kind: DashboardWidgetKind;
   definition?: DashboardDefinition;
+  editing: boolean;
   pageScope?: DashboardPageScope;
   titleId: string;
+  onCountChange: (count: number | null) => void;
 }): React.ReactElement {
   const t = useDashboardT();
   const data = useDashboardWidgetData(widget, pageScope);
+  React.useEffect(() => {
+    if (widget.data.shape !== "resourceView" && widget.data.shape !== "none") {
+      onCountChange(data.count ?? null);
+    }
+  }, [data.count, data.value, onCountChange, widget.data.shape, widget.kind]);
   const Component = kind.Component;
   const Authored = definition?.authored?.[widget.id];
+  const HostedView = widget.data.shape === "resourceView" ? definition?.views?.[widget.data.preset] : undefined;
   return (
     <div className={cn(
       "flex min-h-0 flex-1 flex-col overflow-hidden",
       "px-3 pt-2 pb-1.5",
     )}>
-      <div className={cn("min-h-0 flex-1", kind.shape === "rows" ? "overflow-auto" : "overflow-hidden")}>
-        <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} />
+      <div className={cn("min-h-0 flex-1", kind.shape === "rows" || kind.shape === "resourceView" ? "overflow-auto" : "overflow-hidden")}>
+        <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} hostedView={HostedView} onCountChange={onCountChange} />
       </div>
-      <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
-        {pageScope && widget.data.shape !== "none" ? (
-          <span>{pageScope.resource === widget.data.source.resource ? t("surface.pageFilters") : t("surface.independentSource")}</span>
-        ) : null}
-        <span>{data.live ? t("surface.live") : data.updatedAt ? t("surface.readAt", { time: new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }) : t("surface.manual")}</span>
-        <button type="button" className="rounded-4 px-1 text-fg-muted hover:text-fg focus-visible:focus-ring" onClick={data.refetch}>{t("surface.refresh")}</button>
-      </footer>
+      {!editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" ? (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger render={<button type="button" className="absolute right-1 top-1 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring" aria-label={t("surface.widgetMenu", { title: widget.title })}><Glyph name="more-horizontal" fallbackName="more-vertical" size={14} /></button>} />
+          <DropdownMenu.Portal><DropdownMenu.Positioner align="end" sideOffset={4}><DropdownMenu.Content>
+            <DropdownMenu.Item onClick={data.refetch}>{t("surface.refresh")}</DropdownMenu.Item>
+          </DropdownMenu.Content></DropdownMenu.Positioner></DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      ) : null}
     </div>
   );
 }

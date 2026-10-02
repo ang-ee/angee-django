@@ -48,61 +48,20 @@ from angee.agents.models import (
     normalize_inference_usage,
 )
 from angee.agents.models import Agent as AbstractAgent
-from angee.agents.models import InferenceModel as AbstractInferenceModel
-from angee.agents.models import InferenceProvider as AbstractInferenceProvider
-from angee.agents.models import Skill as AbstractSkill
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
+from angee.agents.testing.models import InferenceModel, InferenceProvider, Skill
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
-from tests.conftest import (
-    Integration,
-    make_integration,
-)
+from tests.conftest import make_integration
 from tests.test_integrate_vcs import (
     REPOS,
     Repository,
     Source,
     _vcs_bridge,
 )
-
-
-class Skill(AbstractSkill):
-    """Concrete skill used by the agents discovery tests."""
-
-    class Meta(AbstractSkill.Meta):
-        """Django model options for the canonical test skill."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_skill"
-        rebac_resource_type = "agents/skill"
-
-
-class InferenceProvider(AbstractInferenceProvider, Integration):
-    """Concrete inference provider (capability over an integration) used by tests."""
-
-    class Meta(AbstractInferenceProvider.Meta):
-        """Django model options for the canonical test inference provider."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_inference_provider"
-        rebac_resource_type = "agents/inference_provider"
-
-
-class InferenceModel(AbstractInferenceModel):
-    """Concrete inference model catalogue row used by tests."""
-
-    class Meta(AbstractInferenceModel.Meta):
-        """Django model options for the canonical test inference model."""
-
-        abstract = False
-        app_label = "agents"
-        db_table = "test_agents_inference_model"
-        rebac_resource_type = "agents/inference_model"
 
 
 def _provider(

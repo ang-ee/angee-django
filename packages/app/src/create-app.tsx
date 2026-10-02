@@ -14,12 +14,15 @@ import {
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
   tanStackRouterProvider,
+  viewAsAuth,
   type AngeeHasuraSchemaConfig,
   type SchemaOperationDocuments,
+  type ResourceMutationOperations,
 } from "@angee/refine";
 import {
   Refine,
   useInvalidateAuthStore,
+  type I18nProvider,
   type AuthProvider as RefineAuthProvider,
   type DataProvider as RefineDataProvider,
   type DataProviders,
@@ -38,6 +41,7 @@ import {
   createRoute,
   createRouter,
   useNavigate,
+  useRouterState,
 } from "@tanstack/react-router";
 import {
   StrictMode,
@@ -53,12 +57,17 @@ import {
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
+  useAppRuntime,
+  useActiveRoute,
   DEFAULT_LOGIN_PATH,
   HOME_PATH_PREFERENCE_KEY,
   createRouteHref,
   type AppRuntime,
+  type RuntimeResourceRoutes,
+  type RuntimeVocabulary,
   type SlotContribution,
 } from "@angee/ui/runtime";
+import { validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import { composeAddons } from "./define-addon";
 import {
   ModalsHost,
@@ -68,6 +77,10 @@ import {
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
+import { ViewAsBanner, ViewAsPicker } from "@angee/ui/chrome/ViewAs";
+import { USER_MENU_ITEMS_SLOT } from "@angee/ui/chrome/UserMenu";
+import { SurfacePresentationProvider, type SurfacePresentation } from "@angee/ui/chrome/surface-policy";
+import { CONSOLE_NOTICE_SLOT } from "@angee/ui/layouts/ConsoleLayout";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
   MenuTree,
@@ -85,7 +98,7 @@ import {
   clearAppearanceCache,
   type HostAppearanceDefaults,
 } from "@angee/ui/theme";
-import { createAngeeI18nRuntime } from "./providers/i18n";
+import { composeAppVocabulary } from "./providers/i18n";
 import {
   type BaseAddon,
   type BaseAddonRoute,
@@ -96,11 +109,13 @@ import {
   AuthStateProvider,
   UserPreferencesProvider,
   createAngeeAuthProvider,
+  identityQueryOptions,
   useLogoutAction,
   useRuntimeAuthState,
   useUserPreferences,
   type AuthState,
 } from "./providers/auth";
+import { createViewAsProvider, useViewAsState, type ViewAsProvider } from "./providers/view-as";
 import {
   parseFlatSearch,
   stringifyFlatSearch,
@@ -108,9 +123,12 @@ import {
 import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
-  resourceRouteIndex,
+  AppRouteProjection,
+  resourceMutationsForSchema,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
+import { admittedContributions, routePolicyIndex } from "./route-policy";
+import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
   compareCodePoint,
   createAddonRouteNodes,
@@ -147,6 +165,8 @@ export interface CreateAppInput {
   subscriptionSchema?: string;
   /** Where `/` redirects. Defaults to the first non-public route's path. */
   home?: string;
+  /** Confine console navigation to this menu root; public routes stay available. */
+  confineTo?: string;
   /** Auth-owned sign-in destination. Defaults to `/login`. */
   loginPath?: string;
   /** Host-level UI slot contributions, merged with the addons'. */
@@ -156,8 +176,8 @@ export interface CreateAppInput {
 }
 
 export type AngeeAppSchemaConfig =
-  Omit<AngeeHasuraSchemaConfig, "metadata"> & {
-    /** Generated schema metadata imported from emitted JSON. */
+  Omit<AngeeHasuraSchemaConfig, "metadata" | "mutations"> & {
+    /** Generated schema metadata fetched from its emitted JSON asset. */
     metadata?: unknown;
     /** Generated operation documents imported from emitted project codegen. */
     operationDocuments?: SchemaOperationDocuments;
@@ -166,6 +186,7 @@ export type AngeeAppSchemaConfig =
 type NormalizedAngeeAppSchemaConfig =
   Omit<AngeeAppSchemaConfig, "metadata"> & {
     metadata?: AngeeSchemaMetadata;
+    mutations: Readonly<Record<string, ResourceMutationOperations>>;
     fieldMetadata: SchemaFieldMetadata;
   };
 
@@ -211,13 +232,37 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
  * `createApp({...}).mount(...)`.
  */
 export function createApp(input: CreateAppInput): AngeeApp {
-  const schemas = normalizeSchemaConfigs(input.schemas);
+  const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
+  const viewAs: ViewAsProvider = createViewAsProvider({
+    changed: async (userId) => {
+      // Stop live delivery before resetting/refetching any actor-bound data.
+      refineLiveProvider?.setEnabled(false);
+      resetSessionQueries(queryClient);
+      if (userId === null) refineLiveProvider?.setEnabled(true);
+      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider));
+      if (userId !== null && (identity?.id !== userId || !identity.realUser)) {
+        throw new Error("Preview identity was not returned.");
+      }
+    },
+  });
+  const schemas = normalizeSchemaConfigs(Object.fromEntries(
+    Object.entries(input.schemas).map(([name, schema]) => [name, {
+      ...schema,
+      fetch: viewAsAuth(viewAs.getUserId)(schema.fetch ?? globalThis.fetch),
+    }]),
+  ));
   const modelLabelInventory = mergeModelLabelInventory(
     Object.values(schemas).map((schema) => schema.fieldMetadata),
   );
   const composed = composeAddons(
     [
-      { id: "base", icons: baseIcons },
+      { id: "base", icons: baseIcons, slots: [
+        { slot: CONSOLE_NOTICE_SLOT, id: "view-as", content: <ViewAsBanner /> },
+        { slot: USER_MENU_ITEMS_SLOT, id: "view-as", content: <ViewAsPicker /> },
+      ], layoutProviders: layoutNamesForRoutes(input.layouts)
+        .filter((layout) => layout !== "console")
+        .map((layout) => ({ id: "view-as", layout, component: ViewAsLayoutNotice })),
+      },
       ...input.addons,
       ...(input.slots ? [{ id: "host", slots: input.slots }] : []),
     ],
@@ -226,39 +271,86 @@ export function createApp(input: CreateAppInput): AngeeApp {
         canonicalModelLabel(modelLabelInventory, spelling),
     },
   );
-  const routes = composed.routes as readonly BaseAddonRoute[];
+  const routes = resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]);
+  for (const route of routes) {
+    if (!route.recordMatch) continue;
+    const model = route.recordModel ?? route.resource;
+    const { field, equals } = route.recordMatch;
+    if (!model || !field || !equals || !modelLabelInventory.some((resource) =>
+      resource.modelLabel === model && Object.values(resource.query.fields).some((entry) => entry.row?.paths.includes(field)))) {
+      throw new Error(`Route "${route.name}" has an unreadable record match "${field}" on "${model ?? "unknown"}".`);
+    }
+  }
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const routeDescriptors = routes.map(({ name, path }) => ({ name, path }));
   const routeHref = createRouteHref(routeDescriptors);
-  const routesByResource = resourceRouteIndex(routes);
-  const pathsByResource = Object.fromEntries(
-    Object.entries(routesByResource).map(([resource, routeNames]) => [
-      resource,
-      routeHref(routeNames.collection),
-    ]),
-  );
   const loginPath = input.loginPath ?? DEFAULT_LOGIN_PATH;
   const menus = resolveMenuRouteTargets(
     composed.menus as readonly ChromeMenuItem[],
     routeHref,
   );
   const menuTree = MenuTree.from(menus);
-
-  const routeResourceProjection = refineRouteResourceProjection(
-    routes,
-    menuTree,
-  );
+  const projection = new AppRouteProjection(routes, menuTree, input.confineTo);
+  const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
+  const unrestrictedSurface: SurfacePresentation = {};
+  const navigationTree = projection.navigationTree;
+  for (const preset of Object.values(composed.resourceViews)) {
+    const models = Object.values(schemas).flatMap((schema) => {
+      const model = schema.fieldMetadata.labels[preset.resource];
+      return model ? [model] : [];
+    });
+    let failure: unknown;
+    const valid = models.some((model) => {
+      try { validateResourceViewPreset(preset, model); return true; }
+      catch (error) { failure = error; return false; }
+    });
+    if (!valid) throw failure ?? new Error(`Unknown resource "${preset.resource}" in view "${preset.id}".`);
+  }
+  const validateDefaultView = (id: string, route: BaseAddonRoute | undefined, menuId?: string) => {
+    const preset = composed.resourceViews[id];
+    const model = route ? inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource) : undefined;
+    if (!preset || preset.resource !== model) {
+      throw new Error(menuId
+        ? `Menu item "${menuId}" selects resource view "${id}" that route "${route?.name}" does not admit.`
+        : `Unknown or incompatible default resource view "${id}" on route "${route?.name}".`);
+    }
+  };
+  for (const route of routes) {
+    if (route.defaultResourceView) validateDefaultView(route.defaultResourceView, route);
+  }
+  const menuPresetIdsByRoute = new Map<string, string[]>();
+  for (const item of [...menuTree.byId.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (!item.defaultResourceView) continue;
+    const route = item.route ? routesByName.get(item.route) : undefined;
+    if (!route) {
+      throw new Error(`Menu item "${item.id}" selects resource view "${item.defaultResourceView}" without a target route.`);
+    }
+    validateDefaultView(item.defaultResourceView, route, item.id);
+    const admitted = menuPresetIdsByRoute.get(route.name) ?? [];
+    admitted.push(item.defaultResourceView);
+    menuPresetIdsByRoute.set(route.name, admitted);
+  }
+  const routesByResource = projection.resourceRoutes(input.confineTo);
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
-  const i18n = createAngeeI18nRuntime(mergeI18n(enUiBundle, composed.i18n));
+  const vocabularyForRoute = composeAppVocabulary(
+    mergeI18n(enUiBundle, composed.i18n), composed.vocabulary,
+    modelLabelInventory, menuTree, routes,
+  );
+  const defaultVocabulary = vocabularyForRoute(input.confineTo);
+  const i18n = defaultVocabulary.i18n;
 
   // The static composition; the session fields (auth, logoutAction,
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
+    confineTo: input.confineTo ?? null,
+    brand: composed.brand,
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
     i18n: i18n.instance,
+    vocabulary: defaultVocabulary.vocabulary,
+    resourceViews: composed.resourceViews,
     icons: composed.icons,
     forms: composed.forms,
     chatter: composed.chatter,
@@ -276,17 +368,22 @@ export function createApp(input: CreateAppInput): AngeeApp {
     themes: composed.themes as readonly ThemeContribution[],
   };
   const operationDocuments = operationDocumentsForSchemas(schemas);
-  const refineResources = refineResourcesForSchemas(
-    schemas,
-    pathsByResource,
-    routeResourceProjection.metadataByResource,
-  );
-  // Menu route resources seed refine's tree in authored addon/menu order; schema
-  // CRUD resources then attach under those parents without reordering sections.
-  const refineResourceRegistry = [
-    ...routeResourceProjection.resources,
-    ...refineResources,
-  ];
+  function resourceRegistryFor(
+    selected: Readonly<Record<string, RuntimeResourceRoutes>>,
+    vocabulary: RuntimeVocabulary,
+  ) {
+    const paths = Object.fromEntries(Object.entries(selected).map(([resource, names]) => [resource, routeHref(names.collection)]));
+    const projected = refineRouteResourceProjection(routes, menuTree, navigationTree, selected);
+    return [...projected.resources, ...refineResourcesForSchemas(schemas, paths, projected.metadataByResource)]
+      .map((resource) => {
+        const model = resource.meta?.modelLabel;
+        const words = typeof model === "string" ? vocabulary.resources[model] : undefined;
+        const menuId = resource.meta?.menuId;
+        const label = typeof menuId === "string" ? vocabulary.menus[menuId] : words?.pluralLabel ?? words?.label;
+        return label === undefined ? resource : { ...resource, meta: { ...resource.meta, label } };
+      });
+  }
+  const refineResourceRegistry = resourceRegistryFor(routesByResource, runtime.vocabulary);
   const refineDataProviders = mergeAddonDataProviders(
     createAngeeHasuraDataProviders(schemas, defaultSchema),
     composed.dataProviders as Readonly<
@@ -295,55 +392,97 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   // The one QueryClient instance createApp owns (per `@angee/app` `index.ts`):
   // shared by `<Refine>` and the route gate so identity is fetched once.
-  const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
   const refineLiveProvider = createLiveProviderForSchema(
     schemas,
     subscriptionSchema,
     queryClient,
   );
   const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
-  const refineAuthProvider = createAuthProviderForSchema(
+  const refineAuthProvider: RefineAuthProvider = createAuthProviderForSchema(
     schemas,
     authSchema,
     loginPath,
     queryClient,
+    () => {
+      viewAs.reset();
+      refineLiveProvider?.setEnabled(true);
+    },
   );
-  const refineI18nProvider = i18n.provider;
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
   );
   const home =
-    (input.home ? routeHref.maybe(input.home) ?? input.home : undefined) ??
+    (input.home ? input.home.startsWith("/") ? input.home : routeHref(input.home) : undefined) ??
+    (input.confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
     routes.find((route) => route.layout !== "public")?.path ??
     "/";
+  const homePath = new URL(home, "https://angee.invalid").pathname;
+  const homeRoute = input.home && !input.home.startsWith("/")
+    ? routesByName.get(input.home) : routes.find((route) => route.path === homePath);
+  if (input.confineTo !== undefined && (homePath === "/"
+    || !(homeRoute ? projection.rootFor(homeRoute) === input.confineTo : menuTree.activeAppRoot(homePath)?.id === input.confineTo))) {
+    throw new Error(`Home "${home}" must belong to confined menu root "${input.confineTo}".`);
+  }
 
   function RootOutlet(): ReactNode {
+    const pathname = useRouterState({ select: (state) => state.location.pathname });
+    const activeRoute = useActiveRoute(routes);
+    const app = projection.activeApp(pathname);
+    const words = vocabularyForRoute(app, activeRoute?.name);
+    const publicRoute = activeRoute?.layout === "public"
+      || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
+    const surface = publicRoute ? unrestrictedSurface : surfaceForRoute(app, activeRoute?.name);
+    const scopedRuntime = useMemo(() => {
+      const selected = projection.resourceRoutes(app, activeRoute?.name);
+      const menuResourceViewIds = new Set<string>();
+      let route = activeRoute;
+      while (route) {
+        for (const id of menuPresetIdsByRoute.get(route.name) ?? []) menuResourceViewIds.add(id);
+        route = route.parent ? routesByName.get(route.parent) : undefined;
+      }
+      return {
+        ...runtime,
+        i18n: words.i18n.instance,
+        vocabulary: words.vocabulary,
+        defaultResourceView: projection.defaultResourceView(activeRoute?.name),
+        slots: admittedContributions(runtime.slots, surface.admit, "slots"),
+        chatter: admittedContributions(runtime.chatter, surface.admit, "aside"),
+        drawers: admittedContributions(runtime.drawers, surface.admit, "drawers"),
+        menuResourceViewIds: [...menuResourceViewIds].sort(),
+        routesByResource: selected,
+        routeHref,
+      };
+    }, [app, activeRoute, words, surface]);
     return (
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
-          <AppRuntimeProvider runtime={runtime}>
-            <ModalsHost>
-              <ToastProvider>
-                <RefineRoot />
-              </ToastProvider>
-            </ModalsHost>
-          </AppRuntimeProvider>
+          <SurfacePresentationProvider value={surface}>
+            <AppRuntimeProvider runtime={scopedRuntime}>
+              <ModalsHost>
+                <ToastProvider>
+                  <RefineRoot i18nProvider={words.i18n.provider} />
+                </ToastProvider>
+              </ModalsHost>
+            </AppRuntimeProvider>
+          </SurfacePresentationProvider>
         </OperationDocumentsProvider>
       </NuqsAdapter>
     );
   }
 
-  function RefineRoot(): ReactNode {
+  function RefineRoot({ i18nProvider }: { i18nProvider: I18nProvider }): ReactNode {
+    const { vocabulary, routesByResource: selected } = useAppRuntime();
+    const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary), [selected, vocabulary]);
     const refineNotificationProvider = useRefineNotificationProvider();
     return (
       <Refine
         authProvider={refineAuthProvider}
         accessControlProvider={refineAccessControlProvider}
         dataProvider={refineDataProviders}
-        i18nProvider={refineI18nProvider}
+        i18nProvider={i18nProvider}
         liveProvider={refineLiveProvider}
         notificationProvider={refineNotificationProvider}
-        resources={refineResourceRegistry}
+        resources={labeledResources}
         routerProvider={tanStackRouterProvider}
         options={{
           liveMode: refineLiveProvider ? "auto" : "off",
@@ -352,6 +491,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         }}
       >
         <AppFrame
+          viewAs={viewAs}
           authSchema={authSchema}
           loginPath={loginPath}
           appearance={input.appearance}
@@ -367,7 +507,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <HomeRedirect fallback={home} />,
+    component: () => <HomeRedirect fallback={home} confined={input.confineTo !== undefined} />,
   });
 
   const layoutRoutes = createLayoutRoutes({
@@ -385,6 +525,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
+    ...(input.confineTo !== undefined ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } } : {}),
   });
 
   const router = createRouter({
@@ -442,6 +583,7 @@ function normalizeSchemaConfig(
     metadata == null ? undefined : defineAngeeSchemaMetadata(metadata);
   return {
     ...config,
+    mutations: resourceMutationsForSchema(normalizedMetadata),
     fieldMetadata: schemaFieldMetadataFromAngeeSchemaMetadata(normalizedMetadata),
     ...(normalizedMetadata == null ? {} : { metadata: normalizedMetadata }),
   };
@@ -516,6 +658,7 @@ function createAuthProviderForSchema(
   authSchema: string,
   loginPath: string,
   queryClient: QueryClient,
+  onAuthChange: () => void,
 ): RefineAuthProvider {
   const schema = schemas[authSchema];
   if (!schema) {
@@ -525,14 +668,21 @@ function createAuthProviderForSchema(
     ...schema,
     loginPath,
     queryClient,
+    identityClient: schemas.console,
     // Reset observed queries so identity and mounted views see the transition;
     // clearing their entries would strand observers with the previous data.
     onAuthChange: () => {
-      queryClient.removeQueries({ predicate: (query) => query.getObserversCount() === 0 });
-      queryClient.getMutationCache().clear();
-      void queryClient.resetQueries();
+      onAuthChange();
+      resetSessionQueries(queryClient);
     },
   });
+}
+
+/** Preserve native observers while discarding data from the previous actor. */
+function resetSessionQueries(queryClient: QueryClient): void {
+  queryClient.removeQueries({ predicate: (query) => query.getObserversCount() === 0 });
+  queryClient.getMutationCache().clear();
+  void queryClient.resetQueries();
 }
 
 /**
@@ -541,17 +691,31 @@ function createAuthProviderForSchema(
  * runtime and auth state to every route.
  */
 function AppFrame({
+  viewAs,
   authSchema,
   loginPath,
   appearance,
   children,
 }: {
+  viewAs: ViewAsProvider;
   authSchema: string;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
   children: ReactNode;
 }): ReactNode {
-  const { auth } = useRuntimeAuthState();
+  const { auth: identityAuth, identity } = useRuntimeAuthState();
+  const preview = useViewAsState(viewAs);
+  const auth = useMemo<AuthState>(() => ({
+    ...identityAuth,
+    viewAs: {
+      ...preview,
+      currentUser: preview.pending ? null : identity,
+      realUser: identity?.realUser ?? null,
+      viewablePeople: identity?.viewablePeople ?? [],
+      enter: (userId) => { void viewAs.enter(userId); },
+      exit: () => { void viewAs.exit(); },
+    },
+  }), [identityAuth, identity, preview, viewAs]);
   const invalidateAuthStore = useInvalidateAuthStore();
   const sourceLogoutAction = useLogoutAction();
   const actorId = auth.status === "resolving" ? null : auth.user?.id ?? "anonymous";
@@ -568,10 +732,12 @@ function AppFrame({
     return () => window.removeEventListener("storage", onStorage);
   }, [actorId, invalidateAuthStore]);
   const logout = useCallback(async () => {
+    if (viewAs.getSnapshot().pending) return false;
+    await viewAs.exit();
     const success = await sourceLogoutAction.logout();
     if (success) clearAppearanceCache();
     return success;
-  }, [sourceLogoutAction.logout]);
+  }, [sourceLogoutAction.logout, viewAs]);
   const logoutAction = useMemo(() => ({ ...sourceLogoutAction, logout }), [logout, sourceLogoutAction]);
   return (
     <AuthStateProvider auth={auth}>
@@ -614,10 +780,16 @@ function RuntimeSessionProvider({
   );
 }
 
-function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
+/** Public and other layouts retain an exit path when leaving console chrome. */
+function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
+  return <><ViewAsBanner />{children}</>;
+}
+
+function HomeRedirect({ fallback, confined }: { fallback: string; confined: boolean }): ReactNode {
   const menuTree = useChromeMenuTree();
   const { preferences } = useUserPreferences();
   const target = useMemo(() => {
+    if (confined) return fallback;
     const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
     if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
       return preferredPath;
@@ -628,7 +800,7 @@ function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
       .railMenuItems()
       .find((node) => node.id === defaultItemId);
     return (item && railDefaultTarget(item)) ?? fallback;
-  }, [fallback, menuTree, preferences]);
+  }, [confined, fallback, menuTree, preferences]);
   return <Redirect to={target} />;
 }
 
@@ -640,13 +812,12 @@ function Redirect({ to }: { to: string }): ReactNode {
   return null;
 }
 
-function mergeI18n(base: I18nResources, over: I18nResources): I18nResources {
-  const merged: Record<string, Record<string, string>> = {};
-  for (const [namespace, messages] of Object.entries(base)) {
-    merged[namespace] = { ...messages };
+/** Base and addon namespaces have disjoint ownership. */
+function mergeI18n(base: I18nResources, addons: I18nResources): I18nResources {
+  for (const namespace of Object.keys(addons)) {
+    if (Object.prototype.hasOwnProperty.call(base, namespace)) {
+      throw new Error(`Addon i18n namespace "${namespace}" is owned by the base bundle.`);
+    }
   }
-  for (const [namespace, messages] of Object.entries(over)) {
-    merged[namespace] = { ...(merged[namespace] ?? {}), ...messages };
-  }
-  return merged;
+  return { ...base, ...addons };
 }

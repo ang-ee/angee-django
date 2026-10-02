@@ -21,6 +21,7 @@ import { booleanToggleWidget, switchWidget } from "./switch";
 import { tagInputWidget } from "./tagInput";
 import { textareaWidget } from "./textarea";
 import { textWidget } from "./text";
+import { visibilityWidget } from "./visibility";
 import { userRefWidget } from "./userRef";
 import type { WidgetDefinition } from "./types";
 
@@ -33,6 +34,8 @@ export {
 
 export type {
   FieldPresentation,
+  VisibilityBinding,
+  VisibilityAction,
   WidgetDefinition,
   WidgetControlProps,
   WidgetField,
@@ -40,27 +43,33 @@ export type {
   WidgetRenderProps,
   WidgetFocusTarget,
 } from "./types";
-export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
+export { StatusbarSteps, StatusbarSkeleton, type StatusbarStep, type StatusbarStepsProps } from "./statusbar";
+export { VisibilityControl } from "./visibility";
+export type { VisibilityControlProps } from "./visibility";
 export { JsonValueSchema } from "./json-value";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { useStatusTone } from "./use-status-tone";
 export { STATUS_TONES, statusTone, type StatusToneMap, type StatusToneOptions } from "./status-tones";
 export {
-  DATE_DISPLAY_FORMAT,
-  DATETIME_DISPLAY_FORMAT,
   DATE_STORAGE_FORMAT,
   DATETIME_STORAGE_FORMAT,
   TIME_INPUT_FORMAT,
   dateFromValue,
   formatDate,
+  formatDateRange,
   formatDateStorage,
   formatDateTime,
   formatDateTimeStorage,
+  formatDuration,
+  formatRelativeTime,
   formatTimeInput,
+  setHumanDateLocale,
   valueLabel,
   type DateFormatValue,
   type DateWidgetValue,
+  type HumanDateOptions,
 } from "./date-format";
 export { DatePopover, type DatePopoverProps } from "./date-popover";
 export {
@@ -103,7 +112,7 @@ const markdownPreviewWidget = lazyWidget(
  */
 const rowsWidget = lazyWidget(
   () => import("../views/form/RowsField").then((m) => m.rowsWidget),
-  { edit: true },
+  { edit: true, acceptsRowTemplate: true },
 );
 const objectWidget = lazyWidget(
   () => import("../views/form/StructuredField").then((m) => m.objectWidget),
@@ -115,6 +124,7 @@ const listWidget = lazyWidget(
 );
 
 export const defaultWidgets = {
+  visibility: visibilityWidget,
   text: textWidget,
   textarea: textareaWidget,
   integer: integerWidget,

@@ -8,19 +8,21 @@ import { READ_MODELS, SetRecordFollowingDocument } from "./documents";
 import {
   RecordThreadConversation,
   type RecordThreadConversationChrome,
+  type RecordThreadConversationProps,
 } from "./RecordThreadConversation";
 
 export interface RecordChatterPaneProps {
   context: ChatterViewContext;
+  submitKey?: RecordThreadConversationProps["submitKey"];
 }
 
 /** The Comments chatter tab: the record-thread conversation (the shared
  *  `RecordThreadConversation` owner — transcript + composer + mark-read) framed by
- *  the chatter-specific chrome the pane keeps (the follower/attachment/unread meta
- *  strip, the follow toggle, and the notification-subtype filters). The transcript
+ *  the chatter-specific chrome the pane keeps (the attachment/unread meta
+ *  strip, the Following toggle, and the notification-subtype filters). The transcript
  *  itself is not re-implemented here; a discuss room composes the same owner without
  *  this chrome. */
-export function RecordChatterPane({ context }: RecordChatterPaneProps): React.ReactElement {
+export function RecordChatterPane({ context, submitKey }: RecordChatterPaneProps): React.ReactElement {
   const t = useMessagingT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
@@ -38,6 +40,7 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
     <RecordThreadConversation
       modelLabel={modelLabel}
       recordId={recordId}
+      submitKey={submitKey}
       header={(chrome) => (
         <ChatterConversationHeader
           {...chrome}
@@ -51,8 +54,8 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
 }
 
 // ---------------------------------------------------------------------------
-// The chatter-specific chrome: the follower/attachment/unread meta strip, the
-// mark-read + follow toggles, and the notification-subtype filters. Rendered above
+// The chatter-specific chrome: the attachment/unread meta strip, the
+// mark-read + Following toggles, and the notification-subtype filters. Rendered above
 // the transcript via the conversation's `header` seam; a discuss room omits it.
 // ---------------------------------------------------------------------------
 
@@ -76,7 +79,6 @@ function ChatterConversationHeader({
     errorFrom: (data) => data?.set_record_following,
   });
 
-  const followerCount = payload?.follower_count ?? 0;
   const attachmentCount = payload?.attachment_count ?? 0;
   const unreadCount = payload?.unread_count ?? 0;
   const deliveryErrorCount = payload?.message_has_error_counter ?? 0;
@@ -134,25 +136,22 @@ function ChatterConversationHeader({
     <>
       <div className="flex items-center justify-between gap-3">
         <div className={cn(textRoleVariants({ role: "meta" }), "inline-flex items-center gap-1")}>
-          <Glyph decorative name="users" />
-          {t("chatter.following", { count: followerCount })}
           {attachmentCount > 0 ? (
             <>
-              <span aria-hidden="true">·</span>
               <Glyph decorative name="attachment" />
               {attachmentCount.toLocaleString()}
             </>
           ) : null}
           {unreadCount > 0 ? (
             <>
-              <span aria-hidden="true">·</span>
+              {attachmentCount > 0 ? <span aria-hidden="true">·</span> : null}
               <Glyph decorative name="bell" />
               {t("chatter.unread", { count: unreadCount })}
             </>
           ) : null}
           {deliveryErrorCount > 0 ? (
             <>
-              <span aria-hidden="true">·</span>
+              {attachmentCount > 0 || unreadCount > 0 ? <span aria-hidden="true">·</span> : null}
               <Glyph decorative name="triangle-alert" />
               {t("chatter.failed", { count: deliveryErrorCount })}
             </>
@@ -175,11 +174,12 @@ function ChatterConversationHeader({
             type="button"
             variant={isFollowing ? "secondary" : "ghost"}
             size="sm"
+            aria-pressed={isFollowing}
             disabled={followState.fetching}
             onClick={() => void handleFollowToggle()}
           >
             <Glyph name={isFollowing ? "bell-off" : "bell"} />
-            {isFollowing ? t("chatter.unfollow") : t("chatter.follow")}
+            {t("chatter.following")}
           </Button>
         </div>
       </div>

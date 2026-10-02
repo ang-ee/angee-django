@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ kind: "organization" as "organization" | "person" | null, fetching: false }));
+const state = vi.hoisted(() => ({ kind: "ORGANIZATION" as "ORGANIZATION" | "PERSON" | null, fetching: false }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
@@ -13,7 +13,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   }),
 }));
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
-vi.mock("./OrganizationsPage", () => ({
+vi.mock("./OrganizationForm", () => ({
   OrganizationForm: (props: { resource: string; id: string; readOnly?: boolean }) =>
     <div data-testid="organization-form">{props.resource}:{props.id}:{String(props.readOnly)}</div>,
 }));
@@ -26,13 +26,13 @@ import { PartyForm, partyForm } from "./PartyForm";
 
 afterEach(() => {
   cleanup();
-  state.kind = "organization";
+  state.kind = "ORGANIZATION";
   state.fetching = false;
 });
 
 test.each([
-  ["organization", "organization-form", "parties.Organization"],
-  ["person", "person-form", "parties.Person"],
+  ["ORGANIZATION", "organization-form", "parties.Organization"],
+  ["PERSON", "person-form", "parties.Person"],
 ] as const)("delegates a %s parent to its canonical registered form", (kind, testId, resource) => {
   state.kind = kind;
   render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
@@ -49,7 +49,7 @@ test("does not invent a form for a missing or non-concrete Party", () => {
 });
 
 test("keeps the resolved concrete form mounted during a background refetch", () => {
-  state.kind = "organization";
+  state.kind = "ORGANIZATION";
   state.fetching = true;
   render(<PartyForm resource="parties.Party" id="party-1" readOnly />);
   expect(screen.getByTestId("organization-form").textContent).toBe("parties.Organization:party-1:true");

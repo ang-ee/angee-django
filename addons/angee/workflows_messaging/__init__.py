@@ -1,1 +1,1 @@
-"""Channel-message delivery for native workflow event triggers."""
+"""Message admission sources and channel scope for workflows."""

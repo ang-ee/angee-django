@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import Enum
 from functools import partial
 from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db.models import F
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 
+from angee.base.fields import SqidField
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
+from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -37,11 +42,12 @@ from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
-from angee.iam.permissions import request_from_info
+from angee.iam.permissions import request_from_info, session_user
 from angee.knowledge.models import (
     AmbiguousMatchError,
     RecordBindingManager,
     SectionNotFoundError,
+    SectionOp,
     StaleBodyError,
     StructuredEditError,
     UnsupportedPageKindError,
@@ -50,6 +56,7 @@ from angee.knowledge.models import (
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
 MarkdownPage = apps.get_model("knowledge", "MarkdownPage")
+strawberry.enum(SectionOp)
 Link = apps.get_model("knowledge", "Link")
 RecordBinding = apps.get_model("knowledge", "RecordBinding")
 
@@ -67,6 +74,8 @@ class VaultType(AngeeNode):
     accent: auto
     created_at: auto
     updated_at: auto
+
+    permissions = permissions_field(("write",))
 
     @strawberry_django.field(only=["owner_id"])
     def owner(self) -> strawberry.ID | None:
@@ -95,7 +104,7 @@ class OutlineEntryType:
 
 @strawberry_django.type(MarkdownPage)
 class MarkdownPageType(AngeeNode):
-    """GraphQL projection of a page's markdown body sidecar."""
+    """GraphQL projection of a concrete markdown page."""
 
     body: auto
     body_hash: auto
@@ -103,11 +112,11 @@ class MarkdownPageType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["page_id"])
+    @strawberry_django.field(only=["page_ptr_id"])
     def page(self) -> strawberry.ID:
         """Return the owning page's public id."""
 
-        return require_public_id(Page, cast(Any, self).page_id)
+        return require_public_id(Page, cast(Any, self).page_ptr_id)
 
     @strawberry_django.field(only=["body"])
     def excerpt(self) -> str:
@@ -147,10 +156,23 @@ class PageType(AuthoredRefMixin, AngeeNode):
         resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
     title: auto
-    kind: auto
     icon: auto
     created_at: auto
     updated_at: auto
+    permissions = permissions_field(("write",))
+
+    @strawberry_django.field(only=["id", "markdown__kind"])
+    def kind(self) -> str:
+        """Return the concrete page kind."""
+
+        return cast(str, cast(Any, self).kind)
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
+        """Load concrete markdown identity with each page collection."""
+
+        del info
+        return queryset.select_related("markdown")
 
     @strawberry_django.field(only=["vault_id"])
     def vault(self) -> strawberry.ID:
@@ -179,11 +201,11 @@ class PageType(AuthoredRefMixin, AngeeNode):
 
     @strawberry_django.field(only=["id"])
     def markdown(self) -> MarkdownPageType | None:
-        """Return the markdown body sidecar visible to the actor, if any."""
+        """Return the concrete markdown body visible to the actor, if any."""
 
         return cast(
             MarkdownPageType | None,
-            MarkdownPage._default_manager.filter(page_id=cast(Any, self).pk).first(),
+            MarkdownPage._default_manager.filter(pk=cast(Any, self).pk).first(),
         )
 
     @strawberry_django.field(only=["id"])
@@ -216,15 +238,31 @@ class PageType(AuthoredRefMixin, AngeeNode):
 
 @strawberry_django.type(RecordBinding)
 class RecordBindingType(AngeeNode):
-    """Existence reverse-index visible to target readers.
-
-    Bound page/vault public ids, role, and timestamps are visible by design;
-    knowledge content remains gated by the page/vault's own REBAC policy.
-    """
+    """Binding metadata visible only to readers of both knowledge and target."""
 
     role: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["page_id", "page__title"])
+    def page_title(self) -> str | None:
+        """Return a readable bound page's title, when this edge owns a page."""
+
+        page = cast(Any, self).page
+        return None if page is None else str(page.title)
+
+    @strawberry_django.field(only=["page_id"])
+    def page_detail(self) -> PageType | None:
+        """Expose the readable page through its existing content and author projection."""
+
+        return cast(PageType | None, cast(Any, self).page)
+
+    @strawberry_django.field(only=["page_id"])
+    def page_can_write(self) -> bool:
+        """Expose the page end's write permission for binding controls."""
+
+        page = cast(Any, self).page
+        return page is not None and bool(page.has_access("write"))
 
     @strawberry_django.field(only=["page_id"])
     def page(self) -> PublicID | None:
@@ -272,20 +310,6 @@ class PageBodyPayload:
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
 
-@strawberry.enum
-class SectionOp(Enum):
-    """How :meth:`patch_page_section` splices content into a section.
-
-    The member value is the op token the markdown owner
-    (:meth:`MarkdownPage.spliced_section`) accepts; the upper-case member
-    name is the wire enum value.
-    """
-
-    REPLACE = "replace"
-    APPEND = "append"
-    PREPEND = "prepend"
-
-
 def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
     """Run a markdown body write and map its domain errors to a payload.
 
@@ -313,20 +337,25 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a vault owned by the requesting user."""
 
         user = getattr(info.context.request, "user", None)
-        return Vault._default_manager.create_for(user, **data)
+        fields = dict(data)
+        # The factory stamps attribution; the shared backend already validated scope.
+        fields.pop("created_by_id", None)
+        return Vault._default_manager.create_for(user, **fields)
 
 
 class PageWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create a page in a vault the requesting user can write."""
 
         del info
+        if client_creation_key is not None:
+            raise ValidationError({"client_creation_key": "Page creation does not support creation keys."})
         vault = require_instance_for_id(Vault, data["vault"])
         parent = None
         if data.get("parent") is not None:
@@ -337,33 +366,50 @@ class PageWriteBackend(AngeeHasuraWriteBackend):
         return Page._default_manager.create_in(vault, parent=parent, **payload)
 
 
+_VAULT_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Vault)
 _VAULT_RESOURCE = hasura_model_resource(
     VaultType,
     model=Vault,
     name="vaults",
-    filterable=["id", "name", "updated_at"],
-    sortable=["name", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=["updated_at"],
-    insertable=["name", "description", "icon", "accent"],
-    updatable=["name", "description", "icon", "accent"],
-    write_backend=VaultWriteBackend(Vault),
+    filterable=["id", "name", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_filterable_fields")],
+    sortable=["name", "created_at", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_sortable_fields")],
+    aggregatable=["id", *declared_hasura_resource_fields(Vault, "hasura_aggregatable_fields")],
+    groupable=["updated_at", *declared_hasura_resource_fields(Vault, "hasura_groupable_fields")],
+    insertable=[
+        "name",
+        "description",
+        "icon",
+        "accent",
+        *declared_hasura_resource_fields(Vault, "hasura_insertable_fields"),
+    ],
+    updatable=[
+        "name",
+        "description",
+        "icon",
+        "accent",
+        *declared_hasura_resource_fields(Vault, "hasura_updatable_fields"),
+    ],
+    field_id_decode={
+        name: public_pk_decoder(Vault._meta.get_field(name).related_model)
+        for name in _VAULT_EXTENSION_PUBLIC_ID_FIELDS
+    },
+    write_backend=VaultWriteBackend(Vault, public_id_fields=_VAULT_EXTENSION_PUBLIC_ID_FIELDS),
 )
 _PAGE_RESOURCE = hasura_model_resource(
     PageType,
     model=Page,
     name="pages",
-    filterable=["id", "vault", "title", "kind", "updated_at"],
-    sortable=["title", "kind", "created_at", "updated_at"],
+    filterable=["id", "vault", "title", "updated_at"],
+    sortable=["title", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["vault", "vault__name", "kind", "updated_at"],
-    insertable=["vault", "title", "kind", "parent", "icon"],
-    updatable=["title", "kind", "icon", "parent"],
+    groupable=["vault", "vault__name", "updated_at"],
+    updatable=["title", "icon", "parent"],
     field_id_decode={
         "vault": public_pk_decoder(Vault),
         "parent": public_pk_decoder(Page),
     },
     write_backend=PageWriteBackend(Page, public_id_fields=("parent",)),
+    get_queryset=partial(PageType.get_queryset, Page.objects),
     subtitle=DataResourceSubtitleMetadata(word_count="markdown.word_count"),
 )
 
@@ -447,6 +493,13 @@ class KnowledgeQuery:
             list(RecordBinding._default_manager.for_record(record, role=role)),
         )
 
+    @strawberry.field(name="record_knowledge_can_bind")
+    def record_knowledge_can_bind(self, model_label: str, record_id: PublicID) -> bool:
+        """Report the record end's write scope; page writes remain independent."""
+
+        record = _record_for_binding(model_label, record_id)
+        return record is not None and bool(record.has_access("write"))
+
     @strawberry.field(name="page_record_bindings")
     def page_record_bindings(
         self,
@@ -478,7 +531,38 @@ class KnowledgeQuery:
 
 @strawberry.type
 class KnowledgeMutation:
-    """Markdown body writes that belong to the Knowledge domain."""
+    """Vault, binding and markdown writes owned by knowledge."""
+
+    @strawberry.mutation(name="create_vault_from")
+    @action_guard("Could not create the vault from this template.", errors=(UnsupportedPageKindError,))
+    def create_vault_from(
+        self,
+        info: strawberry.Info,
+        template: PublicID,
+        name: str,
+        owned: bool = True,
+        client_creation_key: str | None = None,
+    ) -> ActionResult:
+        """Clone a readable template, optionally ownerless and replay-safe."""
+
+        session_user(info)
+        # Decode only identity: the manager resolves replay before reading the template.
+        field = cast(SqidField, Vault._meta.get_field("sqid"))
+        source = Vault(pk=field.public_id_to_value(template))
+        vault = Vault._default_manager.create_from(
+            source, name=name, owned=owned, client_creation_key=client_creation_key,
+        )
+        return ActionResult(ok=True, message="Vault created.", id=require_public_id(Vault, vault.pk))
+
+    @strawberry.mutation(name="create_page")
+    def create_page(
+        self, vault: PublicID, title: str, kind: str = "note", parent: PublicID | None = None
+    ) -> PageType:
+        """Create the requested concrete page through its vault-owned preflight."""
+
+        vault_row = require_instance_for_id(Vault, vault)
+        parent_row = require_instance_for_id(Page, parent) if parent is not None else None
+        return cast(PageType, Page._default_manager.create_in(vault_row, title=title, kind=kind, parent=parent_row))
 
     @strawberry.mutation(name="bind_knowledge_record")
     def bind_knowledge_record(self, input: RecordBindingInput) -> RecordBindingType:

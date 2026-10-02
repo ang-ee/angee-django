@@ -13,6 +13,7 @@ export const READ_MODELS = [
   "messaging.Message",
   "messaging.ThreadFollower",
   "messaging.ThreadActivity",
+  "messaging.ActivityType",
   "messaging.ThreadNotification",
   "messaging.Reaction",
   "messaging.MessageStar",
@@ -83,7 +84,7 @@ export const MessagingChannelHealth = graphql(`
       display_name
       backend_class
       pairing_state
-      last_sync_status
+      sync_stage
       last_sync_completed_at
       sync_error
     }
@@ -191,6 +192,7 @@ export const RecordActivityFields = graphql(`
     status
     state
     user { ...RecordUserFields }
+    created_by { ...RecordUserFields }
   }
 `);
 
@@ -210,6 +212,10 @@ export const RecordMessageFields = graphql(`
     message_type
     can_edit
     can_delete
+    author_label
+    is_self
+    is_reply
+    edited_at
     sender {
       id
       display_name
@@ -324,6 +330,17 @@ export const MessagingRecipientUsersDocument = graphql(`
   }
 `);
 
+export const RecordFollowerFields = graphql(`
+  fragment RecordFollowerFields on RecordThreadFollowerType {
+    id
+    notification_policy
+    subtype_keys
+    party { id display_name }
+    user { id username is_active }
+  }
+`);
+
+/** Chatter omits the optional reply-count resolver; explicit stream queries can select it. */
 export const RecordThreadDocument = graphql(`
   query MessagingRecordThread(
     $modelLabel: String!
@@ -333,6 +350,7 @@ export const RecordThreadDocument = graphql(`
     $before: ID = null
     $after: ID = null
     $around: ID = null
+    $messageTypes: [String!] = []
   ) {
     record_thread(
       input: {
@@ -343,26 +361,26 @@ export const RecordThreadDocument = graphql(`
         before: $before
         after: $after
         around: $around
+        message_types: $messageTypes
       }
     ) {
       error
       error_code
+      thread_post_access
+      permissions
       thread {
         ...RecordThreadSummaryFields
       }
       message_result_count
+      audience_label
+      post_kinds
       messages {
         ...RecordMessageFields
       }
       follower_count
       is_following
       self_follower {
-        id
-        notification_policy
-        subtype_keys
-        user {
-          ...RecordUserFields
-        }
+        ...RecordFollowerFields
       }
       suggested_recipients {
         reason
@@ -397,17 +415,13 @@ export const RecordThreadDocument = graphql(`
         }
       }
       followers {
-        id
-        notification_policy
-        subtype_keys
-        user {
-          ...RecordUserFields
-        }
+        ...RecordFollowerFields
       }
       activity_count
       activities {
         ...RecordActivityFields
       }
+      activity_types { id key name glyph }
     }
   }
 `);
@@ -441,11 +455,12 @@ export const PostRecordMessageDocument = graphql(`
     $modelLabel: String!
     $recordId: ID!
     $body: String!
-    $kind: String = "comment"
+    $kind: RecordMessagePostKind = COMMENT
     $parentMessageId: ID = null
     $attachmentIds: [ID!] = []
     $recipientUserIds: [ID!] = []
     $autofollowRecipients: Boolean = false
+    $clientCreationKey: String = null
   ) {
     post_record_message(
       input: {
@@ -458,6 +473,7 @@ export const PostRecordMessageDocument = graphql(`
         recipient_user_ids: $recipientUserIds
         autofollow_recipients: $autofollowRecipients
       }
+      client_creation_key: $clientCreationKey
     ) {
       error
       error_code
@@ -673,10 +689,31 @@ export const SetRecordFollowingDocument = graphql(`
       follower_count
       is_following
       follower {
-        id
-        notification_policy
-        subtype_keys
+        ...RecordFollowerFields
       }
+    }
+  }
+`);
+
+export const LogRecordActivityDocument = graphql(`
+  mutation MessagingLogRecordActivity(
+    $modelLabel: String!
+    $recordId: ID!
+    $activityType: String!
+    $occurredOn: Date!
+    $note: String!
+  ) {
+    log_record_activity(input: {
+      model_label: $modelLabel
+      record_id: $recordId
+      activity_type: $activityType
+      occurred_on: $occurredOn
+      note: $note
+    }) {
+      error
+      error_code
+      activity_count
+      activity { ...RecordActivityFields }
     }
   }
 `);

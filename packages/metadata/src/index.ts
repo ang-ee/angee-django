@@ -22,12 +22,15 @@ export {
   isClientRowModel,
   lineReadSelectionPaths,
   modelMetadataForLabel,
+  modelFieldForPath,
   relationModelLabelForField,
   relationRepresentationForPath,
   resourceReadSelectionPaths,
   resourceOperationTarget,
   schemaFieldMetadataFromAngeeSchemaMetadata,
   schemaFieldMetadataFromDataResources,
+  schemaFieldMetadataWithVocabulary,
+  type ResourceVocabulary,
   useActiveGraphQLSchemaName,
   useModelMetadata,
   useModelRootFields,
@@ -80,6 +83,7 @@ export {
   type PageResult,
   type Row,
 } from "./rows";
+export { holdsPermission } from "./permissions";
 export type {
   ResourceFilter,
   ResourceOrder,

@@ -720,22 +720,25 @@ export function MessageComposer({
 export interface MessageComposerHintProps {
   children?: ReactNode;
   className?: string;
+  /** Which key sends: plain Enter (default), or Ctrl/Cmd+Enter with Enter for a newline. */
+  submitKey?: "enter" | "mod-enter";
 }
 
 /** The keyboard-shortcut affordance under a composer; defaults to "⏎ send · ⇧⏎ newline".
  *  Pure presentation — the real keybindings live with the input the composer renders. */
-export function MessageComposerHint({ children, className }: MessageComposerHintProps): ReactElement {
+export function MessageComposerHint({ children, className, submitKey = "enter" }: MessageComposerHintProps): ReactElement {
   const t = useUiT();
+  const modEnter = submitKey === "mod-enter";
   return (
     <span className={cn(textRoleVariants({ role: "caption" }), "flex items-center gap-1.5", className)}>
       {children ?? (
         <>
-          <Kbd size="sm">⏎</Kbd>
+          <Kbd size="sm">{modEnter ? "⌘/Ctrl ⏎" : "⏎"}</Kbd>
           <span>{t("message.composer.send")}</span>
           <span aria-hidden className="opacity-60">
             ·
           </span>
-          <Kbd size="sm">⇧⏎</Kbd>
+          <Kbd size="sm">{modEnter ? "⏎" : "⇧⏎"}</Kbd>
           <span>{t("message.composer.newline")}</span>
         </>
       )}

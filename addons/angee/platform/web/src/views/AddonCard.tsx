@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type ReactElement, type ReactNode } from
 import {
   Badge, Button, Chip, Glyph, errorMessage, useStatusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
 import { useAuthoredQuery } from "@angee/refine";
+import type { AddonKind } from "@angee/gql/console/graphql";
 
 import {
   AddonChangePreview,
@@ -9,7 +10,7 @@ import {
   InstallAddon,
   PLATFORM_ADDON_MUTATION_INVALIDATES,
 } from "../documents";
-import { usePlatformT } from "../i18n";
+import { addonEnumLabel, usePlatformT } from "../i18n";
 import { AddonChangeDialog, type AddonChangeAction } from "./AddonChangeDialog";
 
 /** The reflection resource the board reads + invalidates after every lifecycle write. */
@@ -26,7 +27,7 @@ export interface AddonResourceRow extends Record<string, unknown> {
   category: string;
   description: string;
   keywords: readonly string[];
-  kind: string;
+  kind: AddonKind;
   source: string;
   state: string;
   forced: boolean;
@@ -45,11 +46,11 @@ const MAX_CARD_KEYWORDS = 5;
 // shared `useStatusTone` vocabulary owns the mechanism (`disabled` is already neutral
 // there), with these platform-specific values supplied as the override.
 export const STATE_TONES: Record<string, Tone> = {
-  enabled: "success",
-  removed: "danger",
+  ENABLED: "success",
+  REMOVED: "danger",
 };
 export const SOURCE_TONES: Record<string, Tone> = {
-  remote: "info",
+  REMOTE: "info",
 };
 
 /**
@@ -83,9 +84,9 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
         </span>
       ) : null}
       <span className="flex flex-wrap items-center gap-1">
-        <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`state.${row.state}`)}</Badge>
+        <Badge tone={statusTone(row.state, STATE_TONES)}>{addonEnumLabel(t, "state", row.state)}</Badge>
         <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
-          {t(`source.${row.source}`)}
+          {addonEnumLabel(t, "source", row.source)}
         </Badge>
         {row.forced ? <Badge tone="info">{t("apps.required")}</Badge> : null}
         {row.pending ? <Badge tone="warning">{t("apps.pending")}</Badge> : null}
@@ -179,7 +180,7 @@ export function AddonCardActions({
   // Pending first: a queued install or disable shows the restart state and
   // hides the live action, so a composed-but-disabled root cannot be queued twice.
   if (row.pending) return null;
-  if (row.state === "enabled") {
+  if (row.state === "ENABLED") {
     return (<>
       <Button
         size="sm"
@@ -194,7 +195,7 @@ export function AddonCardActions({
       {dialog}
     </>);
   }
-  if (row.source === "remote") {
+  if (row.source === "REMOTE") {
     // Known from a marketplace source but not materialised — the local installer
     // cannot clone it, so installing would write an unbootable settings.yaml.
     // Materialising is an operator-tier step; until then the action is locked.
@@ -208,7 +209,7 @@ export function AddonCardActions({
   return (<>
     <Button size="sm" variant="primary" disabled={busy} onClick={() => { setApplyError(null); setAction("INSTALL"); }}>
       <Glyph decorative name="plus" />
-      {t(row.state === "removed" ? "apps.reinstall" : "apps.install")}
+      {t(row.state === "REMOVED" ? "apps.reinstall" : "apps.install")}
     </Button>
     {dialog}
   </>);

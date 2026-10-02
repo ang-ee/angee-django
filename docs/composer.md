@@ -47,7 +47,7 @@ below.
 | Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/compose/project.py), called by [`angee.compose.settings`](../angee/compose/settings.py) |
 | Bounded django-yamlconf loading and provenance | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.compose.defaults`](../angee/compose/defaults.py) |
-| Reserved composed settings and final settings mutation | [`Composer`](../angee/compose/composer.py) |
+| Reserved composed settings and final settings mutation | [`AutoConfig`](../angee/compose/autoconfig.py) owns reserved names; [`Composer`](../angee/compose/composer.py) assigns their values |
 | Django app discovery, identity aliases and root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
 | Dependency ordering and cycle rejection for both discovery paths | [`order_app_dependencies`](../angee/addons.py) |
 | Addon settings fragments and declared `ANGEE_*` env overlays | [`AutoConfig`](../angee/compose/autoconfig.py) |
@@ -132,11 +132,26 @@ After `INSTALLED_APPS` is resolved, `Composer` applies optional app settings
 through `AutoConfig` in dependency order. Core and third-party apps are plain
 `AppConfig` instances; folder addons additionally carry manifests.
 
+Bare settings modules such as the source-addon test harness call
+`AutoConfig.apply_installed(globals(), environment=False)` before Django loads models. They declare
+the complete app list in contribution order and receive the same addon defaults
+without generating a runtime. Django's app factory resolves their string entries;
+the method also accepts the config instances already resolved by `Composer`.
+Disabling environment input keeps shell service credentials and endpoints out of
+isolated tests. Production composition keeps environment input enabled.
+
 Any app may provide `<app>.autoconfig` with a `SETTINGS` mapping. The keys use
 `django-yamlconf` syntax; `AutoConfig` owns the Angee rules around reserved
 settings, app defaults, list/dict merging, and declared `ANGEE_*` environment
 overlays. Apps still read `django.conf.settings`; process environment is
 normalized during composition.
+An addon that owns an implementation base appends its dotted class path to
+`ANGEE_IMPL_REGISTRIES`; contributors add entries to the base's named setting.
+
+Derived `settings(namespace)` hooks read only their supplied namespace.
+`AutoConfig` gives enabled environment values precedence over project values,
+so hooks inherit the same environment policy as declared settings without
+reading `os.environ` themselves. Hook parsing still owns typed derived values.
 
 `django_yamlconf` is in the framework-owned app prefix, so `ycexplain` and
 `yclist` remain the provenance tools for composed settings.
@@ -336,6 +351,10 @@ error. Discovery does not inspect Python ASTs to predict runtime exports.
 conventional package. It renders `runtime/web/manifest.json` and Tailwind sources
 without importing GraphQL schemas. The frontend codegen owner consumes that
 manifest and SDL to produce `runtime/gql/` and `runtime/web/app.ts`.
+The generated web module exposes `loadComposedSchemas()` for parallel fetches of
+the emitted schema metadata JSON assets. The rendered host passes this loader to
+`@angee/app`'s `bootApp`; it awaits metadata before synchronous `createApp`
+composition. The app Vite config preloads those assets in built HTML.
 
 The durable boundary is: declare addon facts in `addon.toml`, derive integration
 from the unchanged hatch-angee manifest, and keep implementation with its owner.
@@ -346,8 +365,8 @@ Resource relocation with renamed workflow keys requires an explicit data
 migration: renamed workflow keys cannot adopt old definitions through
 [`AngeeResource._adopt_for_row`](../addons/angee/resources/loader.py) with
 `adopt = "key"`. Removing a resource manifest declaration does not retire its rows or
-ledgers; [`WorkflowDefinitionManagerMixin.install_definition`](../addons/angee/workflows/definitions.py)
-reconciles only loaded facets, with no relocation prune/alias path.
+ledgers; [`WorkflowManager.install_definition`](../addons/angee/workflows/managers.py)
+installs the supplied whole document, with no relocation prune/alias path.
 
 ## Serving
 
@@ -408,10 +427,14 @@ explicit `None` disabling migrations for an emitted label, fail clearly.
 - `addon.toml` owns addon declarations; native AppConfig owns Django identity and lifecycle.
 - Capability conventions are defaults, with explicit manifest declarations taking precedence.
 - Generated `runtime/` is output; edit addon source, not emitted files.
-- Workflow graphs live in source: addon [step YAML](../addons/angee/workflows_parties/resources/install/101_workflows.step.yaml)
-  and [edge YAML](../addons/angee/workflows_parties/resources/install/102_workflows.edge.yaml)
-  are the executable inventory consumed by
-  [`WorkflowDefinitionResource`](../addons/angee/workflows/resources.py); never
-  hand-edit the emitted graph.
+- Workflow graphs are complete documents in declared resource files, as in the
+  [notes workflow](../examples/addons/example/notes/resources/demo/100_workflows.workflow.yaml).
+  [`WorkflowDefinitionResource`](../addons/angee/workflows/resources.py) delegates
+  identity, draft validation and publication to `WorkflowManager.install_definition`.
+  Publication freezes the normalized child contracts in each version. Edit the
+  source document and republish affected parents when a child contract changes.
 - Runtime cleanup may delete only the configured generated runtime directory,
   only after verifying Angee's generated sentinel, and must preserve migrations.
+  A fresh-stack reset that also discards generated migration history has no
+  owner yet (Decision 29). `Runtime.clean_configured` cannot serve as that reset;
+  see [the migration debt](backend/guidelines.md#migrations-and-runtime).

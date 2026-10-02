@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import strawberry
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
@@ -22,22 +23,44 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
+from angee.base.errors import RecordAccessSubjectRefused
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import (
     ActionResult,
+    ActionSelectionInput,
     action_guard,
     action_target,
     authorized_action_target,
+    many_actions,
     resolve_action_target,
 )
+from angee.graphql.schema import AngeeSchema
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
+
+
+@pytest.mark.parametrize("camel_case_keys", [True, False])
+def test_action_guard_preserves_authored_field_paths_when_requested(camel_case_keys: bool) -> None:
+    """Frozen JSON schemas retain field names through the shared guard."""
+
+    @action_guard("Invalid answer.", camel_case_keys=camel_case_keys)
+    def submit() -> ActionResult:
+        raise ValidationError({"review_note": ["Required."], "rows.0.target_id": ["Not accessible."]})
+
+    result = submit()
+    assert result.ok is False
+    assert result.validation_errors == {
+        "reviewNote" if camel_case_keys else "review_note": ["Required."],
+        "rows.0.targetId" if camel_case_keys else "rows.0.target_id": ["Not accessible."],
+    }
 
 
 def test_action_result_carries_created_record_id() -> None:
     """A create-and-return verb populates ``id``; a plain result leaves it ``None``."""
 
     assert ActionResult(ok=True, message="ok").id is None
+    assert ActionResult(ok=True, message="ok").code is None
     created = ActionResult(ok=True, message="Review registered.", id="review_abc123")
     assert created.id == "review_abc123"
 
@@ -63,8 +86,7 @@ def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixtu
     assert validation.ok is False
     assert validation.message == "Could not register the review."
     assert validation.validation_errors == {"amount": ["Exceeds the limit."]}
-    assert "GraphQL action register failed" in caplog.messages
-    assert caplog.records[-1].exc_info is not None
+    assert not caplog.records
 
     transition = register("transition")
     assert transition.ok is False
@@ -92,6 +114,105 @@ def test_action_guard_admits_addon_local_errors_and_reraises_others() -> None:
 
     with pytest.raises(RuntimeError, match="boom"):
         submit("other")
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (CreationKeyConflict("private-content"), "CREATION_KEY_CONFLICT"),
+        (StaleRevisionError(1, 2), "STALE_REVISION"),
+    ],
+)
+def test_action_guard_preserves_typed_wire_errors(
+    error: Exception, code: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Authored actions preserve stable codes without exposing exception details."""
+
+    @strawberry.type
+    class Query:
+        ready: bool = True
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        @action_guard("Update failed.", errors=(Exception,))
+        def update_record(self) -> ActionResult:
+            raise error
+
+    result = AngeeSchema(query=Query, mutation=Mutation).execute_sync("mutation { updateRecord { ok } }")
+
+    assert result.errors is not None
+    assert result.errors[0].message == code
+    expected = {"code": code}
+    if isinstance(error, StaleRevisionError):
+        expected["current_revision"] = error.current
+    assert result.errors[0].extensions == expected
+    assert result.errors[0].original_error is None
+    assert str(error) not in caplog.text
+    assert not caplog.records
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "validation_errors"),
+    [
+        pytest.param(
+            ValidationError("The reviewer declined.", code="REVIEW_REFUSED"),
+            "REVIEW_REFUSED", None, id="coded-validation",
+        ),
+        pytest.param(ValidationError("The reviewer declined."), None, None, id="uncoded-validation"),
+        pytest.param(
+            ValidationError({"unit_price": ["Must be positive."]}),
+            None, {"unitPrice": ["Must be positive."]}, id="uncoded-field-validation",
+        ),
+        pytest.param(
+            RecordAccessSubjectRefused(), "RECORD_ACCESS_SUBJECT_REFUSED", None, id="dual-typed-validation",
+        ),
+    ],
+)
+def test_action_guard_keeps_validation_refusal_codes_in_band(
+    error: ValidationError,
+    code: str | None,
+    validation_errors: dict[str, list[str]] | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Coded and uncoded validation refusals keep their native codes on the wire."""
+
+    @strawberry.type
+    class Query:
+        ready: bool = True
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        @action_guard("Access change refused.", errors=(Exception,))
+        def update_access(self) -> ActionResult:
+            raise error
+
+    result = AngeeSchema(query=Query, mutation=Mutation).execute_sync(
+        "mutation { updateAccess { ok message code validationErrors } }"
+    )
+
+    assert result.errors is None
+    assert result.data == {
+        "updateAccess": {
+            "ok": False,
+            "message": "Access change refused.",
+            "code": code,
+            "validationErrors": validation_errors,
+        },
+    }
+    assert not caplog.records
+
+
+def test_action_result_from_error_preserves_domain_code() -> None:
+    """Direct projection uses the domain owner's code without its private detail."""
+
+    result = ActionResult.from_error(CreationKeyConflict("private-content"), "Creation refused.")
+
+    assert result.ok is False
+    assert result.message == "Creation refused."
+    assert result.code == "CREATION_KEY_CONFLICT"
+    assert result.validation_errors is None
 
 
 def test_action_result_carries_in_band_validation_errors() -> None:
@@ -148,20 +269,23 @@ def test_action_result_from_error_keeps_non_field_errors_at_form_level() -> None
     error = ValidationError({NON_FIELD_ERRORS: ["The document is out of balance."]})
     result = ActionResult.from_error(error, "Cannot post.")
 
+    assert result.message == "The document is out of balance."
     assert result.validation_errors == {NON_FIELD_ERRORS: ["The document is out of balance."]}
 
 
 def test_action_result_from_error_falls_back_to_message_only() -> None:
-    """A non-field ``ValidationError`` and any other exception yield a message-only result."""
+    """Uncoded errors without a field map yield a message-only result."""
 
     non_field = ActionResult.from_error(ValidationError("Whole thing is wrong."), "Bad request.")
     assert non_field.ok is False
     assert non_field.message == "Bad request."
+    assert non_field.code is None
     assert non_field.validation_errors is None
 
     other = ActionResult.from_error(RuntimeError("boom"), "Sync failed.")
     assert other.ok is False
     assert other.message == "Sync failed."
+    assert other.code is None
     assert other.validation_errors is None
 
 
@@ -388,3 +512,41 @@ def test_action_guard_maps_authorized_action_target_failures_in_band(composed_ta
     assert result.validation_errors == {
         NON_FIELD_ERRORS: ["Document 'sd_missing' was not found."]
     }
+
+
+@pytest.mark.parametrize("ids", [[], ["same", "same"], [str(index) for index in range(101)]])
+def test_many_actions_bound_selection_before_any_call(ids):
+    called = []
+    with pytest.raises(ValidationError):
+        many_actions([ActionSelectionInput(id=value, expected_revision=1) for value in ids], called.append)
+    assert called == []
+
+
+@pytest.mark.django_db
+def test_many_actions_rollback_refused_row_and_keep_eligible_successes():
+    selection = [ActionSelectionInput(id=value, expected_revision=1) for value in ("good", "refused", "last")]
+
+    def run(item):
+        Group.objects.create(name=item.id)
+        if item.id == "refused":
+            raise ValidationError({"stage": "Ineligible"})
+        return ActionResult(ok=True, message="Applied")
+
+    results = many_actions(selection, run)
+    assert [result.ok for result in results] == [True, False, True]
+    assert set(Group.objects.values_list("name", flat=True)) == {"good", "last"}
+
+
+@pytest.mark.django_db
+def test_many_actions_unexpected_failure_rolls_back_the_whole_call():
+    selection = [ActionSelectionInput(id=value, expected_revision=1) for value in ("first", "second")]
+
+    def run(item):
+        Group.objects.create(name=item.id)
+        if item.id == "second":
+            raise RuntimeError("Infrastructure failure")
+        return ActionResult(ok=True, message="Applied")
+
+    with pytest.raises(RuntimeError):
+        many_actions(selection, run)
+    assert not Group.objects.exists()

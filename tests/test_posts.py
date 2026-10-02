@@ -8,7 +8,7 @@ following edge (:class:`~angee.posts.managers.FeedFollowManager`), the rolled-up
 :meth:`~angee.posts.models.Feed.sync` delegating to ``Message.objects.ingest`` under
 the public-thread modality with the email quotation builder gated off. The concrete
 test models (composed the way the composer folds each source model onto one runtime
-table) and the ``stub`` feed backend live in ``tests.conftest``.
+table) and feed backend live in ``tests.conftest``.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 from django.core.management import call_command
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -28,7 +30,10 @@ from rebac import (
     write_relationships,
 )
 
+from angee.integrate import scheduler
+from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
+from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge, Reaction, Thread
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
@@ -38,15 +43,9 @@ from tests.conftest import (
     PostMetrics,
     Quota,
     StubFeedBackend,
+    create_platform_admin,
     create_user,
     make_integration,
-)
-from tests.test_messaging import (
-    Handle,
-    Message,
-    MessageEdge,
-    Reaction,
-    Thread,
 )
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -72,7 +71,7 @@ def _handle(value: str = "chan-1") -> Any:
 def _feed(slug: str = "feed") -> Any:
     """Create a Feed (an Integration child + Bridge) bound to the stub backend."""
 
-    return make_integration(slug, model=Feed, backend_class="stub")
+    return make_integration(slug, model=Feed, backend_class="feed", feed_backend_class="stub")
 
 
 def _post(
@@ -101,6 +100,84 @@ def _post(
         tags=tags,
         metrics=metrics,
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_feed_is_a_channel_with_one_concrete_bridge_kind(posts_tables: None) -> None:
+    """The parent carries message access while Feed remains the sync capability."""
+
+    del posts_tables
+    with system_context(reason="test.posts.feed_channel_parent"):
+        feed = _feed("channel-child")
+        channel = Channel._base_manager.get(pk=feed.pk)
+        integration = Integration._base_manager.get(pk=feed.pk)
+        assert Feed._meta.parents[Channel].primary_key
+        assert channel.backend_class == "feed"
+        assert channel.backend.category == "feed"
+        assert feed.feed_backend_class == "stub"
+        assert feed.live_implementation_field() is None
+        assert integration.concrete_capability() == feed
+        assert not Channel.objects.of_concrete_type().filter(pk=feed.pk).exists()
+        assert Feed.objects.of_concrete_type().filter(pk=feed.pk).exists()
+
+    reader = create_user("feed-channel-reader")
+    with actor_context(feed.owner):
+        channel.grant_record_access("reader", reader)
+    assert Feed.objects.with_actor(reader).filter(pk=feed.pk).exists()
+    integrity, authorized = integration.concrete_children(actor=reader, exposed_model_labels={"posts.Feed"})
+    assert integrity == [feed]
+    assert authorized == [feed]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Channel ancestor does not enqueue its Feed child's sync separately."""
+
+    del posts_tables
+    with system_context(reason="test.posts.due_feed"):
+        feed = _feed("due-feed")
+        feed.next_sync_at = _AT
+        feed.save(update_fields=["next_sync_at"])
+    queued: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        scheduler,
+        "queue_bridge_sync",
+        lambda bridge, **kwargs: queued.append((bridge._meta.label, bridge.pk)),
+    )
+
+    scheduler.enqueue_due_bridges(now=_AT + timedelta(hours=1))
+
+    assert queued == [("posts.Feed", feed.pk)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None) -> None:
+    """Adding Feed rows does not add a child lookup per Integration row."""
+
+    del posts_tables
+    admin = create_platform_admin("feed-prefetch-admin")
+    _feed("prefetch-one")
+
+    def read_targets() -> tuple[int, list[Any]]:
+        with CaptureQueriesContext(connection) as queries:
+            rows = list(
+                Integration.objects.sudo(reason="test.posts.feed_prefetch")
+                .with_concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})
+                .order_by("pk")
+            )
+            targets = [
+                row.concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})[1][0]
+                for row in rows
+            ]
+        return len(queries), targets
+
+    one_count, first = read_targets()
+    for index in range(4):
+        _feed(f"prefetch-more-{index}")
+    many_count, targets = read_targets()
+    assert len(first) == 1
+    assert len(targets) == 5
+    assert many_count <= one_count + 1
 
 
 # --- Quota ledger ---------------------------------------------------------------

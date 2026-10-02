@@ -11,7 +11,9 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "src/views/gantt/LICENSE",
+    "src/views/gantt/UPSTREAM.md"
   ],
   "type": "module",
   "sideEffects": [
@@ -374,6 +376,10 @@
     "./views/validation-errors": {
       "types": "./src/views/form/validation-errors.ts",
       "import": "./src/views/form/validation-errors.ts"
+    },
+    "./views/json-schema": {
+      "types": "./src/views/form/json-schema.ts",
+      "import": "./src/views/form/json-schema.ts"
     },
     "./data/revisions": {
       "types": "./src/data/revisions.ts",
@@ -742,6 +748,10 @@
         "types": "./dist/views/form/validation-errors.d.ts",
         "default": "./dist/views/form/validation-errors.js"
       },
+      "./views/json-schema": {
+        "types": "./dist/views/form/json-schema.d.ts",
+        "default": "./dist/views/form/json-schema.js"
+      },
       "./data/revisions": {
         "types": "./dist/data/revisions.d.ts",
         "default": "./dist/data/revisions.js"
@@ -772,6 +782,7 @@
     "@codemirror/state": "^6.7.0",
     "@codemirror/view": "^6.43.3",
     "@dagrejs/dagre": "3.0.0",
+    "@date-fns/tz": "^1.5.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@fullcalendar/core": "^6.1.21",
@@ -783,6 +794,8 @@
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.3",
     "@xyflow/react": "^12.11.1",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "cmdk": "^1.1.1",
     "codemirror": "^6.0.0",
     "date-fns": "^4.1.0",

@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 
+import { formSubmitError } from "./validation-errors";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useFieldArray, type Control } from "react-hook-form";
 import type { ComponentProps } from "react";
-import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
@@ -53,6 +54,8 @@ const { Provider, clearClients } = createUiTestProviders({
 afterEach(() => { cleanup(); clearClients(); });
 
 async function fixture(options: {
+  resourceMetadata?: DataResourceMetadata;
+  revision?: number;
   submit?: FormSubmit;
   lines?: readonly Row[];
   isCreate?: boolean;
@@ -62,10 +65,10 @@ async function fixture(options: {
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
 } = {}) {
   const seedLines = options.lines ?? initialLines;
-  const activeResource = options.publicView ? renderedResource : resource;
-  let record: Row = { id: "doc-1", title: "Original", lines: seedLines };
+  const activeResource = options.resourceMetadata ?? (options.publicView ? renderedResource : resource);
+  let record: Row = { id: "doc-1", title: "Original", lines: seedLines, revision: options.revision };
   const getOne = vi.fn(async () => ({ data: record }));
-  const submit = vi.fn(options.submit ?? (async () => null));
+  const submit = vi.fn<FormSubmit>(options.submit ?? (async () => formSubmitError("No record returned.")));
   const update = vi.fn(async ({ variables }: { variables: Row }) => {
     record = { ...record, ...variables };
     return { data: record };
@@ -143,7 +146,7 @@ async function fixture(options: {
     move: (from: number, to: number) => act(() => move(from, to)),
     refresh: async (lines: readonly Row[]) => {
       record = { id: "doc-1", title: "Remote title", lines };
-      act(() => surface.reload());
+      await act(async () => { await surface.reload(); });
       await waitFor(() => expect(surface.form.getValues("title")).toBe("Remote title"));
     },
   };
@@ -165,8 +168,8 @@ test("new documents render Add line and create their draft lines in one native n
   expect(f.provider.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
   expect(f.getOne).not.toHaveBeenCalled();
-  await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
-  expect(f.surface().form.getValues("lines")).toEqual(saved.lines);
+  await waitFor(() => expect(f.surface().form.getValues("lines")).toEqual(saved.lines));
+  expect(f.surface().formIsDirty).toBe(false);
 });
 
 test("seeds rendered document lines without a reseed loop", async () => {
@@ -195,6 +198,29 @@ test("routes a dirty-lines save through the resource save mutation", async () =>
   }));
   expect(f.update).not.toHaveBeenCalled();
   await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
+});
+
+test.each([true, false])("line saves use only their own revision advertisement (save: %s)", async (saveRevision) => {
+  const argumentsList = [{ name: "expected_revision", type: "Int" }];
+  const f = await fixture({
+    publicView: true,
+    revision: saveRevision ? 3 : undefined,
+    resourceMetadata: {
+      ...renderedResource,
+      fields: [...(renderedResource.fields ?? []), {
+        ...lineField("revision", "Int"), creatable: false, updatable: false,
+      }],
+      updateArguments: saveRevision ? [] : argumentsList,
+      saveArguments: saveRevision ? argumentsList : [],
+    },
+  });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  const payload = f.custom.mock.calls[0]?.[0].payload;
+  if (saveRevision) expect(payload).toHaveProperty("expected_revision", 3);
+  else expect(payload).not.toHaveProperty("expected_revision");
+  expect(f.update).not.toHaveBeenCalled();
 });
 
 test("a rendered new line with untouched numeric cells saves without those keys", async () => {
@@ -296,7 +322,7 @@ test("failed nested creation preserves the header and lines for retry", async ()
 });
 
 test("successful semantic no-op line saves accept the native draft baseline", async () => {
-  const f = await fixture({ submit: async () => ({ id: "doc-1", title: "Original", lines: initialLines }) });
+  const f = await fixture({ submit: async () => ({ status: "ok", data: { id: "doc-1", title: "Original", lines: initialLines } }) });
   act(() => f.surface().form.setValue<string>("lines.0.quantity", "10", { shouldDirty: true }));
   expect(f.surface().formIsDirty).toBe(true);
   await act(async () => f.surface().submitForm());
@@ -307,7 +333,7 @@ test("successful semantic no-op line saves accept the native draft baseline", as
 
 test("semantic no-op line saves preserve a later edit while the request is pending", async () => {
   let resolve!: (row: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   act(() => f.surface().form.setValue<string>("lines.0.quantity", "10", { shouldDirty: true }));
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
@@ -375,7 +401,7 @@ test("clean line arrays adopt server insertions while dirty scalar values surviv
   edit("title", "Local title");
   const remote = [{ id: "x", label: "Xray", quantity: 40, position: 0 }, ...initialLines.map((row, index) => ({ ...row, position: index + 1 }))];
   f.setRecord({ id: "doc-1", title: "Remote title", lines: remote });
-  act(() => f.surface().reload());
+  await act(async () => { await f.surface().reload(); });
   await waitFor(() => expect(f.surface().form.getValues("lines")).toEqual(remote));
   expect(f.surface().form.getValues("title")).toBe("Local title");
 });
@@ -412,7 +438,7 @@ test("removing a row then refreshing unchanged lines submits its deletion withou
 
 test("a delayed existing-line save keeps later cells and rebases the next atomic write", async () => {
   let resolve!: (value: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("a.label", "Submitted alpha");
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
@@ -425,7 +451,7 @@ test("a delayed existing-line save keeps later cells and rebases the next atomic
   await act(async () => { resolve(accepted); await saving; });
   expect(f.surface().form.getValues("lines")).toEqual([initialLines[1], { ...initialLines[0], label: "Later alpha" }, initialLines[2]]);
   expect(f.surface().form.formState.defaultValues?.lines).toEqual(savedLines);
-  f.submit.mockResolvedValueOnce(null);
+  f.submit.mockResolvedValueOnce(formSubmitError("No record returned."));
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(2);
   expect(f.submit.mock.calls[1]?.[1].lines?.created).toEqual([]);
@@ -434,7 +460,7 @@ test("a delayed existing-line save keeps later cells and rebases the next atomic
 
 test("a new line receives its saved ID normally while post-submission scalar edits remain dirty", async () => {
   let resolve!: (value: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   const newLine = { label: "Delta", quantity: 40, position: 3 };
   f.append(newLine);
   let saving!: Promise<void>;
@@ -448,7 +474,7 @@ test("a new line receives its saved ID normally while post-submission scalar edi
   expect(f.surface().form.getValues("lines")).toEqual(savedLines);
   expect(f.surface().form.getFieldState("lines").isDirty).toBe(false);
   expect(f.surface().form.getValues("title")).toBe("Later title");
-  f.submit.mockResolvedValueOnce(null);
+  f.submit.mockResolvedValueOnce(formSubmitError("No record returned."));
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(2);
   expect(f.submit.mock.calls[1]?.[0]).toEqual({ title: "Later title" });
@@ -457,7 +483,7 @@ test("a new line receives its saved ID normally while post-submission scalar edi
 
 test.each([true, false])("concurrent edits to a newly saved line remain intact and cannot recreate it (response includes IDs: %s)", async (includesLines) => {
   let resolve!: (value: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   const newLine = { label: "Delta", quantity: 40, position: 3 };
   f.append(newLine);
   let saving!: Promise<void>;
@@ -499,7 +525,7 @@ test.each([
   { label: "duplicate default positions", positions: [0, 0, 0] },
 ])("unchanged server lines with $label remain saveable before and after discard", async ({ positions }) => {
   const lines = initialLines.map((row, index) => ({ ...row, position: positions[index] }));
-  const f = await fixture({ lines });
+  const f = await fixture({ lines, submit: async () => ({ status: "ok", data: { id: "doc-1", title: "Original", lines } }) });
   edit("a.label", "First edit");
   await f.refresh(lines);
   await act(async () => f.surface().submitForm());

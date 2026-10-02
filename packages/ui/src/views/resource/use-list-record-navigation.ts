@@ -65,7 +65,7 @@ export function useListRecordNavigation<TRow extends Row>({
   const dataResource = model?.resource;
   const readId = React.useCallback((row: Row | null | undefined) => rowPublicId(row, dataResource), [dataResource]);
   const idFields = React.useMemo(() => [dataResource?.query.identity.field ?? "id"], [dataResource?.query.identity.field]);
-  const localQueryScope = stableSerialize([view?.state.filter, view?.state.sorting, view?.state.groupStack, view?.state.pagination.pageSize, view?.state.view]);
+  const localQueryScope = stableSerialize([view?.baseFilter, view?.state.filter, view?.state.sorting, view?.state.groupStack, view?.state.pagination.pageSize, view?.state.view]);
   const binding = `${resource}:${model?.resource?.schemaName ?? ""}`;
   const [captured, setCaptured] = React.useState<{ binding: string; scope: ListViewNavigationScope | null } | null>(null);
   const scopeRef = React.useRef<{ binding: string; scope: ListViewNavigationScope } | null>(null);

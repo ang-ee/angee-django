@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.storage.backends.StorageBackend"],
     "ANGEE_STORAGE_DEFAULT_DRIVE": "assets",
     "ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES": 64 * 1024 * 1024,
     "ANGEE_STORAGE_DRAFT_TTL_HOURS": 24,

@@ -15,6 +15,8 @@ const routerMocks = vi.hoisted(() => ({
   routeHref: vi.fn(),
 }));
 
+const hoistedInvalidate = vi.hoisted(() => vi.fn());
+
 const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(), refetch: {
     detail: vi.fn(async () => undefined), pages: vi.fn(async () => undefined), vaults: vi.fn(async () => undefined), }, }));
@@ -34,6 +36,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: sdkMocks.useAuthoredQuery,
+  useInvalidateAuthoredModels: () => hoistedInvalidate,
 }));
 
 // The shared rendered hooks resolve from `@angee/ui`, so the module mock folds
@@ -172,6 +175,7 @@ function renderPage() {
 let knowledgeData = makeKnowledgeData();
 
 beforeEach(() => {
+  hoistedInvalidate.mockClear();
   knowledgeData = makeKnowledgeData();
   routerMocks.params = {};
   routerMocks.navigate.mockClear();
@@ -224,6 +228,15 @@ describe("KnowledgePage explorer wiring", () => {
     );
   });
 
+  test("shows the not-found state when the detail read returns null", () => {
+    routerMocks.params = { id: "missing-page" };
+
+    renderPage();
+
+    expect(screen.getByTestId("empty-state").textContent).toBe("Page not found");
+    expect(screen.queryByTestId("page-editor")).toBeNull();
+  });
+
   test("publishes the navigator into the primary pane", () => {
     renderPage();
 
@@ -256,7 +269,7 @@ describe("KnowledgePage explorer wiring", () => {
 
     fireEvent.click(screen.getByTestId("create-root"));
 
-    expect(sdkMocks.refetch.vaults).toHaveBeenCalledOnce();
+    expect(hoistedInvalidate).toHaveBeenCalledExactlyOnceWith(["knowledge.Vault"]);
     expect(routerMocks.navigate).toHaveBeenLastCalledWith({ to: "/knowledge" });
     expect(routerMocks.routeHref).toHaveBeenCalledWith("knowledge.home");
     expect(rootPickerValue()).toBe("vault-a");
@@ -306,6 +319,7 @@ function queryResult(
   return {
     data,
     fetching: false,
+    isPending: false,
     error: null,
     refetch: sdkMocks.refetch[name],
   };
@@ -355,6 +369,7 @@ function page(id: string, title: string, kind: string, vault: string) {
 function detail(id: string, title: string, vault: string) {
   return {
     ...page(id, title, "note", vault),
+    permissions: ["write"],
     markdown: {
       body: "Hello",
       body_hash: "hash",

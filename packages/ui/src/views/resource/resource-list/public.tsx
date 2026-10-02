@@ -11,7 +11,7 @@ import { useResourceViewMaybe, withResourceViewScope } from "../resource-view-co
 import { initialResourceSorting } from "../resource-view-codecs";
 import { type ResourceViewDefaultGroups, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import type { ListViewNavigationScope } from "../resource-view-surface";
-import type { BoardLaneSource } from "../resource-view-types";
+import type { BoardCardSpec, BoardLaneSource } from "../resource-view-types";
 import type { Occurrence } from "../../calendar/CalendarView";
 import type { RecordNavigation } from "../RecordPager";
 import type { RecordResolutionNavigationResult } from "../use-list-record-navigation";
@@ -68,6 +68,14 @@ export interface RecordSmartButtonDescriptor {
   onClick?: () => void;
 }
 
+/** Typed server verb shown in the list's native create position. */
+export interface ListCreateAction extends Omit<ActionDescriptor, "submit"> {
+  submit: NonNullable<ActionDescriptor["submit"]>;
+  /** Permission-bearing parent projected by the server for a scoped create. */
+  record?: Row | null;
+  permission?: string;
+}
+
 export interface ResourceListProps<TRow extends Row = Row> {
   /** Refine/Angee resource id, e.g. `"notes.Note"`, shared by list and form. */
   resource: string;
@@ -121,16 +129,20 @@ export interface ResourceListProps<TRow extends Row = Row> {
   splitLayout?: ResourceListSplitLayout;
   /** List options forwarded to `ListView`. */
   presentation?: ListViewProps<TRow>["presentation"];
+  chrome?: ListViewProps<TRow>["chrome"];
   baseFilter?: ListViewProps<TRow>["baseFilter"];
   /** Initial editable filter for a new view; route state and saved views remain authoritative thereafter. */
   defaultFilter?: ResourceViewFilter;
   filterOptions?: ListViewProps<TRow>["filterOptions"];
+  filterRow?: ListViewProps<TRow>["filterRow"];
   facets?: ListViewProps<TRow>["facets"];
   customFilterFields?: ListViewProps<TRow>["customFilterFields"];
   groupOptions?: ListViewProps<TRow>["groupOptions"];
   order?: ListViewProps<TRow>["order"];
   pageSize?: number;
   defaultView?: ResourceViewKind;
+  /** Shipped view ids visible on this route (its route default joins them). */
+  presetIds?: readonly string[];
   defaultGroup?: ResourceViewGroup | null;
   defaultGroups?: ResourceViewDefaultGroups;
   /** Calendar sources + interaction seams. When declared, the Calendar kind is
@@ -139,6 +151,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   calendar?: ResourceListCalendarSpec;
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
+  boardCard?: BoardCardSpec;
   fields?: ListViewProps<TRow>["fields"];
   /** List component used for the collection surface. Defaults to the lean flat list. */
   list?: ListComponent<TRow>;
@@ -148,6 +161,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
   recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */
   hideCreate?: boolean;
+  /** Server create verb; replaces the generated create form command when present. */
+  createAction?: ListCreateAction;
   /** List-scope create seed (create only, not edit): field values a filtered list
    * seeds new rows with so they match its active filter/facet. This is the
    * facet-seed owner and forwards to `FormView.defaultValues`. A *fixed per-field*
@@ -256,10 +271,12 @@ export function ResourceList<TRow extends Row = Row>({
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.resource,
+    baseFilter: declarations.list?.props.baseFilter ?? props.baseFilter,
     // A routed collection owns the route query even if its visual presentation
     // is embedded. Callers can still explicitly request local state.
     scope: scope ?? (props.routed ? "inherit" : undefined),
     presentation: props.presentation,
+    presetIds: declarations.list?.props.presetIds ?? props.presetIds,
     initialState,
     children: () => props.routed ? (
       <RoutedRecordController<TRow> resource={props.resource} newRecordId={REFINE_CREATE_ID}>
