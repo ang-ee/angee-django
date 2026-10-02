@@ -163,9 +163,15 @@ export interface CreateAppInput {
   defaultSchema?: string;
   /** Schema carrying the change subscriptions. Defaults to `console`. */
   subscriptionSchema?: string;
-  /** Where `/` redirects. Defaults to the first non-public route's path. */
+  /**
+   * @deprecated Addons declare `shell.home`; a deployment pins it in `ANGEE_UI`.
+   * When set, it overrides the composed shell's home.
+   */
   home?: string;
-  /** Confine console navigation to this menu root; public routes stay available. */
+  /**
+   * @deprecated Addons declare a perspective and select it with `shell.perspective`.
+   * When set, it overrides the composed perspective's menu root.
+   */
   confineTo?: string;
   /** Auth-owned sign-in destination. Defaults to `/login`. */
   loginPath?: string;
@@ -290,7 +296,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routeHref,
   );
   const menuTree = MenuTree.from(menus);
-  const projection = new AppRouteProjection(routes, menuTree, input.confineTo);
+  const confineTo = input.confineTo ?? composed.shell.perspective?.root;
+  const homeInput = input.home ?? composed.shell.home;
+  const projection = new AppRouteProjection(routes, menuTree, confineTo);
   const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
   const unrestrictedSurface: SurfacePresentation = {};
   const navigationTree = projection.navigationTree;
@@ -330,7 +338,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     admitted.push(item.defaultResourceView);
     menuPresetIdsByRoute.set(route.name, admitted);
   }
-  const routesByResource = projection.resourceRoutes(input.confineTo);
+  const routesByResource = projection.resourceRoutes(confineTo);
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
@@ -338,13 +346,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
     mergeI18n(enUiBundle, composed.i18n), composed.vocabulary,
     modelLabelInventory, menuTree, routes,
   );
-  const defaultVocabulary = vocabularyForRoute(input.confineTo);
+  const defaultVocabulary = vocabularyForRoute(confineTo);
   const i18n = defaultVocabulary.i18n;
 
   // The static composition; the session fields (auth, logoutAction,
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
-    confineTo: input.confineTo ?? null,
+    confineTo: confineTo ?? null,
     brand: composed.brand,
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
@@ -412,16 +420,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
     refineResourceRegistry,
   );
   const home =
-    (input.home ? input.home.startsWith("/") ? input.home : routeHref(input.home) : undefined) ??
-    (input.confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
+    (homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined) ??
+    (confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
     routes.find((route) => route.layout !== "public")?.path ??
     "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
-  const homeRoute = input.home && !input.home.startsWith("/")
-    ? routesByName.get(input.home) : routes.find((route) => route.path === homePath);
-  if (input.confineTo !== undefined && (homePath === "/"
-    || !(homeRoute ? projection.rootFor(homeRoute) === input.confineTo : menuTree.activeAppRoot(homePath)?.id === input.confineTo))) {
-    throw new Error(`Home "${home}" must belong to confined menu root "${input.confineTo}".`);
+  const homeRoute = homeInput && !homeInput.startsWith("/")
+    ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
+  if (confineTo !== undefined && (homePath === "/"
+    || !(homeRoute ? projection.rootFor(homeRoute) === confineTo : menuTree.activeAppRoot(homePath)?.id === confineTo))) {
+    throw new Error(`Home "${home}" must belong to confined menu root "${confineTo}".`);
   }
 
   function RootOutlet(): ReactNode {
@@ -507,7 +515,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <HomeRedirect fallback={home} confined={input.confineTo !== undefined} />,
+    component: () => <HomeRedirect fallback={home} confined={confineTo !== undefined} />,
   });
 
   const layoutRoutes = createLayoutRoutes({
@@ -525,7 +533,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
-    ...(input.confineTo !== undefined ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } } : {}),
+    ...(confineTo !== undefined ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } } : {}),
   });
 
   const router = createRouter({

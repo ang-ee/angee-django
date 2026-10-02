@@ -39,6 +39,7 @@ import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones
 import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
 import type { AppSurface } from "./route-policy";
+import { resolveShell, type PerspectiveDeclaration, type ResolvedShell, type ShellDeclaration } from "./shell";
 export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
 import {
   DASHBOARD_STORE_SLOT,
@@ -108,7 +109,16 @@ export interface LayoutProviderContribution {
 /** One addon's self-describing manifest. */
 export interface AddonManifest {
   id: string;
-  /** Product identity; at most one addon claims the application brand. */
+  /**
+   * Ids of the manifests this one depends on, transitively. The composed runtime
+   * supplies them from `addon.toml`; shell facts layer along them.
+   */
+  dependsOn?: readonly string[];
+  /** Home, brand and selected perspective, overriding the addons this one depends on. */
+  shell?: ShellDeclaration;
+  /** Named confinements a shell may select; ids are unique across addons. */
+  perspectives?: Readonly<Record<string, PerspectiveDeclaration>>;
+  /** @deprecated Declare `shell.brand`. */
   brand?: RuntimeBrand;
   routes?: readonly AddonRoute[];
   menus?: readonly MenuItem[];
@@ -157,6 +167,8 @@ export type ThemeManifestContribution =
 
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
+  /** Home, brand and perspective resolved across the addon layers. */
+  shell: ResolvedShell;
   brand: RuntimeBrand | null;
   routes: readonly AddonRoute[];
   menus: readonly ComposedMenuItem[];
@@ -282,7 +294,7 @@ export function composeAddons(
   options: ComposeAddonsOptions,
 ): ComposedAddons {
   const canonicalizeModel = options.canonicalModelLabel;
-  const identity: { brand?: RuntimeBrand } = {};
+  const shell = resolveShell(addons);
   const routes: AddonRoute[] = [];
   const menus: ComposedMenuItem[] = [];
   const widgets: WidgetMap = {};
@@ -301,13 +313,6 @@ export function composeAddons(
   const themeIds: Record<string, true> = {};
 
   for (const addon of addons) {
-    if (addon.brand) {
-      assertUnclaimed(identity, "brand", addon.id, "brand");
-      if (!addon.brand.name.trim() || !addon.brand.mark.trim()) {
-        throw new Error(`Addon "${addon.id}" declares an empty brand name or mark.`);
-      }
-      identity.brand = addon.brand;
-    }
     for (const contribution of addon.themes ?? []) {
       const definition = "definition" in contribution
         ? contribution.definition
@@ -409,8 +414,8 @@ export function composeAddons(
     }
   }
 
-  if (identity.brand && !getIcon(icons, identity.brand.mark)) {
-    throw new Error(`Brand mark "${identity.brand.mark}" is not registered by any addon.`);
+  if (shell.brand && !getIcon(icons, shell.brand.mark)) {
+    throw new Error(`Brand mark "${shell.brand.mark}" is not registered by any addon.`);
   }
 
   const slots = mergeSlotContributions(
@@ -423,7 +428,8 @@ export function composeAddons(
     ),
   );
   return {
-    brand: identity.brand ?? null,
+    shell,
+    brand: shell.brand,
     routes,
     menus,
     widgets,

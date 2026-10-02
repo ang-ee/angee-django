@@ -1,0 +1,10 @@
+# The demo manager moderates work's demo team; products seat it on their own teams.
+_meta:
+  model: spaces.Membership
+rows:
+  - xref: manager_engineering
+    fields:
+      group: work.eng
+      party: pm.manager_person
+      role: moderator
+      is_confirmed: true

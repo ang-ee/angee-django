@@ -198,6 +198,35 @@ def order_app_dependencies(
     return tuple(ordered)
 
 
+def addon_ancestors(app_configs: Iterable[AppConfig]) -> dict[str, tuple[str, ...]]:
+    """Return each supplied app's transitive ``depends_on`` closure, sorted by name.
+
+    A dependency resolves by app name or label among the supplied configs, the
+    same aliases :class:`~angee.compose.appgraph.AppGraph` registers; plain Django
+    apps carry no manifest and therefore no dependencies. Consumers that project
+    the graph (the web runtime) read this instead of re-walking manifests.
+    """
+
+    configs = tuple(app_configs)
+    aliases = {alias: config.name for config in configs for alias in (config.label, config.name)}
+    direct: dict[str, tuple[str, ...]] = {}
+    for config in configs:
+        manifest = addon_manifest(config)
+        declared = manifest.depends_on if manifest is not None else ()
+        direct[config.name] = tuple(aliases[name] for name in declared if name in aliases)
+    closures: dict[str, tuple[str, ...]] = {}
+
+    def closure(name: str) -> tuple[str, ...]:
+        if name not in closures:
+            reached = set(direct[name])
+            for dependency in direct[name]:
+                reached.update(closure(dependency))
+            closures[name] = tuple(sorted(reached))
+        return closures[name]
+
+    return {config.name: closure(config.name) for config in configs}
+
+
 def is_angee_addon(app_config: AppConfig) -> bool:
     """Return whether the native config has a co-located addon manifest."""
 

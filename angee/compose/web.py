@@ -2,7 +2,8 @@
 
 The composer's *web* projector. It is deliberately offline and pure: it reads
 native addon manifests bound to ``AppConfig`` and renders two files under ``runtime/web/`` —
-``manifest.json`` (the package graph + codegen contributions) and
+``manifest.json`` (the package graph, each package's addon ancestry, codegen
+contributions and the deployment's ``ANGEE_UI`` layer) and
 ``tailwind.sources.css`` (the Tailwind ``@source`` include). It holds **no**
 GraphQL-schema knowledge: which schemas exist, whether each is live, and the
 shape of their operation documents are owned by the SDL on disk and the
@@ -18,12 +19,12 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.addons import addon_manifest
+from angee.addons import addon_ancestors, addon_manifest
 from angee.fs import GENERATED_SENTINEL
 
 CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
@@ -31,6 +32,8 @@ CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
 
 WEB_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 DEFAULT_WEB_ROOT = "../../web"
+UI_LAYER_KEYS = frozenset({"shell", "perspectives"})
+"""Manifest keys the deployment's ``ANGEE_UI`` setting may declare; ``@angee/app`` validates their values."""
 
 
 class WebRuntime:
@@ -42,11 +45,14 @@ class WebRuntime:
         *,
         runtime_dir: Path | None = None,
         web_root: str = DEFAULT_WEB_ROOT,
+        ui: Mapping[str, Any] | None = None,
     ) -> None:
+        addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.web_root = web_root
+        ancestors = addon_ancestors(addons)
         core_packages = [{"package": name, "sourceRoot": "src"} for name in CORE_WEB_PACKAGES]
-        addon_packages: list[dict[str, str]] = []
+        addon_packages: list[dict[str, Any]] = []
         codegen_entries: list[dict[str, Any]] = []
         packages_seen: dict[str, str] = {}
         schemas_seen: dict[str, str] = {}
@@ -75,6 +81,9 @@ class WebRuntime:
                     )
                 schemas_seen[schema] = addon.name
                 codegen_entries.append(codegen)
+        package_apps = {entry["app"] for entry in addon_packages}
+        for entry in addon_packages:
+            entry["dependsOn"] = [name for name in ancestors[entry["app"]] if name in package_apps]
         self.manifest: dict[str, Any] = {
             "schema": 1,
             "corePackages": core_packages,
@@ -86,6 +95,8 @@ class WebRuntime:
             ]
             + [{"kind": "host", "path": "src"}],
         }
+        if ui:
+            self.manifest["deployment"] = self._ui_layer(ui)
 
     def render_sources(self) -> dict[Path, str]:
         """Return generated web files keyed by runtime-relative path."""
@@ -119,6 +130,20 @@ class WebRuntime:
                 "",
             ]
         )
+
+    @staticmethod
+    def _ui_layer(ui: object) -> dict[str, Any]:
+        """Admit the deployment's UI layer; ``@angee/app`` resolves and validates its values."""
+
+        if not isinstance(ui, Mapping):
+            raise ImproperlyConfigured("ANGEE_UI must be a mapping")
+        unknown = sorted(set(ui) - UI_LAYER_KEYS)
+        if unknown:
+            raise ImproperlyConfigured(f"ANGEE_UI declares unknown keys {unknown}; allowed: {sorted(UI_LAYER_KEYS)}")
+        try:
+            return cast(dict[str, Any], json.loads(json.dumps(ui, sort_keys=True)))
+        except (TypeError, ValueError) as error:
+            raise ImproperlyConfigured("ANGEE_UI must contain only JSON values") from error
 
     @staticmethod
     def _package_name(addon: AppConfig, web: Mapping[str, Any]) -> str | None:
