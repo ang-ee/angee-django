@@ -3,10 +3,8 @@ import type { SessionNotification } from "@agentclientprotocol/sdk";
 
 import { emptySession, foldIntoSession, type AcpSession } from "./acp-session";
 
-// Build a `session/update` notification from a bare update payload. The ACP update union is
-// wide; the reducer only reads the fields below, so the tests cast at this boundary.
-function note(update: Record<string, unknown>): SessionNotification {
-  return { sessionId: "s1", update } as unknown as SessionNotification;
+function note(update: SessionNotification["update"]): SessionNotification {
+  return { sessionId: "s1", update };
 }
 
 describe("foldIntoSession", () => {

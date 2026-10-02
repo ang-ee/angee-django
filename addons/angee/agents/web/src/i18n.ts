@@ -19,7 +19,6 @@ export const enAgentsMessages: Record<string, string> = {
 
   // AgentChat — the live ACP chat surface (header, composer, settings cog).
   "chat.title": "Agent",
-  "chat.unavailable": "Chat is unavailable for this agent.",
   "chat.resolving": "Connecting to your agent…",
   "chat.empty": "Ask the agent about what you're looking at — it has the notes tools.",
   "chat.placeholder": "Message the agent…",
@@ -52,11 +51,31 @@ export const enAgentsMessages: Record<string, string> = {
   "chat.status.closed": "Disconnected",
   "chat.connectFailed": "Failed to connect to the agent.",
   "chat.responseFailed": "The agent did not respond.",
+  "chat.unsupportedProtocol": "This agent uses an unsupported chat protocol.",
+  "chat.turnFailed": "The agent could not complete this turn. You can send another message.",
+  "chat.failed": "Failed",
+  "chat.turnStopped": "The agent stopped before completing this turn. You can send another message.",
+  "chat.messageNotSent": "Your message was not sent. Try again when the agent is connected.",
+  "chat.modelUnavailable": "The selected model {model} is unavailable in this session.",
+  "permission.title": "Tool permission",
+  "permission.approve": "Approve",
+  "permission.approveAlways": "Always approve",
+  "permission.reject": "Reject",
+  "permission.rejectAlways": "Always reject",
+  "permission.reason": "Reason (optional)",
 
   // AgentSessionsPage — the full-page sessions view (left rail + conversation).
   "sessions.railLabel": "Running agents",
   "sessions.new": "New agent",
   "sessions.running": "Running",
+  "sessions.sessionsLabel": "Sessions",
+  "sessions.create": "New session",
+  "sessions.loadMore": "Load more sessions",
+  "sessions.live": "Live session",
+  "sessions.untitled": "Untitled session",
+  "sessions.unavailable": "This agent does not support session history.",
+  "sessions.listFailed": "Could not load this agent's sessions.",
+  "sessions.retry": "Retry",
 
   // Collection facets shared by the agents catalogue surfaces.
   "facet.vendor": "Vendor",

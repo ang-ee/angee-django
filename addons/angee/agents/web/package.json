@@ -16,7 +16,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.0.0",
+    "@agentclientprotocol/sdk": "1.5.1",
     "@angee/app": "workspace:*",
     "@angee/integrate": "workspace:*",
     "@angee/iam": "workspace:*",

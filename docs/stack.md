@@ -213,7 +213,7 @@ template test.
 | tailwind-merge | Safe class merging | `cn()` helper |
 | lucide-react | Icons | Name-referenced icon registry |
 | Vite | Bundling, dev server, HMR | Project integration |
-| @agentclientprotocol/sdk | ACP client — agent JSON-RPC session, prompt/cancel, session-update stream (the agent image runs `@agentclientprotocol/claude-agent-acp`; both replace the deprecated `@zed-industries/*` names) | WebSocket ndjson transport to a routed agent + assistant-ui runtime bridge |
+| @agentclientprotocol/sdk | ACP v1/v2 clients — JSON-RPC sessions, list/load/resume, prompt/cancel, permissions and session updates | [One chat runtime](../addons/angee/agents/web/src/useAcpRuntime.ts) selects the SDK client from the endpoint's protocol version; v2 uses the SDK's `experimental` surface, pinned together with the Python SDK. [WebSocket transport](../addons/angee/agents/web/src/acp-transport.ts) composes the SDK stream with routed tokens or same-origin cookies |
 | @assistant-ui/react | Chat thread UI — message store, composer, tool-call rendering | ACP-streaming runtime adapter and styled thread surface |
 | streamdown | Streamed-markdown render for assistant chunks | Assistant message body in the agent chat |
 | @noble/hashes | Portable audited SHA-256 for browser file bytes, including non-secure LAN HTTP origins where WebCrypto digest is unavailable | `@angee/storage` emits the lowercase content hash used by upload deduplication and finalize verification |

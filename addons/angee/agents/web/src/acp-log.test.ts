@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
+import type { AcpNotification } from "./acp-client";
 
 import { foldIntoLog, type ChatMessage, type ChatPart } from "./acp-log";
 
-// Build a `session/update` notification from a bare update payload. The ACP update union
-// is wide; the reducer only reads the fields below, so the tests cast at this boundary.
-function note(update: Record<string, unknown>): SessionNotification {
-  return { sessionId: "s1", update } as unknown as SessionNotification;
+function note(update: SessionNotification["update"]): AcpNotification {
+  return { protocolVersion: 1, params: { sessionId: "s1", update } };
 }
 
 function toolParts(message: ChatMessage | undefined): Extract<ChatPart, { kind: "tool" }>[] {

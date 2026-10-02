@@ -255,6 +255,8 @@ class AgentChatEndpoint:
     so the chat session can advertise the same MCP servers the agent runs with.
     ``model_handle`` is the selected agent model in the service runtime's convention,
     used to select the ACP session model explicitly after session creation.
+    ``protocol_version`` is the ACP protocol version the endpoint speaks; the client
+    must know it before it connects, because each version has its own client.
     """
 
     url: str
@@ -262,6 +264,7 @@ class AgentChatEndpoint:
     expires_at: str
     mcp_servers: JSON
     model_handle: str
+    protocol_version: int
 
 
 @strawberry.type
@@ -782,6 +785,7 @@ class AgentActionMutation:
             expires_at=session["expires_at"],
             mcp_servers=session["mcp_servers"],
             model_handle=str(agent.service_model_handle()),
+            protocol_version=1,
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

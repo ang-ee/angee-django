@@ -1,419 +1,412 @@
-// The ACP chat runtime: opens a forward-authed WebSocket to a running agent, drives
-// the ACP session (initialize → newSession → setModel → prompt/cancel), folds `session/update`
-// notifications into an assistant-ui external store, and renders the result through
-// `AssistantRuntimeProvider`. The browser speaks ACP to the agent through the
-// operator's central Caddy; the route token is short-lived, so the endpoint is
-// re-minted and the socket reconnected when the token nears expiry.
-
+// One assistant-ui runtime over the SDK native v1 and v2 ACP clients.
 import * as React from "react";
-import { SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, } from "@assistant-ui/react";
-import {
-  ClientSideConnection, PROTOCOL_VERSION, type Agent, type AvailableCommand, type Client, type ContentBlock, type McpServer, type NewSessionResponse, type PromptCapabilities, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigSelectGroup, type SessionConfigSelectOption, type SessionNotification, } from "@agentclientprotocol/sdk";
+import { createMessageQueue, SimpleImageAttachmentAdapter, useExternalStoreRuntime, type MessageQueueController, type AppendMessage, type CompleteAttachment } from "@assistant-ui/react";
+import type { AvailableCommand, ContentBlock, McpServer, PromptCapabilities, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import * as v from "valibot";
-import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
-import { errorMessage, useLatestRef } from "@angee/ui";
+import { useActiveDataProviderName, useAuthoredMutation, useInfiniteQuery, useQueryClient, type DocumentVariables } from "@angee/refine";
+import { useLatestRef } from "@angee/ui";
+import type { DocumentType } from "@angee/gql/console";
 
-import { convertMessage, foldIntoLog, type ChatMessage, type ChatPart } from "./acp-log";
-import { emptySession, foldIntoSession, type AcpSession } from "./acp-session";
+import { ACP_META_NAMESPACE, connectAcp, selectSessionModel, type AcpClient, type AcpPermissionRequest } from "./acp-client";
+import { convertMessage, foldIntoLog, reconcileUserMessage, settleLog, type ChatMessage, type ChatPart } from "./acp-log";
+import { emptySession, foldIntoSession, type AcpSession, type AcpSessionNavigation } from "./acp-session";
 import { openAcpTransport, type AcpTransport } from "./acp-transport";
-import { type DocumentType } from "@angee/gql/console";
-import {
-  AgentChatEndpointMutation,
-  AgentChatEndpointSchema,
-  RenderAgentPrompt,
-  agentChatViewInput,
-  type AgentChatEndpoint,
-  type AgentChatView,
-  type McpServerConfig,
-} from "./documents";
-import type { AgentSessionRecord } from "./session-contributions";
+import { AgentChatEndpointMutation, AgentChatEndpointSchema, RenderAgentPrompt, agentChatViewInput, type AgentChatEndpoint, type AgentChatView, type McpServerConfig } from "./documents";
 import { useAgentsT } from "./i18n";
 
-// Re-mint the route token this far before it expires, so the socket reconnects while
-// the old one is still valid rather than after the agent has dropped it.
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
-
-/** The chat connection lifecycle, surfaced to the view's status header. */
+const MAX_TIMER_MS = 2_147_483_647;
+const MAX_RECONNECT_MS = 30_000;
+class EndpointError extends Error {}
 export type AcpStatus = "idle" | "connecting" | "ready" | "error" | "closed";
-
+export interface AcpPermission { id: number; protocolVersion: 1 | 2; request: AcpPermissionRequest }
+export interface AcpRuntimeOptions {
+  agentId: string;
+  view: AgentChatView;
+  /** Initial session for this agent binding; live roster changes do not reset it. */
+  knownSessionId?: string;
+  protocolVersion?: 1 | 2;
+  showSessions?: boolean;
+  onSessionChange?: (id: string) => void;
+}
 export interface AcpRuntime {
   runtime: ReturnType<typeof useExternalStoreRuntime>;
+  protocolVersion: 1 | 2 | undefined;
   status: AcpStatus;
   error: string | null;
-  /** Tear the socket down and open a fresh session (resets the transcript). */
   reconnect: () => void;
-  /** Clear the transcript without dropping the session. */
   clear: () => void;
-  /** The agent's advertised MCP servers, for the session info panel. */
   mcpServers: Record<string, McpServerConfig>;
-  /** The model handle selected on the Agent row and applied to the ACP session. */
   modelHandle: string;
-  /** The agent's advertised slash commands (from `available_commands_update`), for the
-   *  composer's `/` palette; empty until the agent advertises any. */
   availableCommands: readonly AvailableCommand[];
-  /** Whether the agent advertises `promptCapabilities.image` — gates the composer's image
-   *  attachment controls (the paperclip + the attachment adapter). */
   imageSupported: boolean;
-  /** Whether toggling send-time record context is meaningful for this transport. */
-  recordAttachmentSupported: boolean;
-  /** Whether the user's current view rides along as the leading context block on each send.
-   *  Default true; clearing the view-record chip suppresses the context block. */
   recordAttached: boolean;
-  /** Re-attach the current view as the send-time context (sets `recordAttached`). */
   attachRecord: () => void;
-  /** Drop the current view from the send (clears `recordAttached`, suppressing context). */
   clearRecord: () => void;
-  /** Render the `<system_context>` for the current view, for the session info panel. */
   renderContext: () => Promise<string>;
-  /** Present only for the authoritative persisted AgentSession transport. */
-  sessionRecord?: AgentSessionRecord;
+  sessions: AcpSessionNavigation;
+  permissions: readonly AcpPermission[];
+  answerPermission: (id: number, optionId: string, reason?: string) => void;
 }
 
 /**
- * Build the assistant-ui runtime for chatting with the agent identified by `agentId`,
- * about the user's open `view`.
+ * One ACP runtime: v1 ends with the prompt response; v2 follows state_update and
+ * accepts queued prompts. Known session ids are read once per agent binding.
+ * Resume/load reconnect the same session; v1 resume retains the local transcript.
  *
- * Holds the message log as immutable React state: each `session/update` replaces the
- * in-flight assistant message with a fresh object (with fresh parts), so assistant-ui's
- * identity-keyed message cache re-renders the streamed text/reasoning/tool calls.
+ * A v2 requires_action → running update closes unanswered permission dialogs
+ * when another tab answered first. We release the request as cancelled, without
+ * submitting a second decision. Disconnect and unmount also release requests.
+ * V2 rejection reasons travel on the selected outcome as _meta.angee.reason.
+ * Ordered running/output/idle brackets attribute each turn to the oldest accepted,
+ * unsettled user message. Queued acceptance never changes the foreground turn.
  */
-export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime {
+export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
+  const { agentId, view, protocolVersion, showSessions = false } = options;
   const t = useAgentsT();
+  const dataProviderName = useActiveDataProviderName();
+  const queryClient = useQueryClient();
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [status, setStatus] = React.useState<AcpStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
-  const [isRunning, setIsRunning] = React.useState(false);
-  const [mcpServers, setMcpServers] = React.useState<Record<string, McpServerConfig>>({});
-  const [modelHandle, setModelHandle] = React.useState("");
-  // Whether the agent advertises `promptCapabilities.image` — STATE (not a ref) because it
-  // arrives async after `initialize`, and the attachment-adapter memo + the composer's
-  // paperclip must re-render when it flips on. `promptCapabilitiesRef` below carries the same
-  // facts to `onNew` for send-time correctness.
-  const [imageSupported, setImageSupported] = React.useState(false);
-  // Whether the user's current view rides along as the leading context block. Default true so
-  // context is on by default; clearing the view-record chip flips it off. A ref mirror lets the
-  // send-time `onNew` read the latest value without re-subscribing the callback.
-  const [recordAttached, setRecordAttached] = React.useState(true);
-  const recordAttachedRef = useLatestRef(recordAttached);
-  // Latent session state (the agent's advertised slash commands today) folded from `session/update`
-  // alongside the transcript; held outside the message log because it is not a transcript part.
+  const [v1Running, setV1Running] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+  const [pendingTurn, setPendingTurn] = React.useState(false);
+  const [client, setClient] = React.useState<AcpClient | null>(null);
+  const [endpoint, setEndpoint] = React.useState<AgentChatEndpoint | null>(null);
   const [session, setSession] = React.useState<AcpSession>(emptySession);
-  // Bumping this re-runs the connect effect — the `reconnect()` control.
+  const [activeSessionId, setActiveSessionId] = React.useState<string | null>(null);
   const [reconnectNonce, setReconnectNonce] = React.useState(0);
-
-  const connectionRef = React.useRef<Agent | null>(null);
-  const transportRef = React.useRef<AcpTransport | null>(null);
+  const [recordAttached, setRecordAttached] = React.useState(true);
+  const [permissions, setPermissions] = React.useState<AcpPermission[]>([]);
+  const connectionRef = React.useRef<AcpClient | null>(null);
+  const endpointRef = React.useRef<AgentChatEndpoint | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
-  // The agent's advertised prompt capabilities (from `initialize`), read by `onNew` to pick
-  // the native context-block shape; a ref so a fresh value never re-triggers the connect effect.
-  const promptCapabilitiesRef = React.useRef<PromptCapabilities | null>(null);
+  const sessionCwdRef = React.useRef("/workspace");
+  const sessionRef = React.useRef(emptySession);
+  const bindingRef = React.useRef<string | undefined>(undefined);
+  const optionsRef = useLatestRef(options);
+  const pendingPermissions = React.useRef(new Map<number, { version: 1 | 2; resolve: (answer: RequestPermissionResponse) => void }>());
+  const messageCounter = React.useRef(0);
+  const permissionCounter = React.useRef(0);
+  const sendingRef = React.useRef(false);
+  const recordAttachedRef = useLatestRef(recordAttached);
   const viewRef = useLatestRef(view);
-
+  const statusRef = useLatestRef(status);
   const [mintEndpoint] = useAuthoredMutation(AgentChatEndpointMutation);
   const [renderPrompt] = useAuthoredMutation(RenderAgentPrompt);
-
-  // Fold one `session/update` into the log as a NEW object: assistant-ui caches converted
-  // messages by source identity, so a fresh object per chunk is what makes streamed text
-  // re-render (an in-place mutation keeps the identity and is dropped).
-  const onUpdate = React.useCallback((note: SessionNotification): void => {
-    setMessages((log) => foldIntoLog(log, note));
-    setSession((s) => foldIntoSession(s, note));
+  const queryKey = React.useMemo(() => [dataProviderName, "acp", "agents", agentId, "sessions"] as const, [dataProviderName, agentId]);
+  const listOptions = {
+    queryKey,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }: { pageParam: string | undefined; signal: AbortSignal }) => {
+      const current = connectionRef.current;
+      if (!current?.canList) throw new Error(t("sessions.unavailable"));
+      return current.listSessions(pageParam, signal);
+    },
+    getNextPageParam: (page: Awaited<ReturnType<AcpClient["listSessions"]>>, _pages: unknown, pageParam: string | undefined, pageParams: Array<string | undefined>) => {
+      const next = page.nextCursor;
+      return next && next !== pageParam && !pageParams.includes(next) ? next : undefined;
+    },
+  };
+  const navigationAvailable = client?.canList === true && client.canLoad;
+  const sessionQuery = useInfiniteQuery({ ...listOptions, enabled: showSessions && status === "ready" && navigationAvailable });
+  const queryRef = useLatestRef(sessionQuery);
+  const dismissPermissions = React.useCallback(() => {
+    for (const { resolve } of pendingPermissions.current.values()) resolve({ outcome: { outcome: "cancelled" } });
+    pendingPermissions.current.clear();
+    setPermissions([]);
   }, []);
-  // The connect effect builds the ACP client once; it reads `onUpdate` through a ref so a
-  // callback-identity change never tears down and reconnects the socket (which tracks
-  // `agentId`/`reconnectNonce` alone).
-  const onUpdateRef = useLatestRef(onUpdate);
+  const refreshSessions = React.useCallback(() => { void queryClient.invalidateQueries({ queryKey }); }, [queryClient, queryKey]);
+  const refreshRef = useLatestRef(refreshSessions);
+  const listOptionsRef = useLatestRef(listOptions);
 
-  // Connect on mount; reconnect before the route token expires or when `reconnect()` is
-  // called; tear the socket down on unmount or agent change. A per-effect `active` flag
-  // gates every state update and the post-await continuations, so an in-flight connect for
-  // a stale agent never clobbers the live one (it resolves after cleanup set `active = false`).
   React.useEffect(() => {
     let active = true;
+    let generation = 0;
+    let retry = 0;
+    let transport: AcpTransport | null = null;
+    let replayLog: ChatMessage[] | null = null;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-
-    // A new agent (or an explicit reconnect) starts from an empty transcript; an in-effect
-    // token-refresh reconnect does not re-run the effect, so it keeps the live conversation.
-    setMessages([]);
-    setIsRunning(false);
-    setMcpServers({});
-    setModelHandle("");
-    setImageSupported(false);
-    setRecordAttached(true);
-    promptCapabilitiesRef.current = null;
-
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    if (bindingRef.current !== agentId) {
+      sessionIdRef.current = optionsRef.current.knownSessionId ?? null;
+      sessionCwdRef.current = "/workspace";
+      setMessages([]);
+      setActiveSessionId(sessionIdRef.current);
+      setRecordAttached(true);
+      bindingRef.current = agentId;
+    }
     const tearDown = (): void => {
-      transportRef.current?.close();
-      transportRef.current = null;
+      clearTimeout(refreshTimer);
+      clearTimeout(reconnectTimer);
+      connectionRef.current?.close();
       connectionRef.current = null;
-      sessionIdRef.current = null;
+      const previousTransport = transport;
+      transport = null;
+      previousTransport?.close();
+      dismissPermissions();
     };
-
+    const scheduleRetry = (): void => {
+      const delay = Math.min(1000 * 2 ** retry++, MAX_RECONNECT_MS);
+      reconnectTimer = setTimeout(() => void connect(), delay);
+    };
     const connect = async (silent = false): Promise<void> => {
-      // A scheduled token re-mint reconnects silently — it keeps the status "ready" so the
-      // composer isn't disabled mid-conversation; only a genuine failure surfaces.
-      if (!silent) setStatus("connecting");
+      ++generation;
+      tearDown();
+      const currentGeneration = generation;
+      const current = () => active && generation === currentGeneration;
+      if (!silent) {
+        setStatus("connecting");
+        setClient(null);
+        setPendingTurn(false);
+        sessionRef.current = emptySession;
+        setSession(emptySession);
+      }
       setError(null);
-      // Reset commands on EVERY (re)connect — both the hard reconnect AND the silent
-      // token-refresh connect(true), which does not re-run the effect (so the effect-top resets
-      // don't cover it) — so a stale palette never outlives its session. Race-safe at connect-start:
-      // no available_commands_update can arrive before the session handshake below.
-      setSession(emptySession);
       try {
-        const endpoint = await mintEndpoint({ id: agentId });
-        if (!active) return;
-        const validated = parseEndpoint(endpoint);
-        setMcpServers(validated.mcp_servers);
-        setModelHandle(validated.model_handle);
-        const transport = openAcpTransport(validated.url, validated.token);
-        transportRef.current = transport;
-        const connection = new ClientSideConnection(() => makeClient(onUpdateRef), transport.stream);
+        const data = await mintEndpoint({ id: agentId });
+        if (!current()) return;
+        const validated = parseEndpoint(data, t("chat.unsupportedProtocol"), t("chat.connectFailed"), optionsRef.current.protocolVersion);
+        endpointRef.current = validated;
+        setEndpoint(validated);
+        const opened = openAcpTransport(validated.url, validated.token, validated.protocol_version);
+        transport = opened;
+        // Watch closures during initialize/restore as well as after ready.
+        void opened.closed.then(() => {
+          if (!current() || transport !== opened) return;
+          ++generation;
+          tearDown();
+          setStatus("closed");
+          scheduleRetry();
+        });
+        const connection = await connectAcp(opened, (note) => {
+          if (!current() || (sessionIdRef.current !== null && note.params.sessionId !== sessionIdRef.current)) return;
+          const previousState = sessionRef.current.state;
+          const next = foldIntoSession(sessionRef.current, note.params);
+          sessionRef.current = next;
+          setSession(next);
+          if (replayLog !== null) replayLog = foldIntoLog(replayLog, note, t("chat.turnFailed"), t("chat.turnStopped"));
+          else setMessages((log) => foldIntoLog(log, note, t("chat.turnFailed"), t("chat.turnStopped")));
+          if (note.params.update.sessionUpdate === "state_update") setPendingTurn(false);
+          if (opened.protocolVersion === 2 && previousState === "requires_action" && next.state !== "requires_action") dismissPermissions();
+          if (replayLog === null && statusRef.current === "ready" && (note.params.update.sessionUpdate === "session_info_update" || (previousState !== "idle" && next.state === "idle"))) refreshRef.current();
+        }, (request) => {
+          if (!current() || (sessionIdRef.current !== null && request.sessionId !== sessionIdRef.current)) return Promise.resolve({ outcome: { outcome: "cancelled" } });
+          const id = ++permissionCounter.current;
+          return new Promise((resolve) => {
+            pendingPermissions.current.set(id, { version: opened.protocolVersion, resolve });
+            setPermissions((pending) => [...pending, { id, protocolVersion: opened.protocolVersion, request }]);
+          });
+        });
+        if (!current()) { connection.close(); opened.close(); return; }
         connectionRef.current = connection;
-        await transport.ready;
-        if (!active) return;
-        const init = await connection.initialize({
-          protocolVersion: PROTOCOL_VERSION,
-          clientCapabilities: {},
-        });
-        if (!active) return;
-        const caps = init.agentCapabilities?.promptCapabilities ?? null;
-        promptCapabilitiesRef.current = caps;
-        setImageSupported(caps?.image === true);
-        // Straight to a session: the agent runtime authenticates from provisioned
-        // container env (ANTHROPIC_API_KEY or OAuth bearer env), and its ACP
-        // `authenticate` method is not implemented — it advertises `claude-login`
-        // only as a terminal hint. A genuinely unauthenticated agent fails
-        // `newSession` here, which the catch below surfaces, rather than hanging.
-        const session = await connection.newSession({
-          cwd: "/workspace",
-          mcpServers: toMcpServers(validated.mcp_servers),
-        });
-        if (!active) return;
-        await selectSessionModel(connection, session, validated.model_handle);
-        if (!active) return;
-        sessionIdRef.current = session.sessionId;
+        setClient(connection);
+        if (!sessionIdRef.current && connection.canList && connection.canRestore) {
+          const listed = await queryClient.fetchInfiniteQuery({ ...listOptionsRef.current, staleTime: 0 });
+          if (!current()) return;
+          const newest = listed.pages[0]?.sessions[0];
+          if (newest) { sessionIdRef.current = newest.sessionId; sessionCwdRef.current = newest.cwd; }
+        }
+        const sessionId = sessionIdRef.current;
+        if (sessionId && connection.canRestore) {
+          if (connection.canLoad) replayLog = [];
+          await connection.restoreSession({ sessionId, cwd: sessionCwdRef.current, mcpServers: toMcpServers(validated.mcp_servers) });
+        } else if (sessionId) {
+          // An agent without restoration needs a new session on its next send.
+          // Its retained local transcript survives silent token rotation.
+          sessionIdRef.current = null;
+        }
+        if (!current()) return;
+        if (replayLog !== null) {
+          const replayed = replayLog;
+          setMessages((log) => [...replayed, ...log.filter((message) => message.deliveryFailed)]);
+          replayLog = null;
+        }
+        setActiveSessionId(sessionIdRef.current);
         setStatus("ready");
-        scheduleRefresh(validated.expires_at);
-        // Only the *current* transport's close means the chat dropped — a scheduled
-        // refresh closes the previous socket itself, and that close must not clobber the
-        // freshly reconnected one.
-        void transport.closed.then(() => {
-          if (active && transportRef.current === transport) setStatus("closed");
-        });
+        retry = 0;
+        const expires = Date.parse(validated.expires_at);
+        const refresh = () => {
+          const delay = expires - Date.now() - TOKEN_REFRESH_MARGIN_MS;
+          if (!Number.isFinite(delay)) return;
+          if (delay > MAX_TIMER_MS) refreshTimer = setTimeout(refresh, MAX_TIMER_MS);
+          else if (delay > 0) refreshTimer = setTimeout(() => void connect(connection.protocolVersion === 1), delay);
+        };
+        refresh();
       } catch (caught) {
-        if (!active) return;
-        setStatus("error");
-        setError(errorMessage(caught, t("chat.connectFailed")));
+        if (!current()) return;
+        ++generation;
+        tearDown();
+        if (caught instanceof EndpointError) { setStatus("error"); setError(caught.message); }
+        else { setStatus("connecting"); setError(t("chat.connectFailed")); scheduleRetry(); }
       }
     };
-
-    // Re-mint the token and reconnect a margin before it expires; an unparseable or past
-    // `expires_at` simply skips the refresh, leaving the connect-once socket in place.
-    const scheduleRefresh = (expiresAt: string): void => {
-      const delay = Date.parse(expiresAt) - Date.now() - TOKEN_REFRESH_MARGIN_MS;
-      if (Number.isNaN(delay) || delay <= 0) return;
-      refreshTimer = setTimeout(() => {
-        tearDown();
-        void connect(true);
-      }, delay);
-    };
-
     void connect();
-    return () => {
-      active = false;
-      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
-      tearDown();
-    };
-  }, [agentId, mintEndpoint, reconnectNonce, t]);
+    return () => { active = false; ++generation; tearDown(); };
+  }, [agentId, protocolVersion, reconnectNonce, mintEndpoint, t, dismissPermissions, queryClient]);
 
-  // The attachment adapter, wired onto the runtime only when the agent advertises `image`.
-  // `SimpleImageAttachmentAdapter` reads pasted/picked images into data-URL parts; `onNew`
-  // maps those to ACP `image` ContentBlocks. Memoized on `imageSupported` so the runtime sees
-  // a stable adapter that appears/disappears with capability.
-  const attachmentAdapter = React.useMemo(
-    () => (imageSupported ? new SimpleImageAttachmentAdapter() : undefined),
-    [imageSupported],
-  );
-
-  const onNew = React.useCallback(
-    async (message: AppendMessage): Promise<void> => {
-      const connection = connectionRef.current;
-      const sessionId = sessionIdRef.current;
-      const userText = textOf(message);
-      // Map the composer's image attachments to ACP blocks once; the send is valid with text OR
-      // attachments, so an image-only paste must not be dropped by the early return.
-      const blocks = attachmentBlocks(message.attachments, promptCapabilitiesRef.current);
-      if (connection === null || sessionId === null) return;
-      if (userText === "" && blocks.length === 0) return;
-
-      const echoParts: ChatPart[] = [];
-      if (userText !== "") echoParts.push({ kind: "text", text: userText });
-      // Echo the user's image in the transcript from the same attachments, keeping the data-URL
-      // verbatim for an `<img src>` (the ACP block above carries the raw base64 instead).
+  const createSession = React.useCallback(async (): Promise<string> => {
+    const connection = connectionRef.current;
+    const config = endpointRef.current;
+    if (!connection || !config) throw new Error(t("chat.responseFailed"));
+    const created = await connection.newSession({ cwd: "/workspace", mcpServers: toMcpServers(config.mcp_servers) });
+    if (connectionRef.current !== connection) throw new Error(t("chat.responseFailed"));
+    sessionIdRef.current = created.sessionId;
+    sessionCwdRef.current = "/workspace";
+    setActiveSessionId(created.sessionId);
+    await selectSessionModel(connection, created, config.model_handle, t("chat.modelUnavailable", { model: config.model_handle }));
+    refreshRef.current();
+    return created.sessionId;
+  }, [t]);
+  const imageSupported = client?.promptCapabilities.image === true;
+  const attachmentAdapter = React.useMemo(() => imageSupported ? new SimpleImageAttachmentAdapter() : undefined, [imageSupported]);
+  const onNew = React.useCallback(async (message: AppendMessage): Promise<void> => {
+    const userText = textOf(message);
+    const connection = connectionRef.current;
+    const restoreComposer = () => {
+      const composer = runtimeRef.current.thread.composer;
+      if (!composer.getState().text) composer.setText(userText);
       for (const attachment of message.attachments ?? []) {
-        for (const part of attachment.content) {
-          if (part.type === "image") {
-            echoParts.push({ kind: "image", image: part.image, filename: part.filename });
-          }
+        if (!composer.getState().attachments.some((item) => item.id === attachment.id)) {
+          void composer.addAttachment(attachment).catch(() => setError(t("chat.messageNotSent")));
         }
       }
-      setMessages((log) => [
-        ...log,
-        { id: `user-${log.length}`, role: "user", parts: echoParts },
-      ]);
-      setIsRunning(true);
-      try {
-        // The view-record chip's presence gates the leading context block: cleared ⇒ no context.
-        // `buildPromptBlocks` omits an empty-string context, so this needs no extra branch there.
-        const context = recordAttachedRef.current
-          ? await fetchSystemContext(renderPrompt, agentId, viewRef.current)
-          : "";
-        const prompt = buildPromptBlocks(context, userText, promptCapabilitiesRef.current, blocks);
-        await connection.prompt({ sessionId, prompt });
-      } catch (caught) {
-        setError(errorMessage(caught, t("chat.responseFailed")));
-      } finally {
-        setIsRunning(false);
-      }
-    },
-    [agentId, renderPrompt, t],
-  );
-
+    };
+    const optimisticId = `user-local-${++messageCounter.current}`;
+    const echoParts: ChatPart[] = [];
+    if (userText !== "") echoParts.push({ kind: "text", text: userText });
+    for (const attachment of message.attachments ?? []) {
+      for (const part of attachment.content) if (part.type === "image") echoParts.push({ kind: "image", image: part.image, filename: part.filename });
+    }
+    if (echoParts.length === 0) return;
+    if (!connection || statusRef.current !== "ready" || sendingRef.current || (connection.protocolVersion === 1 && v1RunningRef.current)) {
+      setMessages((log) => [...log, { id: optimisticId, role: "user", deliveryFailed: true, parts: echoParts }]);
+      setError(t("chat.messageNotSent"));
+      restoreComposer();
+      return;
+    }
+    const blocks = attachmentBlocks(message.attachments, connection.promptCapabilities);
+    setMessages((log) => [...log, { id: optimisticId, role: "user", optimistic: true, parts: echoParts }]);
+    setError(null);
+    sendingRef.current = true;
+    setSending(true);
+    if (connection.protocolVersion === 1) setV1Running(true);
+    else setPendingTurn(true);
+    let sent = false;
+    try {
+      const sessionId = sessionIdRef.current ?? await createSession();
+      const context = recordAttachedRef.current ? await fetchSystemContext(renderPrompt, agentId, viewRef.current) : "";
+      if (connectionRef.current !== connection || sessionIdRef.current !== sessionId) throw new Error();
+      sent = true;
+      const result = await connection.prompt({ sessionId, prompt: buildPromptBlocks(context, userText, connection.promptCapabilities, blocks) });
+      if (sessionIdRef.current !== sessionId) return;
+      if (result.messageId !== undefined) setMessages((log) => reconcileUserMessage(log, optimisticId, result.messageId));
+      else setMessages((log) => settleLog(log, result.stopReason, t("chat.turnFailed"), t("chat.turnStopped"), optimisticId));
+    } catch {
+      setMessages((log) => log.map((entry) => entry.id === optimisticId ? { ...entry, optimistic: false, deliveryFailed: true } : entry));
+      setError(t(sent ? "chat.responseFailed" : "chat.messageNotSent"));
+      restoreComposer();
+      if (sessionRef.current.state === "idle") setPendingTurn(false);
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+      if (connection.protocolVersion === 1) { setV1Running(false); dismissPermissions(); refreshRef.current(); }
+    }
+  }, [agentId, createSession, renderPrompt, t, dismissPermissions]);
   const onCancel = React.useCallback(async (): Promise<void> => {
     const connection = connectionRef.current;
     const sessionId = sessionIdRef.current;
-    if (connection !== null && sessionId !== null) await connection.cancel({ sessionId });
-    setIsRunning(false);
+    if (!connection || !sessionId) return;
+    try {
+      await connection.cancel(sessionId);
+      if (connectionRef.current === connection && connection.protocolVersion === 1) { setV1Running(false); dismissPermissions(); }
+    } catch { setError(t("chat.responseFailed")); }
+  }, [dismissPermissions, t]);
+  const reconnect = React.useCallback(() => setReconnectNonce((nonce) => nonce + 1), []);
+  const clear = React.useCallback(() => setMessages([]), []);
+  const attachRecord = React.useCallback(() => setRecordAttached(true), []);
+  const clearRecord = React.useCallback(() => setRecordAttached(false), []);
+  const renderContext = React.useCallback(() => fetchSystemContext(renderPrompt, agentId, viewRef.current), [agentId, renderPrompt]);
+  const selectSession = React.useCallback((id: string, cwd: string) => {
+    if (id === sessionIdRef.current) return;
+    sessionIdRef.current = id;
+    sessionCwdRef.current = cwd;
+    setActiveSessionId(id);
+    reconnect();
+  }, [reconnect]);
+  const newSession = React.useCallback(() => {
+    if (sendingRef.current || statusRef.current !== "ready") return;
+    void createSession().then((id) => {
+      setMessages([]);
+      sessionRef.current = emptySession;
+      setSession(emptySession);
+      optionsRef.current.onSessionChange?.(id);
+    }).catch(() => setError(t("chat.responseFailed")));
+  }, [createSession, t]);
+  const answerPermission = React.useCallback((id: number, optionId: string, reason?: string) => {
+    const pending = pendingPermissions.current.get(id);
+    if (!pending) return;
+    pendingPermissions.current.delete(id);
+    const text = reason?.trim();
+    pending.resolve({ outcome: { outcome: "selected", optionId, ...(pending.version === 2 && text ? { _meta: { [ACP_META_NAMESPACE]: { reason: text } } } : {}) } });
+    setPermissions((items) => items.filter((permission) => permission.id !== id));
   }, []);
-
-  const reconnect = React.useCallback((): void => setReconnectNonce((nonce) => nonce + 1), []);
-  const clear = React.useCallback((): void => setMessages([]), []);
-  const attachRecord = React.useCallback((): void => setRecordAttached(true), []);
-  const clearRecord = React.useCallback((): void => setRecordAttached(false), []);
-  const renderContext = React.useCallback(
-    (): Promise<string> => fetchSystemContext(renderPrompt, agentId, viewRef.current),
-    [agentId, renderPrompt],
-  );
-
+  const v1RunningRef = useLatestRef(v1Running);
+  const onNewRef = useLatestRef(onNew);
+  const queueRef = React.useRef<MessageQueueController | null>(null);
+  // The native queue serializes insertion acknowledgements only. ACP owns queued
+  // turns, so release the next send after prompt acceptance, not after idle.
+  const [queue] = React.useState(() => createMessageQueue({
+    run: (message) => { void onNewRef.current(message).finally(() => queueRef.current?.notifyIdle()); },
+  }));
+  queueRef.current = queue;
+  React.useSyncExternalStore(queue.subscribe, () => queue.adapter.items, () => queue.adapter.items);
   const runtime = useExternalStoreRuntime({
-    isRunning,
-    messages,
-    onNew,
-    onCancel,
-    convertMessage,
-    adapters: { attachments: attachmentAdapter },
+    isRunning: client?.protocolVersion === 2 ? session.state !== "idle" || pendingTurn : v1Running,
+    isDisabled: status !== "ready", isSendDisabled: sending || (client?.protocolVersion === 1 && v1Running),
+    messages, onNew, onCancel, convertMessage, adapters: { attachments: attachmentAdapter },
+    queue: client?.protocolVersion === 2 ? queue.adapter : undefined,
   });
-
+  const runtimeRef = useLatestRef(runtime);
+  const sessions = React.useMemo<AcpSessionNavigation>(() => ({
+    currentId: activeSessionId, available: navigationAvailable,
+    ready: status === "ready" && !sending, items: sessionQuery.data?.pages.flatMap((page) => page.sessions) ?? [],
+    loading: sessionQuery.isFetching && !sessionQuery.data,
+    hasMore: navigationAvailable && sessionQuery.hasNextPage, loadingMore: sessionQuery.isFetchingNextPage,
+    loadMore: () => { void queryRef.current.fetchNextPage(); },
+    error: sessionQuery.error ? t("sessions.listFailed") : null,
+    select: selectSession, create: newSession, refresh: refreshSessions,
+  }), [activeSessionId, navigationAvailable, status, sending, sessionQuery.data, sessionQuery.isFetching, sessionQuery.hasNextPage, sessionQuery.isFetchingNextPage, sessionQuery.error, t, selectSession, newSession, refreshSessions]);
   return {
-    runtime,
-    status,
-    error,
-    reconnect,
-    clear,
-    mcpServers,
-    modelHandle,
-    availableCommands: session.availableCommands,
-    imageSupported,
-    recordAttachmentSupported: true,
-    recordAttached,
-    attachRecord,
-    clearRecord,
-    renderContext,
+    runtime, protocolVersion: client?.protocolVersion, status, error, reconnect, clear,
+    mcpServers: endpoint?.mcp_servers ?? {}, modelHandle: endpoint?.model_handle ?? "",
+    availableCommands: session.availableCommands, imageSupported, recordAttached,
+    attachRecord, clearRecord, renderContext, permissions, answerPermission, sessions,
   };
 }
 
-/** Build the ACP `Client` handler: stream updates, auto-approve permission prompts. */
-function makeClient(
-  onUpdateRef: React.MutableRefObject<(note: SessionNotification) => void>,
-): Client {
-  return {
-    async sessionUpdate(note: SessionNotification): Promise<void> {
-      onUpdateRef.current(note);
-    },
-    async requestPermission(
-      params: RequestPermissionRequest,
-    ): Promise<RequestPermissionResponse> {
-      // Auto-approve every requested permission. The agent works inside its own provisioned
-      // container/workspace, and its notes MCP tools are authorized server-side by rebac (the
-      // agent actor's grants), so client approval is a UX confirmation here, not the security
-      // boundary — auto-approving does not widen what the agent may touch. Match the exact
-      // allow kinds, never an `allow*` prefix, so a future kind is not silently approved; a
-      // richer in-thread prompt UI is future work.
-      const allow = params.options.find(
-        (option) => option.kind === "allow_once" || option.kind === "allow_always",
-      );
-      if (allow === undefined) return { outcome: { outcome: "cancelled" } };
-      return { outcome: { outcome: "selected", optionId: allow.optionId } };
-    },
-  };
+function parseEndpoint(data: DocumentType<typeof AgentChatEndpointMutation> | undefined, unsupported: string, invalid: string, explicit?: 1 | 2): AgentChatEndpoint {
+  const payload = data?.agent_chat_endpoint;
+  if (payload && ((payload.protocol_version !== 1 && payload.protocol_version !== 2) || (explicit !== undefined && explicit !== payload.protocol_version))) throw new EndpointError(unsupported);
+  const parsed = v.safeParse(AgentChatEndpointSchema, payload);
+  if (!parsed.success) throw new EndpointError(invalid);
+  return parsed.output;
 }
-
-/** Validate the minted endpoint payload at the network boundary (its `mcpServers` map
- * rides the GraphQL `JSON` scalar, so its shape is opaque on the wire and must be parsed,
- * not asserted). Throws on a missing or malformed payload — the caller shows the error. */
-function parseEndpoint(
-  data: DocumentType<typeof AgentChatEndpointMutation> | undefined,
-): AgentChatEndpoint {
-  if (data === undefined) throw new Error("The agent chat endpoint is unavailable.");
-  return v.parse(AgentChatEndpointSchema, data.agent_chat_endpoint);
-}
-
-/** Render the `<system_context>` block for the current view, or "" on failure. */
 async function fetchSystemContext(
-  renderPrompt: (
-    variables: DocumentVariables<typeof RenderAgentPrompt>,
-  ) => Promise<DocumentType<typeof RenderAgentPrompt> | undefined>,
-  agentId: string,
-  view: AgentChatView,
+  renderPrompt: (variables: DocumentVariables<typeof RenderAgentPrompt>) => Promise<DocumentType<typeof RenderAgentPrompt> | undefined>,
+  agentId: string, view: AgentChatView,
 ): Promise<string> {
   try {
     const data = await renderPrompt({ id: agentId, view: agentChatViewInput(view) });
     return data?.render_agent_prompt ?? "";
-  } catch {
-    return "";
-  }
+  } catch { return ""; }
 }
-
-/** Convert the endpoint's MCP server map to the ACP `newSession` array form. */
 function toMcpServers(servers: Record<string, McpServerConfig>): McpServer[] {
   return Object.entries(servers).map(([name, config]) => ({
-    type: "http",
-    name,
-    url: config.url,
+    type: "http", name, url: config.url,
     headers: Object.entries(config.headers ?? {}).map(([key, value]) => ({ name: key, value })),
   }));
-}
-
-/** Select the Agent row's model for the ACP session before the first prompt. In sdk 1.0.0 the
- *  model is a session config option (`category: "model"`), applied via `setSessionConfigOption`. */
-export async function selectSessionModel(
-  connection: Agent,
-  session: NewSessionResponse,
-  modelHandle: string,
-): Promise<void> {
-  if (modelHandle === "") return;
-  const option = session.configOptions?.find((opt) => opt.category === "model");
-  // No model config option means the agent owns its own model (env/config-pinned in its
-  // container, e.g. opencode) — defer rather than failing the whole session.
-  if (option === undefined || option.type !== "select") return;
-  // The select's values are either flat or grouped; flatten to the selectable options.
-  const values = (
-    option.options as ReadonlyArray<SessionConfigSelectOption | SessionConfigSelectGroup>
-  ).flatMap((entry) => ("options" in entry ? entry.options : [entry]));
-  const match = values.find((value) => value.value === modelHandle || value.name === modelHandle);
-  if (match === undefined) {
-    const available = values.map((value) => value.value).join(", ") || "none";
-    throw new Error(`The selected model ${modelHandle} is not available in this agent session (${available}).`);
-  }
-  if (option.currentValue === match.value) return;
-  if (connection.setSessionConfigOption === undefined) {
-    throw new Error(`The agent does not support selecting ${modelHandle} for this session.`);
-  }
-  await connection.setSessionConfigOption({
-    sessionId: session.sessionId,
-    configId: option.id,
-    value: match.value,
-  });
 }
 
 /** Opaque identifier for the embedded view-context resource (its content is inline). */

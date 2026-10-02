@@ -14,7 +14,7 @@ import {
 import { Skeleton, SkeletonStatus, textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
-import { agentLifecycle, agentRuntime, booleanField, stringField } from "./agent-record";
+import { agentInstanceKind, agentLifecycle, agentRuntime, booleanField, stringField, type AgentInstanceKind } from "./agent-record";
 
 const AGENT_MODEL = "agents.Agent";
 
@@ -84,7 +84,7 @@ export function AgentProvisioning({
     agentRuntime(agent) === "RUNNING" && (!workspace || (expectsService && !service));
   const showRuntime = active || Boolean(workspace) || missingRenderedInstances;
   const hasWorkspaceTemplate = Boolean(agent?.workspace_template?.path);
-  const conflictKind = stringField(agent, "conflict_kind").toLowerCase();
+  const conflictKind = agentInstanceKind(agent);
   const conflictName = stringField(agent, "conflict_name");
 
   // No poll: `agents.Agent` declares `changes(Agent, field="agentChanged")`, so the
@@ -113,7 +113,7 @@ export function AgentProvisioning({
           {agent.last_error ? (
             <p className="text-13 text-danger-text">{String(agent.last_error)}</p>
           ) : null}
-          {conflictName ? (
+          {conflictName && conflictKind ? (
             <OperatorTransportProvider>
               <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
             </OperatorTransportProvider>
@@ -159,7 +159,7 @@ function ConflictingInstance({
   name,
   pane,
 }: {
-  kind: string;
+  kind: AgentInstanceKind;
   name: string;
   pane: AgentProvisioningPane;
 }): React.ReactElement {

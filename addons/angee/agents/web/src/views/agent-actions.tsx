@@ -4,7 +4,7 @@ import { Action, useRecordActionMutation, type ActionConfirm } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
-import { booleanField, stringField } from "./agent-record";
+import { agentInstanceKind, booleanField, stringField } from "./agent-record";
 
 export const AGENT_MODEL = "agents.Agent";
 
@@ -27,27 +27,23 @@ function eligible(field: (typeof AGENT_LIFECYCLE_FIELDS)[number]): (record: Row)
   return (record) => booleanField(record, field);
 }
 
-/** The conflicting instance's kind as a message-key suffix (`workspace` | `service`). */
-function conflictKind(record: Row): string {
-  return stringField(record, "conflict_kind").toLowerCase();
-}
-
 function conflictConfirm(t: AgentsT, verb: "adopt" | "replace", record: Row): ActionConfirm {
-  const kind = conflictKind(record);
+  const kind = agentInstanceKind(record);
   const name = stringField(record, "conflict_name");
   return {
-    title: t(`provisioning.${verb}Title.${kind}`),
-    body: t(`provisioning.${verb}Body.${kind}`, { name }),
+    title: kind ? t(`provisioning.${verb}Title.${kind}`) : t(`provisioning.${verb}`),
+    ...(kind ? { body: t(`provisioning.${verb}Body.${kind}`, { name }) } : {}),
     ...(verb === "replace" ? { danger: true } : {}),
   };
 }
 
 function deprovisionConfirm(t: AgentsT, record: Row): ActionConfirm {
   const name = stringField(record, "conflict_name");
+  const kind = agentInstanceKind(record);
   return {
     title: t("provisioning.deprovisionTitle"),
-    body: name
-      ? t(`provisioning.deprovisionBody.${conflictKind(record)}`, { name })
+    body: name && kind
+      ? t(`provisioning.deprovisionBody.${kind}`, { name })
       : t("provisioning.deprovisionBody"),
     danger: true,
   };

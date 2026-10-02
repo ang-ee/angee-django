@@ -8,11 +8,8 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 import { jsonObjectFromUnknown, type JsonObject } from "@angee/ui";
 import * as v from "valibot";
 
-// The browser-reachable chat endpoint for a running agent: the routed WebSocket URL
-// (no token), a per-actor route token to append as `?token=`, the selected model handle
-// to apply via ACP `session/set_model`, and the agent's rendered MCP server map to
-// advertise on the ACP session. A mutation, not a query: each call mints a fresh,
-// short-lived route token server-side (a side effect).
+// The server owns the endpoint and protocol version: routed v1 uses a fresh token;
+// same-origin v2 uses session cookies. MCP servers and the model config are session inputs.
 export const AgentChatEndpointMutation = graphql(`
   mutation AgentChatEndpoint($id: ID!) {
     agent_chat_endpoint(id: $id) {
@@ -21,6 +18,7 @@ export const AgentChatEndpointMutation = graphql(`
       expires_at
       mcp_servers
       model_handle
+      protocol_version
     }
   }
 `);
@@ -45,6 +43,7 @@ export const AgentChatEndpointSchema = v.object({
   expires_at: v.string(),
   mcp_servers: v.record(v.string(), McpServerConfigSchema),
   model_handle: v.string(),
+  protocol_version: v.union([v.literal(1), v.literal(2)]),
 });
 
 export type AgentChatEndpoint = v.InferOutput<typeof AgentChatEndpointSchema>;
@@ -180,8 +179,8 @@ export type AgentSession = NonNullable<
 
 // The full agent roster the chat surfaces switch between: EVERY agent ordered by recent
 // activity (templates and stopped/errored agents included), filtered client-side to the
-// running ones by `useRunningAgents`. Each running agent owns its own durable ACP session,
-// so the filtered result is a SESSION/THREAD list, not a model catalogue. `runtime_status`
+// running ones by `useRunningAgents`. ACP session/list supplies each agent's sessions.
+// `runtime_status`
 // types as the `RuntimeStatus` enum union (UPPERCASE — RUNNING/STOPPED/…) and `model` is
 // nullable on `AgentType`, so consumers read `agent.model?.name`.
 export const AgentRoster = graphql(`

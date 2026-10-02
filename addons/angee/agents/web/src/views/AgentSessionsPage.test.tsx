@@ -10,6 +10,7 @@ import {
 } from "@angee/app/testing";
 
 import type { AgentRosterItem } from "../documents";
+import type { AgentChatProps } from "../chat-slot";
 import agents from "../index";
 
 const routerMocks = vi.hoisted(() => ({
@@ -19,7 +20,7 @@ const routerMocks = vi.hoisted(() => ({
 }));
 
 const sdkMocks = vi.hoisted(() => ({
-  useAuthoredQuery: vi.fn(), }));
+  useAuthoredQuery: vi.fn(), navigation: true }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -48,6 +49,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
     ...actual,
     useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
+    useRouteSearch: () => ({}),
     // Mirror the real `useNamespaceT` contract: a STABLE translator identity (memoized
     // on its inputs). AgentSessionsPage publishes a `t`-derived node into the shell
     // primary pane via `usePrimaryPane`, so an unstable `t` would churn that node and
@@ -59,8 +61,11 @@ vi.mock("@angee/ui", async (importOriginal) => {
 // Stub the chat surface so the test never pulls in the assistant-ui runtime — it only
 // needs to prove which agent each kept-alive instance is bound to.
 vi.mock("./AgentChat", () => ({
-  AgentChat: ({ agentId }: { agentId: string }) => (
-    <div data-testid="agent-chat" data-agent-id={agentId} />
+  AgentChat: ({ agentId, renderSessionNavigation }: AgentChatProps) => (
+    <>
+      {sdkMocks.navigation ? renderSessionNavigation?.({ currentId: null, available: false, ready: true, items: [], loading: false, error: null, hasMore: false, loadingMore: false, loadMore: vi.fn(), select: vi.fn(), create: vi.fn(), refresh: vi.fn() }) : null}
+      <div data-testid="agent-chat" data-agent-id={agentId} />
+    </>
   ), }));
 
 import { AgentSessionsPage } from "./AgentSessionsPage";
@@ -109,6 +114,7 @@ beforeEach(() => {
   routerMocks.routeHref.mockImplementation(routeHref);
   Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.useAuthoredQuery.mockReset();
+  sdkMocks.navigation = true;
 });
 
 afterEach(() => {
@@ -116,6 +122,15 @@ afterEach(() => {
 });
 
 describe("AgentSessionsPage", () => {
+  test("retains agent navigation for a transport without ACP session navigation", () => {
+    sdkMocks.navigation = false;
+    sdkMocks.useAuthoredQuery.mockReturnValue(queryResult({ agents: [agent("a1", "Scout")] }));
+    routerMocks.params = { id: "a1" };
+    renderPage();
+    expect(screen.getByRole("navigation", { name: "Running agents" })).toBeTruthy();
+    expect(screen.getByRole("link", { current: "page" }).getAttribute("href")).toBe("/agents/sessions/a1");
+    expect(screen.queryByRole("navigation", { name: "Sessions" })).toBeNull();
+  });
   test("loading renders skeleton rail rows and no chat", () => {
     sdkMocks.useAuthoredQuery.mockReturnValue(queryResult(undefined, true));
 
@@ -199,7 +214,7 @@ describe("AgentSessionsPage", () => {
 
     expect(routerMocks.navigate).toHaveBeenCalledWith({
       to: "/agents/sessions/a1",
-      replace: true,
+      replace: true, search: expect.any(Function),
     });
     expect(routerMocks.routeHref).toHaveBeenCalledWith("agents.session", {
       id: "a1",
@@ -216,7 +231,7 @@ describe("AgentSessionsPage", () => {
 
     expect(routerMocks.navigate).toHaveBeenCalledWith({
       to: "/agents/sessions/a1",
-      replace: true,
+      replace: true, search: expect.any(Function),
     });
     // An absent id never mounts a chat that would error on mintEndpoint.
     expect(screen.queryByTestId("agent-chat")).toBeNull();

@@ -25,7 +25,7 @@ import { AgentChat } from "./AgentChat";
 import { AgentProvisioning } from "./AgentProvisioning";
 import { type AgentChatView } from "../documents";
 
-// The selected runtime's addon contributes the chat transport for a running agent.
+// AgentChat provides ACP by default and admits runtime-owned transports through its slot.
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
 const CHAT_FIELDS = ["id", "can_chat", "runtime_class"] as const;

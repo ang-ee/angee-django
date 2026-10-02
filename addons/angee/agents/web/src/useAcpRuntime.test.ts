@@ -5,8 +5,8 @@ import {
   attachmentBlocks,
   buildPromptBlocks,
   dataUrlToImageBlock,
-  selectSessionModel,
 } from "./useAcpRuntime";
+import { selectSessionModel } from "./acp-client";
 
 // A complete image attachment as `SimpleImageAttachmentAdapter` yields it: an `image` part whose
 // `image` is a `data:<mime>;base64,<data>` URL. The reducer only reads `content`, so the rest is
@@ -16,7 +16,7 @@ function imageAttachment(dataUrl: string): CompleteAttachment {
 }
 
 describe("selectSessionModel", () => {
-  // In sdk 1.0.0 the model is a "model"-category select config option, applied via
+  // The model is a "model"-category select config option, applied via
   // setSessionConfigOption; the session fixtures below mirror that shape.
   const modelOption = (currentValue: string, values: string[]) => ({
     id: "model",
@@ -31,9 +31,10 @@ describe("selectSessionModel", () => {
     const setSessionConfigOption = vi.fn(async () => undefined);
 
     await selectSessionModel(
-      { setSessionConfigOption } as never,
-      { sessionId: "session-1", configOptions: [modelOption("default", ["default", "claude-opus-4-8"])] } as never,
+      { setSessionConfigOption },
+      { sessionId: "session-1", configOptions: [modelOption("default", ["default", "claude-opus-4-8"])] },
       "claude-opus-4-8",
+      "Unavailable model: claude-opus-4-8",
     );
 
     expect(setSessionConfigOption).toHaveBeenCalledWith({
@@ -47,9 +48,10 @@ describe("selectSessionModel", () => {
     const setSessionConfigOption = vi.fn(async () => undefined);
 
     await selectSessionModel(
-      { setSessionConfigOption } as never,
-      { sessionId: "session-1", configOptions: [modelOption("claude-opus-4-8", ["claude-opus-4-8"])] } as never,
+      { setSessionConfigOption },
+      { sessionId: "session-1", configOptions: [modelOption("claude-opus-4-8", ["claude-opus-4-8"])] },
       "claude-opus-4-8",
+      "Unavailable model: claude-opus-4-8",
     );
 
     expect(setSessionConfigOption).not.toHaveBeenCalled();
@@ -61,9 +63,10 @@ describe("selectSessionModel", () => {
     const setSessionConfigOption = vi.fn(async () => undefined);
 
     await selectSessionModel(
-      { setSessionConfigOption } as never,
-      { sessionId: "session-1" } as never,
+      { setSessionConfigOption },
+      { sessionId: "session-1" },
       "anthropic/claude-sonnet-4-6",
+      "Unavailable model: anthropic/claude-sonnet-4-6",
     );
 
     expect(setSessionConfigOption).not.toHaveBeenCalled();
@@ -72,9 +75,10 @@ describe("selectSessionModel", () => {
   test("fails loudly when the selected model is not available", async () => {
     await expect(
       selectSessionModel(
-        { setSessionConfigOption: vi.fn() } as never,
-        { sessionId: "session-1", configOptions: [modelOption("default", ["default"])] } as never,
+        { setSessionConfigOption: vi.fn() },
+        { sessionId: "session-1", configOptions: [modelOption("default", ["default"])] },
         "claude-opus-4-8",
+        "Unavailable model: claude-opus-4-8",
       ),
     ).rejects.toThrow("claude-opus-4-8");
   });
@@ -173,4 +177,3 @@ describe("dataUrlToImageBlock", () => {
     expect(dataUrlToImageBlock("https://example.com/cat.png")).toBeNull();
   });
 });
-
