@@ -7,6 +7,8 @@ import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 
+export { WORKFLOW_STUDIO_TAB_ID } from "./catalogue/resources";
+
 export { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 
 export default defineBaseAddon({

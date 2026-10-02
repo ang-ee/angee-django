@@ -16,7 +16,7 @@ from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
-from angee.base.impl import ImplBase, model_config_form_spec, resolve_impl_class
+from angee.base.impl import ImplBase, resolve_impl_class
 from angee.base.jsonschema import check_schema, validate, validator
 from angee.base.serialization import strip_null_bytes
 from angee.base.validation import get_type_adapter
@@ -247,6 +247,7 @@ class Step[I, O, C](ImplBase):
     and field-path errors. Step schema projections are cached by their declared type.
     """
 
+    config_form_spec_json_fields = True
     registry_setting = "ANGEE_WORKFLOW_STEP_CLASSES"
 
     input_model: ClassVar[Any] = None
@@ -315,20 +316,12 @@ class Step[I, O, C](ImplBase):
         return cls.outcomes
 
     @classmethod
-    def config_form_spec(cls) -> dict[str, Any] | None:
-        """Render typed step config with JSON controls for its unstructured leaves."""
-        return None if cls.config_model is None else model_config_form_spec(
-            cls.config_model, owner=cls.__name__, json_fields=True,
-        )
-
-    @classmethod
-    def authoring_outcomes(cls, config: Any) -> dict[Outcome, str]:
-        """Project ports for a draft, retaining static ports while config is incomplete."""
+    def authoring_outcomes(cls, config: Any) -> tuple[dict[Outcome, str], ValidationError | None]:
+        """Offer configured outcomes or static fallback with the node's refusal."""
         try:
-            parsed = cls.parse_config(config)
-        except ValidationError:
-            return {**cls.outcomes, ERROR_OUTCOME: "Error"}
-        return cls.available_outcomes(parsed, validate=True)
+            return cls.available_outcomes(cls.parse_config(config), validate=True), None
+        except ValidationError as error:
+            return cls._with_error_outcome(cls.outcomes), error
 
     @classmethod
     def required_outcomes(cls, config: Any) -> set[Outcome]:
@@ -341,6 +334,10 @@ class Step[I, O, C](ImplBase):
         outcomes = cls.outcomes_for(config)
         if validate:
             outcomes = cls.parse_value(outcomes, dict[Outcome, str], "outcomes")
+        return cls._with_error_outcome(outcomes)
+
+    @staticmethod
+    def _with_error_outcome(outcomes: dict[Outcome, str]) -> dict[Outcome, str]:
         return {**outcomes, ERROR_OUTCOME: "Error"}
 
     @classmethod

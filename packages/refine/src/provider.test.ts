@@ -6,6 +6,7 @@ import type { AngeeLiveResource, GraphQLWsClient } from "./provider";
 import {
   ANGEE_HASURA_PROVIDER_OPTIONS,
   boundedGraphQLTransportError,
+  publicGraphQLError,
   createAngeeGraphQLClient,
   createAngeeHasuraDataProvider,
   createAngeeChangeLiveProvider,
@@ -996,3 +997,11 @@ function resource({
     },
   };
 }
+
+
+test("stale revision transport retains only a valid current revision for explicit overwrite", () => {
+  expect(publicGraphQLError({ message: "Stale", extensions: { code: "STALE_REVISION", current_revision: 0, secret: "private" } }))
+    .toEqual({ message: "Stale", extensions: { code: "STALE_REVISION", current_revision: 0 } });
+  expect(publicGraphQLError({ message: "Stale", extensions: { code: "STALE_REVISION", current_revision: "unsafe" } })?.extensions)
+    .toEqual({ code: "STALE_REVISION" });
+});

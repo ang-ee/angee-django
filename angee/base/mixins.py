@@ -825,17 +825,19 @@ class StaleRevisionError(DomainError):
         Exception.__init__(self, f"Expected revision {expected}; current revision is {current}.")
 
 
-def validate_revision(value: Any) -> None:
-    """Require a portable positive integer revision."""
+def validate_revision(value: Any, *, minimum: int = 1) -> None:
+    """Require a portable integer revision at or above its owner's minimum."""
 
-    if type(value) is not int or not 1 <= value <= 2**31 - 1:
-        raise ValidationError({"expected_revision": "Expected revision must be an integer from 1 to 2147483647."})
+    if type(value) is not int or not minimum <= value <= 2**31 - 1:
+        raise ValidationError(
+            {"expected_revision": f"Expected revision must be an integer from {minimum} to 2147483647."}
+        )
 
 
-def require_revision(*, expected: Any, current: int | None) -> None:
-    """Validate a portable positive revision and reject a stale expectation."""
+def require_revision(*, expected: Any, current: int | None, minimum: int = 1) -> None:
+    """Validate the owner's revision bounds and reject a stale expectation."""
 
-    validate_revision(expected)
+    validate_revision(expected, minimum=minimum)
     if expected != current:
         raise StaleRevisionError(expected, current)
 

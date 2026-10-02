@@ -127,6 +127,8 @@ export interface FieldPresentation {
 }
 
 export interface WidgetField extends FieldPresentation {
+  /** IAM assignment-subject controls offer these native subject kinds. */
+  assignmentSubjectKinds?: readonly ("user" | "group")[];
   name?: string;
   fill?: boolean;
   containerWidth?: number;

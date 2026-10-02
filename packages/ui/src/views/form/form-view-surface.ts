@@ -113,10 +113,11 @@ export interface RecordTabDescriptor {
   /** Shown only while the loaded record satisfies it; absent until the record loads. */
   visibleWhen?: (record: Row) => boolean;
   /**
-   * Keep the panel mounted even while inactive. Base UI mounts a keep-mounted
-   * panel eagerly from the first render, so do not opt in for eager work such as
-   * a socket, subscription, fetch, or token mint; leave it false unless state
-   * preservation outweighs that cost.
+   * Keep the panel's React state and effects mounted while inactive. Base UI
+   * mounts it eagerly; render receives active=false and must suspend its reads
+   * and shell publications explicitly. Persistent effects such as unsaved-edit
+   * navigation guards remain mounted. This differs from React Activity, which
+   * tears down hidden effects, including those guards.
    */
   keepMounted?: boolean;
 }

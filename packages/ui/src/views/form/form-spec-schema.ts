@@ -65,6 +65,7 @@ const FieldKeywordSchema = v.object({
   discriminator: v.optional(v.object({ propertyName: NonEmptyString })),
 });
 const FieldAnnotationSchema = v.object({
+  assignmentSubjectKinds: v.optional(v.array(v.picklist(["user", "group"]))),
   propertyOrder: v.optional(v.array(NonEmptyString)),
   widget: v.optional(NonEmptyString),
   label: v.optional(NonEmptyString),

@@ -73,11 +73,17 @@ def test_request_key_replays_original_admission_after_publication(execution, reg
     workflow = load_workflow(document("entry"), key="request_publication", actor=actor)
     original = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 1}, request_key="test:original")
     saved = Workflow.objects.save_draft(
-        workflow, draft=document("entry", step="revised_echo"),
-        expected_revision=workflow.draft_revision, actor=actor,
+        workflow,
+        draft=document("entry", step="revised_echo"),
+        expected_revision=workflow.draft_revision,
+        actor=actor,
     )
-    assert saved.status == "saved" and not saved.issues
-    version = Workflow.objects.publish(workflow, actor=actor).version
+    assert not saved.issues
+    version = Workflow.objects.publish(
+        workflow,
+        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        actor=actor,
+    ).version
     assert version.pk != original.version_id
     replay = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 1}, request_key="test:original")
     assert replay.pk == original.pk
@@ -93,14 +99,21 @@ def test_publication_rejects_empty_target_lists(execution, outcome):
     """Every next entry declares an edge; ending a branch requires omission."""
     actor, _ = execution
     workflow = Workflow.objects.install_definition(
-        key="empty_targets", name="Empty targets",
+        key="empty_targets",
+        name="Empty targets",
         draft={"nodes": {"entry": {"step": "route", "next": {outcome: []}}}},
-        publish=False, actor=actor,
+        publish=False,
+        actor=actor,
     )
     with pytest.raises(DefinitionInvalid) as caught:
-        Workflow.objects.publish(workflow, actor=actor)
+        Workflow.objects.publish(
+            workflow,
+            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+            actor=actor,
+        )
     assert any(
-        issue.code == "target" and issue.path == ["nodes", "entry", "next", outcome]
+        issue.code == "target"
+        and issue.path == ["nodes", "entry", "next", outcome]
         and "at least one target" in issue.message
         for issue in caught.value.issues
     )
@@ -158,26 +171,40 @@ def test_subject_identity_is_immutable_once_a_version_exists(execution, register
     register_step(VaultEcho)
     register_step(WorkflowEcho)
     workflow = Workflow.objects.install_definition(
-        key="subject_contract", name="Subject contract", subject_model="knowledge.Vault",
-        draft=document("entry", step="vault_echo"), actor=actor,
+        key="subject_contract",
+        name="Subject contract",
+        subject_model="knowledge.Vault",
+        draft=document("entry", step="vault_echo"),
+        actor=actor,
     )
     original = system_queryset(WorkflowVersion).get(pk=workflow.published_id)
     assert original.definition.issues(subject_model="knowledge.vault") == []
     if operation == "install":
         with pytest.raises(ValidationError, match="subject model cannot change"):
             Workflow.objects.install_definition(
-                key=workflow.key, name=workflow.name, subject_model="workflows.Workflow",
-                draft=document("entry", step="workflow_echo"), actor=actor,
+                key=workflow.key,
+                name=workflow.name,
+                subject_model="workflows.Workflow",
+                draft=document("entry", step="workflow_echo"),
+                actor=actor,
             )
     else:
         workflow.subject_model = "workflows.workflow"
         saved = Workflow.objects.save_draft(
-            workflow, draft=document("entry", step="workflow_echo"),
-            expected_revision=workflow.draft_revision, actor=actor,
+            workflow,
+            draft=document("entry", step="workflow_echo"),
+            expected_revision=workflow.draft_revision,
+            actor=actor,
         )
-        assert saved.status == "saved"
+        assert saved.revision > 0
         with pytest.raises(DefinitionInvalid) as caught:
-            Workflow.objects.publish(workflow, actor=actor)
+            Workflow.objects.publish(
+                workflow,
+                expected_revision=system_queryset(Workflow)
+                .values_list("draft_revision", flat=True)
+                .get(pk=workflow.pk),
+                actor=actor,
+            )
         assert any(issue.code == "subject" for issue in caught.value.issues)
     retained = system_queryset(Workflow).get(pk=workflow.pk)
     assert retained.subject_model == "knowledge.Vault" and retained.published_id == original.pk

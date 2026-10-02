@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Any, Literal, cast
+from typing import Any, cast
 from uuid import uuid4
 
 from django.apps import apps
@@ -26,7 +26,8 @@ from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
-from angee.base.mixins import AppendOnlyQuerySet
+from angee.base.impl import impl_registry, resolve_impl_class
+from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
@@ -43,7 +44,7 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import StepMode, Superseded, io_timeout_budget
+from angee.workflows.steps import Step, StepMode, Superseded, io_timeout_budget
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
@@ -75,7 +76,6 @@ def _record_failure(operation: str) -> Iterator[None]:
 class DraftSave:
     """A conditional draft save and its complete validation diagnostics."""
 
-    status: Literal["saved", "conflict", "invalid"]
     revision: int
     issues: list[Issue]
 
@@ -148,6 +148,58 @@ class WorkflowManager(AngeeManager):
             config["outcomes"] = expected.published.definition.output_schemas
         return document, issues
 
+    def authoring_outcomes(
+        self, configurations: list[Any], *, actor: Any
+    ) -> list[tuple[str, dict[str, str], list[Issue]]]:
+        """Resolve each unfinished node independently under the viewer's read scope."""
+        registry = impl_registry(Step.registry_setting)
+        projected: list[tuple[str, dict[str, str], list[Issue]]] = []
+        for entry in configurations:
+            path: list[str | int] = ["nodes", entry.node]
+            if entry.step not in registry:
+                projected.append(
+                    (
+                        entry.node,
+                        {},
+                        [
+                            Issue(
+                                node=entry.node,
+                                path=[*path, "step"],
+                                code="unknown_step",
+                                message=f"Unknown step {entry.step!r}.",
+                            )
+                        ],
+                    )
+                )
+                continue
+            step = resolve_impl_class(Step, entry.step)
+            document, issues = self._resolved_document(
+                {
+                    "nodes": {
+                        "entry": {"step": entry.step, "config": entry.config},
+                    }
+                },
+                actor,
+            )
+            for issue in issues:
+                issue.node = entry.node
+                issue.path = [*path, *issue.path[2:]]
+            outcomes, error = step.authoring_outcomes(document["nodes"]["entry"]["config"])
+            if error is not None:
+                if hasattr(error, "message_dict"):
+                    for field, messages in error.message_dict.items():
+                        issues.extend(
+                            Issue(node=entry.node, path=[*path, *field.split(".")], code="config", message=message)
+                            for message in messages
+                        )
+                else:
+                    issues.extend(
+                        Issue(node=entry.node, path=[*path, "config"], code="config", message=message)
+                        for message in error.messages
+                    )
+            projected.append((entry.node, outcomes, issues))
+        return projected
+
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
         """Name readable published parents whose frozen contract names this workflow."""
         readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
@@ -200,32 +252,40 @@ class WorkflowManager(AngeeManager):
         *,
         draft: Any,
         expected_revision: int,
+        node_keys: dict[str, str] | None = None,
         layout: Any = None,
         actor: Any = None,
     ) -> DraftSave:
         """Save one parsable registered document with optimistic concurrency."""
 
         actor = workflow.require_access("write", actor)
+        with system_context(reason="workflows.save_draft revision preflight"):
+            current = self.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
+        require_revision(expected=expected_revision, current=current, minimum=0)
+        draft, layout = Definition.rekey(draft, keys=node_keys, layout=layout)
         resolved, resolution_issues = self._resolved_document(draft, actor)
         with system_context(reason="workflows.save_draft"):
             definition, issues = Definition.check(resolved, subject_model=workflow.subject_model)
             issues.extend(resolution_issues)
             if definition is None or any(issue.blocks_draft for issue in issues):
-                return DraftSave("invalid", expected_revision, issues)
+                raise DefinitionInvalid(issues)
             values = {"draft": draft, "draft_revision": F("draft_revision") + 1, "updated_at": Now()}
             if layout is not None:
                 values["layout"] = layout
             changed = self.filter(pk=workflow.pk, draft_revision=expected_revision).update(**values)
-            revision = self.values_list("draft_revision", flat=True).get(pk=workflow.pk)
-        return DraftSave("saved" if changed else "conflict", revision, issues)
+            if not changed:
+                current = self.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
+                raise StaleRevisionError(expected_revision, current)
+        return DraftSave(expected_revision + 1, issues)
 
-    def publish(self, workflow: Any, *, actor: Any = None) -> PublishResult:
+    def publish(self, workflow: Any, *, expected_revision: int, actor: Any = None) -> PublishResult:
         """Publish a frozen document and report readable dependents to republish."""
 
         actor = workflow.require_access("write", actor)
         with transaction.atomic():
             with system_context(reason="workflows.publish"):
                 current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+            require_revision(expected=expected_revision, current=current.draft_revision, minimum=0)
             resolved, resolution_issues = self._resolved_document(current.draft, actor)
             definition, issues = Definition.check(resolved, subject_model=current.subject_model)
             issues.extend(resolution_issues)
@@ -264,7 +324,11 @@ class WorkflowManager(AngeeManager):
 
         with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
             workflow = self.save_identity(
-                key=key, name=name, description=description, subject_model=subject_model, actor=actor,
+                key=key,
+                name=name,
+                description=description,
+                subject_model=subject_model,
+                actor=actor,
             )
             saved = self.save_draft(
                 workflow,
@@ -273,10 +337,8 @@ class WorkflowManager(AngeeManager):
                 layout=layout,
                 actor=actor,
             )
-            if saved.status != "saved":
-                raise DefinitionInvalid(saved.issues)
             if publish:
-                self.publish(workflow, actor=actor)
+                self.publish(workflow, expected_revision=saved.revision, actor=actor)
             workflow.refresh_from_db()
             return workflow
 

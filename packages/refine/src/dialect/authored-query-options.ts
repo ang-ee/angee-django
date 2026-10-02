@@ -8,6 +8,7 @@ import {
 } from "@refinedev/core";
 import {
   queryOptions,
+  keepPreviousData,
   useQueryClient,
   type DataTag,
   type Query,
@@ -76,6 +77,7 @@ export function authoredQueryOptions<TDocument extends AuthoredDocument>(
   models: readonly string[] = [],
   records: readonly { model: string; id: string }[] = [],
   relatedModels: readonly string[] = [],
+  retainPreviousData = false,
 ): UnusedSkipTokenOptions<
   DocumentData<TDocument>, Error, DocumentData<TDocument>,
   ReturnType<typeof authoredQueryKey<TDocument>>
@@ -95,7 +97,7 @@ export function authoredQueryOptions<TDocument extends AuthoredDocument>(
       variables ?? {},
       context,
     ),
-    placeholderData: undefined,
+    placeholderData: retainPreviousData ? keepPreviousData : undefined,
   });
 }
 

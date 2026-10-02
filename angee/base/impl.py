@@ -71,12 +71,36 @@ class ImplChoice:
     config_schema: dict[str, Any] | None
 
 
-_SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default", "widget", "relation"})
+_SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default", "widget", "relation", "assignmentSubjectKinds"})
 _POLICY_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 _FILTER_OPERATORS = (
-    "eq", "ne", "eqs", "nes", "lt", "gt", "lte", "gte", "in", "nin", "ina", "nina",
-    "contains", "ncontains", "containss", "ncontainss", "between", "nbetween", "null", "nnull",
-    "startswith", "nstartswith", "startswiths", "nstartswiths", "endswith", "nendswith", "endswiths",
+    "eq",
+    "ne",
+    "eqs",
+    "nes",
+    "lt",
+    "gt",
+    "lte",
+    "gte",
+    "in",
+    "nin",
+    "ina",
+    "nina",
+    "contains",
+    "ncontains",
+    "containss",
+    "ncontainss",
+    "between",
+    "nbetween",
+    "null",
+    "nnull",
+    "startswith",
+    "nstartswith",
+    "startswiths",
+    "nstartswiths",
+    "endswith",
+    "nendswith",
+    "endswiths",
     "nendswiths",
 )
 _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
@@ -84,35 +108,51 @@ _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
     "$defs": {
         "json": {
             "oneOf": [
-                {"type": "null"}, {"type": "string"}, {"type": "number"}, {"type": "boolean"},
+                {"type": "null"},
+                {"type": "string"},
+                {"type": "number"},
+                {"type": "boolean"},
                 {"type": "array", "items": {"$ref": "#/$defs/json"}},
                 {"type": "object", "additionalProperties": {"$ref": "#/$defs/json"}},
             ]
         },
-        "filter": {"oneOf": [
-        {
-            "type": "object", "additionalProperties": False, "required": ["operator", "value"],
-            "properties": {
-                "operator": {"enum": ["and", "or"]}, "key": {"type": "string"},
-                "value": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
-            },
+        "filter": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["operator", "value"],
+                    "properties": {
+                        "operator": {"enum": ["and", "or"]},
+                        "key": {"type": "string"},
+                        "value": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
+                    },
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["operator", "field"],
+                    "properties": {
+                        "operator": {"enum": list(_FILTER_OPERATORS)},
+                        "field": {"type": "string", "minLength": 1},
+                        "value": {"$ref": "#/$defs/json"},
+                    },
+                },
+            ]
         },
-        {
-            "type": "object", "additionalProperties": False, "required": ["operator", "field"],
-            "properties": {
-                "operator": {"enum": list(_FILTER_OPERATORS)},
-                "field": {"type": "string", "minLength": 1}, "value": {"$ref": "#/$defs/json"},
-            },
-        },
-    ]}},
-    "type": "object", "additionalProperties": False, "required": ["resource"],
+    },
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["resource"],
     "properties": {
         "resource": {"type": "string", "minLength": 1},
         "permission": {"type": "string", "pattern": _POLICY_IDENTIFIER.pattern},
         "labelField": {"type": "string", "minLength": 1},
         "filters": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
         "create": {
-            "type": "object", "additionalProperties": False, "required": ["resource"],
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["resource"],
             "properties": {
                 "resource": {"type": "string", "minLength": 1},
                 "defaultValues": {"type": "object", "additionalProperties": {"$ref": "#/$defs/json"}},
@@ -123,12 +163,21 @@ _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
 FORM_SPEC_RELATION_VALIDATOR = validator(_FORM_SPEC_RELATION_SCHEMA)
 """Native validator for the shared FormSpec relation metadata contract."""
 
-FORM_SCHEMA_ANNOTATIONS = frozenset({"title", "description", "widget", "relation", "options", "readOnly"})
+FORM_SCHEMA_ANNOTATIONS = frozenset(
+    {"title", "description", "widget", "relation", "options", "readOnly", "assignmentSubjectKinds"}
+)
 """Presentation annotations shared by config forms and frozen form snapshots."""
 
-_FORM_SCHEMA_KEYS = frozenset(Draft202012Validator.VALIDATORS) | FORM_SCHEMA_ANNOTATIONS | {
-    "$schema", "$defs", "$anchor", "default",
-}
+_FORM_SCHEMA_KEYS = (
+    frozenset(Draft202012Validator.VALIDATORS)
+    | FORM_SCHEMA_ANNOTATIONS
+    | {
+        "$schema",
+        "$defs",
+        "$anchor",
+        "default",
+    }
+)
 _SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
 _FORM_MISSING = object()
 
@@ -218,6 +267,10 @@ def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
         freeze_form_schema(schema["items"])
 
 
+class _UnsupportedConfigSchema(ImproperlyConfigured):
+    """The projector rejected a shape outside the bounded form vocabulary."""
+
+
 class _ConfigFormSpecProjector:
     """Project bounded FormSpec shapes, resolving root-local refs through referencing."""
 
@@ -240,24 +293,22 @@ class _ConfigFormSpecProjector:
         return projected
 
     def _project(self, schema: Any, *, path: str, refs: tuple[str, ...]) -> dict[str, Any]:
+        try:
+            if isinstance(schema, dict) and schema.get("widget") == "json":
+                return self._json_field(schema)
+            return self._project_supported(schema, path=path, refs=refs)
+        except _UnsupportedConfigSchema:
+            if not self.json_fields or path == "config":
+                raise
+            return self._json_field(schema if isinstance(schema, dict) else {})
+
+    def _json_field(self, schema: dict[str, Any]) -> dict[str, Any]:
+        projected = {"type": schema.get("type") if schema.get("type") in {"object", "array"} else "any"}
+        return {**self._metadata(projected, schema), "widget": "json"}
+
+    def _project_supported(self, schema: Any, *, path: str, refs: tuple[str, ...]) -> dict[str, Any]:
         if not isinstance(schema, dict):
             self._unsupported(path, "non-object schema")
-        schema_type = schema.get("type")
-        unstructured = (
-            schema_type == "object" and "properties" not in schema
-            or not schema and path != "config"
-            or schema_type == "number" and ("exclusiveMinimum" in schema or "exclusiveMaximum" in schema)
-            or schema.get("format") not in (None, "date", "date-time")
-            or "anyOf" in schema and (len(schema["anyOf"]) != 2 or {"type": "null"} not in schema["anyOf"])
-            or "oneOf" in schema
-            or "$ref" in schema and schema["$ref"] in refs
-        )
-        if schema.get("widget") == "json" or self.json_fields and unstructured:
-            schema_type = schema.get("type")
-            return self._metadata(
-                {"type": schema_type if schema_type in {"object", "array"} else "any", "widget": "json"},
-                schema,
-            )
         if "$ref" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"$ref"}, path)
             reference = schema["$ref"]
@@ -394,6 +445,8 @@ class _ConfigFormSpecProjector:
             if not isinstance(widget, str) or not widget:
                 self._unsupported("config", "non-string widget")
             result["widget"] = widget
+        if "assignmentSubjectKinds" in schema:
+            result["assignmentSubjectKinds"] = copy.deepcopy(schema["assignmentSubjectKinds"])
         if "relation" in schema:
             if projected.get("type") != "string":
                 self._unsupported("config", "relation on a non-string field")
@@ -418,7 +471,7 @@ class _ConfigFormSpecProjector:
             self._unsupported(path, f"keywords {', '.join(unsupported)}")
 
     def _unsupported(self, path: str, detail: str) -> NoReturn:
-        raise ImproperlyConfigured(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
+        raise _UnsupportedConfigSchema(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
 
 
 def _pydantic_models_in(annotation: Any) -> tuple[type[BaseModel], ...]:
@@ -483,6 +536,8 @@ class ImplBase:
     category: ClassVar[str] = ""
     defaults: ClassVar[dict[str, Any]] = {}
     config_model: ClassVar[type[BaseModel] | None] = None
+    config_form_spec_json_fields: ClassVar[bool] = False
+    """Render unsupported non-root config shapes through the JSON control."""
     check_config_form_spec: ClassVar[bool] = True
     """False for rowless contracts whose typed config is never offered as a FormSpec."""
 
@@ -597,7 +652,11 @@ class ImplBase:
 
         if cls.config_model is None:
             return None
-        return model_config_form_spec(cls.config_model, owner=cls.__name__)
+        return model_config_form_spec(
+            cls.config_model,
+            owner=cls.__name__,
+            json_fields=cls.config_form_spec_json_fields,
+        )
 
     @classmethod
     def materialize(

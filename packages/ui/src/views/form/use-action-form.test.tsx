@@ -6,7 +6,7 @@ import type { ResolverResult } from "react-hook-form";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../feedback";
-import { useActionForm, useActionFormValues } from "./use-action-form";
+import { useActionForm } from "./use-action-form";
 
 function wrapper({ children }: { children: ReactNode }): React.ReactElement {
   return <ToastProvider>{children}</ToastProvider>;
@@ -273,20 +273,4 @@ test("an outdated submit callback is a developer failure, not a retry banner", a
   await act(async () => { await expect(result.current.run()).rejects.toThrow(/FormSubmitResult contract/); });
   expect(result.current.formError).toBeNull();
   expect(result.current.submitting).toBe(false);
-});
-
-
-test("computed form subscriptions ignore unrelated edits and update for their selected structure", async () => {
-  let projections = 0;
-  const { result } = renderHook(() => {
-    const action = useActionForm({ defaultValues: { key: "entry", config: "first" }, submit: () => ({ status: "ok", data: true }) });
-    const key = useActionFormValues(action.form, (values) => values.key);
-    projections++;
-    return { form: action.form, key };
-  }, { wrapper });
-  const before = projections;
-  act(() => { result.current.form.setValue("config", "next"); });
-  expect(projections).toBe(before);
-  act(() => { result.current.form.setValue("key", "renamed"); });
-  expect(result.current.key).toBe("renamed");
 });

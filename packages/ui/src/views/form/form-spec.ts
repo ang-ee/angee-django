@@ -87,6 +87,27 @@ export function useFormSpecFields(
   );
 }
 
+/** Whether the projected descriptors render a control that can display this issue. */
+export function formSpecHasControlForPath(fields: readonly FormSpecFieldDescriptor[], path: string): boolean {
+  const field = fields.find((field) => path === field.name || path.startsWith(`${field.name}.`));
+  return field !== undefined && fieldHasControlForPath(field, path.slice(field.name.length).replace(/^\./, ""));
+}
+
+function fieldHasControlForPath(field: FormSpecFieldDescriptor, path: string): boolean {
+  if (field.hidden) return false;
+  if (!path) return true;
+  if (field.objectTemplate) return formSpecHasControlForPath(field.objectTemplate, path);
+  if (field.itemTemplate || field.rowTemplate) {
+    const item = /^(\d+)(?:\.(.*))?$/.exec(path);
+    if (!item) return false;
+    const childPath = item[2] ?? "";
+    if (field.itemTemplate) return fieldHasControlForPath(field.itemTemplate, childPath);
+    return !childPath || formSpecHasControlForPath(field.rowTemplate ?? [], childPath);
+  }
+  // Atomic widgets (including JSON and subject arrays) display descendant messages themselves.
+  return true;
+}
+
 /**
  * Seed each declared form-spec field from its matching payload key, followed by
  * its schema default and then the shared descriptor-kind empty value. The form
@@ -279,7 +300,7 @@ function deserializeField(
     ? deserializeObjectFields(field, widgets, path, root, references)
     : undefined;
   if (variableList && items) assertFiniteTemplate(references, path);
-  const itemTemplate = items && field.widget !== "json" && (variableList || items.field.relation)
+  const itemTemplate = variableList && items
     ? deserializeField("item", items.field, true, widgets, `${path}[]`, root, items.references)
     : undefined;
   const {
@@ -308,6 +329,7 @@ function deserializeField(
     kind: type,
     widget,
     ...(label ? { label } : {}),
+    ...(field.assignmentSubjectKinds ? { assignmentSubjectKinds: field.assignmentSubjectKinds } : {}),
     ...(addLabel ? { addLabel } : {}),
     ...(removeLabel ? { removeLabel } : {}),
     ...(description ? { description } : {}),

@@ -594,7 +594,10 @@ shared UI copy through an addon bundle.
   shared form owns branching, validation and draft retention across record refreshes.
 - Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
   `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
-  preserves edits and offers reload. Adapt wire responses with
+  preserves edits and offers reload. Typed GraphQL successes use
+  `savedFormSubmitResult`; thrown Django validation and revision refusals use
+  `formSubmitError` (VALIDATION and STALE_REVISION). Do not add another in-band
+  form transport. Adapt ActionResult wire responses with
   `actionFormSubmitResult(data, root)` and normalized outcomes with
   `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.

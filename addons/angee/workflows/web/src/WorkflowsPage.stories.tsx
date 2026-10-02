@@ -46,15 +46,15 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
       const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);
       const { query } = request;
-      if (query.includes("workflow_step_ports")) return jsonResponse({ data: { workflow_step_ports: [{ node: "entry", outcomes: { done: "Done", error: "Error" } }] } });
+      if (query.includes("workflow_step_outcomes")) return jsonResponse({ data: { workflow_step_outcomes: [{ node: "entry", outcomes: { done: "Done", error: "Error" }, issues: [] }] } });
       if (query.includes("workflow_step_choices")) return jsonResponse({ data: {
-        workflow_by_pk: { ...workflowFixture, permissions: ["write"], draft_revision: 1, layout: { entry: [80, 60] },
-          draft: { nodes: { entry: { step: "echo", label: "Entry" } } }, draft_outcomes: { entry: { done: "Done" } } },
-        workflow_step_choices: [{ key: "echo", label: "Echo", icon: "", category: "", defaults: {}, config_schema: null, internal: false, outcomes: { done: "Done", error: "Error" } }],
+        workflow_by_pk: { ...workflowFixture, permissions: ["monitor", "write"], draft_revision: 1, layout: { entry: [80, 60] },
+          draft: { nodes: { entry: { step: "echo", label: "Entry" } } } },
+        workflow_step_choices: [{ key: "echo", label: "Echo", icon: "", category: "", defaults: {}, config_schema: null, internal: false, outcomes: { done: "Done", error: "Error" }, issues: [] }],
       } });
       if (query.includes("workflow_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "Could not read this workflow." }] })
-        : jsonResponse({ data: { workflow_by_pk: unavailable ? null : { ...workflowFixture, permissions: writer ? ["write"] : [] } } });
+        : jsonResponse({ data: { workflow_by_pk: unavailable ? null : { ...workflowFixture, permissions: writer ? ["monitor", "write"] : [] } } });
       if (query.includes("workflowversion")) return jsonResponse({ data: {
         workflowversion: [{ id: "wfv_review", number: 2, created_at: "2026-09-29T09:00:00Z", published_by: "usr_operator", content_hash: "retained_hash" }],
         workflowversion_aggregate: { aggregate: { count: 1 } },

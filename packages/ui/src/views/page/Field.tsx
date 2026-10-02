@@ -3,7 +3,7 @@ import type { CrudFilter } from "@refinedev/core";
 import type { Row } from "@angee/metadata";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
-import type { FieldPresentation } from "../../widgets/types";
+import type { FieldPresentation, WidgetField } from "../../widgets/types";
 
 export type PageFieldKind =
   | "text"
@@ -16,6 +16,7 @@ export type PageFieldKind =
 
 export interface FieldDescriptor extends FieldPresentation {
   name: string;
+  assignmentSubjectKinds?: WidgetField["assignmentSubjectKinds"];
   /**
    * Concrete list/create resource for a relation whose stored model is a base
    * type. The field still reads and writes its declared relation id; only the

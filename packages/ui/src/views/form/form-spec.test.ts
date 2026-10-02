@@ -5,24 +5,37 @@ import { FORM_SPEC_ANNOTATIONS } from "./form-spec-schema";
 import {
   deserializeFormSpec,
   formSpecInitialValues,
+  formSpecHasControlForPath,
   normalizeFormSpecValues,
 } from "./form-spec";
 
 test("FormSpec registers only its presentation annotations with JSON Schema validators", () => {
   expect(FORM_SPEC_ANNOTATIONS).toEqual([
-    "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
+    "assignmentSubjectKinds", "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
     "hidden", "layout", "omittable", "presenceRequired", "defaultValue", "options", "relation",
   ]);
 });
 
 describe("deserializeFormSpec", () => {
-  test("custom scalar-list widgets receive the declared item relation", () => {
+  test("only rendered controls claim nested issue paths while atomic widgets retain child messages", () => {
+    const fields = deserializeFormSpec({ type: "object", properties: {
+      visible: { type: "string" }, hidden: { type: "string", hidden: true },
+      details: { type: "object", properties: { title: { type: "string" } } },
+      rows: { type: "array", widget: "list", items: { type: "object", properties: { title: { type: "string" } } } },
+      raw: { type: "object", widget: "json" },
+    } }, defaultWidgets);
+    for (const path of ["visible", "details.title", "rows.0.title", "raw.anything"])
+      expect(formSpecHasControlForPath(fields, path), path).toBe(true);
+    for (const path of ["hidden", "unknown", "details.unknown", "rows.0.unknown"])
+      expect(formSpecHasControlForPath(fields, path), path).toBe(false);
+  });
+
+  test("custom subject arrays carry typed widget options without becoming composite fields", () => {
     const fields = deserializeFormSpec({ properties: { recipients: {
-      type: "array", widget: "recipients", items: { type: "string", relation: { resource: "contacts.Person" } },
+      type: "array", widget: "recipients", assignmentSubjectKinds: ["user"], items: { type: "string" },
     } } }, { ...defaultWidgets, recipients: defaultWidgets.text! });
-    expect(fields[0]).toMatchObject({ widget: "recipients", itemTemplate: {
-      relation: { resource: "contacts.Person" },
-    } });
+    expect(fields[0]).toMatchObject({ widget: "recipients", assignmentSubjectKinds: ["user"] });
+    expect(fields[0]?.itemTemplate).toBeUndefined();
   });
 
   test("projects declared objects through nested fields while keeping explicit JSON opaque", () => {

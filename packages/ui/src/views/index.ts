@@ -87,6 +87,7 @@ export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
   formSpecInitialValues,
+  formSpecHasControlForPath,
   normalizeFormSpecValues,
   resolveSchemaReference,
   useFormSpecFields,
@@ -107,11 +108,10 @@ export {
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
-export { useWatch, type ResolverResult } from "react-hook-form";
+export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   useActionForm,
-  useActionFormValues,
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
@@ -119,7 +119,6 @@ export { ActionFormProvider } from "./form/ActionFormProvider";
 export {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
-  wireFormSubmitResult,
   invalidFormSubmit,
   formSubmitError,
   savedFormSubmitResult,

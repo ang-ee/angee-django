@@ -123,8 +123,6 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("DescriptorFieldList", "@angee/ui", "src/views/form/DescriptorFieldList.tsx"),
   frameworkCriticalExport("ActionFormProvider", "@angee/ui", "src/views/form/ActionFormProvider.tsx"),
   frameworkCriticalExport("applyFormErrors", "@angee/ui", "src/views/form/validation-errors.ts"),
-  frameworkCriticalExport("wireFormSubmitResult", "@angee/ui", "src/views/form/validation-errors.ts"),
-  frameworkCriticalExport("useActionFormValues", "@angee/ui", "src/views/form/use-action-form.ts"),
   frameworkCriticalExport("jsonSchemaActionArgs", "@angee/ui", "src/views/form/json-schema.ts"),
   frameworkCriticalExport("parseFormSpec", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("isCompositeFieldDescriptor", "@angee/ui", "src/views/form/form-view-model.ts"),

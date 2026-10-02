@@ -1,11 +1,11 @@
 import * as v from "valibot";
 import {
-  JsonValueSchema, keyedCollectionFromRecord, keyedCollectionToRecord,
+  JsonValueSchema, formSpecHasControlForPath, keyedCollectionFromRecord, keyedCollectionToRecord,
   type JsonValue, type KeyedCollection, type GraphEditorLayout, type FormSubmitResult, type ValidationErrors,
+  type FormSpecFieldDescriptor,
 } from "@angee/ui";
 
-// This is the authoring projection, not a second definition validator. Unknown
-// declaration fields survive every edit; Definition remains the schema owner.
+// Unknown declarations survive edits; Definition owns document and binding validation.
 const NodeProjection = v.looseObject({
   step: v.string(), label: v.optional(v.string(), ""),
   config: v.optional(v.record(v.string(), v.unknown()), {}),
@@ -14,7 +14,7 @@ const NodeProjection = v.looseObject({
 const DocumentProjection = v.looseObject({ nodes: v.record(v.string(), NodeProjection) });
 const LayoutProjection = v.record(v.string(), v.tuple([v.number(), v.number()]));
 export const OutcomesProjection = v.record(v.string(), v.string());
-export const DiagnosticsProjection = v.array(v.object({
+const DiagnosticsProjection = v.array(v.object({
   node: v.nullable(v.string()), path: v.array(v.union([v.string(), v.number()])), code: v.string(), message: v.string(),
 }));
 export type StudioNode = v.InferOutput<typeof NodeProjection>;
@@ -23,8 +23,10 @@ export type StudioValues = {
   layout: GraphEditorLayout;
   document: Record<string, unknown>;
 };
+export type StudioIssues = { nodes: Record<string, Record<string, readonly string[]>>; formErrors: readonly string[] };
+export const EMPTY_ISSUES: StudioIssues = { nodes: {}, formErrors: [] };
 
-/** Convert persisted references and layout keys to stable client identities. */
+/** Loaded authored keys also serve as the session's initial client identities. */
 export function studioValues(draft: unknown, layout: unknown): StudioValues {
   const { nodes, ...document } = v.parse(DocumentProjection, v.parse(JsonValueSchema, draft));
   return { entries: keyedCollectionFromRecord(nodes), document,
@@ -32,64 +34,62 @@ export function studioValues(draft: unknown, layout: unknown): StudioValues {
       .map(([id, [x, y]]) => [id, { x, y }])) };
 }
 
-/** Translate only binding references, including nested map body references. */
-function referenceKey(value: string, keys: ReadonlyMap<string, string>): string {
-  const [id, ...suffix] = value.split(".");
-  return [keys.get(id!) ?? id, ...suffix].join(".");
-}
-function bindingReferences(value: unknown, keys: ReadonlyMap<string, string>): unknown {
-  if (Array.isArray(value)) return value.map((item) => bindingReferences(item, keys));
-  if (value && typeof value === "object" && Object.hasOwn(value, "value")) return value;
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([name, item]) => [
-    name, name === "from" && typeof item === "string" ? referenceKey(item, keys) : bindingReferences(item, keys),
-  ]));
-  return value;
-}
-
-function bodyReferences(value: unknown, keys: ReadonlyMap<string, string>): unknown {
-  const body = v.parse(v.looseObject({ input: v.optional(v.unknown()) }), value);
-  return { ...body, ...(body.input === undefined ? {} : { input: bindingReferences(body.input, keys) }) };
-}
-
+/** Send client-addressed declarations unchanged; Definition performs every re-key. */
 export function studioSnapshot(values: StudioValues): FormSubmitResult<{
   draft: JsonValue; layout: Record<string, readonly [number, number]>;
-  clientIdByKey: ReadonlyMap<string, string>;
+  nodeKeys: Record<string, string>; clientIdByKey: ReadonlyMap<string, string>;
 }> {
   const snapshot = keyedCollectionToRecord(values.entries);
-  if (snapshot.status !== "ok") return { ...snapshot, issues: studioErrors(snapshot.issues, values.entries, new Map()) };
-  const { keyByClientId, clientIdByKey } = snapshot.data;
-  const nodes = Object.fromEntries(values.entries.map((entry) => [entry.key, {
-    ...entry.value,
-    ...(entry.value.input === undefined ? {} : { input: bindingReferences(entry.value.input, keyByClientId) }),
-    ...(entry.value.body === undefined ? {} : { body: bodyReferences(entry.value.body, keyByClientId) }),
-    next: Object.fromEntries(Object.entries(entry.value.next).map(([port, targets]) => [port,
-      (typeof targets === "string" ? [targets] : targets).map((id) => keyByClientId.get(id) ?? id),
-    ])),
-  }]));
+  if (snapshot.status !== "ok") return snapshot;
   return { status: "ok", data: {
-    draft: v.parse(JsonValueSchema, { ...values.document, results: bindingReferences(values.document.results ?? [], keyByClientId), nodes }),
-    layout: Object.fromEntries(values.entries.flatMap(({ clientId, key }) => {
-      const point = values.layout[clientId];
-      return point ? [[key, [point.x, point.y] as const]] : [];
-    })), clientIdByKey,
+    draft: v.parse(JsonValueSchema, { ...values.document, nodes: Object.fromEntries(values.entries.map((entry) => [entry.clientId, entry.value])) }),
+    layout: Object.fromEntries(Object.entries(values.layout).map(([id, point]) => [id, [point.x, point.y] as const])),
+    nodeKeys: Object.fromEntries(snapshot.data.keyByClientId), clientIdByKey: snapshot.data.clientIdByKey,
   } };
 }
 
-/** Bind submit-time keys back to the current array, even after a rename or reorder. */
-export function studioErrors(
-  issues: ValidationErrors, entries: readonly KeyedCollection<StudioNode>[number][], ids: ReadonlyMap<string, string>,
-): ValidationErrors {
-  const fields: Record<string, readonly string[]> = {};
+/** Capture server paths against the submission's keys, independently of array order. */
+export function captureStudioIssues(issues: ValidationErrors, ids: ReadonlyMap<string, string>): StudioIssues {
+  const nodes: StudioIssues["nodes"] = {};
   const formErrors = [...issues.formErrors];
   for (const [path, messages] of Object.entries(issues.fieldErrors)) {
-    const parts = path.split(".");
-    const clientId = parts[0] === "nodes" ? ids.get(parts[1]!) : path;
-    const index = entries.findIndex((entry) => entry.clientId === clientId);
-    if (index < 0) { formErrors.push(...messages); continue; }
-    const suffix = parts[0] !== "nodes" || parts[2] === "[key]" ? "key"
-      : parts.length > 2 ? `value.${parts.slice(2).join(".")}` : "key";
-    const field = `entries.${index}.${suffix}`;
-    fields[field] = [...(fields[field] ?? []), ...messages];
+    const key = path.startsWith("nodes.")
+      ? [...ids.keys()].sort((a, b) => b.length - a.length).find((key) => path === `nodes.${key}` || path.startsWith(`nodes.${key}.`))
+      : path;
+    const id = key === undefined ? undefined : ids.get(key);
+    if (id === undefined) { formErrors.push(...messages); continue; }
+    const suffix = key !== undefined && path.startsWith(`nodes.${key}.`) ? path.slice(`nodes.${key}.`.length) : "[key]";
+    const fields = nodes[id] ??= {};
+    fields[suffix] = [...(fields[suffix] ?? []), ...messages];
   }
-  return { fieldErrors: fields, formErrors };
+  return { nodes, formErrors };
+}
+
+/** Re-project stable issues to today's form paths; unrendered declarations stay visible. */
+export function projectStudioIssues(issues: StudioIssues, entries: StudioValues["entries"], configFields: ReadonlyMap<string, readonly FormSpecFieldDescriptor[]>): ValidationErrors {
+  const fieldErrors: ValidationErrors["fieldErrors"] = {};
+  const formErrors = [...issues.formErrors];
+  for (const [id, fields] of Object.entries(issues.nodes)) {
+    const index = entries.findIndex((entry) => entry.clientId === id);
+    const entry = entries[index];
+    if (!entry) continue;
+    for (const [path, messages] of Object.entries(fields)) {
+      const suffix = path === "[key]" ? "key" : `value.${path}`;
+      if (path === "[key]" || path === "label" || path === "config"
+          || (path.startsWith("config.") && formSpecHasControlForPath(configFields.get(entry.value.step) ?? [], path.slice("config.".length)))) {
+        fieldErrors[`entries.${index}.${suffix}`] = messages;
+      } else formErrors.push(...messages.map((message) => `${entry.key}: ${message}`));
+    }
+  }
+  return { fieldErrors, formErrors };
+}
+
+export function diagnosticErrors(diagnostics: unknown): ValidationErrors {
+  const fieldErrors: Record<string, string[]> = {};
+  const formErrors: string[] = [];
+  for (const issue of v.parse(DiagnosticsProjection, diagnostics)) {
+    if (issue.path.length) (fieldErrors[issue.path.join(".")] ??= []).push(issue.message);
+    else formErrors.push(issue.message);
+  }
+  return { fieldErrors, formErrors };
 }

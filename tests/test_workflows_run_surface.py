@@ -28,15 +28,25 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
     admin, _sent = execution
     starter, outsider = (create_user(name) for name in ("publication-starter", "publication-outsider"))
     workflow = load_workflow(
-        document("entry"), key="visible-publication", name="Visible publication",
-        subject_model="knowledge.vault", actor=admin,
+        document("entry"),
+        key="visible-publication",
+        name="Visible publication",
+        subject_model="knowledge.vault",
+        actor=admin,
     )
     original = workflow.published
     saved = Workflow.objects.save_draft(
-        workflow, draft=document("entry", "finish"), expected_revision=workflow.draft_revision, actor=admin,
+        workflow,
+        draft=document("entry", "finish"),
+        expected_revision=workflow.draft_revision,
+        actor=admin,
     )
-    assert saved.status == "saved"
-    current = Workflow.objects.publish(workflow, actor=admin).version
+    assert saved.revision > 0
+    current = Workflow.objects.publish(
+        workflow,
+        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        actor=admin,
+    ).version
     hidden = load_workflow(document("entry"), key="hidden-publication", actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", starter)
     query = """query($id: String!, $key: String!, $model: String!) {
@@ -52,11 +62,16 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
     }"""
     variables = {"id": workflow.sqid, "key": workflow.key, "model": "knowledge.vault"}
     visible = result_data(execute_schema(schema, query, variables, user=starter))
-    assert visible["workflow"] == [{
-        "id": workflow.sqid, "key": workflow.key, "name": workflow.name, "description": "",
-        "subject_model": "knowledge.Vault",
-        "published": {"id": current.sqid, "number": 2, "created_at": current.created_at.isoformat()},
-    }]
+    assert visible["workflow"] == [
+        {
+            "id": workflow.sqid,
+            "key": workflow.key,
+            "name": workflow.name,
+            "description": "",
+            "subject_model": "knowledge.Vault",
+            "published": {"id": current.sqid, "number": 2, "created_at": current.created_at.isoformat()},
+        }
+    ]
     assert visible["workflow_by_pk"] == {"id": workflow.sqid, "published": {"id": current.sqid, "number": 2}}
     assert visible["workflow_aggregate"] == {"aggregate": {"count": 1}}
     assert visible["workflowversion_aggregate"] == {"aggregate": {"count": 2}}
@@ -69,14 +84,23 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
     author_view = result_data(execute_schema(schema, query, variables, user=admin))
     assert all(row["published_by"] == {"id": admin.sqid} for row in author_view["workflowversion"])
     assert result_data(execute_schema(schema, query, variables, user=outsider)) == {
-        "workflow": [], "workflow_by_pk": None, "workflow_aggregate": {"aggregate": {"count": 0}},
-        "workflowversion": [], "workflowversion_aggregate": {"aggregate": {"count": 0}},
+        "workflow": [],
+        "workflow_by_pk": None,
+        "workflow_aggregate": {"aggregate": {"count": 0}},
+        "workflowversion": [],
+        "workflowversion_aggregate": {"aggregate": {"count": 0}},
     }
-    assert result_data(execute_schema(schema, query, {**variables, "id": hidden.sqid}, user=starter))[
-        "workflow_by_pk"
-    ] is None
-    assert "draft" not in schema._schema.get_type("WorkflowType").fields
-    assert "layout" not in schema._schema.get_type("WorkflowType").fields
+    assert (
+        result_data(execute_schema(schema, query, {**variables, "id": hidden.sqid}, user=starter))["workflow_by_pk"]
+        is None
+    )
+    draft_read = execute_schema(
+        schema,
+        "query($id: String!) { workflow_by_pk(id: $id) { draft layout draft_revision } }",
+        {"id": workflow.sqid},
+        user=starter,
+    )
+    assert result_data(draft_read)["workflow_by_pk"] == {"draft": None, "layout": None, "draft_revision": None}
     resources = {item.model_label: item for item in schema.angee_resources}
     assert {"key", "subject_model"} <= resources["workflows.Workflow"].query.fields.keys()
     assert resources["workflows.WorkflowVersion"].query.fields["workflow"].filter is not None

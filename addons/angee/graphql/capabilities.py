@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from enum import Enum
 from functools import cache, partial
 from types import GenericAlias
@@ -113,23 +113,3 @@ def permissions_field(names: Iterable[str]) -> Any:
 
     resolve.__annotations__["return"] = GenericAlias(list, (enum,))
     return strawberry_django.field(resolver=resolve, extensions=[_PermissionsExtension(names)])
-
-
-class _ReadPermissionExtension(_PermissionsExtension):
-    """Redact a nullable model field through the same permission projection."""
-
-    def resolve(
-        self, next_: Callable[..., Any], source: models.Model, info: strawberry.Info, **kwargs: Any,
-    ) -> Any:
-        if self.names[0] not in held_permissions(source, self.names):
-            return None
-        return next_(source, info, **kwargs)
-
-
-def read_permission_field(permission: str, **kwargs: Any) -> Any:
-    """Declare a nullable Strawberry-Django field readable under one Zed permission.
-
-    Reuses permission validation and SQL batching from ``permissions_field``.
-    The field's native resolver and optimizer hints remain its own declarations.
-    """
-    return strawberry_django.field(extensions=[_ReadPermissionExtension((permission,))], **kwargs)

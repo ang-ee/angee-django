@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useForm, useWatch, type UseFormReturn, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
+import { useForm, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
 
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -87,11 +87,4 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
     clearFieldError,
     resetErrors: clearErrors,
   };
-}
-/** Subscribe an authored surface to a computed projection of its native form values. */
-export function useActionFormValues<TValues extends FieldValues, TOutput>(
-  form: Pick<UseFormReturn<TValues>, "control">,
-  compute: (values: TValues) => TOutput,
-): TOutput {
-  return useWatch({ control: form.control, compute });
 }

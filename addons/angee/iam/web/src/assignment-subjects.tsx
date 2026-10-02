@@ -1,5 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
-import type { SelectChoice } from "@angee/ui";
+import type { SelectChoice, WidgetField } from "@angee/ui";
 import { useMemo } from "react";
 
 import {
@@ -21,8 +21,8 @@ export interface AssignmentSubjectOption extends SelectChoice {
 
 export interface UseAssignmentSubjectsOptions {
   limit?: number;
-  /** A FormSpec item relation narrows the offered subjects to its resource. */
-  resource?: string;
+  /** Native subjects offered by the IAM widget; omitted offers both kinds. */
+  kinds?: WidgetField["assignmentSubjectKinds"];
 }
 
 export interface AssignmentSubjectsResult {
@@ -36,7 +36,7 @@ export interface AssignmentSubjectsResult {
 export function assignmentSubjectOptions(
   data: IAMAssignmentSubjectsData | undefined,
   labels: { users: string; groups: string },
-  resource?: string,
+  kinds?: WidgetField["assignmentSubjectKinds"],
 ): readonly AssignmentSubjectOption[] {
   const users = (data?.users ?? [])
     .filter((user) => user.is_active)
@@ -54,13 +54,11 @@ export function assignmentSubjectOptions(
     kind: "group" as const,
     id: group.id,
   }));
-  if (resource === "iam.User") return users;
-  if (resource === "iam.Group") return groups;
-  return resource ? [] : [...users, ...groups];
+  return [...users, ...groups].filter((option) => kinds === undefined || kinds.includes(option.kind));
 }
 
 export function useAssignmentSubjects(
-  { limit = IAM_LIST_LIMIT, resource }: UseAssignmentSubjectsOptions = {},
+  { limit = IAM_LIST_LIMIT, kinds }: UseAssignmentSubjectsOptions = {},
 ): AssignmentSubjectsResult {
   const t = useIamT();
   const variables = useMemo<IAMAssignmentSubjectsVariables>(() => ({ limit }), [limit]);
@@ -69,8 +67,8 @@ export function useAssignmentSubjects(
     () => assignmentSubjectOptions(query.data, {
       users: t("assignmentSubjects.users"),
       groups: t("assignmentSubjects.groups"),
-    }, resource),
-    [query.data, resource, t],
+    }, kinds),
+    [query.data, kinds, t],
   );
   const userCount = query.data?.users_aggregate.aggregate?.count ?? 0;
   const groupCount = query.data?.groups_aggregate.aggregate?.count ?? 0;

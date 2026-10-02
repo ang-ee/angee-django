@@ -56,6 +56,8 @@ export interface AuthoredOperationOptions {
 
 export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   enabled?: boolean;
+  /** Retain the last result while a new variable set loads, using native Query placeholders. */
+  keepPreviousData?: boolean;
   /** Exact rows whose live changes invalidate this read; omitted keeps model-wide semantics. */
   records?: readonly { model: string; id: string }[];
   /** Models whose changes match only through their event's related records. */
@@ -94,7 +96,7 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   const records = useStableValue(options.records, []);
   const relatedModels = useStableArray(options.relatedModels ?? []);
   const configured = authoredQueryOptions(
-    client, dataProvider, provider, document, variables, models, records, relatedModels,
+    client, dataProvider, provider, document, variables, models, records, relatedModels, options.keepPreviousData,
   );
   const result = useQuery({
     ...configured,

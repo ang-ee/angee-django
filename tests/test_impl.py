@@ -1184,3 +1184,24 @@ def test_form_spec_json_fields_preserve_structured_siblings_and_typed_validation
     with pytest.raises(ValidationError) as refused:
         Configured.parse_config({"payload": {"value": "wrong"}, "timeout": 0})
     assert {"config.payload.value", "config.timeout"} <= set(refused.value.message_dict)
+
+
+def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_shape():
+    """New unsupported constraints inherit JSON fallback without a second allow-list."""
+
+    class Config(BaseModel):
+        regular: str = "Editable"
+        patterned: str = Field(default="abc", pattern="^[a-z]+$")
+        unique: set[int] = Field(default_factory=set)
+
+    class JsonImpl(ImplBase):
+        config_model = Config
+        config_form_spec_json_fields = True
+
+    fields = JsonImpl.config_form_spec()["properties"]
+    assert fields["regular"]["type"] == "string"
+    assert fields["patterned"]["widget"] == fields["unique"]["widget"] == "json"
+    with pytest.raises(ValidationError):
+        JsonImpl.parse_config({"patterned": "INVALID"})
+    with pytest.raises(ImproperlyConfigured, match="pattern"):
+        model_config_form_spec(Config, owner="Config")

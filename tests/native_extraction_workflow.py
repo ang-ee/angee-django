@@ -111,15 +111,20 @@ class ExtractionWorkflowTests(TransactionTestCase):
         self.fail_page = fail_page
         draft = deepcopy(self.workflow.draft)
         draft["nodes"]["process_evidence"]["config"]["schema"] = {
-            "$id": "urn:test:composed-extraction", "type": "object",
-            "properties": {"text": {"type": "string"}}, "required": ["text"],
+            "$id": "urn:test:composed-extraction",
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
         }
         saved = type(self.workflow).objects.save_draft(
-            self.workflow, draft=draft, expected_revision=self.workflow.draft_revision, actor=self.actor,
+            self.workflow,
+            draft=draft,
+            expected_revision=self.workflow.draft_revision,
+            actor=self.actor,
         )
-        self.assertEqual(saved.status, "saved")
+        self.assertGreater(saved.revision, 0)
         self.assertEqual(saved.issues, [])
-        type(self.workflow).objects.publish(self.workflow, actor=self.actor)
+        type(self.workflow).objects.publish(self.workflow, expected_revision=saved.revision, actor=self.actor)
         content = io.BytesIO()
         if pages:
             with pdfium.PdfDocument.new() as document:
@@ -130,13 +135,22 @@ class ExtractionWorkflowTests(TransactionTestCase):
             content.write(b"\xef\xbb\xbf")  # An empty UTF-8 document with a recognizable encoding.
         with actor_context(self.actor):
             source = apps.get_model("storage.File").objects.ingest_bytes(
-                content.getvalue(), filename="document.pdf" if pages else "empty.txt", drive_id=str(self.drive.sqid),
+                content.getvalue(),
+                filename="document.pdf" if pages else "empty.txt",
+                drive_id=str(self.drive.sqid),
             )
-        run = start_run(self.workflow, actor=self.actor, input={
-            "files": [str(source.sqid)], "message_parts": [],
-            "target_model": "storage.File", "target_id": str(source.sqid),
-            "model": None, "recognition_model": str(self.model.sqid),
-        })
+        run = start_run(
+            self.workflow,
+            actor=self.actor,
+            input={
+                "files": [str(source.sqid)],
+                "message_parts": [],
+                "target_model": "storage.File",
+                "target_id": str(source.sqid),
+                "model": None,
+                "recognition_model": str(self.model.sqid),
+            },
+        )
         run_until(run)
         with system_context(reason="composed extraction execution assertions"):
             attempts = apps.get_model("workflows.StepAttempt").objects.filter(step_run__run=run)
@@ -170,9 +184,10 @@ class ExtractionWorkflowTests(TransactionTestCase):
             self.assertEqual(evidence.pages.count(), pages or 1)
             self.assertEqual(evidence.parts.count(), len(successful) if pages else 1)
             self.assertEqual(evidence.outcome.get("code"), "source_hold" if fail_page is not None else None)
-            self.assertEqual(evidence.unresolved_reasons, (
-                (f"recognition_unavailable:0:{fail_page}",) if fail_page is not None else ()
-            ))
+            self.assertEqual(
+                evidence.unresolved_reasons,
+                ((f"recognition_unavailable:0:{fail_page}",) if fail_page is not None else ()),
+            )
             self.assertEqual(run.outcome, "source_hold" if fail_page is not None else "processed")
             self.assertEqual(process.artifacts.count(), 1)
 

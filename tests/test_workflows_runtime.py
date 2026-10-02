@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
@@ -292,18 +293,29 @@ def test_draft_compare_and_swap_and_publish_hash(execution):
     revision = workflow.draft_revision
     incomplete = {"nodes": {"first": {"step": "echo"}, "second": {"step": "echo"}}}
     saved = Workflow.objects.save_draft(workflow, draft=incomplete, expected_revision=revision, actor=actor)
-    assert saved.status == "saved" and saved.issues
-    conflict = Workflow.objects.save_draft(workflow, draft=document("entry"), expected_revision=revision, actor=actor)
-    assert conflict.status == "conflict"
+    assert saved.issues
+    with pytest.raises(StaleRevisionError):
+        Workflow.objects.save_draft(workflow, draft=document("entry"), expected_revision=revision, actor=actor)
     with pytest.raises(DefinitionInvalid):
-        Workflow.objects.publish(workflow, actor=actor)
-    unknown = Workflow.objects.save_draft(
-        workflow, draft=document("entry", step="missing"), expected_revision=saved.revision, actor=actor
-    )
-    assert unknown.status == "invalid"
+        Workflow.objects.publish(
+            workflow,
+            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+            actor=actor,
+        )
+    with pytest.raises(DefinitionInvalid):
+        Workflow.objects.save_draft(
+            workflow, draft=document("entry", step="missing"), expected_revision=saved.revision, actor=actor
+        )
     Workflow.objects.save_draft(workflow, draft=document("entry"), expected_revision=saved.revision, actor=actor)
     original = workflow.published_id
-    assert Workflow.objects.publish(workflow, actor=actor).version.pk == original
+    assert (
+        Workflow.objects.publish(
+            workflow,
+            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+            actor=actor,
+        ).version.pk
+        == original
+    )
     assert system_queryset(WorkflowVersion).filter(workflow=workflow).count() == 1
 
 
@@ -463,7 +475,11 @@ def test_publication_and_start_keep_requesting_actor_attribution(execution, expl
 
     with actor_context(operator):
         actor = operator if explicit_actor else None
-        version = Workflow.objects.publish(workflow, actor=actor).version
+        version = Workflow.objects.publish(
+            workflow,
+            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+            actor=actor,
+        ).version
         run = WorkflowRun.objects.start(workflow, actor=actor)
 
     requester = operator if explicit_actor else admin
@@ -492,18 +508,24 @@ def test_workflow_verbs_deny_an_explicit_outsider_and_preserve_the_pinned_actor(
     with actor_context(outsider):
         with pytest.raises(PermissionDenied, match="'write'"):
             Workflow.objects.save_draft(
-                workflow.with_actor(admin), draft=document("entry"), expected_revision=workflow.draft_revision,
+                workflow.with_actor(admin),
+                draft=document("entry"),
+                expected_revision=workflow.draft_revision,
                 actor=outsider,
             )
         with pytest.raises(PermissionDenied, match="'write'"):
-            Workflow.objects.publish(workflow.with_actor(admin), actor=outsider)
+            Workflow.objects.publish(
+                workflow.with_actor(admin), expected_revision=workflow.draft_revision, actor=outsider
+            )
         with pytest.raises(PermissionDenied, match="'start'"):
             WorkflowRun.objects.start(workflow.with_actor(admin), actor=outsider)
         with pytest.raises(PermissionDenied, match="'write'"):
             WorkflowRun.objects.reprocess(run.with_actor(admin), actor=outsider)
         with pytest.raises(PermissionDenied, match="'write'"):
             WorkflowRun.objects.cancel(run.with_actor(admin), actor=outsider)
-        published = Workflow.objects.publish(workflow.with_actor(admin)).version
+        published = Workflow.objects.publish(
+            workflow.with_actor(admin), expected_revision=workflow.draft_revision
+        ).version
         started = WorkflowRun.objects.start(workflow.with_actor(admin), actor=None)
         replay = WorkflowRun.objects.reprocess(run.with_actor(admin))
         assert published.published_by_id == started.run_as_id == replay.run_as_id == admin.pk
@@ -521,7 +543,10 @@ def test_workflow_verbs_deny_missing_requesters_in_every_strict_mode(execution, 
     settings.REBAC_STRICT_MODE = strict_mode
     operations = (
         lambda: Workflow.objects.save_draft(workflow, draft=document("entry"), expected_revision=0),
-        lambda: Workflow.objects.publish(workflow),
+        lambda: Workflow.objects.publish(
+            workflow,
+            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        ),
         lambda: WorkflowRun.objects.start(workflow, actor=None),
         lambda: WorkflowRun.objects.cancel(run),
         lambda: WorkflowRun.objects.reprocess(run),
@@ -664,9 +689,16 @@ def test_reprocess_uses_current_publication_and_ambient_actor(execution):
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 8}, request_key="test:reprocess")
     run_until(system_queryset(WorkflowRun).get(pk=run.pk))
     Workflow.objects.save_draft(
-        workflow, draft=document("entry", "last"), expected_revision=workflow.draft_revision, actor=actor,
+        workflow,
+        draft=document("entry", "last"),
+        expected_revision=workflow.draft_revision,
+        actor=actor,
     )
-    current = Workflow.objects.publish(workflow, actor=actor).version
+    current = Workflow.objects.publish(
+        workflow,
+        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        actor=actor,
+    ).version
     with actor_context(actor):
         replay = WorkflowRun.objects.reprocess(run)
     assert replay.pk != run.pk and replay.version_id == current.pk != run.version_id
@@ -682,13 +714,26 @@ def test_run_version_remains_pinned_across_republish(execution):
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 8}, request_key="test:version_pin")
     pinned = run.version_id
     Workflow.objects.save_draft(
-        workflow, draft=document("entry", "last"), expected_revision=workflow.draft_revision, actor=actor,
+        workflow,
+        draft=document("entry", "last"),
+        expected_revision=workflow.draft_revision,
+        actor=actor,
     )
-    current = Workflow.objects.publish(workflow, actor=actor).version
+    current = Workflow.objects.publish(
+        workflow,
+        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        actor=actor,
+    ).version
     assert current.pk != pinned
-    assert WorkflowRun.objects.start(
-        workflow, actor=actor, input={"value": 8}, request_key="test:version_pin",
-    ).pk == run.pk
+    assert (
+        WorkflowRun.objects.start(
+            workflow,
+            actor=actor,
+            input={"value": 8},
+            request_key="test:version_pin",
+        ).pk
+        == run.pk
+    )
     run_until(run)
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.version_id == pinned and retained.status == RunStatus.SUCCEEDED
@@ -827,10 +872,17 @@ def test_start_permission_does_not_grant_workflow_editing(execution):
     assert run.run_as_id == actor.pk
     with pytest.raises(PermissionDenied):
         Workflow.objects.save_draft(
-            workflow, actor=actor, draft=document("entry"), expected_revision=workflow.draft_revision,
+            workflow,
+            actor=actor,
+            draft=document("entry"),
+            expected_revision=workflow.draft_revision,
         )
     with pytest.raises(PermissionDenied):
-        Workflow.objects.publish(workflow, actor=actor)
+        Workflow.objects.publish(
+            workflow,
+            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+            actor=actor,
+        )
     with pytest.raises(PermissionDenied):
         Workflow.objects.install_definition(key=workflow.key, name=workflow.name, draft=document("entry"), actor=actor)
     WorkflowRun.objects.cancel(run, actor=actor)
@@ -877,8 +929,8 @@ def test_starter_cannot_read_another_starters_engine_rows(execution, settings, s
             other.require_access("read", first)
     visible = Workflow.objects.with_actor(first).get(pk=workflow.pk)
     assert visible.name == workflow.name
-    assert visible.denied_read_fields() == frozenset({"draft", "layout"})
-    assert visible.draft is None and visible.layout is None
+    assert visible.denied_read_fields() == frozenset({"draft", "layout", "draft_revision"})
+    assert visible.draft is None and visible.layout is None and visible.draft_revision is None
     assert WorkflowVersion.objects.with_actor(first).get(pk=workflow.published_id).document
 
 

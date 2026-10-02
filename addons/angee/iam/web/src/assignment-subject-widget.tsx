@@ -1,4 +1,4 @@
-import { Chip, RemovableChip, Select, textRoleVariants, type FormSpecFieldDescriptor, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
+import { Chip, RemovableChip, Select, textRoleVariants, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import { useAssignmentSubjects } from "./assignment-subjects";
@@ -12,8 +12,7 @@ function AssignmentSubjectsEdit({
   onCommit,
   controlRef,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
-  const item = (field as { itemTemplate?: FormSpecFieldDescriptor } | undefined)?.itemTemplate;
-  const subjects = useAssignmentSubjects({ resource: item?.relation?.resource });
+  const subjects = useAssignmentSubjects({ kinds: field?.assignmentSubjectKinds });
   const t = useIamT();
   const selected = normaliseSubjects(value);
   const labels = new Map(subjects.options.map((option) => [option.value, option.label]));
@@ -25,7 +24,7 @@ function AssignmentSubjectsEdit({
     onCommit?.();
   }
 
-  if (readOnly) return <AssignmentSubjectsRead value={selected} />;
+  if (readOnly) return <AssignmentSubjectsRead value={selected} field={field} />;
 
   return (
     <div className="grid gap-2">
@@ -67,9 +66,9 @@ function AssignmentSubjectsEdit({
 }
 
 function AssignmentSubjectsRead({
-  value,
+  value, field,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
-  const subjects = useAssignmentSubjects();
+  const subjects = useAssignmentSubjects({ kinds: field?.assignmentSubjectKinds });
   const labels = new Map(subjects.options.map((option) => [option.value, option.label]));
   const selected = normaliseSubjects(value);
   if (selected.length === 0) return <span className={textRoleVariants({ role: "meta" })} />;

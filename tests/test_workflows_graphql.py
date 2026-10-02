@@ -523,65 +523,105 @@ def test_step_rows_follow_graph_order_even_when_database_order_differs(schema, c
         assert (data["version"] is None) is (actor == operator)
 
 
-def test_studio_redacts_authoring_from_readers_and_batches_writer_capabilities(schema, callers):
-    """A reader sees workflow identity but neither drafts nor their revision/layout."""
+@pytest.mark.parametrize("relation,visible", [("viewer", True), ("starter", False), ("operator", False)])
+def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
+    schema, callers, monkeypatch, relation, visible
+):
+    """Zed redaction agrees on root, run, version and trigger reads at every list size."""
+    from rebac import actor_context
+
+    from angee.knowledge import schema as knowledge_schema
+    from angee.workflows.testing.drivers import trigger_source
+    from angee.workflows.testing.models import Trigger
+    from tests.conftest import Vault, make_addon
+
     admin, editor, reader = callers
-    workflow = load_workflow(document("entry"), actor=admin)
-    workflow.with_actor(admin).grant_record_access("editor", editor)
-    workflow.with_actor(admin).grant_record_access("viewer", reader)
-    query = "{ workflow { id permissions draft draft_revision layout draft_outcomes } }"
-    hidden = result_data(execute_schema(schema, query, user=reader))["workflow"][0]
-    assert hidden == {"id": workflow.sqid, "permissions": [], "draft": None,
-                      "draft_revision": None, "layout": None, "draft_outcomes": None}
+    monkeypatch.setattr(GraphQLSchemas, "_discovered", GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)]))
+
+    def create(key):
+        workflow = load_workflow(document("entry"), key=key, actor=admin, subject_model="knowledge.vault")
+        workflow.with_actor(admin).grant_record_access(relation, reader)
+        run = start_run(workflow, actor=admin, subject=vault_for(admin, name=key))
+        run.with_actor(admin).grant_record_access("reader", reader)
+        with actor_context(admin), trigger_source(Vault):
+            Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+        return workflow
+
+    workflow = create("studio_one")
+    fields = "id permissions draft draft_revision layout"
+    query = f"""query($id: String!) {{
+      workflow_by_pk(id: $id) {{ {fields} }}
+      workflow {{ {fields} }}
+      workflowrun {{ version {{ workflow {{ {fields} }} }} }}
+      workflowversion {{ workflow {{ {fields} }} }}
+      trigger {{ workflow {{ {fields} }} }}
+    }}"""
     with CaptureQueriesContext(connection) as one:
-        visible = result_data(execute_schema(schema, query, user=editor))["workflow"][0]
-    assert visible["permissions"] == ["write"]
-    assert visible["draft"] == document("entry")
-    assert visible["draft_outcomes"] == {"entry": {"done": "Done", "error": "Error"}}
-    second = load_workflow(document("entry"), key="second_studio", actor=admin)
-    second.with_actor(admin).grant_record_access("editor", editor)
+        data = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
+    rows = [
+        data["workflow_by_pk"],
+        *data["workflow"],
+        *(row["version"]["workflow"] for row in data["workflowrun"]),
+        *(row["workflow"] for row in data["workflowversion"]),
+        *(row["workflow"] for row in data["trigger"]),
+    ]
+    assert len(rows) == 5
+    for row in rows:
+        assert row["permissions"] == (["monitor"] if visible else [])
+        assert row["draft"] == (document("entry") if visible else None)
+        assert row["draft_revision"] == (1 if visible else None)
+        assert row["layout"] == ({} if visible else None)
+    create("studio_two")
     with CaptureQueriesContext(connection) as many:
-        assert len(result_data(execute_schema(schema, query, user=editor))["workflow"]) == 2
+        larger = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
+    assert len(larger["workflow"]) == 2
     assert len(many) == len(one)
 
 
-def test_studio_save_conflict_preserves_draft_and_publish_numbers(schema, callers):
-    """Explicit writes retain draft edits, layout and monotonically numbered versions."""
+def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(schema, callers):
+    """Native errors keep stale writes and stale publications from changing the row."""
     admin, editor, reader = callers
     workflow = load_workflow(document("entry"), actor=admin)
     workflow.with_actor(admin).grant_record_access("editor", editor)
     workflow.with_actor(admin).grant_record_access("viewer", reader)
-    revision = system_queryset(Workflow).get(pk=workflow.pk).draft_revision
+    revision = workflow.draft_revision
     draft = document("renamed")
-    draft["nodes"]["renamed"]["label"] = "Changed entry"
     query = """mutation($id: ID!, $draft: JSON!, $layout: JSON!, $revision: Int!) {
       save_workflow_draft(id: $id, draft: $draft, layout: $layout, expected_revision: $revision) {
-        status issues message data { revision diagnostics }
+        revision diagnostics
       }
     }"""
     variables = {"id": workflow.sqid, "draft": draft, "layout": {"renamed": [120, 80]}, "revision": revision}
-    denied = execute_schema(schema, query, variables, user=reader)
-    assert denied.errors
-    assert system_queryset(Workflow).get(pk=workflow.pk).draft_revision == revision
+    assert execute_schema(schema, query, variables, user=reader).errors
     saved = result_data(execute_schema(schema, query, variables, user=editor))["save_workflow_draft"]
-    assert saved["status"] == "OK"
-    assert saved["data"] == {"revision": revision + 1, "diagnostics": []}
-    variables["draft"] = document("other")
-    conflict = result_data(execute_schema(schema, query, variables, user=editor))["save_workflow_draft"]
-    assert conflict["status"] == "CONFLICT"
-    assert conflict["data"]["revision"] == revision + 1
-    persisted = system_queryset(Workflow).get(pk=workflow.pk)
-    assert persisted.draft == draft
-    assert persisted.layout == {"renamed": [120, 80]}
-    publish = "mutation($id: ID!) { publish_workflow(id: $id) { status issues data { number dependents } } }"
-    published = result_data(execute_schema(schema, publish, {"id": workflow.sqid}, user=editor))["publish_workflow"]
-    assert published == {"status": "OK", "issues": None, "data": {"number": 2, "dependents": []}}
-    unchanged = result_data(execute_schema(schema, publish, {"id": workflow.sqid}, user=editor))
-    assert unchanged["publish_workflow"]["data"]["number"] == 2
+    assert saved == {"revision": revision + 1, "diagnostics": []}
+    variables["draft"] = {"invalid": True}
+    stale = execute_schema(schema, query, variables, user=editor)
+    assert stale.errors[0].extensions == {"code": "STALE_REVISION", "current_revision": revision + 1}
+    assert system_queryset(Workflow).get(pk=workflow.pk).draft == draft
+    publish = """mutation($id: ID!, $revision: Int!) {
+      publish_workflow(id: $id, expected_revision: $revision) { number dependents }
+    }"""
+    stale = execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision}, user=editor)
+    assert stale.errors[0].extensions["code"] == "STALE_REVISION"
+    published = result_data(
+        execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision + 1}, user=editor)
+    )
+    assert published["publish_workflow"] == {"number": 2, "dependents": []}
+    unchanged = result_data(
+        execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision + 1}, user=editor)
+    )
+    assert unchanged == published
+    variables["revision"] = revision + 1
+    invalid = execute_schema(schema, query, variables, user=editor)
+    assert invalid.errors[0].extensions["code"] == "VALIDATION"
+    assert invalid.errors[0].extensions["validationErrors"]
 
 
-def test_studio_projects_registered_schema_and_dynamic_ports_with_located_issues(schema, callers, register_step):
-    """One step declaration owns config fields, configured ports and internal metadata."""
+def test_studio_outcomes_resolve_await_contracts_and_isolate_bad_nodes(schema, callers, register_step):
+    """Monitor readers get real child outcomes and located per-node fallbacks."""
+    from angee.workflows.awaits import AwaitRun
+
     class ChoiceConfig(BaseModel):
         minimum: int = Field(default=1, ge=1)
         outcome: str = "approved"
@@ -595,33 +635,104 @@ def test_studio_projects_registered_schema_and_dynamic_ports_with_located_issues
             return {config.outcome: "Selected outcome"}
 
     register_step(ConfiguredStep)
+    register_step(AwaitRun)
     admin, editor, reader = callers
+    child = load_workflow(
+        {"nodes": {"entry": {"step": "echo"}}, "results": [{"from": "entry", "as": "accepted"}]},
+        key="studio_child",
+        actor=admin,
+    )
     workflow = load_workflow(document("entry"), actor=admin)
-    workflow.with_actor(admin).grant_record_access("editor", editor)
     workflow.with_actor(admin).grant_record_access("viewer", reader)
+    child.with_actor(admin).grant_record_access("viewer", reader)
     query = """query($id: ID!, $configuration: [WorkflowStepConfiguration!]!) {
       workflow_step_choices(id: $id) { key internal config_schema }
-      workflow_step_ports(id: $id, configurations: $configuration) { node outcomes }
+      workflow_step_outcomes(id: $id, configurations: $configuration) { node outcomes issues }
     }"""
-    variables = {"id": workflow.sqid, "configuration": [{"node": "client-entry", "step": ConfiguredStep.key,
-                                                         "config": {"outcome": "accepted"}}]}
-    assert execute_schema(schema, query, variables, user=reader).errors
-    projected = result_data(execute_schema(schema, query, variables, user=editor))
-    choice = next(item for item in projected["workflow_step_choices"] if item["key"] == ConfiguredStep.key)
-    assert choice["internal"] is True
-    assert choice["config_schema"]["properties"]["minimum"]["minimum"] == 1
-    assert projected["workflow_step_ports"] == [{"node": "client-entry", "outcomes": {
-        "accepted": "Selected outcome", "error": "Error",
-    }}]
-    revision = system_queryset(Workflow).get(pk=workflow.pk).draft_revision
-    draft = document("entry", step=ConfiguredStep.key)
+    configurations = [
+        {"node": "await-client", "step": "await_run", "config": {"expects": child.key}},
+        {"node": "configured-client", "step": ConfiguredStep.key, "config": {"outcome": "accepted"}},
+        {"node": "bad-config", "step": ConfiguredStep.key, "config": {"minimum": 0}},
+        {"node": "bad-outcome", "step": ConfiguredStep.key, "config": {"outcome": "INVALID"}},
+        {"node": "retired", "step": "retired", "config": {}},
+        {"node": "hidden-child", "step": "await_run", "config": {"expects": "hidden"}},
+    ]
+    data = result_data(
+        execute_schema(schema, query, {"id": workflow.sqid, "configuration": configurations}, user=reader)
+    )
+    choice = next(item for item in data["workflow_step_choices"] if item["key"] == ConfiguredStep.key)
+    assert choice["internal"] and choice["config_schema"]["properties"]["minimum"]["minimum"] == 1
+    by_id = {item["node"]: item for item in data["workflow_step_outcomes"]}
+    assert "accepted" in by_id["await-client"]["outcomes"]
+    assert by_id["configured-client"]["outcomes"] == {"accepted": "Selected outcome", "error": "Error"}
+    for key in ("bad-config", "bad-outcome", "hidden-child"):
+        assert by_id[key]["outcomes"]["error"] == "Error"
+        assert by_id[key]["issues"] and by_id[key]["issues"][0]["node"] == key
+    assert by_id["retired"]["outcomes"] == {} and by_id["retired"]["issues"][0]["code"] == "unknown_step"
+
+
+def test_studio_success_keeps_nonblocking_config_diagnostics_and_publish_validation(schema, callers, register_step):
+    class Configuration(BaseModel):
+        minimum: int = Field(ge=1)
+
+    class Configured(Step[Value, Value, Configuration]):
+        key = "studio_validation"
+
+    register_step(Configured)
+    admin, editor, reader = callers
+    workflow = load_workflow(document("entry"), actor=admin)
+    draft = document("entry", step=Configured.key)
     draft["nodes"]["entry"]["config"] = {"minimum": 0}
-    saved = Workflow.objects.save_draft(workflow, draft=draft, expected_revision=revision, actor=editor)
-    assert saved.status == "saved"
-    assert any(issue.path == ["nodes", "entry", "config", "minimum"] for issue in saved.issues)
-    published = result_data(execute_schema(schema,
-        "mutation($id: ID!) { publish_workflow(id: $id) { status issues } }",
-        {"id": workflow.sqid}, user=editor,
-    ))["publish_workflow"]
-    assert published["status"] == "INVALID"
-    assert "nodes.entry.config.minimum" in published["issues"]["fieldErrors"]
+    saved = result_data(execute_schema(
+        schema,
+        """mutation($id: ID!, $draft: JSON!, $revision: Int!) {
+          save_workflow_draft(id: $id, draft: $draft, layout: {}, expected_revision: $revision) {
+            revision diagnostics
+          }
+        }""",
+        {"id": workflow.sqid, "draft": draft, "revision": workflow.draft_revision},
+        user=admin,
+    ))["save_workflow_draft"]
+    assert len(saved["diagnostics"]) == 1
+    assert saved["diagnostics"][0]["path"] == ["nodes", "entry", "config", "minimum"]
+    published = execute_schema(
+        schema,
+        "mutation($id: ID!, $revision: Int!) { publish_workflow(id: $id, expected_revision: $revision) { number } }",
+        {"id": workflow.sqid, "revision": saved["revision"]},
+        user=admin,
+    )
+    assert published.errors[0].extensions["code"] == "VALIDATION"
+    assert "nodes.entry.config.minimum" in published.errors[0].extensions["validationErrors"]
+
+
+def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeypatch, register_step):
+    """The rowless projection passes one resolved class to the common choice owner."""
+    from angee.base import impl as impl_owner
+    from angee.graphql.impl import registry_impl_choices
+    from angee.workflows.schema import WorkflowStepChoice
+
+    class Projected(Step[Value, Value, None]):
+        key = "studio_projected"
+
+    register_step(Projected)
+    resolve = impl_owner.resolve_impl_class
+    build = Projected.choice
+    resolved = []
+    built = []
+
+    def resolve_once(base, key):
+        resolved.append(key)
+        return resolve(base, key)
+
+    def build_once(cls):
+        built.append(cls)
+        return build()
+
+    monkeypatch.setattr(impl_owner, "resolve_impl_class", resolve_once)
+    monkeypatch.setattr(Projected, "choice", classmethod(build_once))
+    choices = registry_impl_choices(Step, WorkflowStepChoice.from_step)
+    assert resolved.count(Projected.key) == 1
+    assert built == [Projected]
+    projected = next(choice for choice in choices if choice.key == Projected.key)
+    assert projected.defaults == build().defaults
+    assert projected.outcomes == {"done": "Done", "error": "Error"}
