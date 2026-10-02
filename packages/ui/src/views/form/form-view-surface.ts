@@ -3,6 +3,7 @@ import {
   lineReadSelectionPaths,
   modelFieldForPath,
   refineResourceName,
+  relationRepresentationForPath,
   useModelMetadata,
   useSchemaFieldMetadata,
   type ModelMetadata,
@@ -444,6 +445,15 @@ export function useFormViewSurface({
       const resolved = modelMetadata ? modelFieldForPath(field.name, modelMetadata, schemaMetadata) : null;
       const fieldMetadata = resolved?.field;
       if (modelMetadata && (!fieldMetadata || fieldMetadata.readable === false)) continue;
+      // A to-many relation selects its records' identity and representation,
+      // the same selection a list column of that relation makes.
+      const relationList = modelMetadata && fieldMetadata?.kind === "list"
+        ? relationRepresentationForPath(field.name, modelMetadata, schemaMetadata)
+        : null;
+      if (relationList?.relationList) {
+        for (const path of relationList.selectionPaths) paths.add(path);
+        continue;
+      }
       addFieldSelection(
         paths,
         field,

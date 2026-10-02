@@ -1110,6 +1110,23 @@ describe("FormView", () => {
     expect(screen.queryByRole("textbox", { name: "Version" })).toBeNull();
   });
 
+  test("selects a to-many relation's record identity and representation, not the bare object list", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "run-1", workflows: [{ id: "workflow-1", name: "Daily briefing" }] };
+    const metadata = workflowRelationMetadata();
+    const run = metadata.types.RunType!;
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" fields={[
+      { name: "workflows", hidden: true },
+    ]} />, { types: { ...metadata.types,
+      RunType: { ...run, fields: { ...run.fields,
+        workflows: { name: "workflows", kind: "list", relationModelLabel: "workflows.Workflow" } } },
+    } });
+    await waitFor(() => expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "workflows.id", "workflows.name",
+    ])));
+    expect(sdkMocks.recordSelection).not.toContain("workflows");
+  });
+
   test("falls back from a missing relation label to identity, then Untitled", async () => {
     sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1" } };
     const metadata = workflowRelationMetadata();
