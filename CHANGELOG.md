@@ -11,6 +11,12 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Resource seeds apply transition-owned state only when creating a target;
+  updates and adoption preserve live state. Initial state is excluded from
+  content hashes, so changing it alone does not trigger re-import.
+  Seeds that supplied transition-owned state or lost keys re-import once on the
+  next resource load. That update overwrites operator edits to every other field
+  the seed still names; live transition-owned state is preserved.
 - Workflow IO steps commit claims before their bodies, fence results, reap
   deadlines and retain effect markers. Operator actions recover failed or
   stalled work with explicit duplicate acknowledgement when required. Add
