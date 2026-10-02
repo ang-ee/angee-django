@@ -21,6 +21,7 @@ rows:
     fields:
       round: proposals.mvp_bakeoff
       responder: iam.user_bob
+      state: draft
       cost: "15000.00"
       currency: money.eur
       staffing: Bob
@@ -34,6 +35,7 @@ rows:
     fields:
       round: proposals.mvp_bakeoff
       responder: proposals.user_carla
+      state: draft
       staffing: Carla and an integration specialist
       timeframe_start: 2026-09-28
       timeframe_end: 2026-11-13

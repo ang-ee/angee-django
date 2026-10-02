@@ -20,11 +20,9 @@ from import_export.utils import get_related_model
 
 from angee.base.identity import instances_from_public_ids, public_id_of
 from angee.base.impl import ImplDefaultsMixin
-from angee.base.mixins import update_fields_with_auto_now
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.base.serialization import json_safe
-from angee.base.transitions import StateTransitions
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.mixins import ResourceLoadMixin
@@ -132,39 +130,6 @@ class AngeeResource(resources.ModelResource):
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
 
-    @functools.cached_property
-    def _transition_state_fields(self) -> tuple[fields.Field, ...]:
-        """Project model-owned state names onto native import fields."""
-
-        names = StateTransitions.get_field_names(self._meta.model)
-        return tuple(field for field in self.get_import_fields() if field.attribute in names)
-
-    def init_instance(self, row: Mapping[str, Any] | None = None) -> models.Model:
-        """Supply seeded state during initial model construction."""
-
-        values = {
-            field.attribute: field.clean(row)
-            for field in self._transition_state_fields
-            if row is not None and field.column_name in row and not field.readonly
-        }
-        return self._meta.model(**values)
-
-    def after_init_instance(
-        self, instance: models.Model, new: bool, row: dict[str, Any], **kwargs: Any,
-    ) -> None:
-        """Leave live state intact on existing targets, including adopted rows."""
-
-        if not new:
-            for field in self._transition_state_fields:
-                if field.column_name in row and not field.readonly:
-                    model_field = instance._meta.get_field(field.attribute)
-                    try:
-                        model_field.clean(field.clean(row), instance)
-                    except ValidationError as error:
-                        raise ValidationError({field.attribute: error}) from error
-                row.pop(field.column_name, None)
-        super().after_init_instance(instance, new, row, **kwargs)
-
     def import_instance(self, instance: models.Model, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Keep hash-skipped instances intact, including operator-authored values."""
 
@@ -201,33 +166,17 @@ class AngeeResource(resources.ModelResource):
         row: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        """Select imported columns for saving and mark them before impl defaults."""
+        """Mark model fields supplied by import-export before impl defaults run."""
 
         del kwargs
+        if not isinstance(instance, ImplDefaultsMixin):
+            return
         imported_fields = {
             field.attribute
             for field in self.fields.values()
             if not field.readonly and isinstance(field.attribute, str) and field.column_name in row
         }
-        self._update_fields = {
-            field.name
-            for field in instance._meta.concrete_fields
-            if not field.primary_key and (field.name in imported_fields or field.attname in imported_fields)
-        }
-        if isinstance(instance, RecordRefMixin):
-            reference = instance.record_ref_field()
-            if reference.name in imported_fields:
-                self._update_fields.update((reference.ct_field, reference.fk_field))
-        if isinstance(instance, ImplDefaultsMixin):
-            instance.mark_impl_provided_fields(imported_fields)
-
-    def do_instance_save(self, instance: models.Model, is_create: bool) -> None:
-        """Save updates without writing omitted columns or stale live state."""
-
-        if is_create:
-            super().do_instance_save(instance, is_create)
-        else:
-            instance.save(update_fields=update_fields_with_auto_now(instance, self._update_fields))
+        instance.mark_impl_provided_fields(imported_fields)
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""
@@ -370,10 +319,9 @@ class AngeeResource(resources.ModelResource):
         return value.strip()
 
     def _row_content_hash(self, row: Mapping[str, Any]) -> str:
-        """Hash updateable seed values, excluding identity and initial state."""
+        """Return a deterministic hash for model field values in ``row``."""
 
-        excluded = {"_xref", *(field.column_name for field in self._transition_state_fields)}
-        payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
+        payload = {key: value for key, value in sorted(row.items()) if key != "_xref"}
         body = json.dumps(
             json_safe(payload),
             sort_keys=True,

@@ -1068,14 +1068,6 @@ and current contracts before applying a historical example to a new deployment.
   name; that field also owns the content-type and object-id backing column names.
   Source omission and explicit null must remain
   distinguishable through dataset normalization.
-- **Transition-owned state in a seed is an initial value, applied on create and never on update.**
-  This covers only fields guarded by a
-  [`StateTransitions`](../../angee/base/transitions.py) declaration; the
-  [resource loader](../../addons/angee/resources/loader.py) validates seeded state
-  before discarding it on updates. Companion fields written by transitions
-  (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
-  such as `submitted_at`) remain ordinary seed fields and are not protected.
-  Seeds must omit those fields to preserve their live values.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
