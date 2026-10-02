@@ -139,6 +139,11 @@ class ExtractionManager(EvidenceManager):
                 and system_queryset(target.parts.model).filter(message_id=target.pk, file_id=source.file.pk).exists()
                 or source.message_part is not None and target._meta.label == "messaging.Message"
                 and source.message_part.message_id == target.pk
+                # A file delivered by a message keeps that message's parts as context.
+                or source.message_part is not None and target._meta.label == "storage.File"
+                and system_queryset(source.message_part._meta.model).filter(
+                    message_id=source.message_part.message_id, file_id=target.pk,
+                ).exists()
             ):
                 raise ValidationError("Every source must be the extraction target or belongs to the extraction target.")
         readable_records(tuple(source.evidence_reference for source in sources), (actor,))
