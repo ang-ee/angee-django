@@ -53,6 +53,8 @@ describe("decision stories with native router, queries, and generated mutations"
     expect(screen.getByRole("heading", { name: "Decision" })).toBeTruthy();
     expect(screen.getByText("Kind")).toBeTruthy();
     expect(screen.getByText("Status")).toBeTruthy();
+    // The GraphQL enum member name reads back through its option label.
+    expect(screen.queryByText("PENDING")).toBeNull();
     expect(screen.getByText("Assignees")).toBeTruthy();
   });
 

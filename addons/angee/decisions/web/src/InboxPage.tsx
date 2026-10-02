@@ -4,7 +4,7 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useEffect, useMemo, type ReactElement } from "react";
 import {
   ActionFormDialog, Column, ErrorBanner, Field, Form, Group, LARGE_VIEWPORT_QUERY, LabeledDescriptorField, List, LoadingPanel,
-  RecordReference, ResourceList, actionOutcomeSubmitResult, formSubmitError, useActionOutcomeMutation, useAppRuntime,
+  RecordReference, ResourceList, actionOutcomeSubmitResult, formSubmitError, optionLabel, useActionOutcomeMutation, useAppRuntime,
   useEnumOptions, useMediaQuery, useRecordPeek, useRouteHref, useRuntimeAuth, useUiT,
   type ActionDescriptor, type RecordPanelContext, type ResourceViewFilter, type StringIdRow,
 } from "@angee/ui";
@@ -96,7 +96,7 @@ export function InboxPage(): ReactElement {
             <div className="grid gap-4 sm:grid-cols-2">
               <div><div className="text-xs text-fg-muted">{t("inbox.kind")}</div><div>{String(record?.kind_label ?? "")}</div></div>
               <div><div className="text-xs text-fg-muted">{t("decision.status")}</div>
-                <div>{statusOptions.find((option) => option.value === statusValue)?.label ?? String(statusValue ?? "")}</div></div>
+                <div>{optionLabel(statusOptions, typeof statusValue === "string" ? statusValue : null)}</div></div>
               {assignees.length > 0 ? <div><div className="text-xs text-fg-muted">{t("decision.assignees")}</div>
                 <div>{assignees.join(", ")}</div></div> : null}
             </div>
