@@ -7,12 +7,23 @@ from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.backends import reset_backend
 from rebac.errors import PermissionDenied
-from rebac.models import active_relationship_model
+from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, ownership_tables  # noqa: F401
 from tests.core_seam_models import SubjectGuardedRow, subject_tables  # noqa: F401
+
+
+def _non_audit_writes(queries):
+    """Permission bypass receipts are allowed; record, history and grant writes are not."""
+
+    audit_insert = f"INSERT INTO {connection.ops.quote_name(PermissionAuditEvent._meta.db_table)} "
+    return [
+        query["sql"] for query in queries
+        if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+        and not query["sql"].lstrip().startswith(audit_insert)
+    ]
 
 
 @pytest.fixture(params=["denormalized", "registry"])
@@ -71,7 +82,7 @@ def test_refused_grant_writes_no_relationship_or_row(grant_case, relation, entry
             row.grant_record_access(relation, subject)
         else:
             row._grant_declared_record_access(SubjectGuardedRow, relation, subject)
-    assert not any(query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for query in queries)
+    assert not _non_audit_writes(queries)
     assert not active_relationship_model().objects.exists()
     assert list(OwnedRow.history.filter(id=row.id).values()) == history_before
     assert row.with_actor(owner).direct_record_access() == ()
@@ -172,7 +183,7 @@ def test_transfer_validates_the_locked_actor_bound_child_before_any_write(recipi
     [(locked, actor, relation, subject)] = calls
     assert locked is not stale
     assert (locked.pk, actor, relation, subject) == (stale.pk, to_subject_ref(owner), "owner", recipient)
-    assert not any(query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for query in queries)
+    assert not _non_audit_writes(queries)
     assert list(OwnedRow.history.filter(id=stale.id).values()) == history_before
     with system_context(reason="test.subject.inspect"):
         stale.refresh_from_db()
@@ -213,7 +224,7 @@ def test_accepted_same_owner_transfer_validates_once_without_saving(monkeypatch)
     with CaptureQueriesContext(connection) as queries:
         assert row.with_actor(owner).transfer_ownership(owner) is row
     assert calls == [("owner", owner)]
-    assert not any(query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for query in queries)
+    assert not _non_audit_writes(queries)
     assert list(OwnedRow.history.filter(id=row.id).values()) == history_before
 
 

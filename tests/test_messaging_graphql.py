@@ -217,9 +217,8 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(composed_tables: No
     admin = _platform_admin("msg-bypk-title-admin")
     thread, message = _seed_thread_and_message(admin)
     with system_context(reason="test.messaging.bypk.title"):
-        # The channel FK targets the Integration MTI parent; resolving the object
-        # projection must serve the parent instance (regression: a ChannelType
-        # declaration crashed with "Expected ChannelType but got Integration").
+        # The channel FK targets Channel, also the MTI parent of a posts Feed.
+        # Its projection must use Channel's join key and permission scope.
         channel = make_integration("bypk-title-channel", model=Channel, backend_class="manual")
         message.channel = channel
         message.save(update_fields=("channel", "updated_at"))
@@ -1136,7 +1135,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             """
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
-                input: {model_label: $model, record_id: $id, body: $body, kind: "note"}
+                input: {model_label: $model, record_id: $id, body: $body, kind: NOTE}
                 client_creation_key: "note-request"
               ) {
                 error
@@ -2083,7 +2082,7 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     """can_edit/can_delete mirror the update/delete mutation authorization."""
 
     admin = _platform_admin("msg-capability-admin")
-    with system_context(reason="test.messaging.record_capability.seed"):
+    with actor_context(admin), system_context(reason="test.messaging.record_capability.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 808")
         ticket.message_post("Editable comment.")
         ticket.message_track(

@@ -1892,6 +1892,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def submit(self, expected_revision: int | None = None) -> Self:
         """Submit under the round-first lock, freezing draft writes by state."""
 
+        actor, unscoped = self.effective_actor(strict=True)
         if not self.has_access("write"):
             raise PermissionDenied("Proposal write access is required.")
         if self.pk is None:
@@ -1911,6 +1912,8 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 .order_by("pk")
                 .get()
             )
+            if not unscoped and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Proposal write access is required.")
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.state == ProposalState.SUBMITTED:
@@ -1923,7 +1926,9 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             ):
                 raise ValidationError({"round": "Proposals cannot be submitted after opening."})
             else:
-                locked._submit_locked(fallback_user_id=locked.responder_id or locked_round.facilitator_id)
+                locked.sudo(reason="proposals.proposal.submit")._submit_locked(
+                    fallback_user_id=locked.responder_id or locked_round.facilitator_id,
+                )
         _adopt(self, locked, ("state", "submitted_at", "submitted_by", "updated_at", "updated_by"))
         return self
 
@@ -1994,11 +1999,11 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def create_track(self) -> models.Model:
         """Create one ownerless, item-owning project with its own bound drive."""
 
+        actor, unscoped = self.effective_actor(strict=True)
         if not self.has_access("write"):
             raise PermissionDenied("Proposal write access is required.")
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
-        actor = instance_actor(self)
         project_model = apps.get_model("projects", "Project")
         with transaction.atomic():
             round_model = apps.get_model("proposals", "Round")
@@ -2015,6 +2020,8 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 .order_by("pk")
                 .get()
             )
+            if not unscoped and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Proposal write access is required.")
             if locked.track_id is not None:
                 track: Any = locked.track
             else:
@@ -2028,7 +2035,10 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                     track.save(ownerless=True)
                 locked.track = track
                 locked.allow_immutable_save("track_id")
-                locked.save(update_fields=("track", "updated_at"))
+                locked.sudo(reason="proposals.proposal.create_track.link").save(
+                    update_fields=("track", "updated_at"),
+                )
+                locked.unsudo()
                 if (
                     locked_round.status == RoundStatus.OPENED
                     and locked_round.opening_policy
@@ -2056,7 +2066,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                         )
                     drive = system_queryset(drive_model).get(pk=drive.pk)
                     bind(project=track, target=drive)
-        bind_actor(track, actor)
+        bind_actor(track, instance_actor(self))
         _adopt(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
         self._state.fields_cache["track"] = track
         return track

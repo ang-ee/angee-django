@@ -20,7 +20,6 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import post_save
 from django.test import RequestFactory, TestCase
@@ -399,7 +398,6 @@ def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
     hidden = make_integration("target-hidden", model=InferenceProvider, backend_class="manual")
     sibling_parent = make_integration("target-sibling", model=InferenceProvider, backend_class="manual")
     VcsBridge(integration_ptr_id=sibling_parent.pk, backend_class="local").save_base(raw=True, force_insert=True)
-    call_command("rebac", "index", "rebuild", verbosity=0)
     rows = _data(
         _execute(
             _schema(),

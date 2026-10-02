@@ -79,7 +79,10 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(decision.basis["current"]["name"], "Original name")
         self.answer(run, values={"name_action": "replace", "address_action": "add", "handle_action": "confirm"})
         party = system_queryset(Party).get(pk=party.pk)
-        self.assertEqual((run.status, run.outcome, party.display_name), ("succeeded", "applied", "Reviewed name"))
+        self.assertEqual(
+            (run.status, run.outcome, party.display_name), ("succeeded", "applied", "Reviewed name"),
+            list(system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)),
+        )
         self.assertEqual(party.updated_by_id, self.reviewer.pk)
         address = system_queryset(Address).get(party=party)
         self.assertEqual((address.street, address.label, address.created_by_id),

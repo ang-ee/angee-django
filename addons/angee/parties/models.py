@@ -817,7 +817,7 @@ class AddressManager(AngeeManager):
                 if conflict == "raise":
                     raise ValidationError({"address": "A different address already exists for this party."})
                 is_primary = False
-            verified_actor = self.check_create({"party": (party,)})
+            verified_actor = self.check_create()
             row = self.model(
                 party=party,
                 label=" ".join(label.split()).strip()[:64],

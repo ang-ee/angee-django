@@ -71,7 +71,7 @@ def test_record_stream_projects_latest_edit_and_unpaged_reply_count(composed_tab
             _schema(),
             """
             query StreamRole($id: ID!) {
-              record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id, role: "notes"}) {
+              record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id, role: "source"}) {
                 reply_count message_result_count
               }
             }

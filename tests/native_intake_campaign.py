@@ -53,7 +53,8 @@ class IntakeCampaign(IntakeAccessCase):
         self.assertNotEqual(denied.pk, need.access_decision_id)
         denied.refresh_from_db()
         self.assertEqual((denied.resolution, denied.resolved_by_id, denied.resolved_at), receipt)
-        self.assertEqual(denied.superseded_by_id, need.access_decision_id)
+        self.assertIsNone(denied.superseded_by_id)
+        self.assertEqual(need.access_decision.group.reasked_from_id, denied.group_id)
         approved_id, revision = need.access_decision_id, need.revision
         self.assertEqual(need.decide_access("approve").pk, self.reader.pk)
         self.assertEqual((need.access_decision_id, need.revision), (approved_id, revision))
@@ -77,12 +78,17 @@ class IntakeCampaign(IntakeAccessCase):
         for replacement in (self.party(self.writer), None):
             previous = need.access_decision
             resolution = previous.resolution
+            was_pending = previous.is_pending
             need.party = replacement
             need.save(update_fields=("party",))
             need.refresh_from_db()
             previous.refresh_from_db()
             self.assertEqual(need.access_verdict, "pending")
-            self.assertEqual(previous.superseded_by_id, need.access_decision_id)
+            if was_pending:
+                self.assertEqual(previous.superseded_by_id, need.access_decision_id)
+            else:
+                self.assertIsNone(previous.superseded_by_id)
+                self.assertEqual(need.access_decision.group.reasked_from_id, previous.group_id)
             self.assertEqual(previous.resolution, resolution)
             self.assertIsNone(need.access_resolved_at)
 
@@ -120,6 +126,23 @@ class IntakeCampaign(IntakeAccessCase):
         need.refresh_from_db()
         self.assertEqual((need.party_id, need.access_decision_id, need.revision), before)
         self.assertEqual(set(followers._base_manager.values_list("pk", flat=True)), follower_ids)
+
+    def test_graphql_need_create_preserves_task_target_provenance(self):
+        with system_context(reason="tests.t3.need_target_provenance"):
+            project = apps.get_model("projects", "Project").objects.create(title="Project", owner=self.owner)
+            task = self.Task.objects.create(title="Target", queue=self.queue, project=project, owner=self.owner)
+        created = self.graphql(
+            """
+            mutation CreateNeed($task: ID!) {
+              insert_intake_needs_one(object: {task: $task, body: "Task request"}) { id }
+            }
+            """,
+            {"task": str(task.sqid)},
+            user=self.owner,
+        )["insert_intake_needs_one"]
+        need = self.Need.objects.as_user(self.owner).get(sqid=created["id"])
+        self.assertEqual(need.task_id, task.pk)
+        self.assertIsNone(need.project_id)
 
     def test_project_reader_loses_restricted_task_need_but_keeps_direct_need(self):
         with system_context(reason="tests.t3.need_targets"):

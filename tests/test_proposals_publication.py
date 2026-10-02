@@ -130,8 +130,11 @@ class PublicationCases(TransactionTestCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 locked.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            self.assertEqual(len(queries), 1)
-            self.assertEqual(queries[0]["sql"].upper().count("EXISTS("), 1)
+            # Three audited system scopes (task twice, message once) and one
+            # application SELECT containing the complete blocker predicate.
+            self.assertEqual(len(queries), 4, queries.captured_queries)
+            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
+            self.assertEqual(queries[3]["sql"].upper().count("EXISTS("), 1)
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):
@@ -324,12 +327,12 @@ class PublicationCases(TransactionTestCase):
         for kind in ("comment", "note"):
             with self.subTest(kind=kind):
                 payload = self.data(self.execute(
-                    """mutation($id: ID!, $kind: String!) {
+                    """mutation($id: ID!, $kind: RecordMessagePostKind!) {
                       post_record_message(input: {
                         model_label: "projects.Task", record_id: $id, body: "Hidden asker", kind: $kind
                       }) { message { id } error error_code }
                     }""",
-                    {"id": str(question.sqid), "kind": kind}, self.asker,
+                    {"id": str(question.sqid), "kind": kind.upper()}, self.asker,
                 ))["post_record_message"]
                 self.assertIsNone(payload["message"])
                 self.assertIn("hidden asker", payload["error"])

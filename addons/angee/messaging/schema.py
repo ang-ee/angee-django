@@ -45,7 +45,7 @@ from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
-from angee.integrate.schema import BridgeTypeMixin, IntegrationType
+from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
 from angee.messaging.models import ThreadedModelMixin
@@ -442,10 +442,7 @@ class MessageType(AngeeNode):
     parent: "MessageType | None" = actor_scoped_to_one("parent")
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
-    # The FK targets the Integration MTI parent (a messaging Channel or a posts
-    # Feed both produce messages), so the projection is the parent type — a
-    # ChannelType declaration would crash resolving a Feed-ingested row.
-    channel: IntegrationType | None = actor_scoped_to_one("channel")
+    channel: ChannelType | None = actor_scoped_to_one("channel")
     tracking_values: list[TrackingValueType] = actor_scoped_to_many("tracking_values")
     participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto
@@ -661,8 +658,7 @@ class ThreadType(AngeeNode):
     title: FragmentType | None
     message_count: auto
     last_message_at: auto
-    # Integration parent, same reason as MessageType.channel.
-    channel: "IntegrationType | None" = actor_scoped_to_one("channel")
+    channel: "ChannelType | None" = actor_scoped_to_one("channel")
     messages: list[MessageType] = actor_scoped_to_many("messages")
     participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto

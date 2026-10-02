@@ -29,6 +29,7 @@ from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging_graphql
 from tests.conftest import (
+    MarkdownPage,
     Page,
     SchemaAddon,
     Vault,
@@ -736,7 +737,7 @@ def test_team_member_clones_an_ownerless_template_vault(spaces_tables: None) -> 
         group = Group.objects.create(name="Managers", slug="managers")
         Membership.objects.create(group=group, party=person, is_confirmed=True)
         template = Vault.objects.create(name="Intake template", team=group)
-        Page.objects.create(vault=template, title="Checklist", kind=Page.Kind.TEMPLATE)
+        MarkdownPage.objects.create(vault=template, title="Checklist", kind=Page.PageKind.TEMPLATE)
     assert template.owner_id is None
 
     with actor_context(member):

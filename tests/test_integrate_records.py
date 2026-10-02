@@ -14,7 +14,9 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.base.mixins import AppendOnlyBaseQuerySet
 from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.scoping import lock_if_supported
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,
@@ -57,12 +59,10 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
             model = type(row)
             assert model._default_manager is model.objects
             for manager in (model.objects, model._base_manager):
-                queryset = manager.filter(pk=row.pk).order_by("pk").lock_if_supported()
-                expected = (
-                    AngeeUnscopedQuerySet
-                    if manager is model._base_manager and model is not RecordRevision
-                    else AngeeQuerySet
-                )
+                queryset = lock_if_supported(manager.filter(pk=row.pk).order_by("pk"))
+                expected = AngeeQuerySet
+                if manager is model._base_manager:
+                    expected = AppendOnlyBaseQuerySet if model is RecordRevision else AngeeUnscopedQuerySet
                 assert isinstance(queryset, expected)
                 assert queryset.query.select_for_update is True
                 assert list(queryset) == [row]

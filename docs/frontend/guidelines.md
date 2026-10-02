@@ -560,7 +560,7 @@ shared UI copy through an addon bundle.
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
 - **Human decision subjects opt into the generic tab.** Compose
-  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/index.tsx);
+  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/RecordDecisions.tsx);
   [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
   subject identity, while each subject addon owns successor admission.
 - A relation field is a link, not a dead end. A routed collection page tags its

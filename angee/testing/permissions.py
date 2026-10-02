@@ -17,14 +17,14 @@ from angee.fs import write_atomic
 
 
 def install_permission_schema(schema: Schema, *, active: LocalBackend | None = None) -> LocalBackend:
-    """Make a local test schema current and rebuild its permission index."""
+    """Install a local test schema through the library's public test hook."""
 
     return install_schema(schema, backend=active)
 
 
 @pytest.fixture
 def composed_permissions(composed_tables: None, restore_composed_permission_bindings: None, tmp_path: Path) -> None:
-    """Bind installed contributions and let native sync install their index."""
+    """Bind installed contributions and let native sync persist their schema."""
 
     configs = list(apps.get_app_configs())
     sources = extension_source_map(configs, field_owners=ModelComposition.discover(configs).field_gate_owners())

@@ -11,7 +11,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.base.mixins import CreationKeyConflict
-from angee.knowledge.models import UnsupportedPageKindError, VaultQuerySet
+from angee.knowledge.models import VaultQuerySet
 from tests.conftest import Link, MarkdownPage, Page, RecordBinding, Vault, create_platform_admin, create_user
 from tests.knowledge_campaign import clone_template as clone_template
 from tests.test_knowledge import _grant
@@ -51,11 +51,11 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
             assert page.parent_id == (
                 copies[source_by_id[original.parent_id].title].pk if original.parent_id else None
             )
-        originals = {body.page_id: body for body in MarkdownPage.objects.filter(page__vault=fixture.source)}
-        bodies = list(MarkdownPage.objects.filter(page__vault=clone))
+        originals = {body.pk: body for body in MarkdownPage.objects.filter(vault=fixture.source)}
+        bodies = list(MarkdownPage.objects.filter(vault=clone))
         assert len(bodies) == 2
         for body in bodies:
-            original = originals[source_pages[body.page.title].pk]
+            original = originals[source_pages[body.title].pk]
             assert body.pk != original.pk
             assert (body.body, body.body_hash, body.word_count) == (
                 original.body, original.body_hash, original.word_count,
@@ -80,9 +80,9 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
         ).exists()
         MarkdownPage.objects.write_body(copies["Guide"], "Changed copy")
         fixture.note.refresh_from_db()
-        assert MarkdownPage.objects.get(page=fixture.note).body == originals[fixture.note.pk].body
+        assert MarkdownPage.objects.get(pk=fixture.note.pk).body == originals[fixture.note.pk].body
         MarkdownPage.objects.write_body(fixture.note, "Changed template")
-        assert MarkdownPage.objects.get(page=copies["Guide"]).body == "Changed copy"
+        assert MarkdownPage.objects.get(pk=copies["Guide"].pk).body == "Changed copy"
     assert not Vault.objects.as_user(fixture.reader).filter(pk=clone.pk).exists()
 
 
@@ -184,7 +184,7 @@ def test_template_edits_do_not_change_completed_replay_content(clone_template):
         MarkdownPage.objects.write_body(fixture.note, "A later version")
     with actor_context(fixture.actor):
         assert Vault.objects.create_from(fixture.source, name="Replay", client_creation_key="receipt").pk == clone.pk
-        assert MarkdownPage.objects.get(page__vault=clone, page__title="Guide").body.startswith("# Guide")
+        assert MarkdownPage.objects.get(vault=clone, title="Guide").body.startswith("# Guide")
 
 
 def test_creation_key_is_private_to_creating_actor(clone_template):
@@ -229,7 +229,7 @@ def test_forced_replay_miss_converges_on_committed_winner(clone_template, monkey
     with system_context(reason="test.race.counts"):
         assert Vault.objects.filter(client_creation_key="race").count() == 1
         assert Page.objects.filter(vault=winner).count() == 4
-        assert MarkdownPage.objects.filter(page__vault=winner).count() == 2
+        assert MarkdownPage.objects.filter(vault=winner).count() == 2
 
 
 @pytest.mark.parametrize("invalid", ["kind", "cycle", "foreign-parent"])
@@ -237,7 +237,12 @@ def test_invalid_template_rolls_back_clone_and_its_receipt(clone_template, inval
     fixture = clone_template
     with system_context(reason="test.invalid_template"):
         if invalid == "kind":
-            Page.objects.filter(pk=fixture.note.pk).update(kind="external")
+            # Simulate stored corruption; the closed enum rejects this value
+            # before SQL through every ordinary write path.
+            table = connection.ops.quote_name(MarkdownPage._meta.db_table)
+            column = connection.ops.quote_name(MarkdownPage._meta.pk.column)
+            with connection.cursor() as cursor:
+                cursor.execute(f"UPDATE {table} SET kind = %s WHERE {column} = %s", ["external", fixture.note.pk])
         elif invalid == "cycle":
             Page.objects.filter(pk=fixture.note.pk).update(parent=fixture.note)
         else:
@@ -245,8 +250,7 @@ def test_invalid_template_rolls_back_clone_and_its_receipt(clone_template, inval
             parent = Page.objects.create(vault=foreign, title="Foreign parent")
             Page.objects.filter(pk=fixture.note.pk).update(parent=parent)
         before = Vault.objects.count(), Page.objects.count(), MarkdownPage.objects.count()
-    error = UnsupportedPageKindError if invalid == "kind" else ValidationError
-    with actor_context(fixture.actor), pytest.raises(error):
+    with actor_context(fixture.actor), pytest.raises(ValidationError):
         Vault.objects.create_from(fixture.source, name="Invalid", client_creation_key="invalid")
     with system_context(reason="test.invalid_clone.rollback"):
         assert (Vault.objects.count(), Page.objects.count(), MarkdownPage.objects.count()) == before
@@ -289,7 +293,7 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
         assert len(captured) <= {5: 230, 60: 286}[size], f"{size} pages used {len(captured)} queries"
         with system_context(reason="test.clone.budget.contents"):
             assert Page.objects.filter(vault=clone).count() == size
-            assert MarkdownPage.objects.filter(page__vault=clone).count() == size
+            assert MarkdownPage.objects.filter(vault=clone).count() == size
             assert Page.history.filter(vault_id=clone.pk).count() == size
     # Review measured +56 for +55 pages; permit batch-size boundaries across DBs.
     assert counts[1] - counts[0] <= 60, counts

@@ -944,12 +944,12 @@ def _sortable_alias_expression(
 
 
 def with_filter_aliases(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
-    """Project declared aliases on nested node reads through the guarded alias owner."""
+    """Project declared aliases using the row queryset's actor for every guard."""
     projected = {}
     for name, (expression, paths) in _declared_aliases(queryset.model)[1].items():
         source = system_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
         projected[name] = models.Subquery(source.annotate(
-            _angee_scalar=_sortable_alias_expression(expression, paths, None, source),
+            _angee_scalar=_sortable_alias_expression(expression, paths, None, queryset),
         ).values("_angee_scalar")[:1])
     return queryset.annotate(**projected) if projected else queryset
 
@@ -1202,7 +1202,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     source_read_queryset, source_aggregate = read_queryset, aggregate_source
 
     def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_read_queryset(info))
+        return with_filter_aliases(prepare_filters(source_read_queryset(info)))
 
     def aggregate_source(info: strawberry.Info) -> models.QuerySet[Any]:
         return prepare_filters(source_aggregate(info))

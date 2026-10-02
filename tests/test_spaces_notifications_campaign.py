@@ -136,7 +136,7 @@ def test_graphql_generated_writes_do_not_accept_preference_columns(roster, space
     assert not Membership._base_manager.filter(group=roster.group, party=roster.people["outsider"]).exists()
 
 
-def test_audience_has_exactly_one_query_at_two_sizes_and_keeps_external_parties(roster, django_assert_num_queries):
+def test_audience_has_one_audited_read_at_two_sizes_and_keeps_external_parties(roster, django_assert_num_queries):
     expected = {roster.people[role].pk: (NotificationPolicy.INBOX, ()) for role in ("owner", "moderator", "member")}
     for size in (3, 20):
         with system_context(reason="grow audience"):
@@ -147,7 +147,8 @@ def test_audience_has_exactly_one_query_at_two_sizes_and_keeps_external_parties(
                     notification_policy="email", subtype_keys=["comment"],
                 )
                 expected[party.pk] = (NotificationPolicy.EMAIL, ("comment",))
-        with django_assert_num_queries(1):
+        # One system-queryset audit INSERT and one roster SELECT at either size.
+        with django_assert_num_queries(2):
             actual = {member.party_id: (member.notification_policy, member.subtype_keys)
                       for member in roster.group.thread_audience()}
         assert actual == expected
@@ -164,11 +165,11 @@ def test_queue_inherits_parent_audience_and_roster_changes_never_create_follower
         )
     assert queue._meta.get_field("owner").model is type(roster.group)
     assert not [error for error in check_ownership([apps.get_app_config("work")]) if error.obj is Queue]
-    with django_assert_num_queries(1):
+    with django_assert_num_queries(2):
         audience = [(member.party_id, member.notification_policy) for member in queue.thread_audience()]
     assert audience == [(row.party_id, NotificationPolicy.MUTED)]
     with system_context(reason="remove audience member"):
         row.delete()
-    with django_assert_num_queries(1):
+    with django_assert_num_queries(2):
         assert list(queue.thread_audience()) == []
     assert not ThreadFollower._base_manager.exists()

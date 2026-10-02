@@ -1,8 +1,7 @@
 """Canonical concrete nexus models for the bare-Django test runtime.
 
-The permission index resolves the nexus backings (party edges, user cadences)
-whenever it is built, so register the models from conftest, before Django
-creates the test database, rather than from the nexus test module.
+Permission queries resolve the nexus backings (party edges, user cadences),
+so register the models from conftest before Django creates the test database.
 """
 
 from angee.nexus.models import Cadence as AbstractCadence

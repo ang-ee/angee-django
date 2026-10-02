@@ -313,7 +313,7 @@ def test_lift_ignores_phase_and_backward_moves_never_erase_disclosure(campaign: 
     assert Proposal._base_manager.get(pk=proposal.pk).disclosed_at == opened.opened_at
 
 
-@pytest.mark.parametrize("state", ("collecting", "cancelled"))
+@pytest.mark.parametrize("state", ("collecting", "canceled"))
 def test_manager_can_lift_any_undisclosed_round_and_reader_sees_receipt(
     campaign: ProposalCampaign, state: str,
 ) -> None:
@@ -323,7 +323,7 @@ def test_manager_can_lift_any_undisclosed_round_and_reader_sees_receipt(
     manager, reader = c.person("facilitator"), c.person("reader")
     with actor_context(manager):
         as_actor(proposal, manager).submit()
-        if state == "cancelled":
+        if state == "canceled":
             round = as_actor(round, manager).cancel()
     grant(round, "reader", reader)
     assert as_actor(round, manager).can_open()
@@ -335,7 +335,7 @@ def test_manager_can_lift_any_undisclosed_round_and_reader_sees_receipt(
         revision = lifted.revision
         assert not as_actor(round, manager).can_open()
         replay = as_actor(round, manager).open(expected_revision=revision)
-    assert lifted.status == ("opened" if state == "collecting" else "cancelled")
+    assert lifted.status == ("opened" if state == "collecting" else "canceled")
     assert replay.revision == revision
     assert as_actor(round, reader).has_access("read")
     assert Round._base_manager.get(pk=round.pk).opened_at == c.now

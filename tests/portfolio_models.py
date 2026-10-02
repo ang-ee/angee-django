@@ -1,8 +1,8 @@
 """Canonical concrete portfolio models for the bare-Django test runtime.
 
-The permission index resolves every portfolio backing (release products,
-initiative placements) whenever it is built, so register the models from
-conftest, before Django creates the test database.
+Permission queries resolve the portfolio backings (release products,
+initiative placements), so register the models from conftest before Django
+creates the test database.
 """
 
 from django.db import models

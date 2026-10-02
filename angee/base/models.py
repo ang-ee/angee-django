@@ -216,8 +216,8 @@ class AngeeUnscopedQuerySet(
     """Angee queryset API for intentionally permission-naive managers.
 
     Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics. Its
-    writes maintain the permission index, which a declared base manager requires.
+    whose unfiltered relation reads must retain native Django semantics. It
+    composes the library's tracked writes required by a declared base manager.
     """
 
     def scoped_for_aggregate(self) -> Self:

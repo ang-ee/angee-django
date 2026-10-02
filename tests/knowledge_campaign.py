@@ -18,10 +18,10 @@ def clone_template(composed_tables):
         source = Vault.objects.create_for(
             author, name="Template", description="Shared instructions", icon="book", accent="blue",
         )
-        root = Page.objects.create_in(source, title="Folder", kind=Page.Kind.FOLDER, icon="folder")
-        nested = Page.objects.create_in(source, title="Nested", parent=root, kind=Page.Kind.FOLDER)
+        root = Page.objects.create_in(source, title="Folder", kind=Page.PageKind.FOLDER, icon="folder")
+        nested = Page.objects.create_in(source, title="Nested", parent=root, kind=Page.PageKind.FOLDER)
         note = Page.objects.create_in(source, title="Guide", parent=nested, icon="note")
-        template = Page.objects.create_in(source, title="Outline", kind=Page.Kind.TEMPLATE)
+        template = Page.objects.create_in(source, title="Outline", kind=Page.PageKind.TEMPLATE)
         MarkdownPage.objects.write_body(note, "# Guide\n\n[[Outline]] [[Guide]] [[Missing]]")
         MarkdownPage.objects.write_body(template, "# Outline\n\nOriginal instructions")
     _grant(source, "viewer", actor)

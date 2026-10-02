@@ -454,7 +454,7 @@ def test_body_rollback_for_returned_failure(execution, register_step):
 
 @pytest.mark.parametrize("explicit_actor", [False, True])
 def test_publication_and_start_keep_requesting_actor_attribution(execution, explicit_actor):
-    """Authorization and publication/run attribution preserve explicit and ambient actors."""
+    """An explicit requester overrides the pinned actor; ambient context does not."""
     admin, _ = execution
     operator = create_user("publication_operator")
     workflow = load_workflow(document("entry"), key="attribution", actor=admin, publish=False)
@@ -466,8 +466,9 @@ def test_publication_and_start_keep_requesting_actor_attribution(execution, expl
         version = Workflow.objects.publish(workflow, actor=actor).version
         run = WorkflowRun.objects.start(workflow, actor=actor)
 
-    assert version.published_by_id == operator.pk
-    assert run.run_as_id == operator.pk
+    requester = operator if explicit_actor else admin
+    assert version.published_by_id == requester.pk
+    assert run.run_as_id == requester.pk
 
 
 def test_start_requires_an_actor_even_with_system_access(execution):
@@ -480,8 +481,8 @@ def test_start_requires_an_actor_even_with_system_access(execution):
         WorkflowRun.objects.start(workflow, actor=None)
 
 
-def test_workflow_verbs_authorize_the_ambient_requester_over_a_pinned_actor(execution):
-    """A previously bound administrator cannot authorize an ambient outsider's operation."""
+def test_workflow_verbs_deny_an_explicit_outsider_and_preserve_the_pinned_actor(execution):
+    """K3 keeps the pinned requester unless the caller supplies an explicit actor."""
     admin, _ = execution
     workflow = load_workflow(document("entry"), key="ambient_requester", actor=admin)
     run = WorkflowRun.objects.start(workflow, actor=admin)
@@ -492,15 +493,20 @@ def test_workflow_verbs_authorize_the_ambient_requester_over_a_pinned_actor(exec
         with pytest.raises(PermissionDenied, match="'write'"):
             Workflow.objects.save_draft(
                 workflow.with_actor(admin), draft=document("entry"), expected_revision=workflow.draft_revision,
+                actor=outsider,
             )
         with pytest.raises(PermissionDenied, match="'write'"):
-            Workflow.objects.publish(workflow.with_actor(admin))
+            Workflow.objects.publish(workflow.with_actor(admin), actor=outsider)
         with pytest.raises(PermissionDenied, match="'start'"):
-            WorkflowRun.objects.start(workflow.with_actor(admin), actor=None)
+            WorkflowRun.objects.start(workflow.with_actor(admin), actor=outsider)
         with pytest.raises(PermissionDenied, match="'write'"):
-            WorkflowRun.objects.reprocess(run.with_actor(admin))
+            WorkflowRun.objects.reprocess(run.with_actor(admin), actor=outsider)
         with pytest.raises(PermissionDenied, match="'write'"):
-            WorkflowRun.objects.cancel(run.with_actor(admin))
+            WorkflowRun.objects.cancel(run.with_actor(admin), actor=outsider)
+        published = Workflow.objects.publish(workflow.with_actor(admin)).version
+        started = WorkflowRun.objects.start(workflow.with_actor(admin), actor=None)
+        replay = WorkflowRun.objects.reprocess(run.with_actor(admin))
+        assert published.published_by_id == started.run_as_id == replay.run_as_id == admin.pk
 
 
 @pytest.mark.parametrize("strict_mode", [False, True])
@@ -721,7 +727,7 @@ def test_reprocess_requires_operator_access_and_acts_as_requester(execution, run
         assert system_queryset(WorkflowRun).filter(version__workflow=workflow).count() == 1
     else:
         with actor_context(operator):
-            replay = WorkflowRun.objects.reprocess(run)
+            replay = WorkflowRun.objects.reprocess(run.with_actor(operator))
         assert replay.pk != run.pk and replay.run_as_id == operator.pk != run.run_as_id
         assert replay.version_id == run.version_id and replay.request_key is None
 
