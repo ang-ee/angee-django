@@ -250,7 +250,6 @@ _RESOURCE_TYPES = [
 ]
 
 _SPACES_SCHEMA_BUCKET = {
-    "type_extensions": [ChannelSpaceExtension, VaultSpaceExtension],
     "query": [
         _GROUP_RESOURCE.query,
         _MEMBERSHIP_RESOURCE.query,
@@ -276,6 +275,8 @@ schemas = {
     },
     "console": {
         **_SPACES_SCHEMA_BUCKET,
+        # Channel and vault nodes are console types, so their team projection is too.
+        "type_extensions": [ChannelSpaceExtension, VaultSpaceExtension],
         "subscription": [
             changes(Group, field="spaceGroupChanged"),
             changes(Membership, field="spaceMembershipChanged"),
