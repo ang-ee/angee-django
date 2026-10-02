@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.test import RequestFactory, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -215,26 +216,32 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
 
 
 def test_agent_delete_capability_has_constant_query_count(composed_tables: None) -> None:
-    """A narrow can_delete selection batches session existence and lifecycle facts."""
+    """A narrow can_delete selection batches active turns and lifecycle facts."""
 
-    admin = _platform_admin("agt-delete-budget")
+    owner = User.objects.create_user(username="agt-delete-budget-owner")
+    other = User.objects.create_user(username="agt-delete-budget-session-owner")
     with system_context(reason="test.agents.delete_capability.seed"):
-        Agent.objects.create(name="A available", owner=admin)
-        retained = Agent.objects.create(name="B retained", owner=admin)
-        AgentSession.objects.create(agent=retained, owner=admin)
-        Agent.objects.create(name="C rendered", owner=admin, lifecycle="ready", service="agent-service")
+        idle = Agent.objects.create(name="A idle", owner=owner)
+        AgentSession.objects.create(agent=idle, owner=other)
+        active = Agent.objects.create(name="B active", owner=owner)
+        session = AgentSession.objects.create(agent=active, owner=other)
+        AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
+        Agent.objects.create(name="C rendered", owner=owner, lifecycle="ready", service="agent-service")
+        waiting = Agent.objects.create(name="D waiting", owner=owner)
+        session = AgentSession.objects.create(agent=waiting, owner=other)
+        AgentTurn.objects.create(session=session, index=1, prompt="Private approval", status="awaiting_approval")
     query = """
         query Capabilities($limit: Int!) {
           agents(limit: $limit, order_by: {name: asc}) { can_delete }
         }
     """
     console = _schema()
-    _data(_execute(console, query, {"limit": 1}, user=admin))
+    _data(_execute(console, query, {"limit": 1}, user=owner))
     counts = []
-    for size in (1, 3):
+    for size in (1, 4):
         with CaptureQueriesContext(connection) as captured:
-            rows = _data(_execute(console, query, {"limit": size}, user=admin))["agents"]
-        assert [row["can_delete"] for row in rows] == [True, False, False][:size]
+            rows = _data(_execute(console, query, {"limit": size}, user=owner))["agents"]
+        assert [row["can_delete"] for row in rows] == [True, False, False, False][:size]
         counts.append(len(captured))
     assert counts[0] == counts[1], counts
 
@@ -270,37 +277,149 @@ def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> No
         assert Agent.objects.filter(pk=agent.pk).exists()
 
 
-def test_agent_delete_names_retaining_sessions_and_allows_deletion_after_theirs(composed_tables: None) -> None:
-    """Retained sessions explain a protected delete; only an admin deletes them first."""
+def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tables: None) -> None:
+    """Agent authority deletes private transcripts without granting read or session delete."""
 
-    owner = User.objects.create_user(username="agt-retained-session-owner")
-    admin = _platform_admin("agt-retained-session-admin")
-    with system_context(reason="test.agents.retained_sessions.seed"):
+    owner = User.objects.create_user(username="agt-cascade-owner")
+    others = [User.objects.create_user(username=f"agt-cascade-user-{index}") for index in range(2)]
+    with system_context(reason="test.agents.cascade.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        sessions = [
+            AgentSession.objects.create(agent=agent, owner=user, title=f"Private {user.username}")
+            for user in (owner, *others)
+        ]
+        turns = [
+            AgentTurn.objects.create(session=session, index=index, prompt=f"Private {status}", status=status)
+            for session in sessions
+            for index, status in enumerate(("completed", "failed", "canceled", "pending"), 1)
+        ]
+        unrelated = Agent.objects.create(name="Unrelated", owner=others[0])
+        unrelated_session = AgentSession.objects.create(agent=unrelated, owner=others[0])
+        unrelated_turn = AgentTurn.objects.create(session=unrelated_session, index=1, prompt="Keep", status="completed")
+    with actor_context(owner):
+        assert Agent.objects.get(pk=agent.pk).can_delete
+        assert not AgentSession.objects.filter(pk__in=[session.pk for session in sessions[1:]]).exists()
+        assert not AgentTurn.objects.filter(session_id__in=[session.pk for session in sessions[1:]]).exists()
+        assert not AgentSession.objects.get(pk=sessions[0].pk).has_access("delete")
+    console = _schema()
+    before = _data(_execute(
+        console,
+        "{ agents { can_delete } agent_sessions { id title } agent_turns { id prompt } }",
+        user=owner,
+    ))
+    assert before["agents"] == [{"can_delete": True}]
+    assert before["agent_sessions"] == [{"id": str(sessions[0].sqid), "title": f"Private {owner.username}"}]
+    assert {row["id"] for row in before["agent_turns"]} == {
+        str(turn.sqid) for turn in turns if turn.session_id == sessions[0].pk
+    }
+    deleted = _data(_execute(
+        console,
+        "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id name } }",
+        {"id": str(agent.sqid)},
+        user=owner,
+    ))["delete_agents_by_pk"]
+    assert deleted == {"id": str(agent.sqid), "name": "Assistant"}
+    with system_context(reason="test.agents.cascade.verify"):
+        assert not Agent.objects.filter(pk=agent.pk).exists()
+        assert not AgentSession.objects.filter(pk__in=[session.pk for session in sessions]).exists()
+        assert not AgentTurn.objects.filter(pk__in=[turn.pk for turn in turns]).exists()
+        assert Agent.objects.filter(pk=unrelated.pk).exists()
+        assert AgentSession.objects.filter(pk=unrelated_session.pk).exists()
+        assert AgentTurn.objects.filter(pk=unrelated_turn.pk).exists()
+
+
+def test_agent_instance_delete_restores_actor_after_transcript_cascade(composed_tables: None) -> None:
+    """The owning verb's cascade elevation does not remain on the returned instance."""
+
+    owner = User.objects.create_user(username="agt-cascade-binding-owner")
+    other = User.objects.create_user(username="agt-cascade-binding-session-owner")
+    with system_context(reason="test.agents.cascade_binding.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=other)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Private", status="completed")
+    with actor_context(owner):
+        target = Agent.objects.get(pk=agent.pk)
+        target.delete()
+        assert target.actor() == to_subject_ref(owner)
+        assert not target.is_sudo()
+    with system_context(reason="test.agents.cascade_binding.verify"):
+        assert not Agent.objects.filter(pk=agent.pk).exists()
+        assert not AgentSession.objects.filter(pk=session.pk).exists()
+        assert not AgentTurn.objects.filter(pk=turn.pk).exists()
+
+
+def test_agent_session_direct_delete_stays_admin_only(composed_tables: None) -> None:
+    """An owner cannot delete a session directly; an admin can delete its turns too."""
+
+    owner = User.objects.create_user(username="agt-direct-session-owner")
+    admin = _platform_admin("agt-direct-session-admin")
+    with system_context(reason="test.agents.direct_session_delete.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
         session = AgentSession.objects.create(agent=agent, owner=owner)
-        AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
     console = _schema()
-    delete_agent = "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }"
-    blocked = _execute(console, delete_agent, {"id": str(agent.sqid)}, user=owner)
-    assert blocked.errors is not None
-    assert blocked.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-    assert "agent sessions (1)" in blocked.errors[0].message
-
     delete_session = "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }"
     refused = _execute(console, delete_session, {"id": str(session.sqid)}, user=owner)
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    with system_context(reason="test.agents.direct_session_delete.refused"):
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk).exists()
     deleted = _data(_execute(console, delete_session, {"id": str(session.sqid)}, user=admin))[
         "delete_agent_sessions_by_pk"
     ]
     assert deleted == {"id": str(session.sqid)}
-    assert _data(_execute(console, delete_agent, {"id": str(agent.sqid)}, user=owner))["delete_agents_by_pk"] == {
+    with system_context(reason="test.agents.direct_session_delete.verify"):
+        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert not AgentSession.objects.filter(pk=session.pk).exists()
+        assert not AgentTurn.objects.filter(pk=turn.pk).exists()
+
+
+@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_tables: None, status: str) -> None:
+    """The projection and delete verb refuse all active work without disclosing its transcript."""
+
+    owner = User.objects.create_user(username="agt-active-agent-owner")
+    other = User.objects.create_user(username="agt-active-agent-session-owner")
+    with system_context(reason="test.agents.active_agent_delete.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        # Turn execution owns eligibility, even if the session projection is stale.
+        session = AgentSession.objects.create(agent=agent, owner=other)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Private question", status=status)
+    with actor_context(owner):
+        target = Agent.objects.get(pk=agent.pk)
+        assert not target.can_delete
+        assert target.delete_blocker() == "Stop all active turns before deleting this agent."
+        with pytest.raises(ValidationError, match="Stop all active turns before deleting this agent"):
+            target.delete()
+        assert not target.is_sudo()
+    console = _schema()
+    query = "{ agents { can_delete } agent_sessions { id title } agent_turns { id prompt } }"
+    assert _data(_execute(console, query, user=owner)) == {
+        "agents": [{"can_delete": False}], "agent_sessions": [], "agent_turns": [],
+    }
+    mutation = "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }"
+    refused = _execute(console, mutation, {"id": str(agent.sqid)}, user=owner)
+    assert refused.errors is not None
+    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert refused.errors[0].message == "Stop all active turns before deleting this agent."
+    with system_context(reason="test.agents.active_agent_delete.verify_and_stop"):
+        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
+        turn.mark_canceled()
+    with actor_context(owner):
+        assert Agent.objects.get(pk=agent.pk).can_delete
+    assert _data(_execute(console, query, user=owner)) == {
+        "agents": [{"can_delete": True}], "agent_sessions": [], "agent_turns": [],
+    }
+    assert _data(_execute(console, mutation, {"id": str(agent.sqid)}, user=owner))["delete_agents_by_pk"] == {
         "id": str(agent.sqid),
     }
-    with system_context(reason="test.agents.retained_sessions.verify"):
+    with system_context(reason="test.agents.active_agent_delete.verify_deleted"):
         assert not Agent.objects.filter(pk=agent.pk).exists()
         assert not AgentSession.objects.filter(pk=session.pk).exists()
-        assert not AgentTurn.objects.filter(session_id=session.pk).exists()
+        assert not AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
 @pytest.mark.parametrize("relation", ["reader", "editor"])
@@ -325,6 +444,9 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
         readable = Agent.objects.get(pk=agent.pk)
         assert readable.has_access("read")
         assert not readable.has_access("delete")
+        with pytest.raises(PermissionDenied, match="lacks 'delete'"):
+            readable.delete()
+        assert not readable.is_sudo()
     locks: list[type[models.Model]] = []
     previews: list[Any] = []
     select_for_update = models.QuerySet.select_for_update

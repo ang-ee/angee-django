@@ -1102,38 +1102,49 @@ class Agent(AuditMixin, AngeeDataModel):
 
     @property
     def can_delete(self) -> bool:
-        """Visibility projection of deletion: :meth:`delete_blocker` and the retained sessions.
+        """Visibility projection of :meth:`delete_blocker`."""
 
-        Deletion has two refusing owners: :meth:`delete_blocker` (an operator instance
-        must be torn down first) and the framework delete path, which reports the
-        protected sessions itself. The projection answers both, the second from the
-        ``_has_sessions`` annotation when a list selected it.
-        """
-
-        if self.delete_blocker() is not None:
-            return False
-        projected = getattr(self, "_has_sessions", None)
-        if projected is not None:
-            return not projected
-        return not type(self).system_queryset().filter(self.has_sessions_expression(), pk=self.pk).exists()
+        return self.delete_blocker() is None
 
     @classmethod
-    def has_sessions_expression(cls) -> models.Exists:
-        """Project retained session existence independently of the reader's scope."""
+    def has_active_turns_expression(cls) -> models.Exists:
+        """Project active execution across all sessions without exposing transcripts."""
 
         session_model = cls._meta.get_field("sessions").related_model
-        return models.Exists(session_model.system_queryset().filter(agent_id=models.OuterRef("pk")))
+        turn_model = session_model._meta.get_field("turns").related_model
+        return models.Exists(turn_model.system_queryset().active().filter(session__agent_id=models.OuterRef("pk")))
 
     def delete_blocker(self) -> str | None:
-        """Return the model-owned reason deletion is refused, or ``None``.
-
-        Retained sessions are not repeated here: the framework delete path reports
-        protected relations as a readable error for every model.
-        """
+        """Require teardown and stopped turns before deleting the agent and its sessions."""
 
         if self.deprovision_blocker() is None:
             return "Deprovision this agent before deleting it."
+        active = getattr(self, "_has_active_turns", None)
+        if active is None:
+            active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
+        if active:
+            return "Stop all active turns before deleting this agent."
         return None
+
+    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
+        """Authorize the agent, then delete its sessions without their direct-delete gate.
+
+        Direct session deletion stays admin-only. Agent deletion owns its entire
+        transcript cascade, including sessions the deleting actor cannot read.
+        Queryset deletion does not call this instance verb.
+        """
+
+        actor = self.require_access("delete")
+        if blocker := self.delete_blocker():
+            raise ValidationError(blocker)
+        self.sudo(reason="agents.agent.delete_transcripts")
+        try:
+            return super().delete(using=using, keep_parents=keep_parents)
+        finally:
+            if actor is not None:
+                self.with_actor(actor)
+            else:
+                self.unsudo()
 
     def provision_blocker(self, *, prerequisites: bool = True) -> str | None:
         """Return why Provision may not start now, or ``None``."""
@@ -1806,7 +1817,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
     runtime = True
 
     sqid_prefix = "ase_"
-    agent = models.ForeignKey("agents.Agent", on_delete=models.PROTECT, related_name="sessions")
+    agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)

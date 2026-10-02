@@ -211,7 +211,7 @@ class AgentType(AngeeNode):
     can_deprovision: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
     can_delete: bool = strawberry_django.field(
         only=["lifecycle", "workspace", "service", "conflict_kind"],
-        annotate={"_has_sessions": lambda info: Agent.has_sessions_expression()},
+        annotate={"_has_active_turns": lambda info: Agent.has_active_turns_expression()},
     )
     created_at: auto
     updated_at: auto
