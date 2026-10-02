@@ -8,11 +8,11 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
+from angee.projects.testing.models import Link, Project, Queue, Stage, Task
+from angee.spaces.testing.models import Membership
 from tests.conftest import Need, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
-from tests.messaging_models import Message, Person, ThreadFollower, ThreadNotification
-from tests.projects_models import Link, Project, Queue, Stage, Task
-from tests.spaces_models import Membership
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema

@@ -22,6 +22,7 @@ from angee.decisions.contracts import DecisionRequest
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.forms import Action
 from angee.decisions.states import ClosedReason, Verdict
+from angee.decisions.testing.models import Decision, DecisionGroup
 from angee.workflows.definition import Definition
 from angee.workflows.reviews import Review, ReviewStep
 from angee.workflows.runner import runner
@@ -35,7 +36,6 @@ from angee.workflows.testing.models import (
     Workflow,
     WorkflowRun,
 )
-from tests.decisions_models import Decision, DecisionGroup
 
 
 class Approve(Action, key="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):

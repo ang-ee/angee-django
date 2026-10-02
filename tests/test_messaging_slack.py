@@ -29,11 +29,11 @@ from angee.integrate.streams import StreamPage, advance_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
 from angee.messaging.session import LiveChannelSession
+from angee.messaging.testing.models import Message, Part, Thread
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from angee.messaging_integrate_slack.backend import SlackChannelBackend, SlackRateLimitError
 from angee.messaging_integrate_slack.identity import parsed_message
 from tests.conftest import Credential, Vendor, make_integration
-from tests.messaging_models import Message, Part, Thread
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging_graphql import Channel, _platform_admin
 

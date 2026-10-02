@@ -29,6 +29,7 @@ from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.projects.models import Task as AbstractTask
+from angee.projects.testing.models import Queue, Stage, Task
 from angee.testing.permissions import install_permission_schema
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
@@ -39,7 +40,6 @@ from tests.conftest import (
     execute_schema,
     result_data,
 )
-from tests.projects_models import Queue, Stage, Task
 from tests.tables import model_tables
 
 

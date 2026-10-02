@@ -41,12 +41,12 @@ from angee.integrate.oauth.errors import (
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
+from angee.messaging.testing.models import Handle as PartiesHandle
 from tests.conftest import (
     Credential,
     ExternalAccount,
     OAuthClient,
 )
-from tests.messaging_models import Handle as PartiesHandle
 from tests.test_parties_graphql import Person as PartiesPerson
 
 # OIDC first login uses the same concrete Person and handle models as parties tests.

@@ -18,6 +18,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
+from angee.agents.testing.models import InferenceModel, InferenceProvider
 from angee.base.scoping import system_queryset
 from angee.extraction.acquisition import (
     ExtractionConfig,
@@ -49,7 +50,6 @@ from angee.workflows_extraction.steps import (
     ProcessEvidenceStep,
     RecognizePageStep,
 )
-from tests.agents_models import InferenceModel, InferenceProvider
 from tests.conftest import File, MimeType, make_integration
 from tests.extraction_models import Extraction
 from tests.test_extraction_models import evidence as evidence

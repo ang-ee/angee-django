@@ -7,11 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 from rebac import RelationshipTuple, actor_context, delete_relationship, system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from tests.chatterdemo.models import ChatterDoc
-from tests.conftest import File as StorageFile
-from tests.conftest import Vendor, create_platform_admin, execute_schema, result_data
-from tests.messaging_campaign import grant, make_user
-from tests.messaging_models import (
+from angee.messaging.testing.models import (
     Channel,
     Fragment,
     Handle,
@@ -28,6 +24,10 @@ from tests.messaging_models import (
     ThreadFollower,
     ThreadNotification,
 )
+from tests.chatterdemo.models import ChatterDoc
+from tests.conftest import File as StorageFile
+from tests.conftest import Vendor, create_platform_admin, execute_schema, result_data
+from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_graphql import _schema, _storage_drive, messaging_schema
 
 

@@ -17,11 +17,11 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.graphql.view_as import ViewAs
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, graphql_request, result_data
 from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.iam_campaign import legacy_person_emails as legacy_person_emails
-from tests.spaces_models import Group, Membership
 from tests.test_iam_graphql import _schema
 from tests.test_spaces import spaces_tables as spaces_tables
 

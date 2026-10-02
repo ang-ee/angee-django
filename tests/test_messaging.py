@@ -1,6 +1,6 @@
 """Tests for the messaging ingest write path (the channel-sync map).
 
-The concrete messaging/parties models (``tests.messaging_models``, registered from
+The concrete messaging/parties models (``angee.messaging.testing.models``, registered from
 conftest) fold each abstract source model onto one runtime table the way the
 composer does, so the manager write path runs
 against real tables. The cases pin the ingest invariants the module docstring
@@ -38,8 +38,9 @@ from rebac import (
 )
 from rebac.actors import current_sudo_reason, is_sudo
 
-import tests.spaces_models  # noqa: F401 -- register related models before native database setup
+import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
+from angee.agents.testing.models import Agent
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.serialization import strip_null_bytes
@@ -56,15 +57,7 @@ from angee.messaging.backends import (
 )
 from angee.messaging.managers import derived_part_name, normalize_subject
 from angee.messaging.models import ThreadedModelMixin
-from angee.parties.managers import HandleAssociationStatus
-from angee.parties.mixins import LinkSource
-from tests.agents_models import Agent
-from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
-from tests.conftest import Backend, Drive, MimeType, make_integration
-from tests.conftest import (
-    File as StorageFile,
-)
-from tests.messaging_models import (
+from angee.messaging.testing.models import (
     Channel,
     Fragment,
     Handle,
@@ -85,6 +78,13 @@ from tests.messaging_models import (
     ThreadFollower,
     ThreadNotification,
     TrackingValue,
+)
+from angee.parties.managers import HandleAssociationStatus
+from angee.parties.mixins import LinkSource
+from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
+from tests.conftest import Backend, Drive, MimeType, make_integration
+from tests.conftest import (
+    File as StorageFile,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
 

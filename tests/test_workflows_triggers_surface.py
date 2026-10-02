@@ -16,6 +16,7 @@ from rebac import (
 
 from angee.base.scoping import system_queryset
 from angee.integrate.schema import ConsoleImplChoicesQuery
+from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
 from angee.workflows import schema as workflow_schema
 from angee.workflows.testing.drivers import load_workflow
@@ -23,7 +24,6 @@ from angee.workflows.testing.models import Trigger, TriggerEvent
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
 from tests.conftest import Vault, Vendor, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
-from tests.integrate_models import Integration
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.workflow_steps import document
 

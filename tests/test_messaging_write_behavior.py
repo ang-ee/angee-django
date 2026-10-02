@@ -15,7 +15,7 @@ from rebac import system_context
 import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.publishing import mute_changes
 from angee.messaging import delivery
-from tests.messaging_models import Message, TrackingValue
+from angee.messaging.testing.models import Message, TrackingValue
 from tests.test_messaging import channel as channel
 
 

@@ -16,11 +16,11 @@ from rebac.models import Relationship, RelationshipRegistry
 from rebac.preflight import _check_new_model
 from rebac.schema import parse_zed
 
+from angee.projects.testing.models import Queue
+from angee.spaces.testing.models import Group
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_platform_admin, create_user
 from tests.money_models import Currency, CurrencyRate
-from tests.projects_models import Queue
-from tests.spaces_models import Group
 from tests.test_dashboards import DashboardTarget
 
 

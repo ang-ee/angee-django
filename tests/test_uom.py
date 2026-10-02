@@ -17,8 +17,8 @@ from django.db import IntegrityError, transaction
 from rebac import actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
+from angee.uom.testing.models import Uom, UomCategory
 from tests.conftest import create_user
-from tests.uom_models import Uom, UomCategory
 
 
 def _make_category(**fields: Any) -> Any:

@@ -22,7 +22,8 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.compose.runtime import Runtime
-from tests.conftest import installed_field_owners, make_addon
+from angee.testing.permissions import installed_field_owners
+from tests.conftest import make_addon
 from tests.test_model_composition import modules as modules
 from tests.test_model_composition import source
 from tests.test_zed_extensions import _base_addon, _contrib_addon

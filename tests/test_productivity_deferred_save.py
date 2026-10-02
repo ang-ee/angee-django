@@ -13,11 +13,11 @@ from django.db.models.signals import pre_save
 from django.utils import timezone
 from rebac import system_context
 
+import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.scopedemo.models  # noqa: F401 -- register related models before native database setup
-import tests.spaces_models  # noqa: F401 -- register related models before native database setup
+from angee.portfolio.testing.models import Initiative, InitiativeProject, Update
+from angee.projects.testing.models import Cycle, Project, ProjectBinding, Queue, Stage, Task, TaskRelation
 from tests.conftest import Backend, Drive
-from tests.portfolio_models import Initiative, InitiativeProject, Update
-from tests.projects_models import Cycle, Project, ProjectBinding, Queue, Stage, Task, TaskRelation
 from tests.test_project_access import project_access_schema as project_access_schema
 
 

@@ -20,8 +20,19 @@ from rebac import (
 )
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.messaging.testing.models import (
+    Handle,
+    Message,
+    MessageEdge,
+    Participant,
+    Party,
+    Person,
+    Thread,
+    ThreadFollower,
+)
 from angee.nexus.models import Cadence as AbstractCadence
 from angee.nexus.models import Tie as AbstractTie
+from angee.nexus.testing.models import Cadence, Tie
 from tests import test_messaging_graphql
 from tests.conftest import (
     SchemaAddon,
@@ -29,8 +40,6 @@ from tests.conftest import (
     execute_schema,
 )
 from tests.conftest import result_data as _data
-from tests.messaging_models import Handle, Message, MessageEdge, Participant, Party, Person, Thread, ThreadFollower
-from tests.nexus_models import Cadence, Tie
 from tests.test_messaging import ThreadedTicket
 from tests.test_project_access import project_access_schema as project_access_schema
 

@@ -8,11 +8,11 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.messaging.models import NotificationPolicy, NotificationPreference
+from angee.messaging.testing.models import Message, MessageSubtype, Party, Person, ThreadFollower, ThreadNotification
+from angee.projects.testing.models import Project
+from angee.spaces.testing.models import Membership
 from tests.messaging_campaign import add_member, fanout, grant, make_user
 from tests.messaging_campaign import audience_record as audience_record
-from tests.messaging_models import Message, MessageSubtype, Party, Person, ThreadFollower, ThreadNotification
-from tests.projects_models import Project
-from tests.spaces_models import Membership
 from tests.test_spaces import spaces_tables as spaces_tables
 
 

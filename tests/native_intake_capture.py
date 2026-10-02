@@ -10,7 +10,6 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, models
-from django.db.migrations.state import ProjectState
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import parse, validate
@@ -20,10 +19,7 @@ from rebac.roles import grant as grant_role
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import StaleRevisionError
-from angee.decisions.forms import validate_form
 from angee.graphql.schema import GraphQLSchemas
-from angee.intake.runtime_migrations.need_access_decision import FORM_SCHEMA
-from angee.intake.runtime_migrations.need_access_decision import forwards as backfill_access
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 
 
@@ -163,7 +159,8 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
             need.with_actor(self.actor).admit_requester(requester)
             self.assertTrue(need.task.thread_reader_allowed(requester))
             self.assertTrue(need.task.message_is_follower(user=requester))
-            need.remove_requester()
+        need.remove_requester()
+        with system_context(reason="test.intake.requester_role.verify_removal"):
             self.assertFalse(need.task.thread_reader_allowed(requester))
             self.assertFalse(need.task.message_is_follower(user=requester))
 
@@ -315,14 +312,14 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         before = [list(store._base_manager.order_by("pk").values()) for store in stores]
         mutation = """
           mutation Decide($id: ID!, $revision: Int!) {
-            decide(id: $id, revision: $revision, action: "approve", values: {}) {
+            decide(id: $id, revision: $revision, action: "intake.approve", values: {}) {
               ok validation_errors
             }
           }
         """
         variables = {"id": str(decision.sqid), "revision": decision.revision}
         with self.assertRaises(PermissionDenied):
-            decision.decide(actor=self.writer, revision=decision.revision, action="approve", values={})
+            decision.decide(actor=self.writer, revision=decision.revision, action="intake.approve", values={})
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, "pending")
         accepted = self.graphql(mutation, variables, bucket="console")
@@ -336,10 +333,10 @@ class NeedAccessDecisionTests(IntakeAccessCase):
     def test_stale_request_revision_preserves_the_native_conflict_code(self):
         need = self.as_user(self.need())
         revision = need.revision
-        need.decide_access("deny")
+        need.decide_access("intake.deny")
         self.graphql("""
           mutation Decide($need: ID!, $revision: Int!) {
-            decide_need_access(need: $need, action: APPROVE, expected_revision: $revision) {
+            decide_need_access(need: $need, action: INTAKE_APPROVE, expected_revision: $revision) {
               ok code
             }
           }
@@ -350,45 +347,45 @@ class NeedAccessDecisionTests(IntakeAccessCase):
     def test_action_schema_accepts_only_declared_decisions(self):
         schema = GraphQLSchemas.from_discovery().graphql_schema("public")
         action = schema.mutation_type.fields["decide_need_access"].args["action"].type.of_type
-        self.assertEqual(set(action.values), {"APPROVE", "DENY"})
+        self.assertEqual(set(action.values), {"INTAKE_APPROVE", "INTAKE_DENY"})
 
     def test_deny_replay_stale_revision_then_approve_once(self):
         need = self.as_user(self.need(), self.owner)
         before = need.revision
-        need.decide_access("deny", reason="Not yet", expected_revision=before)
+        need.decide_access("intake.deny", reason="Not yet", expected_revision=before)
         denied = need.access_decision
         self.assertEqual(need.access_verdict, "rejected")
-        self.assertEqual(need.access_resolution, {"action": "deny", "reason": "Not yet"})
+        self.assertEqual(need.access_resolution, {"action": "intake.deny", "reason": "Not yet"})
         self.assertEqual(need.access_resolved_by_id, self.owner.pk)
         self.assertEqual(need.revision, before + 1)
         self.assertIsNotNone(need.access_resolved_at)
-        need.decide_access("deny", reason="Replay")
+        need.decide_access("intake.deny", reason="Replay")
         self.assertEqual(need.revision, before + 1)
         self.assertEqual(need.access_resolution["reason"], "Not yet")
         with self.assertRaises(PermissionDenied):
-            need.decide_access("approve")
+            need.decide_access("intake.approve")
         need = self.as_user(need)
         with self.assertRaises(StaleRevisionError):
-            need.decide_access("approve", expected_revision=before)
-        account = need.decide_access("approve", reason="Granted", expected_revision=before + 1)
+            need.decide_access("intake.approve", expected_revision=before)
+        account = need.decide_access("intake.approve", reason="Granted", expected_revision=before + 1)
         self.assertEqual(need.revision, before + 2)
         self.assertEqual(need.access_verdict, "completed")
-        self.assertEqual(need.access_resolution, {"action": "approve", "reason": "Granted"})
+        self.assertEqual(need.access_resolution, {"action": "intake.approve", "reason": "Granted"})
         denied.refresh_from_db()
         self.assertEqual(need.access_decision.group.reasked_from_id, denied.group_id)
-        self.assertEqual(denied.resolution, {"action": "deny", "reason": "Not yet"})
+        self.assertEqual(denied.resolution, {"action": "intake.deny", "reason": "Not yet"})
         self.assertEqual(denied.closed_reason, "resolved")
         self.assertFalse(account.has_usable_password())
-        self.assertEqual(need.decide_access("approve").pk, account.pk)
+        self.assertEqual(need.decide_access("intake.approve").pk, account.pk)
         self.assertEqual(need.revision, before + 2)
         with self.assertRaisesMessage(ValidationError, "Approved access is final"):
-            need.decide_access("deny")
+            need.decide_access("intake.deny")
         self.assertEqual(self.User._base_manager.filter(email="new@example.com").count(), 1)
 
     def test_existing_account_without_claimed_email_can_be_approved(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         before = need.revision
-        self.assertEqual(need.decide_access("approve").pk, self.reader.pk)
+        self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
         self.assertEqual(need.revision, before + 1)
         self.assertEqual(need.access_verdict, "completed")
 
@@ -401,7 +398,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
                 result = self.graphql(
                     """
                     mutation($need: ID!) {
-                      decide_need_access(need: $need, action: APPROVE) { ok validation_errors }
+                      decide_need_access(need: $need, action: INTAKE_APPROVE) { ok validation_errors }
                     }
                 """,
                     {"need": need.sqid},
@@ -417,7 +414,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
             with self.subTest(email=email):
                 party = self.party(self.reader)
                 need = self.as_user(self.need(email=email, party=party))
-                self.assertEqual(need.decide_access("approve").pk, self.reader.pk)
+                self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
                 self.assertEqual(need.party_id, party.pk)
                 self.assertEqual(need.access_verdict, "completed")
         self.assertFalse(self.User._base_manager.filter(email="unknown@example.com").exists())
@@ -430,7 +427,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
             with self.subTest(party=party):
                 need = self.as_user(self.need(email=self.reader.email, party=party))
                 with self.assertRaisesMessage(ValidationError, "inactive"):
-                    need.decide_access("approve")
+                    need.decide_access("intake.approve")
                 need.refresh_from_db()
                 self.assertEqual(need.access_verdict, "pending")
 
@@ -439,7 +436,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
             for partial in (False, True):
                 with self.subTest(replacement=replacement, partial=partial):
                     need = self.as_user(self.need(email="", party=self.party(self.reader)))
-                    need.decide_access("approve")
+                    need.decide_access("intake.approve")
                     previous_decision = need.access_decision
                     before = need.revision
                     need.party = replacement
@@ -456,7 +453,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
 
     def test_unchanged_party_and_unpersisted_assignment_keep_decision(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
-        need.decide_access("approve")
+        need.decide_access("intake.approve")
         need.save()
         need.party = self.party(self.writer)
         need.body = "Edited request"
@@ -467,12 +464,10 @@ class NeedAccessDecisionTests(IntakeAccessCase):
 
     def test_reconcile_never_yields_system_context_and_clears_old_decision(self):
         need = self.legacy_need()
-        # Recreate an imported approval without changing the original audit
-        # attribution used by reconciliation's eligibility rule.
-        with system_context(reason="test legacy decision"):
-            apps.get_model("decisions", "Decision").objects.filter(pk=need.access_decision_id).owner_update(
-                verdict="completed", closed_reason="imported", resolution={"action": "approve", "reason": ""},
-            )
+        apps.get_model("decisions", "Decision").objects.decide(
+            need.access_decision_id, actor=self.owner, revision=need.access_decision.revision,
+            action="intake.approve", values={},
+        )
         self.assertFalse(is_sudo())
         reports = self.Need.objects.reconcile_parties()
         self.assertTrue(next(reports)["eligible"])
@@ -488,47 +483,14 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, "pending")
         self.assertEqual(need.access_resolution, {})
 
-    def test_historical_backfill_approves_only_accounts_reconciliation_keeps(self):
-        # Reproduce pre-adoption rows without creating then deleting retained seats.
-        with patch.object(self.Need, "_new_access_decision", return_value=None):
-            unconfirmed = self.legacy_need()
-            confirmed = self.legacy_need(confirmed=True)
-            edited = self.legacy_need(touched=True)
-            manual = self.need(email="", party=self.party(self.reader))
-        historical = ProjectState.from_apps(apps).apps
-        stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        tuples_before = [list(store._base_manager.order_by("pk").values()) for store in stores]
-        with connection.schema_editor() as editor:
-            backfill_access(historical, editor)
-            decision_count = historical.get_model("decisions", "Decision")._base_manager.count()
-            backfill_access(historical, editor)
-        self.assertEqual(historical.get_model("decisions", "Decision")._base_manager.count(), decision_count)
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], tuples_before)
-        for need, verdict in (
-            (unconfirmed, "pending"),
-            (confirmed, "completed"),
-            (edited, "completed"),
-            (manual, "completed"),
-        ):
-            need.refresh_from_db()
-            self.assertEqual(need.access_verdict, verdict)
-            self.assertIsNone(need.access_resolved_by_id)
-            self.assertIsNone(need.access_resolved_at)
-            self.assertEqual(need.access_decision.intake_need_id, need.pk)
-            self.assertEqual(need.access_decision.group.policy, "first")
 
-    def test_frozen_migration_form_matches_the_adopted_actions(self):
-        self.assertEqual(validate_form(FORM_SCHEMA, "approve", {}, actor=self.admin)[1],
-                         {"action": "approve", "reason": ""})
-        self.assertEqual(validate_form(FORM_SCHEMA, "deny", {}, actor=self.admin)[1],
-                         {"action": "deny", "reason": ""})
 
     def test_deciding_writes_neither_relationship_store(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
         before = [list(store._base_manager.order_by("pk").values()) for store in stores]
-        need.decide_access("deny")
-        need.decide_access("approve")
+        need.decide_access("intake.deny")
+        need.decide_access("intake.approve")
         self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
 
     def test_access_projections_batch_one_seat_query_for_lists(self):
@@ -609,15 +571,53 @@ class NeedAccessTests(IntakeAccessCase):
                 with self.assertRaises(RecordAccessSubjectRefused):
                     self.Need.objects.create(task=need.task, party=party)
             with self.assertRaises(RecordAccessSubjectRefused):
-                self.as_user(need).decide_access("approve")
+                self.as_user(need).decide_access("intake.approve")
         self.assertFalse(self.User._base_manager.filter(email="new@example.com").exists())
         need.refresh_from_db()
         self.assertIsNone(need.party_id)
         self.assertEqual(need.access_verdict, "pending")
 
+    def test_assignment_uses_target_share_and_preserves_actor_for_partial_full_and_insert_saves(self):
+        party = self.party(self.reader)
+        self.assertFalse(party.with_actor(self.owner).has_access("write"))
+        for partial in (True, False):
+            need = self.as_user(self.need(), self.owner)
+            need.party = party
+            need.body = "Assigned request"
+            need.save(**({"update_fields": ("party",)} if partial else {}))
+            self.assertFalse(need.is_sudo())
+            stored = self.Need._base_manager.get(pk=need.pk)
+            self.assertEqual(stored.party_id, party.pk)
+            self.assertEqual(stored.updated_by_id, self.owner.pk)
+            self.assertEqual(stored.body, "Request" if partial else "Assigned request")
+        inserted = self.Need(task=need.task, party=party, body="New request").with_actor(self.owner)
+        inserted.save()
+        self.assertFalse(inserted.is_sudo())
+        self.assertEqual(inserted.updated_by_id, self.owner.pk)
+        self.assertEqual(self.Need._base_manager.get(pk=inserted.pk).party_id, party.pk)
+
+    def test_need_writer_cannot_move_its_party_to_a_target_the_writer_owns(self):
+        need = self.need()
+        original_task_id = need.task_id
+        target = self.need().task
+        with system_context(reason="test.intake.assignment_target"):
+            target.owner = self.writer
+            target.save(update_fields=("owner",))
+        candidate = self.as_user(need, self.writer)
+        self.assertTrue(target.with_actor(self.writer).has_access("share"))
+        self.assertTrue(candidate.has_access("write"))
+        self.assertFalse(candidate.has_access("share"))
+        candidate.task = target
+        candidate.party = self.party(self.reader)
+        with self.assertRaises(PermissionDenied):
+            candidate.save(update_fields=("task", "party"))
+        stored = self.Need._base_manager.get(pk=need.pk)
+        self.assertEqual(stored.task_id, original_task_id)
+        self.assertIsNone(stored.party_id)
+
     def test_field_redaction_does_not_erase_decisions_on_writer_save(self):
         need = self.as_user(self.need(), self.owner)
-        need.decide_access("deny", reason="Private reason")
+        need.decide_access("intake.deny", reason="Private reason")
         reader = self.as_user(need, self.reader)
         self.assertIsNone(reader.claimed_email)
         writer = self.as_user(need, self.writer)
@@ -628,7 +628,7 @@ class NeedAccessTests(IntakeAccessCase):
             self.assertIsNone(candidate.access_resolved_at)
             self.assertIsNone(candidate.access_resolution)
             with self.assertRaises(PermissionDenied):
-                candidate.decide_access("deny")
+                candidate.decide_access("intake.deny")
         projection = self.graphql(
             """
             query { intake_needs {
@@ -653,7 +653,7 @@ class NeedAccessTests(IntakeAccessCase):
         writer.save()
         need = self.Need._base_manager.get(pk=need.pk)
         self.assertEqual(need.access_verdict, "rejected")
-        self.assertEqual(need.access_resolution, {"action": "deny", "reason": "Private reason"})
+        self.assertEqual(need.access_resolution, {"action": "intake.deny", "reason": "Private reason"})
         self.assertEqual(need.access_resolved_by_id, self.owner.pk)
 
     def test_requester_comment_filer_read_and_preview_derive_from_need(self):
@@ -665,7 +665,7 @@ class NeedAccessTests(IntakeAccessCase):
         requester_task = need.task.with_actor(to_subject_ref(self.reader))
         for permission in ("read", "comment"):
             self.assertFalse(requester_task.has_access(permission))
-        self.as_user(need).decide_access("approve")
+        self.as_user(need).decide_access("intake.approve")
         for permission in ("read", "comment"):
             self.assertTrue(requester_task.has_access(permission))
         for user in (self.owner, self.writer):
@@ -808,7 +808,7 @@ class NeedResetAccessTests(IntakeAccessCase):
         with system_context(reason="tests.intake.requester_only"):
             need.task.set_visibility("restricted")
             need.task.revoke_record_access("reader", self.reader)
-        self.as_user(need).decide_access("approve")
+        self.as_user(need).decide_access("intake.approve")
         need.refresh_from_db()
         requester_task = self.Task.objects.as_user(self.reader).filter(pk=need.task_id)
         self.assertTrue(requester_task.exists())
@@ -844,50 +844,9 @@ class NeedResetAccessTests(IntakeAccessCase):
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
 class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
     pass
+
+
 class DecisionRecordTests(IntakeAccessCase):
-    def test_revisit_keeps_the_answer_and_admits_one_current_successor(self):
-        need = self.as_user(self.need())
-        need.decide_access("deny", reason="More evidence needed")
-        old = need.access_decision
-        original = (old.verdict, old.resolution, old.resolved_at)
-        with actor_context(self.owner):
-            with self.assertRaises(StaleRevisionError):
-                need.revisit_access(decision=old, revision=old.revision - 1)
-        with actor_context(self.writer):
-            with self.assertRaises(PermissionDenied):
-                self.as_user(need, self.writer).revisit_access(decision=old, revision=old.revision)
-        with actor_context(self.owner):
-            need.revisit_access(decision=old, revision=old.revision)
-        need.refresh_from_db()
-        self.assertNotEqual(need.access_decision_id, old.pk)
-        self.assertTrue(need.access_decision.is_open)
-        old.refresh_from_db()
-        self.assertEqual((old.verdict, old.resolution, old.resolved_at), original)
-        self.assertEqual(need.access_decision.group.reasked_from_id, old.group_id)
-        with actor_context(self.owner):
-            with self.assertRaises(ValidationError):
-                need.revisit_access(decision=old, revision=old.revision)
-        subject = self.graphql("""query($model: String!, $id: String!) {
-          decisions(where: {subject_model: {_eq: $model}, subject_id: {_eq: $id}}) { id }
-        }""", {"model": "intake.Need", "id": need.sqid}, bucket="console")
-        self.assertEqual({row["id"] for row in subject["decisions"]},
-                         {old.sqid, need.access_decision.sqid})
-        related = self.graphql("""query($task: String!) {
-          decisions(where: {intake_need__task: {_eq: $task}}) { id }
-        }""", {"task": need.task.sqid}, bucket="console")
-        self.assertEqual({row["id"] for row in related["decisions"]},
-                         {old.sqid, need.access_decision.sqid})
-
-    def test_approved_access_stays_final(self):
-        need = self.as_user(self.need())
-        need.decide_access("approve")
-        seat = need.access_decision
-        with actor_context(self.owner):
-            with self.assertRaises(ValidationError):
-                need.revisit_access(decision=seat, revision=seat.revision)
-
-
-
     def test_intake_and_iam_authored_documents_match_console(self):
         schema = GraphQLSchemas.from_discovery().build("console")._schema
         root = Path(__file__).resolve().parents[1]

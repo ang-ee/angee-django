@@ -12,7 +12,9 @@ from angee.portfolio.models import InitiativeProject as AbstractInitiativeProjec
 from angee.portfolio.models import PortfolioRole, Product
 from angee.portfolio.models import Release as AbstractRelease
 from angee.portfolio.models import Update as AbstractUpdate
-from tests import projects_models  # noqa: F401 -- register the product origin and placement targets
+from angee.projects.testing import (
+    models as projects_models,  # noqa: F401 -- register the product origin and placement targets
+)
 
 
 class ProductRow(Product):

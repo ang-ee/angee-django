@@ -9,7 +9,7 @@ from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
 from angee.agents.models import Skill as AbstractSkill
 from angee.agents.models import ToolRole as AbstractToolRole
-from tests.integrate_models import Integration
+from angee.integrate.testing.integration import Integration
 
 
 class InferenceProvider(AbstractInferenceProvider, Integration):

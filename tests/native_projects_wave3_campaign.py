@@ -38,7 +38,7 @@ class ProjectSurfaceCampaign(WorkCase):
             project = self.Project.objects.create(title="Private project", owner=self.owner, converted_from=task)
             phase = self.Milestone.objects.create(project=project, name="Selected phase")
             project.set_current_milestone(phase)
-        need.with_actor(self.owner).decide_access("approve")
+        need.with_actor(self.owner).decide_access("intake.approve")
         query = "{ project_tasks { id promoted_phase project { id } milestone { id } } projects { id } }"
         before = self.graphql(query, {}, user=self.reader)
         self.assertIsNone(before["project_tasks"][0]["promoted_phase"])

@@ -16,7 +16,7 @@ import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.c
 import { useDecisionsT } from "./i18n";
 import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./slots";
 
-/** Open readable seats include delegated assignments; filters remain editable. */
+/** Start with my open seats; server-owned authority also finds delegated seats. */
 export function InboxPage(): ReactElement {
   const t = useDecisionsT();
   const uiT = useUiT();
@@ -27,7 +27,9 @@ export function InboxPage(): ReactElement {
   const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", {
     dataProviderName: "console", invalidateModels: DECISION_MODELS,
   });
-  const defaultFilter = useMemo<ResourceViewFilter>(() => ({ is_open: { exact: true } }), []);
+  const defaultFilter = useMemo<ResourceViewFilter>(() => ({
+    assignees: { exact: user?.id }, is_open: { exact: true },
+  }), [user?.id]);
   if (!user) return <LoadingPanel />;
 
   return (
@@ -36,6 +38,7 @@ export function InboxPage(): ReactElement {
       defaultFilter={defaultFilter}
       filterOptions={[
         { id: "assigned", label: t("inbox.assigned"), group: t("inbox.scope"), filter: { assignees: { exact: user.id } } },
+        { id: "can_act", label: t("inbox.canAct"), group: t("inbox.scope"), filter: { can_act: { exact: true } } },
         { id: "requested", label: t("inbox.requested"), group: t("inbox.scope"), filter: { requester: { exact: user.id } } },
         { id: "open", label: t("inbox.open"), group: t("inbox.state"), filter: { is_open: { exact: true } } },
         { id: "settled", label: t("inbox.settled"), group: t("inbox.state"), filter: { is_open: { exact: false } } },

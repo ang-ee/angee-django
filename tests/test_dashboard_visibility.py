@@ -5,7 +5,9 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 
 from angee.dashboards.models import canonical_dashboard_snapshot, widget_visibility_answers
-from tests import projects_models  # noqa: F401 -- registers the concrete work.Queue and projects.Task
+from angee.projects.testing import (
+    models as projects_models,  # noqa: F401 -- registers the concrete work.Queue and projects.Task
+)
 
 
 @pytest.mark.parametrize("key", ["slug", "queue.slug"])

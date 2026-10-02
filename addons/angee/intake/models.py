@@ -37,12 +37,12 @@ class NeedImportance(models.TextChoices):
 class NeedAccessAction(models.TextChoices):
     """Authored transitions for request access."""
 
-    APPROVE = "approve", "Approve"
-    DENY = "deny", "Deny"
+    INTAKE_APPROVE = "intake.approve", "Approve"
+    INTAKE_DENY = "intake.deny", "Deny"
 
 
 class ApproveNeedAccess(
-    Action, key=NeedAccessAction.APPROVE, label=NeedAccessAction.APPROVE.label, verdict=Verdict.COMPLETED,
+    Action, key=NeedAccessAction.INTAKE_APPROVE, label=NeedAccessAction.INTAKE_APPROVE.label, verdict=Verdict.COMPLETED,
 ):
     """Approve the request's account, with an optional explanation."""
 
@@ -50,7 +50,7 @@ class ApproveNeedAccess(
 
 
 class DenyNeedAccess(
-    Action, key=NeedAccessAction.DENY, label=NeedAccessAction.DENY.label, verdict=Verdict.REJECTED,
+    Action, key=NeedAccessAction.INTAKE_DENY, label=NeedAccessAction.INTAKE_DENY.label, verdict=Verdict.REJECTED,
 ):
     """Decline access without changing the request's account."""
 
@@ -518,6 +518,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
         The access verbs supply ``_access_decision`` after admitting or answering
         their decision, so assignment persistence does not replace that seat.
+        Mixed edits stamp audit and revision once through the actor before the
+        assignment-only ``save_base`` persists the authorized relation change.
         """
 
         update_fields = kwargs.get("update_fields")
@@ -575,7 +577,37 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 old_user = self._account_for_party(previous["party_id"])
                 new_user = self._account_for_party(values["party_id"])
                 reset_decision = values["party_id"] is None or old_user != new_user
-            super().save(**kwargs)
+            if assignment_changed and not elevated:
+                if previous is not None and not self.has_access("share"):
+                    raise PermissionDenied("Changing a request's assignment requires need share permission.")
+                assignment_fields = {
+                    name for attname in values for name in (attname, attname.removesuffix("_id"))
+                }
+                separate_assignment = (
+                    previous is None or update_fields is None or update_fields - assignment_fields - {"updated_at"}
+                )
+                if separate_assignment:
+                    # Keep ordinary fields under their actor gates. Inserts first
+                    # establish the target without assigning a party.
+                    before = previous or {**values, "party_id": None}
+                    for name, value in before.items():
+                        setattr(self, name, value)
+                    try:
+                        super().save(**kwargs)
+                    finally:
+                        for name, value in values.items():
+                            setattr(self, name, value)
+                with actor_context(actor):
+                    self.sudo(reason="intake.assign_party")
+                    try:
+                        if separate_assignment:
+                            self.save_base(force_update=True, update_fields=set(values))
+                        else:
+                            super().save(**{**kwargs, "update_fields": set(values)})
+                    finally:
+                        self.with_actor(actor)
+            else:
+                super().save(**kwargs)
             if previous is None or reset_decision:
                 # The row must exist before its decision's subject can reference it.
                 # This owner-controlled FK write is part of the same save/revision.
@@ -639,7 +671,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             party = apps.get_model("parties", "Party").objects.for_user(user)
         self.party = party
         self.save(update_fields=("party", "updated_at"))
-        approved = self.decide_access("approve")
+        approved = self.decide_access(NeedAccessAction.INTAKE_APPROVE)
         if approved is None or not self.target.thread_reader_allowed(user):
             raise PermissionDenied("The admitted requester must be able to read the record.")
         with system_context(reason="intake.need.admit_requester.follow"):
@@ -696,7 +728,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 "share"
             ):
                 raise PermissionDenied("Deciding request access requires need write and target share.")
-            if action == "approve" and locked._account_for_party(locked.party_id) is None:
+            if action == NeedAccessAction.INTAKE_APPROVE and locked._account_for_party(locked.party_id) is None:
                 get_user_model().objects.check_create()
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
@@ -706,13 +738,13 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 locked.access_decision.require_revision(decision_revision)
             verdict = action_model.verdict
             if locked.access_verdict == verdict:
-                if action == "deny":
+                if action == NeedAccessAction.INTAKE_DENY:
                     return None
                 return locked._account_for_party(locked.party_id)
             if locked.access_verdict == Verdict.COMPLETED:
                 raise ValidationError({"action": "Approved access is final."})
             user = None
-            if action == "approve":
+            if action == NeedAccessAction.INTAKE_APPROVE:
                 try:
                     user = locked._link_requester(allow_create=True)
                 except ValidationError:
@@ -730,31 +762,16 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 _access_decision=True, expected_revision=expected_revision,
                 update_fields=("party", "access_decision"),
             )
-            if action == "approve" and user is not None and getattr(user, "kind", None) == "person":
+            if (
+                action == NeedAccessAction.INTAKE_APPROVE
+                and user is not None
+                and getattr(user, "kind", None) == "person"
+            ):
                 with system_context(reason="intake.need.follow_approved_requester"):
                     if locked.target.thread_reader_allowed(user):
                         locked.target.message_subscribe(user=user)
         self.refresh_from_db()
         return user
-
-    def revisit_access(self, *, decision: Any, revision: int) -> Any:
-        """Re-admit a declined access question; approved access remains final."""
-        actor = instance_actor(self)
-        with actor_context(actor), transaction.atomic():
-            locked = type(self).objects.sudo(reason="intake.need.revisit_access.lock").locked_get(pk=self.pk)
-            if not self.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
-                "share"
-            ):
-                raise PermissionDenied("Revisiting access requires need write and target share.")
-            if locked.access_decision_id != decision.pk:
-                raise ValidationError({"revision": "The access question has changed; reload it."})
-            locked.access_decision.require_revision(revision)
-            if locked.access_verdict != Verdict.REJECTED:
-                raise ValidationError("Only declined access can be revisited.")
-            locked.access_decision = locked._new_access_decision()
-            locked.save(_access_decision=True, update_fields=("access_decision",))
-        self.refresh_from_db()
-        return self.access_decision
 
     def convert_to_task(self, queue: models.Model) -> models.Model:
         """Return this need's task; its clean concurrent no-op is SELECT-FOR-UPDATE-backed."""

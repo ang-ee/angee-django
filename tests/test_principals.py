@@ -10,8 +10,8 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
+from angee.agents.testing.models import Agent
 from angee.base.actors import actor_user_id
-from tests.agents_models import Agent
 
 User = get_user_model()
 

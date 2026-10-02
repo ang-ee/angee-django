@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import Annotated
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import F
@@ -31,8 +32,8 @@ from angee.decisions.forms import Action, Relation
 from angee.decisions.policies import DecisionPolicy
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
+from angee.decisions.testing.models import Decision, DecisionEvidence, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
-from tests.decisions_models import Decision, DecisionEvidence, DecisionGroup
 
 
 class Complete(Action, key="complete", label="Complete", verdict=Verdict.COMPLETED):
@@ -90,6 +91,16 @@ def request_for(people, **changes):
     )
 
 
+@pytest.fixture
+def delegated_request(people, composed_permissions):
+    """Exercise intake's domain authority without assigning an explicit seat."""
+    issuer, _reviewer, _outsider, _subject = people
+    with system_context(reason="test.delegated_domain"):
+        project = apps.get_model("projects", "Project").objects.create(title="Delegated review", owner=issuer)
+        need = apps.get_model("intake", "Need").objects.create(project=project)
+    return request_for(people, kind="intake.access", subject=need, assignees=None, requester=None)
+
+
 def seat(group, index=0):
     """Read committed state without carrying a principal into another call."""
 
@@ -134,7 +145,7 @@ def test_complete_lifecycle_without_any_run(people):
     assert len(resolved) == 1
 
 
-def test_delegated_system_admission_requires_a_current_actor(people):
+def test_delegated_system_admission_requires_a_current_domain_actor(people, delegated_request):
     issuer, _reviewer, _outsider, _subject = people
     request = request_for(people, assignees=None, requester=None)
     with pytest.raises(PermissionDenied):
@@ -146,20 +157,24 @@ def test_delegated_system_admission_requires_a_current_actor(people):
             Decision.objects.admit_group([request], actor=None)
     admin = create_platform_admin("delegated-decision-admin")
     with system_context(reason="test.delegated_question"):
-        group = Decision.objects.admit_group([request], actor=None)
+        with pytest.raises(ValidationError, match="current actor"):
+            Decision.objects.admit_group([request], actor=None)
+        group = Decision.objects.admit_group([delegated_request], actor=None)
         decision = seat(group)
         assert not decision.assignees.exists()
     assert group.issuer_id is None and decision.requester_id is None
     assert decision.revision == 1
+    document = "query { decisions(where: {can_act: {_eq: true}}) { id } }"
+    visible = result_data(execute_schema(addon_schema(decision_schema.schemas, "console"), document, user=issuer))
+    assert str(decision.sqid) in {row["id"] for row in visible["decisions"]}
     assert answer(decision, admin).resolved_by_id == admin.pk
 
 
-def test_reask_preserves_a_system_delegated_seat(people):
-    admin = create_platform_admin("delegated-reask-admin")
-    request = request_for(people, assignees=None, requester=None)
+def test_reask_preserves_a_system_delegated_seat(people, delegated_request):
+    issuer, _reviewer, _outsider, _subject = people
     with system_context(reason="test.delegated_reask"):
-        first = Decision.objects.admit_group([request], actor=None)
-    answer(seat(first), admin, action="decline", values={"reason": "Try again"})
+        first = Decision.objects.admit_group([delegated_request], actor=None)
+    answer(seat(first), issuer, action="decline", values={"reason": "Try again"})
     with system_context(reason="test.delegated_reask"):
         second = Decision.objects.reask(first.pk, actor=None, actions=(Complete, Decline), errors={})
         assert not seat(second).assignees.exists()
@@ -168,23 +183,21 @@ def test_reask_preserves_a_system_delegated_seat(people):
 
 
 @pytest.mark.parametrize("system_actor", [False, True])
-def test_reask_requires_system_admission_for_a_delegated_seat(people, system_actor):
+def test_reask_requires_system_admission_for_a_delegated_seat(people, delegated_request, system_actor):
     admin = create_platform_admin("delegated-reask-admission-admin")
-    request = request_for(people, assignees=None, requester=None)
     with system_context(reason="test.delegated_reask_admission"):
-        group = Decision.objects.admit_group([request], actor=None)
+        group = Decision.objects.admit_group([delegated_request], actor=None)
     answer(seat(group), admin, action="decline", values={"reason": "Try again"})
     error = PermissionDenied if system_actor else ValidationError
     with pytest.raises(error, match="system context" if system_actor else "system admission"):
         Decision.objects.reask(group.pk, actor=None if system_actor else admin,
                                actions=(Complete, Decline), errors={})
-    assert system_queryset(DecisionGroup).count() == 1
+    assert system_queryset(DecisionGroup).count() == 2
 
 
-def test_delegated_predicate_reuses_prefetched_assignment(people, django_assert_num_queries):
-    create_platform_admin("delegated-predicate-admin")
+def test_delegated_predicate_reuses_prefetched_assignment(delegated_request, django_assert_num_queries):
     with system_context(reason="test.delegated_predicate"):
-        group = Decision.objects.admit_group([request_for(people, assignees=None, requester=None)], actor=None)
+        group = Decision.objects.admit_group([delegated_request], actor=None)
         decision = Decision.objects.select_related("group").prefetch_related("assignees").get(group=group)
         with django_assert_num_queries(0):
             assert decision.is_delegated

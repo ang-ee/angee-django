@@ -13,7 +13,7 @@ from rebac.backends import backend
 from rebac.backends.local import LocalBackend
 
 from angee.graphql.capabilities import held_permissions, permission_annotations
-from tests.projects_models import Task
+from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_models import Proposal, Round
 

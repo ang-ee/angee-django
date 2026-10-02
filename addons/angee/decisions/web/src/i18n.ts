@@ -7,6 +7,7 @@ export const enDecisionsMessages = {
   "decisions.resolved": "Resolved",
   "inbox.scope": "Decisions",
   "inbox.assigned": "Assigned to me",
+  "inbox.canAct": "I can act",
   "inbox.requested": "Requested by me",
   "inbox.state": "Decision state",
   "inbox.open": "Open",

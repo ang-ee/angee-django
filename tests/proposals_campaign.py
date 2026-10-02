@@ -20,11 +20,11 @@ from rebac import (
     write_relationships,
 )
 
+from angee.messaging.testing.models import Person
+from angee.projects.testing.models import Milestone, Project, Task
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import Backend, Drive
-from tests.messaging_models import Person
-from tests.projects_models import Milestone, Project, Task
 from tests.proposals_models import Answer, Round, Topic
-from tests.spaces_models import Group, Membership
 from tests.test_project_access import project_access_schema as project_access_schema
 
 

@@ -6,8 +6,8 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
+from angee.agents.testing.models import Agent
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
-from tests.agents_models import Agent
 from tests.test_agents import InferenceModel, _provider
 
 

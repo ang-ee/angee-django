@@ -20,11 +20,11 @@ from rebac.relationships import write_relationships
 
 from angee.base.identity import public_subject_ref
 from angee.iam.roles import principal_access
+from angee.messaging.testing.models import Channel, Message, Thread
 from angee.projects.access import bind
+from angee.projects.testing.models import Project
 from tests.conftest import Backend, Drive, Folder, Vendor
 from tests.iam_models import Group
-from tests.messaging_models import Channel, Message, Thread
-from tests.projects_models import Project
 from tests.test_project_access import project_access_schema as project_access_schema
 
 

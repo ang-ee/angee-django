@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from tests.messaging_models import Handle, Party
+from angee.messaging.testing.models import Handle, Party
 
 
 def _duplicate_pair(owner: Any) -> set[Any]:

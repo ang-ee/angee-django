@@ -20,8 +20,8 @@ from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.forms import Action
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
+from angee.decisions.testing.models import Decision, DecisionEvidence, DecisionGroup
 from tests.conftest import create_user, vault_for
-from tests.decisions_models import Decision, DecisionEvidence, DecisionGroup
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

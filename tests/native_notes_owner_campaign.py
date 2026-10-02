@@ -49,6 +49,21 @@ class NotesOwnerCampaign(TransactionTestCase):
             ),
         )
 
+    def test_history_retains_stored_flag_without_unredacting_the_editor(self):
+        with actor_context(self.author):
+            note = self.note_model.objects.create(title="History", body="Original", is_starred=True)
+            note.grant_record_access("editor", self.recipient)
+        with actor_context(self.recipient):
+            visible = self.note_model.objects.get(pk=note.pk)
+            self.assertIsNone(visible.is_starred)
+            visible.body = "Edited"
+            visible.save(update_fields=("body",))
+            self.assertIsNone(visible.is_starred)
+        history = note.history.get(history_type="~")
+        self.assertTrue(history.is_starred)
+        self.assertEqual(history.body, "Edited")
+        self.assertFalse(history._meta.get_field("is_starred").null)
+
 
 class NotesOwnerDenormalizedCampaign(NotesOwnerCampaign):
     storage = "denormalized"

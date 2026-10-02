@@ -10,6 +10,7 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
+from angee.decisions.testing.models import Decision
 from angee.graphql import subscriptions
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import GraphQLSchemas
@@ -18,7 +19,6 @@ from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
-from tests.decisions_models import Decision
 
 
 class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):

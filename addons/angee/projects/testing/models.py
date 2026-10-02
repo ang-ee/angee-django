@@ -10,12 +10,14 @@ from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
 from angee.projects.models import TaskRelation as AbstractTaskRelation
 from angee.proposals.models import ProjectProposalAccess, TaskProposalAccess
+from angee.sequence.testing import (
+    models as sequence_models,  # noqa: F401 -- register the queue's native sequence targets
+)
+from angee.spaces.testing.models import Group
 from angee.work.models import Cycle as AbstractCycle
 from angee.work.models import ProjectWork, TaskWork
 from angee.work.models import Queue as AbstractQueue
 from angee.work.models import Stage as AbstractWorkStage
-from tests import sequence_models  # noqa: F401 -- register the queue's native sequence targets
-from tests.spaces_models import Group
 
 
 class Queue(AbstractQueue, Group):

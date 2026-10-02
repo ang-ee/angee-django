@@ -10,14 +10,14 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 
+from angee.messaging.testing.models import Person
 from angee.projects.access import bind, unbind
+from angee.projects.testing.models import Milestone, Project, Task
+from angee.spaces.testing.models import Group, Membership
 from angee.storage.exceptions import UploadDenied
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import Backend, Drive, File, FileAttachment, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
-from tests.messaging_models import Person
-from tests.projects_models import Milestone, Project, Task
-from tests.spaces_models import Group, Membership
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema

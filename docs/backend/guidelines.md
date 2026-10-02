@@ -756,8 +756,11 @@ and current contracts before applying a historical example to a new deployment.
   [`resources`](../../addons/angee/resources/testing/__init__.py),
   [`workflows`](../../addons/angee/workflows/testing/__init__.py), and
   [`integrate`](../../addons/angee/integrate/testing/__init__.py) test apps.
-  Register one concrete model per decision resource from the root test conftest;
-  decisions tests import those models without workflow test support.
+  Import the reusable addon-owned concrete compositions from the root test
+  conftest before database setup, including
+  [`decisions`](../../addons/angee/decisions/testing/models.py) and
+  [`messaging`](../../addons/angee/messaging/testing/models.py); decisions tests
+  import those models without workflow test support.
   Framework probes declared after setup, in isolated registries, unmanaged, or
   under uninstalled or migrated
   labels use the single [`model_tables`](../../tests/tables.py) helper. It drops only
@@ -809,6 +812,10 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Migrations and runtime
 
+- History snapshots retain stored values even when the actor's view is redacted.
+  [`ModelHistory`](../../angee/base/mixins.py) gives native history construction a
+  detached snapshot and records deletion inside the delete transaction before
+  the source row disappears; it never unredacts the caller's instance.
 - **Review local-only rows before upgrading pull-only record sync.** The
   [record-sync driver](../../addons/angee/integrate/README.md) may create them
   remotely as soon as the first baseline completes. Remove rows that must remain

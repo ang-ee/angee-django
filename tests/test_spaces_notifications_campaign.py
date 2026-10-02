@@ -7,13 +7,13 @@ from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.checks import check_ownership
 from angee.messaging.models import NotificationPolicy
+from angee.messaging.testing.models import MessageSubtype, Party, Person, ThreadFollower
+from angee.spaces.testing.models import Membership
 from tests.conftest import create_user, execute_schema, result_data
-from tests.messaging_models import MessageSubtype, Party, Person, ThreadFollower
 from tests.spaces_campaign_helpers import ROLES
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console
 from tests.spaces_campaign_helpers import spaces_storage as spaces_storage
-from tests.spaces_models import Membership
 from tests.test_productivity_write_behavior import Queue
 from tests.test_spaces import spaces_tables as spaces_tables
 

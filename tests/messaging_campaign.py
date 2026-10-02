@@ -9,10 +9,10 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.graphql.publishing import mute_changes
 from angee.messaging.models import AudienceMember, NotificationPolicy
+from angee.messaging.testing.models import Message, Party, Person, ThreadAttachment, ThreadNotification
+from angee.projects.testing.models import Project
+from angee.spaces.testing.models import Group, Membership
 from tests.chatterdemo.models import ChatterDoc
-from tests.messaging_models import Message, Party, Person, ThreadAttachment, ThreadNotification
-from tests.projects_models import Project
-from tests.spaces_models import Group, Membership
 
 
 def grant(row, relation, user):

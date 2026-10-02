@@ -24,10 +24,10 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.base.identity import public_id_for
+from angee.messaging.testing.models import Party
+from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import create_user
-from tests.messaging_models import Party
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.tags_models import Tag, TagAssignment
 
 
 def _shared_reader_exists(tag: Any) -> bool:

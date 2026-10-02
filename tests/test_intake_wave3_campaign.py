@@ -1,4 +1,4 @@
-"""Execute intake's capture, decisions and migration campaign in emitted hosts."""
+"""Execute intake's capture and decisions campaign in emitted hosts."""
 
 import pytest
 

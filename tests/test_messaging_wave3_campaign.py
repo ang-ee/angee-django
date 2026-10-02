@@ -21,10 +21,10 @@ from rebac import (
 from rebac.roles import grant as grant_role
 
 from angee.graphql.publishing import mute_changes
+from angee.messaging.testing.models import ActivityType, Message, ThreadActivity, ThreadAttachment, ThreadNotification
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import execute_schema, result_data
 from tests.messaging_campaign import grant
-from tests.messaging_models import ActivityType, Message, ThreadActivity, ThreadAttachment, ThreadNotification
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema

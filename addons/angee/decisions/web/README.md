@@ -1,8 +1,9 @@
 # Decisions web
 
 The routed `ResourceList` owns the inbox and record frame. Its editable default
-filter selects open readable seats, including seats with delegated assignment;
-the native filter box supplies assigned/requested and open/settled predicates
+filter selects open seats assigned to the current person. The server-owned
+`can_act` filter finds seats they can answer, including delegated assignments;
+the native filter box supplies assigned/requested/answerable and open/settled predicates
 and saved views. The backend owns
 visibility, authority, expiry, and settlement. A requester filter does not grant access, and the other
 seats section shows only decisions the current person may read.
