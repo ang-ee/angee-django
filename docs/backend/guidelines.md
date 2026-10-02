@@ -927,6 +927,11 @@ and current contracts before applying a historical example to a new deployment.
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
   for `**/runtime_migrations` because formatting also changes the pinned digest.
+- **Removing a field or donor addon whose column holds data needs a declared
+  cutover.** `makemigrations` refuses the autodetected drop through the
+  [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
+  addon that stays installed declares a runtime migration that preserves or
+  retires the data and removes the field; an empty column needs nothing.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its
