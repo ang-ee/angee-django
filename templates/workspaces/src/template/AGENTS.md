@@ -6,6 +6,12 @@ slot**, with optional external-addon slots beside it. The workspace is the
 working surface; the stack's `sources/` directory is the operator's clone
 cache — never work there.
 
+Angee development uses Jujutsu (jj): each source store is a colocated jj
+repository, and every further workspace is a jj workspace of it. The operator
+does not manage jj yet, so **do not create workspaces with `angee ws create`**;
+its `angee ws` verbs address only the workspaces it created, such as this one.
+`angee/.agents/skills/angee-workspace/SKILL.md` owns the jj workflow.
+
 ## The slots
 
 - **`angee/`** — the consolidated framework repository. Its root `AGENTS.md`
@@ -38,9 +44,12 @@ installed `angee` CLI.
 ## Rules of the workspace
 
 - Each slot is pinned to this workspace's branch — **never `git checkout`
-  or `switch` inside a slot**; create another workspace for another branch.
-  Update slots with the workspace source verbs (`angee ws …` /
+  or `switch` inside a slot**; add a jj workspace for another branch. Update
+  operator-created slots with the workspace source verbs (`angee ws …` /
   `workspaceSourcePull`), integrate back with publish/merge.
+- A slot that has `.jj` is a jj workspace: write through `jj` only there. It
+  has no running host and no JS install, so run web checks and browser
+  verification in this stack's `src` workspace after merging its bookmark.
 - **Never `pnpm install` inside a slot** — the stack workspace at the stack
   root owns the JS install; a private install forks dependency identities
   for every linked framework package.
