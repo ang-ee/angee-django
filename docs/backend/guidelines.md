@@ -979,6 +979,12 @@ and current contracts before applying a historical example to a new deployment.
   `transaction.on_commit(...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
+  Guards follow Django's final concrete fields, including inherited and deferred
+  columns. See [seeded transition state](#seeded-transition-state) for initialization.
+  Reload committed state through `AngeeModel.refresh_from_db`, or copy loaded
+  values from the owner's persisted copy of the same row through
+  `StateTransitions.copy_persisted_state`; reload authorization stays private.
+  Recovery writes outside the graph use `force_state` with a concrete reason.
   Compose a custom final save through `persist(instance, *, update_fields)`;
   the success hook must explicitly forward it to `save_state`, which retains the
   concurrency guard and transaction.
@@ -996,8 +1002,10 @@ and current contracts before applying a historical example to a new deployment.
   `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
   free.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
-  Lifecycle side effects that must survive those paths belong on Django signals; Agent's
-  service-user deactivation is a `post_delete` receiver for this reason.
+  Lifecycle guards and side effects that must survive those paths belong on Django
+  signals calling the owning model rules. Agents' teardown and active-turn guards
+  use `pre_delete`; service-user deactivation uses `post_delete`. See the
+  [agents receivers](../../addons/angee/agents/signals.py).
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with
@@ -1071,6 +1079,17 @@ and current contracts before applying a historical example to a new deployment.
   name; that field also owns the content-type and object-id backing column names.
   Source omission and explicit null must remain
   distinguishable through dataset normalization.
+- <a id="seeded-transition-state"></a>**Transition-owned state in a seed is an initial value, applied on create and never on update.**
+  Seed initial state through model construction.
+  This covers only fields guarded by a
+  [`StateTransitions`](../../angee/base/transitions.py) declaration; the
+  [resource loader](../../addons/angee/resources/loader.py) validates seeded state
+  before discarding it on updates. Companion fields written by transitions
+  (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
+  such as `submitted_at`) remain ordinary seed fields and are not protected.
+  Seeds must omit those fields to preserve their live values.
+  Unchanged rows with hashes from the previous state-inclusive rule migrate
+  only their ledger hash; changed seed values or keys still trigger import.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.

@@ -211,7 +211,7 @@ class AgentType(AngeeNode):
     can_deprovision: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
     can_delete: bool = strawberry_django.field(
         only=["lifecycle", "workspace", "service", "conflict_kind"],
-        annotate={"_has_sessions": lambda info: Agent.has_sessions_expression()},
+        annotate={"_has_active_turns": lambda info: Agent.has_active_turns_expression()},
     )
     created_at: auto
     updated_at: auto
@@ -342,7 +342,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
-        "lifecycle",
     ],
     updatable=[
         "name",
@@ -358,7 +357,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
-        "lifecycle",
     ],
     field_id_decode={
         "owner": public_pk_decoder(User),

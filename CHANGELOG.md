@@ -11,6 +11,11 @@ live in code docstrings.
 
 ## Unreleased — in-process agent sessions
 
+- Enforce transition-owned state assignment guards on composed concrete models,
+  including inherited and deferred fields. Reload through `AngeeModel`, and copy
+  loaded persisted row values through `StateTransitions.copy_persisted_state`.
+  Remove `lifecycle` from agent generic update and insert inputs; lifecycle
+  changes use the owning actions, and the statusbar is read-only.
 - Run one persisted chat turn per Celery task through the agent's runtime and
   service-user actor. Model verbs own start, post, Stop, Close, streamed updates
   and settlement; a partial unique constraint permits one active turn per
@@ -26,6 +31,13 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Resource seeds apply transition-owned state only when creating a target;
+  updates and adoption preserve live state. Initial state is excluded from
+  content hashes, so changing it alone does not trigger re-import.
+  Unchanged seeds with state-inclusive ledger hashes skip import and migrate
+  only their ledger hash. Seeds whose values or keys changed still import once,
+  overwriting operator edits to other fields they name while preserving live
+  transition-owned state.
 - Workflow IO steps commit claims before their bodies, fence results, reap
   deadlines and retain effect markers. Operator actions recover failed or
   stalled work with explicit duplicate acknowledgement when required. Add

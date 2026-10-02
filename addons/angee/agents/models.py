@@ -25,7 +25,6 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
-from django.db.models.signals import class_prepared, post_delete
 from django.utils import timezone
 from pydantic_ai.messages import (
     BinaryContent,
@@ -55,7 +54,7 @@ from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.graphql.events import ChangeRelatedRecord
-from angee.iam.service_users import deactivate_service_user, sync_service_user
+from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key
@@ -287,6 +286,9 @@ class TurnStatus(models.TextChoices):
 
 ACTIVE_TURN_STATUSES = (TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL)
 """Turn states that occupy the session's single execution slot."""
+
+ACTIVE_TURN_DELETE_MESSAGE = "An agent turn is still running or awaiting approval; stop it first."
+"""Turn-owned refusal shared with session deletion guards."""
 
 OPEN_TURN_STATUSES = (TurnStatus.PENDING, *ACTIVE_TURN_STATUSES)
 """Unfinished turns canceled when their session closes."""
@@ -839,6 +841,9 @@ class Agent(AuditMixin, AngeeDataModel):
     ``instructions`` into AGENTS.md/CLAUDE.md, the selected skills and MCP servers/tools
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
+
+    Deletion requires teardown and stopped turns on every Django collector path.
+    Sessions and turns derive delete authority from this agent in the Zed schema.
     """
 
     runtime = True
@@ -1102,37 +1107,28 @@ class Agent(AuditMixin, AngeeDataModel):
 
     @property
     def can_delete(self) -> bool:
-        """Visibility projection of deletion: :meth:`delete_blocker` and the retained sessions.
+        """Visibility projection of :meth:`delete_blocker`."""
 
-        Deletion has two refusing owners: :meth:`delete_blocker` (an operator instance
-        must be torn down first) and the framework delete path, which reports the
-        protected sessions itself. The projection answers both, the second from the
-        ``_has_sessions`` annotation when a list selected it.
-        """
-
-        if self.delete_blocker() is not None:
-            return False
-        projected = getattr(self, "_has_sessions", None)
-        if projected is not None:
-            return not projected
-        return not type(self).system_queryset().filter(self.has_sessions_expression(), pk=self.pk).exists()
+        return self.delete_blocker() is None
 
     @classmethod
-    def has_sessions_expression(cls) -> models.Exists:
-        """Project retained session existence independently of the reader's scope."""
+    def has_active_turns_expression(cls) -> models.Exists:
+        """Project active execution across all sessions without exposing transcripts."""
 
         session_model = cls._meta.get_field("sessions").related_model
-        return models.Exists(session_model.system_queryset().filter(agent_id=models.OuterRef("pk")))
+        turn_model = session_model._meta.get_field("turns").related_model
+        return models.Exists(turn_model.system_queryset().active().filter(session__agent_id=models.OuterRef("pk")))
 
     def delete_blocker(self) -> str | None:
-        """Return the model-owned reason deletion is refused, or ``None``.
-
-        Retained sessions are not repeated here: the framework delete path reports
-        protected relations as a readable error for every model.
-        """
+        """Require teardown and stopped turns before deleting the agent and its sessions."""
 
         if self.deprovision_blocker() is None:
             return "Deprovision this agent before deleting it."
+        active = getattr(self, "_has_active_turns", None)
+        if active is None:
+            active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
+        if active:
+            return "Stop all active turns before deleting this agent."
         return None
 
     def provision_blocker(self, *, prerequisites: bool = True) -> str | None:
@@ -1801,12 +1797,13 @@ class AgentSession(AuditMixin, AngeeDataModel):
     A pending turn retained across a rebuild runs first when the user next posts.
     A session left awaiting approval is released through Stop or Close. If an
     after-commit settlement signal is lost, the turn stays parked until Stop.
+    Delete authority derives from the agent, independently of session ownership.
     """
 
     runtime = True
 
     sqid_prefix = "ase_"
-    agent = models.ForeignKey("agents.Agent", on_delete=models.PROTECT, related_name="sessions")
+    agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
@@ -1952,7 +1949,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
         """Require active execution to be stopped before deleting its transcript."""
 
         if self.turns.active().exists():
-            return "Stop the active turn or close this session before deleting it."
+            return ACTIVE_TURN_DELETE_MESSAGE
         return None
 
     def claim_turn(self) -> Any | None:
@@ -2174,6 +2171,11 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         model = self._meta.get_field("session").remote_field.model
         return (ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(self.session_id)),)
 
+    def delete_blocker(self) -> str | None:
+        """Refuse deletion of claimed work, including work parked on approval."""
+
+        return ACTIVE_TURN_DELETE_MESSAGE if self.status in ACTIVE_TURN_STATUSES else None
+
     @transition(
         status,
         source=TurnStatus.PENDING,
@@ -2230,37 +2232,3 @@ class AgentTurn(AuditMixin, AngeeDataModel):
     )
     def mark_canceled(self) -> None:
         """Cancel this turn without deleting its audit trail."""
-
-
-def _deactivate_agent_service_user(
-    sender: type[models.Model],
-    instance: models.Model,
-    **kwargs: Any,
-) -> None:
-    """Deactivate an agent service user after every delete path Django supports."""
-
-    del sender, kwargs
-    deactivate_service_user(instance)
-
-
-def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:
-    """Connect concrete Agent lifecycle handlers."""
-
-    del kwargs
-    try:
-        is_agent = issubclass(sender, Agent)
-    except TypeError:
-        return
-    if not is_agent or sender._meta.abstract:
-        return
-    post_delete.connect(
-        _deactivate_agent_service_user,
-        sender=sender,
-        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.service_user.deactivate",
-    )
-
-
-class_prepared.connect(
-    _connect_agent_lifecycle,
-    dispatch_uid="angee.agents.agent_lifecycle.class_prepared",
-)

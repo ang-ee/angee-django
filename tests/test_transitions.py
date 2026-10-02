@@ -9,9 +9,14 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.test import override_settings
+from django.test.utils import isolate_apps
+from rebac import system_context
 
+from angee.agents.models import AgentLifecycle, SessionStatus, TurnStatus
+from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceProvider
 from angee.base import transitions
 from angee.base.fields import StateField
+from angee.base.models import AngeeModel
 from angee.base.transitions import (
     StateTransitions,
     TransitionNotAllowed,
@@ -19,6 +24,9 @@ from angee.base.transitions import (
     save_state,
     transition,
 )
+from angee.integrate.models import IntegrationLifecycle
+from angee.integrate.testing.integration import Integration
+from tests.conftest import make_integration
 from tests.tables import model_tables
 
 POLICY_SETTING = "ANGEE_TEST_TRANSITION_POLICY"
@@ -61,7 +69,7 @@ def persist_after_review(instance: Any, source: Any, target: Any) -> None:
     save_state(instance, source, target)
 
 
-class TransitionTask(models.Model):
+class TransitionTask(AngeeModel):
     """Concrete throwaway model used for guarded-transition tests."""
 
     class State(models.TextChoices):
@@ -156,11 +164,48 @@ class TransitionTask(models.Model):
         self.review_body_save_field = get_transition_save_field(self)
 
 
+def test_field_names_include_both_state_transition_declarations() -> None:
+    assert StateTransitions.get_field_names(TransitionTask) == {"state", "review_state"}
+
+
+@isolate_apps()
+def test_transition_host_requires_angee_model() -> None:
+    """A concrete host must compose the owner of guarded reload authorization."""
+
+    with pytest.raises(ImproperlyConfigured, match=r"tests.PlainTransitionTask.*AngeeModel"):
+        class PlainTransitionTask(models.Model):
+            state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
+            state_transitions = StateTransitions(state, {})
+
+            class Meta:
+                app_label = "tests"
+
+
+@isolate_apps()
+def test_composition_missing_declared_state_field_names_host_and_declaration() -> None:
+    """Removing an abstract field cannot leave its inherited declaration dangling."""
+
+    class StateSource(AngeeModel):
+        state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
+        state_transitions = StateTransitions(state, {})
+
+        class Meta:
+            app_label = "tests"
+            abstract = True
+
+    with pytest.raises(ImproperlyConfigured, match=r"tests.MissingStateTask.state_transitions.*'state'"):
+        class MissingStateTask(StateSource):
+            state = None
+
+            class Meta:
+                app_label = "tests"
+
+
 @pytest.fixture
 def transition_task_table() -> Iterator[None]:
     """Create the throwaway table for one test."""
 
-    with model_tables((TransitionTask,)):
+    with model_tables((TransitionTask,)), system_context(reason="test guarded transition host"):
         yield
 
 
@@ -302,7 +347,7 @@ def test_nested_transition_restores_outer_save_context(
     """Nested transitions and force-state saves restore the outer field."""
 
     seed = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
-    task = TransitionTask(pk=seed.pk, state=TransitionTask.State.RUNNING)
+    task = TransitionTask(pk=seed.pk, state=TransitionTask.State.RUNNING, created_at=seed.created_at)
     task.save()
     if fail_nested:
         if force_review:
@@ -543,6 +588,155 @@ def test_direct_assignment_rejected_on_guarded_fields(transition_task_table: Non
     assert task.state == TransitionTask.State.DRAFT
 
 
+@pytest.mark.parametrize("from_db", [False, True])
+@pytest.mark.parametrize(
+    ("model", "field_name", "initial", "target"),
+    [
+        (Agent, "lifecycle", AgentLifecycle.READY, AgentLifecycle.DRAFT),
+        (AgentSession, "status", SessionStatus.IDLE, SessionStatus.CLOSED),
+        (AgentTurn, "status", TurnStatus.PENDING, TurnStatus.RUNNING),
+        (Integration, "lifecycle", IntegrationLifecycle.CONNECTED, IntegrationLifecycle.DISCONNECTED),
+        (InferenceProvider, "lifecycle", IntegrationLifecycle.CONNECTED, IntegrationLifecycle.DISCONNECTED),
+    ],
+)
+def test_composed_models_guard_inherited_state_after_loading(
+    model: type[models.Model], field_name: str, initial: Any, target: Any, from_db: bool,
+) -> None:
+    """Abstract declarations guard concrete copies and inherited MTI columns."""
+
+    instance = model(**{field_name: initial})
+    if from_db:
+        fields = model._meta.concrete_fields
+        instance = model.from_db(
+            "default", [field.attname for field in fields],
+            [getattr(instance, field.attname) for field in fields],
+        )
+        assert not instance._state.adding
+    assert getattr(instance, field_name) == initial
+
+    with pytest.raises(TransitionNotAllowed, match="direct assignment is not allowed"):
+        setattr(instance, field_name, target)
+
+    assert getattr(instance, field_name) == initial
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model", [Integration, InferenceProvider])
+def test_composed_transitions_persist_inherited_state(model: type[models.Model]) -> None:
+    """Inherited methods retain their guarded saves on the parent and MTI child."""
+
+    instance = make_integration("guarded-integration", model=model)
+    with system_context(reason="test composed integration transition"):
+        instance.pause()
+        instance.refresh_from_db()
+        assert instance.lifecycle == IntegrationLifecycle.PAUSED
+        with pytest.raises(TransitionNotAllowed, match="direct assignment is not allowed"):
+            instance.lifecycle = IntegrationLifecycle.CONNECTED
+        instance.connect()
+        instance.refresh_from_db()
+        assert instance.lifecycle == IntegrationLifecycle.CONNECTED
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model", [Integration, InferenceProvider])
+@pytest.mark.parametrize("missing", [False, True])
+def test_composed_state_reload_preserves_assignment_guard(model: type[models.Model], missing: bool) -> None:
+    """Reloading another instance's transition or failing a reload never leaves a bypass."""
+
+    instance = make_integration("reloaded-integration", model=model)
+    with system_context(reason="test committed integration state reload"):
+        winner = model.objects.get(pk=instance.pk)
+        winner.pause()
+        if missing:
+            model.objects.filter(pk=instance.pk).delete()
+            with pytest.raises(model.DoesNotExist):
+                instance.refresh_from_db(fields=["lifecycle"])
+        else:
+            instance.refresh_from_db(fields=["lifecycle"])
+            assert instance.lifecycle == IntegrationLifecycle.PAUSED
+        with pytest.raises(TransitionNotAllowed, match="direct assignment is not allowed"):
+            instance.lifecycle = IntegrationLifecycle.DISCONNECTED
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model", [Integration, InferenceProvider])
+def test_composed_deferred_state_rejects_assignment_before_read(model: type[models.Model]) -> None:
+    """A deferred database column is loaded before checking a direct assignment."""
+
+    seed = make_integration("deferred-integration", model=model)
+    with system_context(reason="test deferred integration state guard"):
+        instance = model.objects.defer("lifecycle").get(pk=seed.pk)
+        assert "lifecycle" in instance.get_deferred_fields()
+        with pytest.raises(TransitionNotAllowed, match="direct assignment is not allowed"):
+            instance.lifecycle = IntegrationLifecycle.DISCONNECTED
+        assert instance.lifecycle == IntegrationLifecycle.CONNECTED
+        instance.pause()
+        instance.refresh_from_db()
+        assert instance.lifecycle == IntegrationLifecycle.PAUSED
+
+
+@pytest.mark.django_db
+def test_copy_persisted_state_copies_loaded_values_and_invalidates_relation_cache(
+    django_assert_num_queries: Any,
+) -> None:
+    """An owner can copy its saved state and FK without a reload or an open bypass."""
+
+    instance = make_integration("persisted-state-copy")
+    other = make_integration("persisted-state-other-vendor")
+    with system_context(reason="test copy persisted integration fields"):
+        assert instance.vendor.pk != other.vendor.pk
+        source = Integration.objects.get(pk=instance.pk)
+        source.vendor = other.vendor
+        source.save(update_fields={"vendor"})
+        source.pause()
+        with django_assert_num_queries(0):
+            StateTransitions.copy_persisted_state(instance, source, ("lifecycle", "vendor"))
+
+        assert instance.lifecycle == IntegrationLifecycle.PAUSED
+        assert instance.vendor_id == source.vendor_id
+        assert not Integration._meta.get_field("vendor").is_cached(instance)
+        assert not hasattr(instance, "_angee_transition_write_fields")
+        with pytest.raises(TransitionNotAllowed, match="direct assignment is not allowed"):
+            instance.lifecycle = IntegrationLifecycle.DISCONNECTED
+
+
+@pytest.mark.parametrize("invalid_source", ["model", "pk", "unsaved"])
+def test_copy_persisted_state_rejects_a_different_or_unsaved_row(invalid_source: str) -> None:
+    """Construction with a matching pk does not authorize state copying."""
+
+    instance = TransitionTask(pk=1)
+    model = PolicyTask if invalid_source == "model" else TransitionTask
+    source = model(pk=2 if invalid_source == "pk" else 1)
+    if invalid_source != "unsaved":
+        source = model.from_db("default", ["id", "state"], [source.pk, source.state])
+
+    with pytest.raises((TypeError, ValueError), match={
+        "model": "same concrete model", "pk": "same primary key", "unsaved": "persisted source row",
+    }[invalid_source]):
+        StateTransitions.copy_persisted_state(instance, source, ("state",))
+
+    assert instance.state == TransitionTask.State.DRAFT
+    assert not hasattr(instance, "_angee_transition_write_fields")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_copy_persisted_state_rejects_deferred_values_before_copying(
+    transition_task_table: None, django_assert_num_queries: Any,
+) -> None:
+    """Copying uses loaded values only and cannot partially apply a deferred source."""
+
+    instance = TransitionTask.objects.create()
+    TransitionTask.objects.filter(pk=instance.pk).update(note="committed", state=TransitionTask.State.RUNNING)
+    source = TransitionTask.objects.defer("state").get(pk=instance.pk)
+    with django_assert_num_queries(0), pytest.raises(KeyError, match="state"):
+        StateTransitions.copy_persisted_state(instance, source, ("note", "state"))
+
+    assert instance.note == ""
+    assert instance.state == TransitionTask.State.DRAFT
+    assert "state" in source.get_deferred_fields()
+    assert not hasattr(instance, "_angee_transition_write_fields")
+
+
 @pytest.mark.django_db(transaction=True)
 def test_transition_not_allowed_message_names_field_source_and_target(transition_task_table: None) -> None:
     """Illegal transition errors include the field, source, and target."""
@@ -570,7 +764,7 @@ def test_not_allowed_public_helper_raises_the_transition_error(transition_task_t
     assert "state transition from draft to archived" in str(error.value)
 
 
-class PolicyTask(models.Model):
+class PolicyTask(AngeeModel):
     """Throwaway model exercising the settings-backed transition policy overlay."""
 
     class State(models.TextChoices):
@@ -610,7 +804,7 @@ class PolicyTask(models.Model):
 def policy_task_table() -> Iterator[None]:
     """Create the throwaway policy table for one test."""
 
-    with model_tables((PolicyTask,)):
+    with model_tables((PolicyTask,)), system_context(reason="test transition policy host"):
         yield
 
 
@@ -697,7 +891,7 @@ def test_policy_marker_requires_a_policy_setting() -> None:
 
     with pytest.raises(ImproperlyConfigured):
 
-        class Unresolvable(models.Model):
+        class Unresolvable(AngeeModel):
             """Model whose policy edge has no settings key to resolve it."""
 
             class State(models.TextChoices):

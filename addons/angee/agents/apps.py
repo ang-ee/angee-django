@@ -15,4 +15,6 @@ class AgentsConfig(AppConfig):
         """Run agents ready-time hooks after app population."""
 
         super().ready()
-        # Phase-1 ready hooks belong here when agents needs populated models.
+        from angee.agents import signals
+
+        signals.connect()

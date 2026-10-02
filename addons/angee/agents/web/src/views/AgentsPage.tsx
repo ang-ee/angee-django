@@ -148,7 +148,7 @@ function AgentResourceListPage({
       <Form resource={MODEL} deleteVisibleWhen={isTemplate ? undefined : canDeleteAgent}>
         {isTemplate ? null : lifecycleActions}
         <Field name="name" title />
-        <Field name="lifecycle" widget="statusbar" status />
+        <Field name="lifecycle" widget="statusbar" status readOnly />
         {/* Description then instructions lead the Overview tab as full-width
             textareas; `body={false}` keeps `description` a normal field rather than
             the form's auto-detected body. */}
