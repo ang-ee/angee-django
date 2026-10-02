@@ -49,6 +49,9 @@ outermost transaction.
 ``get_transition_save_field(instance)`` exposes the active save context's field
 attname, or ``None``, for model save guards without inspecting private markers.
 
+``StateTransitions.get_field_names(model)`` returns the names of fields guarded
+by declarations on the model or its ancestors, including multi-table parents.
+
 
 Direct Python assignment to a guarded field is rejected at descriptor level after
 initial model construction. The descriptor still permits initial loading,
@@ -206,6 +209,26 @@ class StateTransitions:
             spec.declaration = self
             self._validate_declared_transition(spec)
             method_map[method_name] = spec
+
+    @classmethod
+    def get_field_names(cls, model: type[models.Model]) -> frozenset[str]:
+        """Return guarded state field names, including inherited declarations."""
+
+        return frozenset(
+            value.field.name or value.field.attname
+            for value in cls._iter_declarations(model)
+        )
+
+    @classmethod
+    def _iter_declarations(cls, model: type[models.Model]) -> Iterator[StateTransitions]:
+        """Yield each reachable declaration once, in model MRO order."""
+
+        seen: set[int] = set()
+        for owner in model.__mro__:
+            for value in vars(owner).values():
+                if isinstance(value, cls) and id(value) not in seen:
+                    seen.add(id(value))
+                    yield value
 
     @classmethod
     def action_specs(cls, model: type[models.Model]) -> tuple[TransitionActionSpec, ...]:
@@ -575,12 +598,8 @@ def revalidate_transition_metadata(cls: type[models.Model]) -> None:
     when the reorder leaves a transition method guarding an undeclared edge.
     """
 
-    seen: set[int] = set()
-    for klass in cls.__mro__:
-        for value in vars(klass).values():
-            if isinstance(value, StateTransitions) and id(value) not in seen:
-                seen.add(id(value))
-                value.revalidate_for(cls)
+    for declaration in StateTransitions._iter_declarations(cls):
+        declaration.revalidate_for(cls)
 
 
 def _state_key(field: StateField, value: Any) -> str:

@@ -156,6 +156,10 @@ class TransitionTask(models.Model):
         self.review_body_save_field = get_transition_save_field(self)
 
 
+def test_field_names_include_both_state_transition_declarations() -> None:
+    assert StateTransitions.get_field_names(TransitionTask) == {"state", "review_state"}
+
+
 @pytest.fixture
 def transition_task_table() -> Iterator[None]:
     """Create the throwaway table for one test."""
