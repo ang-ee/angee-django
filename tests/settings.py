@@ -126,6 +126,10 @@ else:
             "TEST": {"NAME": _TEST_DB_FILE},
         }
     }
+    # SQLite caps an expression tree at depth 1000, which compiled permissions over
+    # recursive hierarchies exceed at the framework's default depth of 16. Hierarchies
+    # deeper than 8 need PostgreSQL.
+    REBAC_DEPTH_LIMIT = 8
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
