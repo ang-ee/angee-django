@@ -36,7 +36,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.models.functions import MD5, Coalesce
@@ -2230,7 +2230,13 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
 
         if self.thread_id is None:
             return True
-        return not self.thread.is_record_attached()
+        try:
+            thread = self.thread
+        except ObjectDoesNotExist:
+            # The thread went first in the same delete cascade (record chatter teardown);
+            # a missing thread is no evidence of a generic one, so stay off the surface.
+            return False
+        return not thread.is_record_attached()
 
 
 class ThreadNotification(AuditMixin, AngeeDataModel):

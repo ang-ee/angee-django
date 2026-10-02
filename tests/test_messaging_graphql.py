@@ -3663,6 +3663,25 @@ def test_record_chatter_rows_opt_out_of_change_broadcasts(composed_tables: None)
         assert orphan.broadcasts_changes() is True
 
 
+def test_message_whose_thread_was_deleted_in_the_same_cascade_does_not_broadcast(composed_tables: None) -> None:
+    """Deleting a chattered record tears its thread down before the messages' delete
+    publication runs; asking whether such a message broadcasts must answer (not raise),
+    and a missing thread is no evidence of a generic one."""
+
+    admin = _platform_admin("msg-cascade-admin")
+    with system_context(reason="test.messaging.cascade.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case D")
+    with actor_context(admin):
+        record_message = ticket.message_post("Chatter torn down with its record")
+    thread_id = record_message.thread_id
+
+    with system_context(reason="test.messaging.cascade.delete"):
+        ticket.delete()
+        assert not messaging_models.Thread._base_manager.filter(pk=thread_id).exists()
+        torn_down = messaging_models.Message(thread_id=thread_id, preview="gone")
+        assert torn_down.broadcasts_changes() is False
+
+
 def test_teardown_for_channel_purges_messages_threads_and_cascade(composed_tables: None) -> None:
     """``teardown_for_channel`` deletes a channel's threads/messages and their subtrees.
 
