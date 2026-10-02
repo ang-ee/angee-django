@@ -393,6 +393,25 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         permission = declaration_owner.record_access_permission(relation)
         self.require_access(permission)
+        self._write_declared_record_access(relation, subject)
+
+    def system_grant_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Grant one declared direct relation for a framework flow its owner already authorized.
+
+        Requires an explicit system scope. The ambient actor is not consulted, because the
+        flow's own owner check (for example a bridge's ``write``) is the authorization;
+        the relation must still be declared and the subject valid for it.
+        """
+
+        if not is_sudo():
+            raise PermissionDenied("A system record grant requires an explicit system scope.")
+        self.validate_record_access_target()
+        type(self).record_access_permission(relation)
+        self._write_declared_record_access(relation, subject)
+
+    def _write_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Validate the subject and write the declared relationship tuple."""
+
         self.validate_record_access_subject(relation, subject)
         write_relationships(
             [

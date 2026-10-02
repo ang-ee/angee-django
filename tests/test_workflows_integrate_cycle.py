@@ -12,7 +12,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection
 from django.db.models.functions import Now
 from django.utils import timezone
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.scoping import system_queryset
 from angee.integrate import scheduler
@@ -397,3 +397,24 @@ def test_connect_grants_the_regular_owner_start_access_before_dispatch(cycle_fac
     run = system_queryset(WorkflowRun).for_subject(bridge).get()
     assert run.run_as_id == bridge.owner_id
     assert bridge.lifecycle == IntegrationLifecycle.CONNECTED
+
+
+def test_owner_connecting_as_themselves_gains_start_without_workflow_write(cycle_factory):
+    """The connect-time grant is the framework's own, not the owner's share of the workflow."""
+    workflow, bridge = cycle_factory(connect=False)
+    owner = bridge.owner
+    assert not workflow.with_actor(owner).has_access("write")
+
+    with actor_context(owner):
+        bridge.connect()
+
+    workflow.require_access("start", owner)
+    assert not workflow.with_actor(owner).has_access("write")
+
+
+def test_system_record_grant_requires_a_system_scope_and_a_declared_relation(cycle_factory):
+    workflow, bridge = cycle_factory(connect=False)
+    with pytest.raises(PermissionDenied):
+        workflow.system_grant_record_access("starter", bridge.owner)
+    with system_context(reason="test undeclared system grant"), pytest.raises(ValueError):
+        workflow.system_grant_record_access("owner", bridge.owner)

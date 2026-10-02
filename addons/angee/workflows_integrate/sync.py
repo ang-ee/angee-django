@@ -52,7 +52,7 @@ class SyncCycleBridge(RunSubject):
             cast(Any, super()).connect(**kwargs)
             with system_context(reason="workflows_integrate.connect"):
                 workflow = apps.get_model("workflows", "Workflow").objects.get(key=self.sync_workflow_key)
-                workflow.grant_record_access("starter", owner)
+                workflow.system_grant_record_access("starter", owner)
 
     def sync(self) -> SyncDispatch:
         """Admit the queued occurrence once, retaining its original input on replay."""
