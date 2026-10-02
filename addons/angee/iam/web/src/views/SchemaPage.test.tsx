@@ -91,6 +91,8 @@ describe("IAM schema page", () => {
     expect(within(tree).getByRole("treeitem", { name: /User/ })).toBeTruthy();
     // The graph canvas (content) renders on the page itself.
     expect(screen.getByText("Permission Graph")).toBeTruthy();
+    expect(document.querySelector(".react-flow__handle-bottom")).toBeTruthy();
+    expect(document.querySelector(".react-flow__handle-right")).toBeNull();
   });
 
   test("publishes an additive inspector chatter tab for the selected resource", () => {

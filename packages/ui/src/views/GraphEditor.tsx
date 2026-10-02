@@ -10,6 +10,7 @@ import {
   graphNodeStyle,
   type GraphViewConnection,
   type GraphViewNode,
+  type GraphViewLayout,
   type GraphViewNodeStyle,
   type GraphViewPort,
   type GraphViewPosition,
@@ -47,6 +48,8 @@ export interface GraphEditorProps {
   links: readonly GraphEditorLink[];
   /** Positions keyed by node ID. Omitted IDs receive automatic layout. */
   layout: GraphEditorLayout;
+  /** Automatic layout and handle direction; display consumers default to top-to-bottom. */
+  layoutOptions?: GraphViewLayout;
   readOnly?: boolean;
   selected?: GraphEditorSelection;
   onSelectionChange?: (selected: GraphEditorSelection) => void;
@@ -72,11 +75,13 @@ const EMPTY_SELECTION: GraphEditorSelection = { nodes: [], link: null };
 
 /** Controlled graph editing. Connection policy and every data mutation belong to the caller. */
 export function GraphEditor({
-  nodes, links, layout, canLink, onLink, onUnlink, onDelete, onLayoutChange, onLayoutResolved,
+  nodes, links, layout, layoutOptions, canLink, onLink, onUnlink, onDelete, onLayoutChange, onLayoutResolved,
   onInsertOnLink, onAddFromPort, nodeActions, status, nodeStyles, ariaLabel, className,
   readOnly = false, selected: controlledSelection, onSelectionChange,
 }: GraphEditorProps): React.ReactElement {
   const t = useUiT();
+  const resolvedLayoutOptions = useValueStable(layoutOptions);
+  const [fitViewRequest, requestFit] = React.useReducer((value: number) => value + 1, 0);
   const [localSelection, setLocalSelection] = React.useState<GraphEditorSelection>(EMPTY_SELECTION);
   const selectionScope = JSON.stringify([nodes.map((node) => node.id).sort(), links.map(linkId).sort()]);
   const [previousSelectionScope, setPreviousSelectionScope] = React.useState(selectionScope);
@@ -114,7 +119,7 @@ export function GraphEditor({
     return { id: node.id, width: style.width, height: style.height };
   }));
   const topology = useValueStable(renderedEdges.map(({ id, source, target, kind }) => ({ id, source, target, kind })));
-  const automatic = React.useMemo(() => layoutGraph({ nodes: dimensions, edges: topology }), [dimensions, topology]);
+  const automatic = React.useMemo(() => layoutGraph({ nodes: dimensions, edges: topology, layout: resolvedLayoutOptions }), [dimensions, topology, resolvedLayoutOptions]);
   const resolvedLayout = React.useMemo(() => Object.fromEntries(dimensions.map((node) =>
     [node.id, layout[node.id] ?? automatic.positions.get(node.id)!])), [dimensions, layout, automatic]);
   React.useEffect(() => { onLayoutResolved?.(resolvedLayout); }, [onLayoutResolved, resolvedLayout]);
@@ -134,7 +139,10 @@ export function GraphEditor({
     onLink(link);
   }
   function autoLayout(): void {
-    if (!readOnly) onLayoutChange(Object.fromEntries(automatic.positions));
+    if (!readOnly) {
+      onLayoutChange(Object.fromEntries(automatic.positions));
+      requestFit();
+    }
   }
   function deleteSelection(): void {
     if (readOnly) return;
@@ -179,6 +187,8 @@ export function GraphEditor({
       </div>
       <GraphView
         className="min-h-64 flex-[3]"
+        layout={resolvedLayoutOptions}
+        fitViewRequest={fitViewRequest}
         nodes={renderedNodes}
         edges={renderedEdges}
         nodeStyles={styles}

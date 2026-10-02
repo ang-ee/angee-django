@@ -16,7 +16,6 @@ import {
   type FitViewOptions,
   type Node,
   type NodeProps,
-  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -145,6 +144,8 @@ export interface GraphViewProps<
   layout?: GraphViewLayout;
   status?: Readonly<Record<string, GraphViewStatus | undefined>>;
   fitViewOptions?: FitViewOptions;
+  /** Change this token to request another fit after the initial measured fit. */
+  fitViewRequest?: number;
   /** Accessible name for the focusable graph surface. */
   ariaLabel?: string;
   className?: string;
@@ -199,7 +200,13 @@ const DEFAULT_EDGE_STYLE: Required<GraphViewEdgeStyle> = {
   labelColor: "var(--text-muted)",
 };
 const EMPTY_EDGE_STYLES = {} as Readonly<Partial<Record<string, GraphViewEdgeStyle>>>;
-const DEFAULT_FIT_VIEW_OPTIONS: FitViewOptions = { padding: 0.18 };
+const DEFAULT_FIT_VIEW_OPTIONS: FitViewOptions = { padding: 0.18, minZoom: 0.05 };
+const HANDLE_POSITIONS = {
+  TB: { source: Position.Bottom, target: Position.Top },
+  BT: { source: Position.Top, target: Position.Bottom },
+  LR: { source: Position.Right, target: Position.Left },
+  RL: { source: Position.Left, target: Position.Right },
+};
 
 const NODE_TYPES = { angee: GraphNode };
 
@@ -226,6 +233,7 @@ function GraphCanvas<
   layout,
   status,
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
+  fitViewRequest = 0,
   ariaLabel,
   className,
   onNodeClick,
@@ -320,13 +328,15 @@ function GraphCanvas<
       const overlay = status?.[node.id];
       if (previous && sameNodeContent(previous.data.node, node)
         && previous.data.style === style && previous.data.status === overlay
+        && previous.sourcePosition === HANDLE_POSITIONS[rankdir].source
+        && previous.targetPosition === HANDLE_POSITIONS[rankdir].target
         && previous.selected === selected && previous.measured === measured[node.id]
         && previous.position.x === position.x && previous.position.y === position.y) {
         next.set(node.id, previous);
         return previous;
       }
       const rendered = {
-        ...toReactFlowNode(node, resolvedNodeStyles, overlay, selected),
+        ...toReactFlowNode(node, resolvedNodeStyles, HANDLE_POSITIONS[rankdir], overlay, selected),
         position, measured: measured[node.id],
       };
       next.set(node.id, rendered);
@@ -334,28 +344,48 @@ function GraphCanvas<
     });
     nodeCache.current = next;
     return result;
-  }, [nodes, resolvedNodeStyles, status, selection, dragging, measured, geometryLayout]);
+  }, [nodes, resolvedNodeStyles, status, selection, dragging, measured, geometryLayout, rankdir]);
+  // Declared handles are authoritative. An impossible link cannot stall other
+  // edges or fitting, even if React Flow retains bounds from an older render.
+  const invalidEdges = React.useMemo(() => edges.filter((edge) => {
+    const source = nodes.find((node) => node.id === edge.source);
+    const target = nodes.find((node) => node.id === edge.target);
+    if (!source || !target) return true;
+    const sourceExists = source.ports
+      ? source.ports.some((port) => port.id === (edge.sourceHandle ?? null))
+      : (edge.sourceHandle ?? null) === null && nodeStyles[source.kind].type !== "output";
+    return !sourceExists || (edge.targetHandle ?? null) !== null || nodeStyles[target.kind].type === "input";
+  }), [edges, nodes, nodeStyles]);
+  const warnedEdges = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    for (const edge of invalidEdges) {
+      if (warnedEdges.current.has(edge.id)) continue;
+      warnedEdges.current.add(edge.id);
+      console.warn(`GraphView excluded edge "${edge.id}": its declared source or target handle does not exist.`);
+    }
+  }, [invalidEdges]);
   const renderEdges = React.useMemo(() => edges
-    .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id))
+    .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id) && !invalidEdges.includes(edge))
     .map((edge) => ({
       ...toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle),
       selected: edge.selected ?? edgeSelection[edge.id] ?? false,
-    })), [edges, geometryLayout, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
-  const initialized = useNodesInitialized();
-  // Configured ports can arrive after the first measurement. Wait for React Flow's
-  // updated handle bounds too, rather than mounting edges against old handles.
-  const handlesReady = useStore((state) => renderEdges.every((edge) => {
+    })), [edges, geometryLayout, invalidEdges, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
+  // A primitive selector stays stable when unrelated store state changes. Each
+  // link waits only for its own measured source and target bounds.
+  const readyEdges = useStore((state) => renderEdges.map((edge) => {
     const source = state.nodeLookup.get(edge.source)?.internals.handleBounds?.source;
     const target = state.nodeLookup.get(edge.target)?.internals.handleBounds?.target;
     return source?.some((handle) => (handle.id ?? null) === (edge.sourceHandle ?? null))
-      && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null));
-  }));
-  const { fitView } = useReactFlow();
-  const fitSignature = JSON.stringify([geometryNodes, geometryEdges, resolvedLayout]);
+      && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null)) ? "1" : "0";
+  }).join(""));
+  const initialized = useNodesInitialized();
+  const { fitView, getNode, getEdge } = useReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>();
+  const fittedRequest = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
-    if (initialized && handlesReady) void fitView(fitViewOptions);
-  }, [initialized, handlesReady, fitSignature, fitView, fitViewOptions]);
-  const instanceRef = React.useRef<ReactFlowInstance<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>> | null>(null);
+    if (!initialized || fittedRequest.current === fitViewRequest) return;
+    fittedRequest.current = fitViewRequest;
+    void fitView({ ...DEFAULT_FIT_VIEW_OPTIONS, ...fitViewOptions });
+  }, [initialized, fitViewRequest, fitView, fitViewOptions]);
   // React Flow re-emits selection state whenever its store adopts replaced
   // nodes. Consumers set state from these callbacks, so re-emitting an
   // unchanged selection loops: setState → re-render → store resync → re-emit
@@ -389,24 +419,23 @@ function GraphCanvas<
           gives it a definite size however the caller sizes the wrapper. */}
       <div className="absolute inset-0">
         <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
-          onInit={(instance) => { instanceRef.current = instance; }}
           nodeTypes={NODE_TYPES}
           deleteKeyCode={null}
           nodes={renderNodes}
-          edges={initialized && handlesReady ? renderEdges : []}
+          edges={renderEdges.filter((_edge, index) => readyEdges[index] === "1")}
           onKeyDown={(event) => {
             if (!isGraphActivationKey(event.key)) return;
             if (!(event.target instanceof Element)) return;
             const nodeId = event.target.getAttribute("data-graph-node-id");
             const edgeId = event.target.getAttribute("data-graph-edge-id");
             if (nodeId) {
-              const node = instanceRef.current?.getNode(nodeId);
+              const node = getNode(nodeId);
               if (node) {
                 event.preventDefault();
                 onNodeClick?.(node.data.node, { source: "keyboard" });
               }
             } else if (edgeId) {
-              const edge = instanceRef.current?.getEdge(edgeId);
+              const edge = getEdge(edgeId);
               if (edge?.data?.edge) {
                 event.preventDefault();
                 onEdgeClick?.(edge.data.edge, { source: "keyboard" });
@@ -454,6 +483,7 @@ function GraphCanvas<
             }
             if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
           }}
+          minZoom={fitViewOptions.minZoom ?? DEFAULT_FIT_VIEW_OPTIONS.minZoom}
           fitView={false}
           fitViewOptions={fitViewOptions}
           nodesDraggable={nodesDraggable}
@@ -525,6 +555,7 @@ function toReactFlowNode<
 >(
   node: GraphViewNode<TKind, TMeta>,
   nodeStyles: Readonly<Record<TKind, GraphViewNodeStyle>>,
+  positions: { source: Position; target: Position },
   status?: GraphViewStatus,
   selected = node.selected,
 ): RenderNode<TKind, TMeta> {
@@ -537,8 +568,8 @@ function toReactFlowNode<
     ariaLabel: node.ariaLabel,
     type: "angee",
     position: { x: 0, y: 0 },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
+    sourcePosition: positions.source,
+    targetPosition: positions.target,
     data: {
       node,
       label: <GraphNodeLabel node={node} style={style} status={status} />,
@@ -632,21 +663,26 @@ function GraphNodeLabel<TKind extends string>({
 }
 
 
-function GraphNode({ id, data, isConnectable }: NodeProps<RenderNode<string, Record<string, unknown>>>): React.ReactElement {
+function GraphNode({
+  id, data, isConnectable, sourcePosition = Position.Bottom, targetPosition = Position.Top,
+}: NodeProps<RenderNode<string, Record<string, unknown>>>): React.ReactElement {
   const t = useUiT();
   const updateNodeInternals = useUpdateNodeInternals();
   const portsSignature = JSON.stringify(data.node.ports?.map((port) => port.id));
-  React.useEffect(() => { updateNodeInternals(id); }, [id, portsSignature, data.style.type, updateNodeInternals]);
+  const horizontal = sourcePosition === Position.Right || sourcePosition === Position.Left;
+  React.useEffect(() => { updateNodeInternals(id); }, [id, portsSignature, data.style.type, sourcePosition, targetPosition, updateNodeInternals]);
   return (
     <>
-      {data.style.type !== "input" ? <Handle type="target" position={Position.Top} isConnectable={isConnectable} aria-label={t("graph.input")} /> : null}
+      {data.style.type !== "input" ? <Handle type="target" position={targetPosition} isConnectable={isConnectable} aria-label={t("graph.input")} /> : null}
       {data.label}
-      {data.node.ports ? <div className="flex justify-around gap-1 px-2 pb-2 text-2xs text-fg-muted">
-        {data.node.ports.map((port, index, ports) => <span key={port.id}>
+      {data.node.ports ? <div className={cn("flex gap-1 px-2 pb-2 text-2xs text-fg-muted", horizontal ? "flex-col" : "justify-around")}>
+        {data.node.ports.map((port, index, ports) => <span key={port.id} className={horizontal ? cn("relative w-full", sourcePosition === Position.Right ? "text-right" : "text-left") : undefined}>
           {port.label ?? port.id}
-          <Handle id={port.id} type="source" position={Position.Bottom} isConnectable={isConnectable} aria-label={port.label ?? port.id} style={{ left: ((index + 1) / (ports.length + 1)) * 100 + "%" }} />
+          <Handle id={port.id} type="source" position={sourcePosition} isConnectable={isConnectable} aria-label={port.label ?? port.id} style={horizontal
+            ? { top: "50%", [sourcePosition === Position.Right ? "right" : "left"]: -8 }
+            : { left: ((index + 1) / (ports.length + 1)) * 100 + "%" }} />
         </span>)}
-      </div> : data.style.type !== "output" ? <Handle type="source" position={Position.Bottom} isConnectable={isConnectable} aria-label={t("graph.output")} /> : null}
+      </div> : data.style.type !== "output" ? <Handle type="source" position={sourcePosition} isConnectable={isConnectable} aria-label={t("graph.output")} /> : null}
     </>
   );
 }

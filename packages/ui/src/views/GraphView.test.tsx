@@ -10,6 +10,7 @@ const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
   initialized: true,
   handlesReady: true,
+  unmeasured: new Set<string>(),
   fitView: vi.fn(),
 }));
 const dagreMock = vi.hoisted(() => ({ layouts: 0 }));
@@ -31,14 +32,9 @@ vi.mock("@xyflow/react", async () => {
     Background: () => React.createElement("div", { "data-testid": "background" }),
     Controls: () => React.createElement("div", { "data-testid": "controls" }),
     MarkerType: { ArrowClosed: "arrowclosed" },
-    Position: { Bottom: "bottom", Top: "top" },
+    Position: { Bottom: "bottom", Top: "top", Right: "right", Left: "left" },
     ReactFlow: (props: Record<string, unknown> & { children?: ReactNode }) => {
       reactFlowMock.lastProps = props;
-      const nodes = props.nodes as Array<{ id: string }>;
-      (props.onInit as ((instance: object) => void) | undefined)?.({
-        getNode: (id: string) => nodes.find((node) => node.id === id),
-        getEdge: (id: string) => (props.edges as Array<{ id: string }>).find((edge) => edge.id === id),
-      });
       return React.createElement(
         "div",
         { "data-testid": "react-flow" },
@@ -47,9 +43,13 @@ vi.mock("@xyflow/react", async () => {
     },
     ReactFlowProvider: ({ children }: { children: ReactNode }) => children,
     useNodesInitialized: () => reactFlowMock.initialized,
-    useReactFlow: () => ({ fitView: reactFlowMock.fitView }),
-    useStore: (selector: (state: unknown) => unknown) => selector({ nodeLookup: { get: () => ({ internals: {
-      handleBounds: reactFlowMock.handlesReady ? { source: [{ id: null }, { id: "done" }], target: [{ id: null }] } : undefined,
+    useReactFlow: () => ({
+      fitView: reactFlowMock.fitView,
+      getNode: (id: string) => (reactFlowMock.lastProps?.nodes as Array<{ id: string }>).find((node) => node.id === id),
+      getEdge: (id: string) => (reactFlowMock.lastProps?.edges as Array<{ id: string }>).find((edge) => edge.id === id),
+    }),
+    useStore: (selector: (state: unknown) => unknown) => selector({ nodeLookup: { get: (id: string) => ({ internals: {
+      handleBounds: reactFlowMock.handlesReady && !reactFlowMock.unmeasured.has(id) ? { source: [{ id: null }, { id: "done" }], target: [{ id: null }] } : undefined,
     } }) } }),
   };
 });
@@ -60,25 +60,77 @@ afterEach(() => {
   dagreMock.layouts = 0;
   reactFlowMock.initialized = true;
   reactFlowMock.handlesReady = true;
+  reactFlowMock.unmeasured.clear();
   reactFlowMock.fitView.mockClear();
 });
 
-test("edges and initial fit wait for native initialization and current handle bounds", () => {
+test("initial fit waits for native measurement and does not depend on edges", () => {
   reactFlowMock.initialized = false;
+  reactFlowMock.handlesReady = false;
   const graph = () => <GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />;
   const view = render(graph());
   expect(reactFlowMock.lastProps?.edges).toEqual([]);
-  expect(reactFlowMock.lastProps?.fitView).toBe(false);
   expect(reactFlowMock.fitView).not.toHaveBeenCalled();
   reactFlowMock.initialized = true;
-  reactFlowMock.handlesReady = false;
   view.rerender(graph());
-  expect(reactFlowMock.lastProps?.edges).toEqual([]);
-  expect(reactFlowMock.fitView).not.toHaveBeenCalled();
+  expect(reactFlowMock.fitView).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ minZoom: 0.05 }));
   reactFlowMock.handlesReady = true;
   view.rerender(graph());
   expect(reactFlowMock.lastProps?.edges).toHaveLength(1);
   expect(reactFlowMock.fitView).toHaveBeenCalledOnce();
+});
+
+test("topology, outcome, and layout updates preserve the viewport until a fit is requested", () => {
+  const props = { nodes, edges, nodeStyles };
+  const view = render(<GraphView {...props} />);
+  view.rerender(<GraphView {...props} nodes={[...nodes, { id: "extra", kind: "handler", title: "Extra" }]} edges={[]} />);
+  reactFlowMock.initialized = false;
+  view.rerender(<GraphView {...props} nodes={nodes.map((node) => ({ ...node, ports: [{ id: "done" }] }))} />);
+  reactFlowMock.initialized = true;
+  view.rerender(<GraphView {...props} layout={{ rankdir: "LR" }} fitViewOptions={{ padding: 0.3 }} />);
+  expect(reactFlowMock.fitView).toHaveBeenCalledOnce();
+  view.rerender(<GraphView {...props} fitViewRequest={1} />);
+  expect(reactFlowMock.fitView).toHaveBeenCalledTimes(2);
+  expect(currentProps().onInit).toBeUndefined();
+});
+
+test("unmeasured nodes and impossible handles gate only their own edges and warn once", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const extra = { id: "extra", kind: "handler", title: "Extra", ports: [{ id: "done" }] };
+  reactFlowMock.initialized = false;
+  reactFlowMock.unmeasured.add("extra");
+  const allEdges = [...edges,
+    { id: "waiting", source: "extra", sourceHandle: "done", target: "review", kind: "success" },
+    { id: "impossible", source: "extra", sourceHandle: "retired", target: "review", kind: "success" },
+  ];
+  const graph = () => <GraphView nodes={[...nodes, extra]} edges={allEdges} nodeStyles={nodeStyles} />;
+  const view = render(graph());
+  expect((currentProps().edges as Array<{ id: string }>).map((edge) => edge.id)).toEqual(["draft-review"]);
+  expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("impossible"));
+  reactFlowMock.unmeasured.clear();
+  reactFlowMock.initialized = true;
+  view.rerender(graph());
+  expect((currentProps().edges as Array<{ id: string }>).map((edge) => edge.id)).toEqual(["draft-review", "waiting"]);
+  expect(reactFlowMock.fitView).toHaveBeenCalledOnce();
+  expect(warn).toHaveBeenCalledOnce();
+  warn.mockRestore();
+});
+
+test("a long horizontal workflow fits below React Flow's default zoom floor", async () => {
+  const chain = Array.from({ length: 13 }, (_, index) => ({ id: String(index), kind: "handler", title: `Step ${index}` }));
+  const connections = chain.slice(1).map((node, index) => ({ id: node.id, source: String(index), target: node.id, kind: "success" }));
+  render(<GraphView nodes={chain} edges={connections} nodeStyles={nodeStyles} layout={{ rankdir: "LR" }} />);
+  const rendered = currentProps().nodes as Array<{ position: { x: number; y: number }; sourcePosition: string; targetPosition: string }>;
+  expect(rendered.every((node) => node.sourcePosition === "right" && node.targetPosition === "left")).toBe(true);
+  expect(rendered[12]!.position.x).toBeGreaterThan(rendered[0]!.position.x + 2000);
+  expect(new Set(rendered.map((node) => node.position.y)).size).toBe(1);
+  expect(currentProps().minZoom).toBe(0.05);
+  const { getNodesBounds, getViewportForBounds } = await vi.importActual<typeof import("@xyflow/react")>("@xyflow/react");
+  const bounds = getNodesBounds(rendered.map((node, index) => ({ position: node.position, id: String(index), data: {}, width: 160, height: 72 })));
+  const viewport = getViewportForBounds(bounds, 1600, 800, currentProps().minZoom as number, 2, 0.18);
+  expect(viewport.zoom).toBeLessThan(0.5);
+  expect(bounds.x * viewport.zoom + viewport.x).toBeGreaterThanOrEqual(0);
+  expect((bounds.x + bounds.width) * viewport.zoom + viewport.x).toBeLessThanOrEqual(1600);
 });
 
 const nodes = [

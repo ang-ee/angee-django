@@ -364,7 +364,7 @@ function StudioGraph({ form, recordId, topology, selection, select, configuratio
   return <div className="flex h-[65vh] min-h-[32rem] shrink-0 flex-col" data-testid="workflow-studio-canvas">
     {outcomes.error ? <ErrorBanner description={errorMessage(outcomes.error, t("studio.outcomesFailed"))} /> : null}
     {outcomeIssues.length ? <ErrorBanner description={outcomeIssues.map((issue) => `${form.getValues().entries.find((entry) => entry.clientId === issue.node)?.key ?? issue.node}: ${issue.message}`).join("\n")} /> : null}
-    <GraphEditor {...graph} layout={layout} selected={selection} onSelectionChange={select} readOnly={disabled || !outcomes.data}
+    <GraphEditor {...graph} layoutOptions={{ rankdir: "LR" }} layout={layout} selected={selection} onSelectionChange={select} readOnly={disabled || !outcomes.data}
       className="min-h-0 flex-1" status={status} canLink={canLink} onLink={(value) => link(value)} onUnlink={(value) => link(value, true)}
       onLayoutResolved={layoutResolved}
       onLayoutChange={(value) => update((values) => { values.layout = value; })}

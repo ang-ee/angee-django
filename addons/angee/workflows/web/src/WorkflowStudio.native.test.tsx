@@ -145,7 +145,7 @@ test("configured outcome issues are visible and flag their node", async () => {
   expect(await screen.findByText("Issues")).toBeTruthy();
 });
 
-test("an empty persisted layout displays automatic positions without a dirty draft, and saves them on explicit save", async () => {
+test("an empty persisted layout displays automatic horizontal positions without a dirty draft, and saves them on explicit save", async () => {
   const requests = vi.fn();
   render(<StudioStory linked emptyLayout onRequest={requests} />);
   await selectEntry();
@@ -156,7 +156,8 @@ test("an empty persisted layout displays automatic positions without a dirty dra
   await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
   const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
   expect(Object.keys(save.variables.layout).sort()).toEqual(["entry", "second"]);
-  expect(save.variables.layout.entry).not.toEqual(save.variables.layout.second);
+  expect(save.variables.layout.second[0]).toBeGreaterThan(save.variables.layout.entry[0]);
+  expect(save.variables.layout.second[1]).toBe(save.variables.layout.entry[1]);
 });
 
 test("palette excludes internal steps and structural edits persist layout", async () => {

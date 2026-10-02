@@ -28,6 +28,17 @@ function canvas(): GraphViewProps {
 }
 
 describe("GraphEditor", () => {
+  test("horizontal automatic layout and explicit auto-layout fit use the same options", () => {
+    const { props } = setup({ layout: {}, layoutOptions: { rankdir: "LR" } });
+    expect(canvas().layout).toEqual({ rankdir: "LR" });
+    const [alpha, beta] = canvas().nodes;
+    expect(beta!.position!.x).toBeGreaterThan(alpha!.position!.x);
+    expect(beta!.position!.y).toBe(alpha!.position!.y);
+    expect(canvas().fitViewRequest).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Auto-layout" }));
+    expect(props.onLayoutChange).toHaveBeenCalledOnce();
+    expect(canvas().fitViewRequest).toBe(1);
+  });
   test("the flow gets priority height and automatic display layout does not author a change", () => {
     const resolved = vi.fn();
     const { props } = setup({ layout: {}, onLayoutResolved: resolved });
