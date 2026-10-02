@@ -1046,6 +1046,39 @@ describe("createApp route menu refs", () => {
     }
   });
 
+  test("keeps route.menu when another menu item names one destination of the parameterized route", () => {
+    expect(() =>
+      createApp(testAppInput([
+        {
+          id: "dashboard-placement",
+          routes: [
+            {
+              name: "dashboards.index",
+              path: "/dashboards",
+              layout: "console",
+              component: EmptyPage,
+            },
+            {
+              name: "dashboards.addon",
+              path: "/dashboards/addon/$key",
+              layout: "console",
+              menu: "dashboards",
+              component: EmptyPage,
+            },
+          ],
+          menus: [
+            { id: "dashboards", route: "dashboards.index" },
+            {
+              id: "review-queue",
+              route: "dashboards.addon",
+              params: { key: "example.document_review.overview" },
+            },
+          ],
+        },
+      ])),
+    ).not.toThrow();
+  });
+
   test("rejects internal literal menu targets", () => {
     expect(() =>
       createApp(testAppInput([

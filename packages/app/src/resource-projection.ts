@@ -329,7 +329,9 @@ export function menuNodeForRoute(
         `Route "${route.name}" references unknown menu item "${route.menu}".`,
       );
     }
-    const refs = menuTree.itemsForRoute(route.name);
+    // An item with params names one destination of a parameterized route, so
+    // only route-level refs can contest the route's declared chrome owner.
+    const refs = menuTree.itemsForRoute(route.name).filter((item) => item.params === undefined);
     if (refs.length > 0 && !refs.some((item) => item.id === selected.id)) {
       throw new Error(
         `Route "${route.name}" sets menu "${route.menu}", but that item does not reference the route.`,
