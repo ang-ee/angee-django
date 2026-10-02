@@ -86,7 +86,7 @@ def test_start_races_with_in_process_deprovision(session: AgentSession, winner: 
             created.refresh_from_db()
             assert created.status == SessionStatus.CLOSED
         else:
-            with pytest.raises(ValidationError, match="Provision this agent"):
+            with pytest.raises(ValidationError, match="Agent is not running"):
                 contender.result(timeout=10)
     session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
