@@ -709,9 +709,22 @@ Hard-won traps — the wise learn from others' mistakes
   repository-local `.angee/runtime` fallback may be stale in a workspace slot.
 - **Optional operations travel with their owning addon.** Keep documents and their
   transport UI in the addon contributing the schema fields; a base fragment must
-  codegen without optional dependents. Runtime-specific chat surfaces fill the
-  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from their own
-  addon fragment.
+  codegen without optional dependents. Every agent uses the one
+  [ACP runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts), selecting the
+  SDK version from its endpoint. `AGENT_CHAT_SLOT` remains the seam for
+  [runtime-owned transports](../../addons/angee/agents/web/src/chat-slot.ts)
+  contributed by their owning addon.
+- **Agent sessions are URL selections, created on intent.** The
+  [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
+  owns `?session=` through route search; the ACP runtime restores known/newest
+  sessions and creates on first send or New session. Native Query pages own the list.
+- **ACP view context follows the protocol owner.** The
+  [runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts) derives Current view
+  attachment from the session's sent prompts: first/changed views attach automatically,
+  sending consumes the badge, and users can remove or reattach it. Replayed history
+  without a known normalized envelope starts unsent. V2 sends context on session
+  creation and attached prompts for server rendering; v1 retains its rendered carrier.
+  Native assistant-ui thread/message identities follow ACP session/message ids.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:

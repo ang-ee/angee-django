@@ -27,9 +27,10 @@ from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.publishing import publish_change
+from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
 from angee.workflows.states import DONE_OUTCOME, ERROR_OUTCOME, AttemptResult, RunStatus, StepRunStatus, WaitingKind
-from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _Settlement, io_timeout_budget
+from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _Settlement
 
 logger = logging.getLogger(__name__)
 TICK_CANDIDATE_LIMIT = 1000
@@ -318,7 +319,7 @@ class Runner:
         with self._fenced(step_run) as current:
             attempt = current.attempts.get(number=step_run.attempt)
             if self.step_model.objects.fenced(step_run).extend_deadline(
-                step_run.step.timeout, until=attempt.started_at + io_timeout_budget(),
+                step_run.step.timeout, until=attempt.started_at + task_time_budget(),
             ) != 1:
                 raise Superseded
             step_run.refresh_from_db(fields=["deadline_at"])

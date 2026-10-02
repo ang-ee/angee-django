@@ -10,20 +10,35 @@ from __future__ import annotations
 import base64
 import importlib
 import json
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.db import IntegrityError, connection, models, transaction
 from django.test import RequestFactory, override_settings
-from rebac import system_context
+from django.test.utils import CaptureQueriesContext
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.agents.context import render_view_context
 from angee.agents.models import MCPPlacement
-from angee.agents.testing.models import Agent, InferenceModel, InferenceProvider, MCPServer, Skill
+from angee.agents.testing.models import (
+    Agent,
+    AgentSession,
+    AgentTurn,
+    InferenceModel,
+    InferenceProvider,
+    MCPServer,
+    Skill,
+)
+from angee.base.transitions import TransitionNotAllowed
+from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
-from angee.operator.daemon import OperatorDaemonError, OperatorDaemonNotFound
+from angee.jobs.locks import task_lock
+from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
 from tests.conftest import (
     Credential,
     ExternalAccount,
@@ -199,6 +214,31 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         assert not Agent.objects.filter(sqid=created["id"]).exists()
 
 
+def test_agent_delete_capability_has_constant_query_count(composed_tables: None) -> None:
+    """A narrow can_delete selection batches session existence and lifecycle facts."""
+
+    admin = _platform_admin("agt-delete-budget")
+    with system_context(reason="test.agents.delete_capability.seed"):
+        Agent.objects.create(name="A available", owner=admin)
+        retained = Agent.objects.create(name="B retained", owner=admin)
+        AgentSession.objects.create(agent=retained, owner=admin)
+        Agent.objects.create(name="C rendered", owner=admin, lifecycle="ready", service="agent-service")
+    query = """
+        query Capabilities($limit: Int!) {
+          agents(limit: $limit, order_by: {name: asc}) { can_delete }
+        }
+    """
+    console = _schema()
+    _data(_execute(console, query, {"limit": 1}, user=admin))
+    counts = []
+    for size in (1, 3):
+        with CaptureQueriesContext(connection) as captured:
+            rows = _data(_execute(console, query, {"limit": size}, user=admin))["agents"]
+        assert [row["can_delete"] for row in rows] == [True, False, False][:size]
+        counts.append(len(captured))
+    assert counts[0] == counts[1], counts
+
+
 def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> None:
     """Agent delete policy is enforced by the backend write owner, not only the UI."""
 
@@ -228,6 +268,113 @@ def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> No
     assert "Deprovision this agent before deleting it." in str(result.errors[0])
     with system_context(reason="test.agents.delete_block.verify"):
         assert Agent.objects.filter(pk=agent.pk).exists()
+
+
+def test_agent_delete_names_retaining_sessions_and_allows_deletion_after_theirs(composed_tables: None) -> None:
+    """Retained sessions explain a protected delete; only an admin deletes them first."""
+
+    owner = User.objects.create_user(username="agt-retained-session-owner")
+    admin = _platform_admin("agt-retained-session-admin")
+    with system_context(reason="test.agents.retained_sessions.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
+    console = _schema()
+    delete_agent = "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }"
+    blocked = _execute(console, delete_agent, {"id": str(agent.sqid)}, user=owner)
+    assert blocked.errors is not None
+    assert blocked.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert "agent sessions (1)" in blocked.errors[0].message
+
+    delete_session = "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }"
+    refused = _execute(console, delete_session, {"id": str(session.sqid)}, user=owner)
+    assert refused.errors is not None
+    assert refused.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    deleted = _data(_execute(console, delete_session, {"id": str(session.sqid)}, user=admin))[
+        "delete_agent_sessions_by_pk"
+    ]
+    assert deleted == {"id": str(session.sqid)}
+    assert _data(_execute(console, delete_agent, {"id": str(agent.sqid)}, user=owner))["delete_agents_by_pk"] == {
+        "id": str(agent.sqid),
+    }
+    with system_context(reason="test.agents.retained_sessions.verify"):
+        assert not Agent.objects.filter(pk=agent.pk).exists()
+        assert not AgentSession.objects.filter(pk=session.pk).exists()
+        assert not AgentTurn.objects.filter(session_id=session.pk).exists()
+
+
+@pytest.mark.parametrize("relation", ["reader", "editor"])
+def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    relation: str,
+) -> None:
+    """Read/write reach alone cannot lock a delete target or inspect its blockers."""
+
+    owner = User.objects.create_user(username="agt-delete-owner")
+    reader = User.objects.create_user(username="agt-delete-reader")
+    with system_context(reason="test.agents.delete_permission.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        AgentSession.objects.create(agent=agent, owner=owner)
+        write_relationships(
+            [
+                RelationshipTuple(resource=to_object_ref(agent), relation=relation, subject=to_subject_ref(reader)),
+            ]
+        )
+    with actor_context(reader):
+        readable = Agent.objects.get(pk=agent.pk)
+        assert readable.has_access("read")
+        assert not readable.has_access("delete")
+    locks: list[type[models.Model]] = []
+    previews: list[Any] = []
+    select_for_update = models.QuerySet.select_for_update
+    preview_from_instance = DeletePreview.from_instance
+
+    def record_lock(queryset: Any, *args: Any, **kwargs: Any) -> Any:
+        locks.append(queryset.model)
+        return select_for_update(queryset, *args, **kwargs)
+
+    def record_preview(instance: Any, *args: Any, **kwargs: Any) -> DeletePreview:
+        previews.append(instance)
+        return preview_from_instance(instance, *args, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "select_for_update", record_lock)
+    monkeypatch.setattr(DeletePreview, "from_instance", record_preview)
+    result = _execute(
+        _schema(),
+        "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }",
+        {"id": str(agent.sqid)},
+        user=reader,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    assert "agent sessions" not in result.errors[0].message
+    assert Agent not in locks
+    assert previews == []
+
+
+@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, status: str) -> None:
+    """Even an admin, who may delete sessions, must Stop an active turn first."""
+
+    owner = User.objects.create_user(username="agt-active-session-owner")
+    admin = _platform_admin(f"agt-active-session-admin-{status}")
+    with system_context(reason="test.agents.active_session_delete.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=owner, status=status)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status=status)
+    result = _execute(
+        _schema(),
+        "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }",
+        {"id": str(session.sqid)},
+        user=admin,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert "active turn" in result.errors[0].message.lower()
+    with system_context(reason="test.agents.active_session_delete.verify"):
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
 def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> None:
@@ -757,86 +904,35 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(composed_tables: 
     assert ("destroy", "ws-bot") in calls
 
 
-def test_mark_provisioning_can_reenter_provisioning(composed_tables: None) -> None:
-    """Crash recovery can re-enter the provisioning target without a new graph edge."""
+def test_mark_provisioning_never_starts_over_a_provision_under_way(composed_tables: None) -> None:
+    """``PROVISIONING`` is not a source: a second provision cannot run over the first."""
 
     admin = _platform_admin("agt-reenter-admin")
-    agent = _provisionable_agent(
-        admin,
-        "Reenter",
-        slug="agt-reenter-tpl",
-        lifecycle="provisioning",
-        runtime_status="error",
-        last_error="worker crashed",
-    )
+    agent = _provisionable_agent(admin, "Reenter", slug="agt-reenter-tpl", lifecycle="provisioning")
 
-    with system_context(reason="test.agents.reenter"):
+    with system_context(reason="test.agents.reenter"), pytest.raises(TransitionNotAllowed):
         agent.mark_provisioning()
-        agent.refresh_from_db()
-
-    assert str(agent.lifecycle) == "provisioning"
-    assert str(agent.runtime_status) == "stopped"
-    assert agent.last_error == ""
 
 
-def test_provision_agent_reenters_existing_provisioning_row(composed_tables: None, monkeypatch: Any) -> None:
-    """A repeated provision request for a stuck PROVISIONING row resumes the render flow."""
+def test_provision_agent_refuses_while_a_provision_is_under_way(composed_tables: None, monkeypatch: Any) -> None:
+    """A provision that finds the row ``PROVISIONING`` refuses without touching the daemon or the row.
+
+    The lock is free here — a stalled provision looks like this — so the refusal comes from
+    the lifecycle, which stays authoritative; Deprovision is the way out.
+    """
 
     admin = _platform_admin("agt-double-provision-admin")
-    agent = _provisionable_agent(
-        admin,
-        "Double Provision",
-        slug="agt-double-provision-tpl",
-        lifecycle="provisioning",
-        runtime_status="stopped",
-    )
-    agent_id = _public_id(agent.sqid)
-    calls: list[str] = []
+    agent = _provisionable_agent(admin, "Double", slug="agt-double-provision-tpl", lifecycle="provisioning")
+    operator = _Operator().install(monkeypatch)
 
-    class _FakeDaemon:
-        @classmethod
-        def from_settings(cls) -> _FakeDaemon:
-            return cls()
+    result = _data(_run_action("provision_agent", agent, admin))["provision_agent"]
 
-        def resolve_template_ref(self, *, name: str, kind: str) -> str:
-            return f"ref:{name}"
-
-        def set_secret(self, name: str, value: str) -> None:
-            calls.append(f"secret:{name}:{value}")
-
-        def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
-            calls.append(template)
-            return "ws-double"
-
-        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
-            assert start is False
-            calls.append(f"{template}:{workspace}")
-            return "svc-double"
-
-        def start_service(self, name: str) -> None:
-            assert name == "svc-double"
-
-    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
-
-    result = _data(
-        _execute(
-            _schema(),
-            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
-            {"id": agent_id},
-            user=admin,
-        )
-    )["provision_agent"]
-
-    assert result == {"ok": True, "message": "Provisioned “svc-double”."}
-    assert calls == ["ref:agent-default", "ref:claude-code:ws-double"]
-    with system_context(reason="test.agents.double_provision.verify"):
-        agent.refresh_from_db()
-        assert (agent.workspace, agent.service, str(agent.lifecycle)) == ("ws-double", "svc-double", "ready")
+    assert result["ok"] is False and "deprovision it to recover" in result["message"]
+    assert operator.calls == []
+    assert _agent_state(agent, admin)["lifecycle"] == "PROVISIONING"
 
 
-def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(composed_tables: None, monkeypatch: Any) -> None:
     """A teardown retry for a stuck PROVISIONING row with no daemon names clears locally."""
 
     admin = _platform_admin("agt-empty-deprov-admin")
@@ -847,28 +943,12 @@ def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
         lifecycle="provisioning",
         runtime_status="stopped",
     )
-    agent_id = _public_id(agent.sqid)
-    calls: list[str] = []
+    operator = _Operator().install(monkeypatch)
 
-    class _UnusedDaemon:
-        @classmethod
-        def from_settings(cls) -> _UnusedDaemon:
-            calls.append("from_settings")
-            return cls()
+    result = _data(_run_action("deprovision_agent", agent, admin))["deprovision_agent"]
 
-    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _UnusedDaemon)
-
-    result = _data(
-        _execute(
-            _schema(),
-            "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }",
-            {"id": agent_id},
-            user=admin,
-        )
-    )["deprovision_agent"]
-
-    assert result == {"ok": True, "message": "Deprovisioned."}
-    assert calls == []
+    assert result == {"ok": True, "message": "Deprovisioned.", "code": None}
+    assert operator.calls == []
     with system_context(reason="test.agents.empty_deprov.verify"):
         agent.refresh_from_db()
         assert (agent.workspace, agent.service, str(agent.lifecycle), str(agent.runtime_status)) == (
@@ -962,8 +1042,8 @@ def test_provision_agent_failure_tears_down_service_then_workspace_and_records_e
             raise RuntimeError("image build failed")
 
         def destroy_service(self, name: str) -> None:
+            # Already gone: the daemon client reports a by-name absent instance as destroyed.
             destroyed.append(("service", name))
-            raise OperatorDaemonNotFound(f'service "{name}" is already gone')
 
         def destroy_workspace(self, name: str) -> None:
             destroyed.append(("workspace", name))
@@ -994,65 +1074,46 @@ def test_provision_agent_failure_tears_down_service_then_workspace_and_records_e
         assert (agent.workspace, "image build failed" in agent.last_error) == ("", True)
 
 
-def test_deprovision_agent_treats_missing_operator_instances_as_gone(
+def test_deprovision_agent_keeps_the_names_when_the_daemon_answers_a_plain_404(
     composed_tables: None, monkeypatch: Any
 ) -> None:
-    """A deprovision retry clears stale names when the daemon says they are already gone."""
+    """A not-found that does not name the instance (a proxy, a wrong mount) is a failure, not a destroy.
 
-    admin = _platform_admin("agt-deprov-missing-admin")
+    The daemon client absorbs only a not-found naming the asked-for instance; anything else
+    reaches the teardown, which keeps every name it could not confirm destroyed.
+    """
+
+    admin = _platform_admin("agt-deprov-plain404-admin")
     agent = _provisionable_agent(
         admin,
         "Gonebot",
-        slug="agt-deprov-missing-tpl",
+        slug="agt-deprov-plain404-tpl",
         workspace="ws-gone",
         service="svc-gone",
         lifecycle="ready",
-        runtime_status="error",
-        last_error='Teardown failed: operator POST destroy: HTTP 404: service "svc-gone" is not declared',
+        runtime_status="running",
     )
-    agent_id = _public_id(agent.sqid)
-    calls: list[tuple[str, str]] = []
+    operator = _Operator(
+        workspaces={"ws-gone": ("ref:agent-default", {"agent_name": "Gonebot"})},
+        mounts={"svc-gone": "ws-gone"},
+        fail={"destroy_service": OperatorDaemonNotFound("operator POST destroy: HTTP 404: 404 page not found")},
+    ).install(monkeypatch)
 
-    class _MissingDaemon:
-        @classmethod
-        def from_settings(cls) -> _MissingDaemon:
-            return cls()
+    result = _data(_run_action("deprovision_agent", agent, admin))["deprovision_agent"]
 
-        def destroy_service(self, name: str) -> None:
-            calls.append(("destroy_service", name))
-            raise OperatorDaemonNotFound(f'operator POST destroy: HTTP 404: service "{name}" is not declared')
-
-        def destroy_workspace(self, name: str) -> None:
-            calls.append(("destroy_workspace", name))
-            raise OperatorDaemonNotFound(f'operator POST destroy?purge=true: HTTP 404: workspace "{name}" is not found')
-
-    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _MissingDaemon)
-
-    result = _data(
-        _execute(
-            _schema(),
-            "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }",
-            {"id": agent_id},
-            user=admin,
-        )
-    )["deprovision_agent"]
-
-    assert result == {"ok": True, "message": "Deprovisioned."}
-    assert calls == [("destroy_service", "svc-gone"), ("destroy_workspace", "ws-gone")]
-    with system_context(reason="test.agents.deprov_missing.verify"):
+    assert result["ok"] is False and "404 page not found" in result["message"]
+    assert [name for name, _ in operator.calls] == ["destroy_service"]
+    with system_context(reason="test.agents.deprov_plain404.verify"):
         agent.refresh_from_db()
-        assert (agent.workspace, agent.service, str(agent.lifecycle), str(agent.runtime_status), agent.last_error) == (
-            "",
-            "",
-            "deprovisioned",
-            "stopped",
-            "",
-        )
+    assert (agent.workspace, agent.service, str(agent.lifecycle), str(agent.runtime_status)) == (
+        "ws-gone",
+        "svc-gone",
+        "ready",
+        "error",
+    )
 
 
-def test_provision_agent_records_error_when_plan_resolution_fails(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_provision_agent_records_error_when_plan_resolution_fails(composed_tables: None, monkeypatch: Any) -> None:
     """A plan-resolution failure records ERROR — the agent never strands in PROVISIONING.
 
     `_render_plan` reads the credential chain and agent inputs before the daemon render; a
@@ -1089,60 +1150,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
         assert "credential is unreadable" in agent.last_error
 
 
-def test_reprovision_agent_tolerates_already_destroyed_service(composed_tables: None, monkeypatch: Any) -> None:
-    """A 404 from the old service's destroy means it is already gone — recreate anyway."""
-
-    admin = _platform_admin("agt-reprov404-admin")
-    agent = _provisionable_agent(
-        admin,
-        "Rebot404",
-        slug="agt-reprov404-tpl",
-        workspace="ws-keep",
-        service="svc-ghost",
-        lifecycle="ready",
-        runtime_status="running",
-    )
-    agent_id = _public_id(agent.sqid)
-
-    calls: list[tuple[Any, ...]] = []
-
-    class _FakeDaemon:
-        @classmethod
-        def from_settings(cls) -> _FakeDaemon:
-            return cls()
-
-        def resolve_template_ref(self, *, name: str, kind: str) -> str:
-            return f"ref:{name}"
-
-        def set_secret(self, name: str, value: str) -> None:
-            calls.append(("secret", name))
-
-        def destroy_service(self, name: str) -> None:
-            calls.append(("destroy_service", name))
-            raise OperatorDaemonError(f'service "{name}" is not declared', status_code=404)
-
-        def create_service(
-            self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True, name: str = ""
-        ) -> str:
-            calls.append(("create_service", template, workspace))
-            return "svc-new"
-
-        def start_service(self, name: str) -> None:
-            calls.append(("start_service", name))
-
-    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
-
-    reprovision = "mutation($id: ID!){ reprovision_agent(id: $id){ ok message } }"
-    result = _data(_execute(_schema(), reprovision, {"id": agent_id}, user=admin))["reprovision_agent"]
-
-    assert result == {"ok": True, "message": "Recreated service \u201csvc-new\u201d."}
-    assert ("destroy_service", "svc-ghost") in calls
-    assert ("create_service", "ref:claude-code", "ws-keep") in calls
-
-
-def test_reprovision_agent_recreates_service_over_existing_workspace(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_reprovision_agent_recreates_service_over_existing_workspace(composed_tables: None, monkeypatch: Any) -> None:
     """`reprovisionAgent` destroys the old service and recreates it over the kept workspace."""
 
     admin = _platform_admin("agt-reprov-admin")
@@ -1268,6 +1276,883 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
         assert "service recreate failed" in agent.last_error
 
 
+@dataclass
+class _Operator:
+    """In-memory operator daemon that owns instance naming, as the real daemon does.
+
+    A workspace is named ``ws-<agent name slug>`` and its service ``agent-<workspace>``,
+    so a second render of the same agent collides with what is already there. Destroying
+    an absent instance succeeds and a missing workspace has no status — the daemon
+    client's contract for a not-found that names the instance. ``fail`` maps a daemon
+    call to the error it raises; ``calls`` records every call in order.
+    """
+
+    workspaces: dict[str, tuple[str, dict[str, str]]] = field(default_factory=dict)
+    """Workspace name -> (template ref it was rendered from, the inputs it recorded)."""
+    mounts: dict[str, str] = field(default_factory=dict)
+    """Service name -> the workspace it mounts."""
+    running: set[str] = field(default_factory=set)
+    fail: dict[str, Exception] = field(default_factory=dict)
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def install(self, monkeypatch: Any) -> _Operator:
+        monkeypatch.setattr(agents_provisioning, "OperatorDaemon", SimpleNamespace(from_settings=lambda: self))
+        return self
+
+    def _call(self, name: str, argument: str) -> None:
+        self.calls.append((name, argument))
+        if name in self.fail:
+            raise self.fail[name]
+
+    def resolve_template_ref(self, *, name: str, kind: str) -> str:
+        return f"ref:{name}"
+
+    def set_secret(self, name: str, value: str) -> None:
+        self._call("set_secret", name)
+
+    def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
+        name = "ws-" + inputs["agent_name"].lower().replace(" ", "-")
+        self._call("create_workspace", name)
+        if name in self.workspaces:
+            raise OperatorDaemonConflict(
+                f"operator POST workspaces: HTTP 409: workspace {name} conflicts: already exists",
+                status_code=409,
+                kind=OperatorInstanceKind.WORKSPACE,
+                name=name,
+            )
+        self.workspaces[name] = (template, dict(inputs))
+        return name
+
+    def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
+        name = f"agent-{workspace}"
+        self._call("create_service", name)
+        if name in self.mounts:
+            raise OperatorDaemonConflict(
+                f"operator POST create: HTTP 409: service {name} conflicts: already exists",
+                status_code=409,
+                kind=OperatorInstanceKind.SERVICE,
+                name=name,
+            )
+        self.mounts[name] = workspace
+        return name
+
+    def start_service(self, name: str) -> None:
+        self._call("start_service", name)
+        self.running.add(name)
+
+    def service_status(self, name: str) -> str | None:
+        self._call("service_status", name)
+        if name not in self.mounts:
+            return None
+        return "running" if name in self.running else "exited"
+
+    def destroy_service(self, name: str) -> None:
+        self._call("destroy_service", name)
+        self.mounts.pop(name, None)
+        self.running.discard(name)
+
+    def destroy_workspace(self, name: str) -> None:
+        self._call("destroy_workspace", name)
+        self.workspaces.pop(name, None)
+
+    def workspace_status(self, name: str) -> WorkspaceStatus | None:
+        self._call("workspace_status", name)
+        if name not in self.workspaces:
+            return None
+        template, inputs = self.workspaces[name]
+        services = tuple(sorted(service for service, mounted in self.mounts.items() if mounted == name))
+        return WorkspaceStatus(name=name, template=template, inputs=inputs, services=services)
+
+
+_AGENT_STATE_QUERY = """
+query($id: String!) {
+  agents_by_pk(id: $id) {
+    lifecycle runtime_status workspace service conflict_kind conflict_name last_error
+    can_provision can_adopt can_replace can_reprovision can_deprovision can_delete
+  }
+}
+"""
+
+
+def _agent_state(agent: Any, admin: Any) -> dict[str, Any]:
+    """Read an agent's lifecycle facts and verb eligibility through the console schema."""
+
+    return dict(_data(_execute(_schema(), _AGENT_STATE_QUERY, {"id": agent.sqid}, user=admin))["agents_by_pk"])
+
+
+def _run_action(field_name: str, agent: Any, user: Any) -> Any:
+    """Run one agent action mutation and return its execution result."""
+
+    return _execute(
+        _schema(),
+        f"mutation($id: ID!){{ {field_name}(id: $id){{ ok message code }} }}",
+        {"id": _public_id(agent.sqid)},
+        user=user,
+    )
+
+
+def _action(field_name: str, agent: Any, user: Any) -> dict[str, Any]:
+    """Run one agent action mutation and return its ``ActionResult``."""
+
+    return dict(_data(_run_action(field_name, agent, user))[field_name])
+
+
+def _agent_holding(owner: Any, *, workspace: str = "", service: str = "") -> Any:
+    """Seed another, provisioned agent that records ``workspace``/``service`` as its own."""
+
+    with system_context(reason="test.agents.holding.seed"):
+        return Agent.objects.create(name="Owner", owner=owner, workspace=workspace, service=service, lifecycle="ready")
+
+
+def _operator_holding(
+    monkeypatch: Any,
+    *,
+    workspace: str,
+    agent_name: str,
+    template: str = "ref:agent-default",
+    services: tuple[str, ...] | None = None,
+    running: bool = True,
+) -> _Operator:
+    """Install an operator that already holds a workspace and the services mounting it."""
+
+    mounted = (f"agent-{workspace}",) if services is None else services
+    operator = _Operator(
+        workspaces={workspace: (template, {"agent_name": agent_name})},
+        mounts={service: workspace for service in mounted},
+        running=set(mounted) if running else set(),
+    )
+    return operator.install(monkeypatch)
+
+
+def _conflicted_agent(
+    admin: Any, monkeypatch: Any, *, slug: str, name: str = "Taken", **operator: Any
+) -> tuple[Any, _Operator]:
+    """Seed an agent and an operator holding its workspace, then provision into the conflict."""
+
+    agent = _provisionable_agent(admin, name, slug=slug)
+    workspace = "ws-" + name.lower().replace(" ", "-")
+    daemon = _operator_holding(monkeypatch, workspace=workspace, agent_name=name, **operator)
+    assert _action("provision_agent", agent, admin)["ok"] is False
+    daemon.calls.clear()
+    return agent, daemon
+
+
+def test_provision_agent_records_the_conflicting_workspace_and_offers_adopt_and_replace(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """A 409 over an unrecorded workspace is a recorded outcome; Provision then stays hidden."""
+
+    admin = _platform_admin("agt-conflict-admin")
+    agent = _provisionable_agent(admin, "Taken", slug="agt-conflict-tpl")
+    operator = _operator_holding(monkeypatch, workspace="ws-taken", agent_name="Taken")
+
+    result = _action("provision_agent", agent, admin)
+
+    assert result["ok"] is False and result["code"] is None
+    assert "workspace ws-taken conflicts" in result["message"]
+    state = _agent_state(agent, admin)
+    assert {key: state[key] for key in state if key != "last_error"} == {
+        "lifecycle": "DRAFT",
+        "runtime_status": "ERROR",
+        "workspace": "",
+        "service": "",
+        "conflict_kind": "WORKSPACE",
+        "conflict_name": "ws-taken",
+        "can_provision": False,
+        "can_adopt": True,
+        "can_replace": True,
+        "can_reprovision": False,
+        "can_deprovision": True,
+        "can_delete": False,
+    }
+    # Nothing was created, so nothing was rolled back: the conflicting instance is untouched.
+    assert [name for name, _ in operator.calls] == ["create_workspace"]
+    assert operator.mounts == {"agent-ws-taken": "ws-taken"}
+
+
+def test_provision_agent_conflict_over_another_agents_instance_names_it_only_to_the_admin(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """A conflict with an instance another agent records is never recorded for adoption.
+
+    The admin-only result names the other agent; the persisted error, readable by any
+    reader of this agent, does not. A rename then provisions under a fresh name.
+    """
+
+    admin = _platform_admin("agt-recorded-elsewhere-admin")
+    _agent_holding(admin, workspace="ws-shared")
+    agent = _provisionable_agent(admin, "Shared", slug="agt-recorded-elsewhere-tpl")
+    _operator_holding(monkeypatch, workspace="ws-shared", agent_name="Shared")
+
+    result = _action("provision_agent", agent, admin)
+
+    assert result["ok"] is False
+    assert "recorded by agent “Owner”" in result["message"] and "rename this agent" in result["message"]
+    state = _agent_state(agent, admin)
+    assert (state["conflict_kind"], state["can_provision"], state["can_adopt"]) == (None, True, False)
+    assert "Owner" not in state["last_error"] and "another agent" in state["last_error"]
+
+
+def test_renaming_an_agent_clears_its_conflicting_workspace(composed_tables: None, monkeypatch: Any) -> None:
+    """The conflicting workspace's name derived from the old agent name; a rename makes it stale."""
+
+    admin = _platform_admin("agt-rename-admin")
+    agent, _ = _conflicted_agent(admin, monkeypatch, slug="agt-rename-tpl")
+
+    renamed = _data(
+        _execute(
+            _schema(),
+            """
+            mutation($id: String!) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed"}) {
+                conflict_kind can_provision can_adopt
+              }
+            }
+            """,
+            {"id": agent.sqid},
+            user=admin,
+        )
+    )["update_agents_by_pk"]
+
+    assert renamed == {"conflict_kind": None, "can_provision": True, "can_adopt": False}
+
+
+@pytest.mark.parametrize(
+    ("failing_destroy", "kept", "destroys"),
+    [
+        ("destroy_workspace", ("ws-doomed", "", "ready"), ["destroy_service", "destroy_workspace"]),
+        ("destroy_service", ("ws-doomed", "agent-ws-doomed", "ready"), ["destroy_service"]),
+    ],
+)
+def test_provision_agent_keeps_the_names_whose_rollback_destroy_failed(
+    composed_tables: None, monkeypatch: Any, failing_destroy: str, kept: tuple[str, str, str], destroys: list[str]
+) -> None:
+    """A failed rollback leaves its instance recorded, so the agent never forgets it.
+
+    The workspace is never destroyed under a service whose destroy failed.
+    """
+
+    admin = _platform_admin(f"agt-rollback-{failing_destroy}-admin")
+    agent = _provisionable_agent(admin, "Doomed", slug=f"agt-rollback-{failing_destroy}-tpl")
+    failures = {"start_service": RuntimeError("image build failed"), failing_destroy: RuntimeError("unreachable")}
+    operator = _Operator(fail=failures).install(monkeypatch)
+
+    result = _action("provision_agent", agent, admin)
+
+    assert result["ok"] is False and "image build failed" in result["message"]
+    assert [name for name, _ in operator.calls if name.startswith("destroy")] == destroys
+    with system_context(reason="test.agents.rollback.verify"):
+        agent.refresh_from_db()
+    assert (agent.workspace, agent.service, str(agent.lifecycle)) == kept
+    assert str(agent.runtime_status) == "error" and "image build failed" in agent.last_error
+
+
+@pytest.mark.parametrize(
+    "verb", ["provision_agent", "adopt_agent", "replace_agent", "reprovision_agent", "deprovision_agent"]
+)
+def test_a_lifecycle_verb_is_refused_while_another_holds_the_agent(
+    composed_tables: None, monkeypatch: Any, verb: str
+) -> None:
+    """The five verbs share one advisory lock per agent; a refused verb touches neither daemon nor row."""
+
+    admin = _platform_admin(f"agt-locked-{verb}-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Locked",
+        slug=f"agt-locked-{verb}-tpl",
+        workspace="ws-locked",
+        lifecycle="ready",
+        runtime_status="running",
+        conflict_kind="service",
+        conflict_name="agent-ws-locked",
+    )
+    operator = _Operator().install(monkeypatch)
+    before = _agent_state(agent, admin)
+
+    with task_lock(agent.provisioning_lock_key()) as held:
+        assert held
+        result = _action(verb, agent, admin)
+
+    assert result == {
+        "ok": False,
+        "message": "Another provisioning action is running for this agent; try again when it finishes.",
+        "code": None,
+    }
+    assert operator.calls == []
+    assert _agent_state(agent, admin) == before
+
+
+def test_adopt_agent_keeps_a_running_container_as_it_is(composed_tables: None, monkeypatch: Any) -> None:
+    """Adopt records the workspace and its running service and changes nothing on the daemon."""
+
+    admin = _platform_admin("agt-adopt-admin")
+    plain = User.objects.create_user(username="agt-adopt-plain", email="adopt@example.com")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-adopt-tpl")
+
+    assert _run_action("adopt_agent", agent, plain).errors is not None
+    result = _action("adopt_agent", agent, admin)
+
+    assert result == {"ok": True, "message": "Adopted “agent-ws-taken”.", "code": None}
+    # Read only: no secret sync, no render, no start of a running service.
+    assert operator.calls == [("workspace_status", "ws-taken"), ("service_status", "agent-ws-taken")]
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["runtime_status"], state["workspace"], state["service"]) == (
+        "READY",
+        "RUNNING",
+        "ws-taken",
+        "agent-ws-taken",
+    )
+    assert (state["conflict_kind"], state["can_adopt"], state["can_replace"], state["can_reprovision"]) == (
+        None,
+        False,
+        False,
+        True,
+    )
+
+
+def test_adopt_agent_starts_a_stopped_service(composed_tables: None, monkeypatch: Any) -> None:
+    """A stopped adopted service is brought up; it is not re-rendered."""
+
+    admin = _platform_admin("agt-adopt-start-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-adopt-start-tpl", running=False)
+
+    assert _action("adopt_agent", agent, admin)["ok"] is True
+
+    assert [name for name, _ in operator.calls] == ["workspace_status", "service_status", "start_service"]
+    assert operator.running == {"agent-ws-taken"}
+
+
+def test_adopt_agent_without_a_mounting_service_records_the_workspace_and_asks_for_reprovision(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """Adopt renders nothing: a workspace with no service is recorded, and Reprovision renders one."""
+
+    admin = _platform_admin("agt-adopt-bare-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-adopt-bare-tpl", services=())
+
+    result = _action("adopt_agent", agent, admin)
+
+    assert result["ok"] is True and "reprovision to render one" in result["message"]
+    assert operator.mounts == {}
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["runtime_status"], state["workspace"], state["can_reprovision"]) == (
+        "READY",
+        "ERROR",
+        "ws-taken",
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("operator_state", "holder", "refusal"),
+    [
+        ({"template": "ref:other-template"}, {}, "was rendered from template “ref:other-template”"),
+        ({"agent_name": "Someone Else"}, {}, "was rendered with agent_name “Someone Else”, not “Taken”"),
+        ({"services": ("agent-ws-taken", "sidecar")}, {}, "more services than this agent's runtime renders"),
+        ({}, {"service": "agent-ws-taken"}, "service “agent-ws-taken” is recorded by agent “Owner”"),
+    ],
+)
+def test_adopt_agent_refuses_an_instance_that_does_not_verify_as_this_agents(
+    composed_tables: None, monkeypatch: Any, operator_state: dict[str, Any], holder: dict[str, str], refusal: str
+) -> None:
+    """Adopt verifies template, identity inputs, mounting services and records before changing anything."""
+
+    admin = _platform_admin(f"agt-adopt-refuse-{len(refusal)}-admin")
+    agent = _provisionable_agent(admin, "Taken", slug=f"agt-adopt-refuse-{len(refusal)}-tpl")
+    operator = _operator_holding(
+        monkeypatch,
+        workspace="ws-taken",
+        agent_name=operator_state.get("agent_name", "Taken"),
+        template=operator_state.get("template", "ref:agent-default"),
+        services=operator_state.get("services"),
+    )
+    _action("provision_agent", agent, admin)
+    if holder:
+        _agent_holding(admin, **holder)
+    operator.calls.clear()
+
+    result = _action("adopt_agent", agent, admin)
+
+    assert result["ok"] is False and refusal in result["message"]
+    assert [name for name, _ in operator.calls] == ["workspace_status"]
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["workspace"], state["conflict_name"], state["can_replace"]) == (
+        "DRAFT",
+        "",
+        "ws-taken",
+        True,
+    )
+
+
+def test_adopt_agent_turns_a_record_race_into_the_other_agents_name(composed_tables: None, monkeypatch: Any) -> None:
+    """The unique instance constraint refuses a record another agent won meanwhile."""
+
+    admin = _platform_admin("agt-adopt-race-admin")
+    agent, _ = _conflicted_agent(admin, monkeypatch, slug="agt-adopt-race-tpl")
+    _agent_holding(admin, workspace="ws-taken")
+    # The holder records the workspace after the verification read: let the check pass.
+    monkeypatch.setattr(type(agent), "conflicting_instance_blocker", lambda self, status, *, template_ref: None)
+
+    result = _action("adopt_agent", agent, admin)
+
+    assert result["ok"] is False and "workspace “ws-taken” is recorded by agent “Owner”" in result["message"]
+    assert _agent_state(agent, admin)["conflict_name"] == "ws-taken"
+
+
+def test_adopt_agent_failing_after_the_record_keeps_the_instance(composed_tables: None, monkeypatch: Any) -> None:
+    """Once recorded, a failed start leaves the workspace and service on the agent, never forgotten."""
+
+    admin = _platform_admin("agt-adopt-startfail-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-adopt-startfail-tpl", running=False)
+    operator.fail["start_service"] = RuntimeError("image missing")
+
+    result = _action("adopt_agent", agent, admin)
+
+    assert result["ok"] is False and "image missing" in result["message"]
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["runtime_status"], state["workspace"], state["service"]) == (
+        "READY",
+        "ERROR",
+        "ws-taken",
+        "agent-ws-taken",
+    )
+    assert (state["conflict_kind"], state["can_reprovision"], state["can_deprovision"]) == (None, True, True)
+
+
+@pytest.mark.parametrize("verb", ["adopt_agent", "replace_agent", "deprovision_agent"])
+def test_an_unreachable_operator_during_the_conflict_read_changes_nothing(
+    composed_tables: None, monkeypatch: Any, verb: str
+) -> None:
+    """The verification read failing refuses the verb; nothing is recorded or destroyed."""
+
+    admin = _platform_admin(f"agt-unreachable-{verb}-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug=f"agt-unreachable-{verb}-tpl")
+    operator.fail["workspace_status"] = RuntimeError("operator unreachable")
+    before = _agent_state(agent, admin)
+
+    result = _action(verb, agent, admin)
+
+    assert result["ok"] is False and "operator unreachable" in result["message"]
+    assert [name for name, _ in operator.calls] == ["workspace_status"]
+    assert _agent_state(agent, admin) == before
+
+
+def test_replace_agent_destroys_the_verified_conflicting_instance_then_provisions_afresh(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """Replace records the conflicting instance, destroys it, and renders anew."""
+
+    admin = _platform_admin("agt-replace-admin")
+    plain = User.objects.create_user(username="agt-replace-plain", email="replace@example.com")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-replace-tpl")
+
+    assert _run_action("replace_agent", agent, plain).errors is not None
+    result = _action("replace_agent", agent, admin)
+
+    assert result == {"ok": True, "message": "Provisioned “agent-ws-taken”.", "code": None}
+    assert operator.calls == [
+        ("workspace_status", "ws-taken"),
+        ("workspace_status", "ws-taken"),
+        ("destroy_service", "agent-ws-taken"),
+        ("destroy_workspace", "ws-taken"),
+        ("create_workspace", "ws-taken"),
+        ("create_service", "agent-ws-taken"),
+        ("start_service", "agent-ws-taken"),
+    ]
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["workspace"], state["service"], state["conflict_kind"]) == (
+        "READY",
+        "ws-taken",
+        "agent-ws-taken",
+        None,
+    )
+
+
+def test_replace_agent_refuses_to_destroy_a_workspace_this_agent_did_not_render(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """A conflicting workspace from another template is never destroyed by Replace."""
+
+    admin = _platform_admin("agt-replace-foreign-admin")
+    agent, operator = _conflicted_agent(
+        admin, monkeypatch, slug="agt-replace-foreign-tpl", template="ref:stale-template"
+    )
+
+    result = _action("replace_agent", agent, admin)
+
+    assert result["ok"] is False and "Deprovision to clear the record without destroying it" in result["message"]
+    assert [name for name, _ in operator.calls] == ["workspace_status"]
+    assert "ws-taken" in operator.workspaces and operator.mounts == {"agent-ws-taken": "ws-taken"}
+
+
+def test_replace_agent_refuses_before_destroying_when_it_could_not_provision(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """A replace that could not rebuild the agent never destroys the conflicting instance."""
+
+    admin = _platform_admin("agt-replace-refuse-admin")
+    with system_context(reason="test.agents.replace_refuse.seed"):
+        agent = Agent.objects.create(
+            name="Templateless",
+            owner=admin,
+            runtime_class="claude_code",
+            conflict_kind="workspace",
+            conflict_name="ws-templateless",
+            runtime_status="error",
+        )
+    operator = _operator_holding(monkeypatch, workspace="ws-templateless", agent_name="Templateless")
+
+    result = _action("replace_agent", agent, admin)
+
+    assert result["ok"] is False and "Set a workspace template" in result["message"]
+    assert operator.calls == []
+
+
+def test_a_service_conflict_keeps_the_new_workspace_and_replace_clears_both(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """A 409 on the service keeps the workspace this provision created; Replace then rebuilds both."""
+
+    admin = _platform_admin("agt-service-conflict-admin")
+    agent = _provisionable_agent(admin, "Svc Taken", slug="agt-service-conflict-tpl")
+    # The service survived a workspace destroyed outside this agent.
+    operator = _Operator(mounts={"agent-ws-svc-taken": "ws-svc-taken"}).install(monkeypatch)
+
+    provisioned = _action("provision_agent", agent, admin)
+
+    assert provisioned["ok"] is False and "service agent-ws-svc-taken conflicts" in provisioned["message"]
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["workspace"], state["conflict_kind"], state["conflict_name"]) == (
+        "READY",
+        "ws-svc-taken",
+        "SERVICE",
+        "agent-ws-svc-taken",
+    )
+    assert (state["can_provision"], state["can_reprovision"], state["can_adopt"], state["can_replace"]) == (
+        False,
+        False,
+        True,
+        True,
+    )
+    operator.calls.clear()
+
+    replaced = _action("replace_agent", agent, admin)
+
+    assert replaced == {"ok": True, "message": "Provisioned “agent-ws-svc-taken”.", "code": None}
+    assert [name for name, _ in operator.calls][:4] == [
+        "workspace_status",
+        "workspace_status",
+        "destroy_service",
+        "destroy_workspace",
+    ]
+    assert _agent_state(agent, admin)["conflict_kind"] is None
+
+
+def test_reprovision_agent_records_a_service_conflict(composed_tables: None, monkeypatch: Any) -> None:
+    """A 409 while recreating the service is recorded, keeping the workspace and forgetting the destroyed service."""
+
+    admin = _platform_admin("agt-reprov-conflict-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Rebot",
+        slug="agt-reprov-conflict-tpl",
+        workspace="ws-keep",
+        service="svc-old",
+        lifecycle="ready",
+        runtime_status="running",
+    )
+    operator = _Operator(
+        workspaces={"ws-keep": ("ref:agent-default", {"agent_name": "Rebot"})},
+        mounts={"svc-old": "ws-keep", "agent-ws-keep": "ws-keep"},
+    ).install(monkeypatch)
+
+    result = _action("reprovision_agent", agent, admin)
+
+    assert result["ok"] is False and "service agent-ws-keep conflicts" in result["message"]
+    assert ("destroy_service", "svc-old") in operator.calls
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["workspace"], state["service"]) == ("READY", "ws-keep", "")
+    assert (state["conflict_kind"], state["conflict_name"], state["can_adopt"]) == (
+        "SERVICE",
+        "agent-ws-keep",
+        True,
+    )
+
+
+def _reprovisionable(admin: Any, monkeypatch: Any, *, slug: str) -> tuple[Any, _Operator]:
+    """Seed a provisioned agent whose service the daemon will recreate under the same name."""
+
+    agent = _provisionable_agent(
+        admin,
+        "Rebot",
+        slug=slug,
+        workspace="ws-keep",
+        service="agent-ws-keep",
+        lifecycle="ready",
+        runtime_status="running",
+    )
+    operator = _Operator(
+        workspaces={"ws-keep": ("ref:agent-default", {"agent_name": "Rebot"})},
+        mounts={"agent-ws-keep": "ws-keep"},
+    ).install(monkeypatch)
+    return agent, operator
+
+
+def _service_conflict(name: str) -> OperatorDaemonConflict:
+    """A classified 409 naming the service ``name``."""
+
+    return OperatorDaemonConflict(
+        f"operator POST up: HTTP 409: service {name} conflicts: already exists",
+        status_code=409,
+        kind=OperatorInstanceKind.SERVICE,
+        name=name,
+    )
+
+
+def test_reprovision_agent_never_forgets_the_new_service_on_a_later_conflict(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """The old service is forgotten when destroyed; the new one, same name, stays recorded."""
+
+    admin = _platform_admin("agt-reprov-keep-new-admin")
+    agent, operator = _reprovisionable(admin, monkeypatch, slug="agt-reprov-keep-new-tpl")
+    operator.fail["start_service"] = _service_conflict("agent-sidecar")
+
+    result = _action("reprovision_agent", agent, admin)
+
+    assert result["ok"] is False and "agent-sidecar conflicts" in result["message"]
+    assert operator.mounts == {"agent-ws-keep": "ws-keep"}  # destroyed, then created again
+    state = _agent_state(agent, admin)
+    assert (state["workspace"], state["service"], state["conflict_kind"], state["conflict_name"]) == (
+        "ws-keep",
+        "agent-ws-keep",
+        "SERVICE",
+        "agent-sidecar",
+    )
+
+
+def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(composed_tables: None, monkeypatch: Any) -> None:
+    """It is never recorded as a conflict the agent "does not record"; the verb's own creation is undone."""
+
+    admin = _platform_admin("agt-own-409-admin")
+    agent, operator = _reprovisionable(admin, monkeypatch, slug="agt-own-409-tpl")
+    operator.fail["start_service"] = _service_conflict("agent-ws-keep")
+
+    result = _action("reprovision_agent", agent, admin)
+
+    assert result["ok"] is False and "service agent-ws-keep conflicts" in result["message"]
+    state = _agent_state(agent, admin)
+    assert (state["conflict_kind"], state["service"], state["workspace"]) == (None, "", "ws-keep")
+    assert "does not record" not in state["last_error"]
+    assert operator.mounts == {}  # the new service this verb created was rolled back
+
+
+@pytest.mark.parametrize(
+    ("recorded", "conflict", "mounts", "refusal"),
+    [
+        (
+            {"workspace": "ws-own"},
+            ("workspace", "ws-taken"),
+            {"agent-ws-taken": "ws-taken"},
+            "already records workspace “ws-own”, so it cannot also take over “ws-taken”",
+        ),
+        (
+            {"workspace": "ws-own", "service": "svc-own"},
+            ("service", "agent-ws-own"),
+            {"agent-ws-own": "ws-own"},
+            "already records service “svc-own”, so it cannot also take over “agent-ws-own”",
+        ),
+    ],
+)
+def test_a_conflicting_instance_never_overwrites_one_this_agent_records(
+    composed_tables: None,
+    monkeypatch: Any,
+    recorded: dict[str, str],
+    conflict: tuple[str, str],
+    mounts: dict[str, str],
+    refusal: str,
+) -> None:
+    """Adopt refuses, and Deprovision destroys only the agent's own instances, leaving the other in place."""
+
+    admin = _platform_admin(f"agt-own-overwrite-{conflict[0]}-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Taken",
+        slug=f"agt-own-overwrite-{conflict[0]}-tpl",
+        lifecycle="ready",
+        runtime_status="error",
+        conflict_kind=conflict[0],
+        conflict_name=conflict[1],
+        **recorded,
+    )
+    identity = {"agent_name": "Taken"}
+    operator = _Operator(
+        workspaces={"ws-own": ("ref:agent-default", identity), "ws-taken": ("ref:agent-default", identity)},
+        mounts=mounts,
+    ).install(monkeypatch)
+
+    adopted = _action("adopt_agent", agent, admin)
+
+    assert adopted["ok"] is False and refusal in adopted["message"]
+    assert _agent_state(agent, admin)["conflict_name"] == conflict[1]
+
+    deprovisioned = _action("deprovision_agent", agent, admin)
+
+    assert deprovisioned["ok"] is True and f"Left “{conflict[1]}” in place" in deprovisioned["message"]
+    destroyed = {name for verb, name in operator.calls if verb.startswith("destroy")}
+    assert destroyed == set(recorded.values())
+    assert conflict[1] in {*operator.workspaces, *operator.mounts}
+
+
+@pytest.mark.parametrize("verb", ["adopt_agent", "replace_agent", "deprovision_agent"])
+def test_a_service_conflict_without_a_recorded_workspace_cannot_be_verified(
+    composed_tables: None, monkeypatch: Any, verb: str
+) -> None:
+    """The daemon is never asked about an empty workspace name; only Deprovision proceeds, destroying nothing."""
+
+    admin = _platform_admin(f"agt-unverifiable-{verb}-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Orphan",
+        slug=f"agt-unverifiable-{verb}-tpl",
+        runtime_status="error",
+        conflict_kind="service",
+        conflict_name="agent-ws-orphan",
+    )
+    operator = _Operator(mounts={"agent-ws-orphan": "ws-orphan"}).install(monkeypatch)
+
+    result = _action(verb, agent, admin)
+
+    assert "cannot be verified" in result["message"]
+    assert operator.calls == []
+    state = _agent_state(agent, admin)
+    if verb == "deprovision_agent":
+        assert result["ok"] is True
+        assert (state["lifecycle"], state["conflict_kind"], state["can_provision"]) == ("DEPROVISIONED", None, True)
+    else:
+        assert result["ok"] is False
+        assert state["conflict_name"] == "agent-ws-orphan"
+
+
+def test_deprovision_agent_destroys_the_verified_conflicting_instance(composed_tables: None, monkeypatch: Any) -> None:
+    """Deprovision records the conflicting instance as the agent's own, then destroys it."""
+
+    admin = _platform_admin("agt-deprov-conflict-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-deprov-conflict-tpl")
+
+    result = _action("deprovision_agent", agent, admin)
+
+    assert result == {"ok": True, "message": "Deprovisioned.", "code": None}
+    assert operator.calls == [
+        ("workspace_status", "ws-taken"),
+        ("destroy_service", "agent-ws-taken"),
+        ("destroy_workspace", "ws-taken"),
+    ]
+    assert (operator.workspaces, operator.mounts) == ({}, {})
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["conflict_kind"], state["can_provision"], state["can_delete"]) == (
+        "DEPROVISIONED",
+        None,
+        True,
+        True,
+    )
+
+
+def test_deprovision_agent_keeps_a_recorded_instance_whose_destroy_failed(
+    composed_tables: None, monkeypatch: Any
+) -> None:
+    """After the record, a refused workspace destroy keeps that workspace on the agent for a retry."""
+
+    admin = _platform_admin("agt-deprov-retry-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug="agt-deprov-retry-tpl")
+    operator.fail["destroy_workspace"] = RuntimeError("workspace has unpushed work")
+
+    result = _action("deprovision_agent", agent, admin)
+
+    assert result["ok"] is False and "unpushed work" in result["message"]
+    assert operator.mounts == {}
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["workspace"], state["service"], state["conflict_kind"]) == (
+        "READY",
+        "ws-taken",
+        "",
+        None,
+    )
+    assert state["can_deprovision"] is True
+    del operator.fail["destroy_workspace"]
+    assert _action("deprovision_agent", agent, admin)["ok"] is True
+    assert operator.workspaces == {}
+
+
+@pytest.mark.parametrize(
+    ("operator_state", "holder"),
+    [({"template": "ref:stale-template"}, False), ({}, True)],
+)
+def test_deprovision_agent_clears_a_conflict_it_cannot_verify_without_destroying_anything(
+    composed_tables: None, monkeypatch: Any, operator_state: dict[str, Any], holder: bool
+) -> None:
+    """The non-destructive way out: an instance that is not this agent's stays; the record is cleared."""
+
+    admin = _platform_admin(f"agt-deprov-foreign-{holder}-admin")
+    agent, operator = _conflicted_agent(admin, monkeypatch, slug=f"agt-deprov-foreign-{holder}-tpl", **operator_state)
+    if holder:
+        owner = _agent_holding(admin, workspace="ws-taken")
+
+    result = _action("deprovision_agent", agent, admin)
+
+    assert result["ok"] is True and "Left “ws-taken” in place" in result["message"]
+    assert [name for name, _ in operator.calls] == ["workspace_status"]
+    assert "ws-taken" in operator.workspaces and operator.mounts == {"agent-ws-taken": "ws-taken"}
+    state = _agent_state(agent, admin)
+    assert (state["lifecycle"], state["conflict_kind"], state["can_provision"]) == ("DEPROVISIONED", None, True)
+    if holder:
+        with system_context(reason="test.agents.deprov_foreign.verify"):
+            owner.refresh_from_db()
+        assert owner.workspace == "ws-taken"
+
+
+def test_two_agents_cannot_record_the_same_operator_instance(composed_tables: None) -> None:
+    """The partial unique constraints allow any number of blank names, and one agent per instance."""
+
+    admin = _platform_admin("agt-unique-admin")
+    _agent_holding(admin, workspace="ws-once", service="svc-once")
+    with system_context(reason="test.agents.unique.seed"):
+        Agent.objects.create(name="Blank A", owner=admin)
+        Agent.objects.create(name="Blank B", owner=admin)
+        for duplicate in ({"workspace": "ws-once"}, {"service": "svc-once"}):
+            with pytest.raises(IntegrityError), transaction.atomic():
+                Agent.objects.create(name="Copy", owner=admin, **duplicate)
+
+
+def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables: None) -> None:
+    """``can_*`` answer from each row's own columns and annotations, so a list costs the same at any size."""
+
+    admin = _platform_admin("agt-eligibility-admin")
+    query = """
+    { agents { can_provision can_adopt can_replace can_reprovision can_deprovision can_delete } }
+    """
+
+    def queries_for(count: int) -> int:
+        with system_context(reason="test.agents.eligibility.seed"):
+            existing = Agent.objects.count()
+            for index in range(existing, count):
+                agent = Agent.objects.create(
+                    name=f"Row {index}",
+                    owner=admin,
+                    runtime_class="claude_code",
+                    conflict_kind="workspace" if index % 2 else None,
+                    conflict_name=f"ws-row-{index}" if index % 2 else "",
+                )
+                if index % 3 == 0:
+                    AgentSession.objects.create(agent=agent, owner=admin)
+        with CaptureQueriesContext(connection) as captured:
+            rows = _data(_execute(_schema(), query, user=admin))["agents"]
+        assert len(rows) == count
+        return len(captured.captured_queries)
+
+    assert queries_for(1) == queries_for(3) == queries_for(6)
+
+
 def test_provision_agent_refuses_when_inference_credential_has_no_secret(
     composed_tables: None, monkeypatch: Any
 ) -> None:
@@ -1286,29 +2171,12 @@ def test_provision_agent_refuses_when_inference_credential_has_no_secret(
             name="claude-opus-4-8",
         )
     agent = _provisionable_agent(admin, "NoKey", slug="agt-nokey-tpl", model=model)
-    agent_id = _public_id(agent.sqid)
+    operator = _Operator().install(monkeypatch)
 
-    called: list[str] = []
-
-    class _UnusedDaemon:
-        @classmethod
-        def from_settings(cls) -> _UnusedDaemon:
-            called.append("from_settings")
-            return cls()
-
-    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _UnusedDaemon)
-
-    result = _data(
-        _execute(
-            _schema(),
-            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
-            {"id": agent_id},
-            user=admin,
-        )
-    )["provision_agent"]
+    result = _action("provision_agent", agent, admin)
 
     assert result["ok"] is False and "inference credential" in result["message"]
-    assert called == []  # refused before constructing the daemon / any render
+    assert operator.calls == []  # refused before any daemon call or render
     with system_context(reason="test.agents.nokey.verify"):
         agent.refresh_from_db()
         # Never flipped to PROVISIONING; the lifecycle stays a fresh DRAFT and nothing rendered.
@@ -1356,9 +2224,7 @@ def test_agent_inference_credential_override_wins_over_model_chain(composed_tabl
         assert service_inputs["model"] == "claude-opus-4-8"
 
 
-def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(composed_tables: None, monkeypatch: Any) -> None:
     """`agentChatEndpoint` returns the routed url + per-actor route token + mcpServers.
 
     The daemon is mocked. Asserts the resolver looks the agent's `service` up, mints a
@@ -1403,11 +2269,11 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
             minted.append((actor, service, ttl))
             return {"token": "jwt-route", "expires_at": "2026-06-15T00:00:00Z"}
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+    monkeypatch.setattr("angee.agents.runtimes.OperatorDaemon", _FakeDaemon)
 
     query = """
         mutation Chat($id: ID!) {
-          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle }
+          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle protocol_version }
         }
     """
     assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
@@ -1417,6 +2283,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert endpoint["token"] == "jwt-route"
     assert endpoint["expires_at"] == "2026-06-15T00:00:00Z"
     assert endpoint["model_handle"] == "claude-opus-4-8"
+    assert endpoint["protocol_version"] == 1
     assert endpoint["mcp_servers"] == {
         "notes": {"type": "http", "url": "http://host.docker.internal:8101/mcp/notes/"},
     }
@@ -1425,6 +2292,54 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert len(minted) == 1
     actor, service, ttl = minted[0]
     assert actor.startswith("auth/user:") and service == "svc-chat" and ttl == "2h"
+
+
+@pytest.mark.parametrize("secure", [False, True])
+def test_in_process_chat_endpoint_uses_cookie_origin_and_call_permission(
+    composed_tables: None,
+    secure: bool,
+    settings: Any,
+) -> None:
+    settings.ALLOWED_HOSTS = ["localhost"]
+    owner = User.objects.create_user(username="agt-endpoint-owner")
+    stranger = User.objects.create_user(username="agt-endpoint-stranger")
+    with system_context(reason="test.agents.in_process_endpoint"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
+    query = """
+        mutation Chat($id: ID!) {
+          agent_chat_endpoint(id: $id) { url token expires_at protocol_version mcp_servers model_handle }
+        }
+    """
+    request = RequestFactory().post("/graphql/console/", secure=secure, HTTP_HOST="localhost:5173")
+    request.user = owner
+    console = _schema()
+    endpoint = _data(execute_schema(console, query, {"id": str(agent.sqid)}, request=request))["agent_chat_endpoint"]
+    assert endpoint == {
+        "url": f"{'wss' if secure else 'ws'}://localhost:5173/acp/agents/{agent.sqid}/",
+        "token": "",
+        "expires_at": "",
+        "protocol_version": 2,
+        "mcp_servers": {},
+        "model_handle": "",
+    }
+    assert _execute(console, query, {"id": str(agent.sqid)}, user=stranger).errors
+    with system_context(reason="test.agents.unavailable_endpoint"):
+        Agent.objects.filter(pk=agent.pk).update(runtime_status="stopped")
+    assert _execute(console, query, {"id": str(agent.sqid)}, user=owner).errors
+
+
+def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(composed_tables: None) -> None:
+    owner = User.objects.create_user(username="agt-container-owner")
+    with system_context(reason="test.agents.container_endpoint"):
+        agent = Agent.objects.create(name="Container", owner=owner, runtime_class="claude_code", service="svc")
+    result = _execute(
+        _schema(),
+        "mutation($id: ID!) { agent_chat_endpoint(id: $id) { url } }",
+        {"id": str(agent.sqid)},
+        user=owner,
+    )
+    assert result.errors
+    assert "Platform admin" in result.errors[0].message
 
 
 def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None) -> None:
@@ -1477,7 +2392,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
 
     query = """
         query Session($view: JSON!) {
-          resolve_session_for_view(view: $view) { agent_name status model_handle }
+          resolve_session_for_view(view: $view) { agent_name status model_handle runs_in_process }
         }
     """
     view = {"kind": "record", "type": "notes/note", "sqid": "nte_x"}
@@ -1486,6 +2401,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert session["agent_name"] == "Sidekick"
     assert session["status"] == "running"
     assert session["model_handle"] == "claude-opus-4-8"
+    assert session["runs_in_process"] is False
 
     # A platform admin with no running agent gets null, not an error.
     other = _platform_admin("agt-session-none")
@@ -1497,6 +2413,78 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     viewer = User.objects.create_user(username="agt-session-viewer", email="viewer@example.com")
     viewer_session = _data(_execute(console, query, {"view": view}, user=viewer))["resolve_session_for_view"]
     assert viewer_session is None
+
+
+def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_tasks: list[Any]) -> None:
+    """The GraphQL read side retains caller-scoped sessions, turns and view resolution."""
+
+    owner = User.objects.create_user(username="agt-chat-owner")
+    reader = User.objects.create_user(username="agt-chat-reader")
+    with system_context(reason="test.agents.chat.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
+        write_relationships(
+            [
+                RelationshipTuple(resource=to_object_ref(agent), relation="reader", subject=to_subject_ref(reader)),
+            ]
+        )
+    with actor_context(owner):
+        session = AgentSession.objects.start(agent, owner=owner, context={"kind": "list"})
+        turn = session.post("Private question", context={"kind": "record"})
+    console = _schema()
+    target = _data(
+        _execute(
+            console,
+            "{ resolve_session_for_view(view: {}) { runs_in_process session_id } }",
+            user=owner,
+        )
+    )["resolve_session_for_view"]
+    assert target == {"runs_in_process": True, "session_id": str(session.sqid)}
+    query = """
+        query Chat($id: String!) {
+          agent_sessions { id context agent { permissions } }
+          agent_turns { id prompt context }
+          agent_turns_by_pk(id: $id) { id prompt context }
+        }
+    """
+    mine = _data(_execute(console, query, {"id": str(turn.sqid)}, user=owner))
+    assert mine == {
+        "agent_sessions": [{"id": str(session.sqid), "context": {"kind": "list"}, "agent": {"permissions": ["call"]}}],
+        "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}}],
+        "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}},
+    }
+    hidden = _data(_execute(console, query, {"id": str(turn.sqid)}, user=reader))
+    assert hidden == {"agent_sessions": [], "agent_turns": [], "agent_turns_by_pk": None}
+    mutation_fields = _data(_execute(console, "{ __schema { mutationType { fields { name } } } }", user=owner))
+    assert not any("agent_turns" in field["name"] for field in mutation_fields["__schema"]["mutationType"]["fields"])
+
+
+def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None) -> None:
+    """In-process teardown closes persisted sessions through their cancellation verb."""
+
+    admin = _platform_admin("agt-chat-deprovision")
+    with system_context(reason="test.agents.deprovision_sessions.seed"):
+        agent = Agent.objects.create(
+            name="Assistant",
+            owner=admin,
+            runtime_class="pydantic",
+            runtime_status="running",
+            lifecycle="ready",
+        )
+        for status in ("running", "awaiting_approval"):
+            session = AgentSession.objects.create(agent=agent, owner=admin, status=status)
+            AgentTurn.objects.create(session=session, index=1, prompt="Message", status=status)
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation Deprovision($id: ID!) { deprovision_agent(id: $id) { ok message } }",
+            {"id": str(agent.sqid)},
+            user=admin,
+        )
+    )["deprovision_agent"]
+    assert result == {"ok": True, "message": "Deprovisioned."}
+    with system_context(reason="test.agents.deprovision_sessions.verify"):
+        assert set(agent.sessions.values_list("status", flat=True)) == {"closed"}
+        assert set(AgentTurn.objects.filter(session__agent=agent).values_list("status", flat=True)) == {"canceled"}
 
 
 def test_provision_workspace_inputs_from_agent_fields(composed_tables: None) -> None:

@@ -1,6 +1,54 @@
 """Transport-independent domain refusals."""
 
-from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from dataclasses import dataclass
+
+from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, PermissionDenied, ValidationError
+from rebac import MissingActorError
+
+from angee.base.transitions import TransitionNotAllowed
+
+INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
+
+
+@dataclass(frozen=True)
+class ErrorClassification:
+    """Public refusal classification; internal exception values never leave it."""
+
+    code: str
+    message: str
+
+    @property
+    def expected(self) -> bool:
+        return self.code != "INTERNAL"
+
+
+def validation_error(error: BaseException | None) -> ValidationError | None:
+    """Find an authored validation refusal in an exception chain."""
+
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, ValidationError):
+            return error
+        seen.add(id(error))
+        error = error.__cause__ or error.__context__
+    return None
+
+
+def classify_error(error: BaseException | None) -> ErrorClassification:
+    """Share domain, authentication, permission and validation wire policy."""
+
+    if isinstance(error, DomainError):
+        return ErrorClassification(error.code, error.code)
+    if isinstance(error, MissingActorError):
+        return ErrorClassification("UNAUTHENTICATED", "Authentication required.")
+    if isinstance(error, PermissionDenied):
+        return ErrorClassification("PERMISSION_DENIED", "Permission denied.")
+    validation = validation_error(error)
+    if validation is not None:
+        return ErrorClassification("VALIDATION", " ".join(validation.messages))
+    if isinstance(error, TransitionNotAllowed | ObjectDoesNotExist):
+        return ErrorClassification("BAD_USER_INPUT", "The requested operation was refused.")
+    return ErrorClassification("INTERNAL", INTERNAL_ERROR_MESSAGE)
 
 
 def exception_text(error: BaseException, *, diagnostic: bool = False) -> str:

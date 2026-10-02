@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -50,6 +50,30 @@ test("linked UI keeps the complete CodeMirror graph out of dependency optimizati
     expect(config.optimizeDeps?.exclude).toEqual(
       expect.arrayContaining(["@angee/ui", "@codemirror", "codemirror"]),
     );
+  } finally {
+    rmSync(webRoot, { recursive: true, force: true });
+  }
+});
+
+test("proxies the agent ACP WebSocket with the browser Origin intact", async () => {
+  const webRoot = mkdtempSync(join(tmpdir(), "angee-vite-acp-"));
+  try {
+    writeFileSync(join(webRoot, "package.json"), '{"dependencies":{}}\n');
+    const config = await defineAngeeWebViteConfig({
+      prebundleAngeePackages: false,
+      gqlRuntimeDir: join(webRoot, "runtime", "gql"),
+      webRoot,
+    });
+    const protocol = readFileSync(
+      new URL("../../../addons/angee/agents/protocol.py", import.meta.url), "utf8",
+    );
+    const acpPath = protocol.match(/^ACP_PATH = "([^"]+)"$/m)?.[1];
+    expect(acpPath).toBeDefined();
+    expect(config.server?.proxy?.[acpPath!]).toEqual({
+      target: (config.server?.proxy?.["/graphql/"] as { target: string }).target,
+      changeOrigin: false,
+      ws: true,
+    });
   } finally {
     rmSync(webRoot, { recursive: true, force: true });
   }

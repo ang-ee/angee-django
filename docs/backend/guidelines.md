@@ -639,13 +639,16 @@ data through REBAC, never a queryset bypass.
   [`angee.E024`](../../angee/base/checks.py) rejects caveated subjects in every
   effective schema. Actor-scoped querysets carry no caveat context. Express
   row-dependent conditions as live field-backed relations.
-- Bracket every server-side read/write in `system_context`/`asystem_context` and
-  resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
-  an actor is denied.
-- A per-row `create` permission cannot gate an insert (the unsaved row has no id →
-  deny). Gate explicitly with a preflight (`has_access("write")` /
-  `rebac.check_new`), then insert via `row.sudo()` + `save()`; `.sudo()` never
-  auto-clears, so follow with `.with_actor(actor)`.
+- User-requested reads and writes retain their actor scope. Reserve
+  `system_context`/`asystem_context` for named system-owned work; do not elevate
+  a user factory merely because it inserts a row.
+- Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
+  const-backed relationships, so per-row `create` gates remain authoritative.
+  Compose that path for ordinary factories, as
+  [`AgentSessionManager.start`](../../addons/angee/agents/models.py) does.
+  Manual factories needing an explicit relationship preflight use
+  [`AngeeManager.check_create`](../../angee/base/models.py); restore the
+  authorized actor after any required per-instance elevated insert.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
@@ -1515,6 +1518,12 @@ validated at the driver boundary.
   owner already: `angee.integrate.http.HttpClient` (`self.http`), which builds the
   one context; route new outbound calls through it rather than hand-rolling
   `urlopen` + context.
+- **Instance names on a row follow daemon-confirmed facts.** Record a daemon
+  instance's name when the daemon reports it created and blank it only when the
+  daemon confirms it gone. A 409 is the typed
+  [`OperatorDaemonConflict`](../../addons/angee/operator/daemon.py) whose `kind` and
+  `name` come from the daemon's error body; never parse the message or re-derive
+  the name.
 - **MCP bearers are per agent and derived from the server credential.**
   `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server; rotating
   the credential (or changing placement) invalidates every provisioned agent's bearer
@@ -1632,6 +1641,15 @@ Their docstrings own the exact behavior.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
 
+### Addon WebSocket endpoints
+
+Mount addon sockets through `asgi.websocket_urlpatterns` and compose
+`RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
+The [shared router](../../angee/asgi.py) owns Origin trust and Django session
+authentication; never repeat those handshake checks per consumer. Long-lived
+protocols that accept writes must revalidate the session at each request and
+open fresh evaluator scopes for authorization and change-feed reads.
+
 ### GraphQL actor and write contracts
 
 - **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
@@ -1640,7 +1658,7 @@ Their docstrings own the exact behavior.
   [ViewAs](../../addons/angee/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
-  [WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
+  [GraphQL WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../addons/angee/mcp/graphql.py)
   has no request and continues under its own actor.
 - **Concurrency and replay tokens are GraphQL root arguments.** On models

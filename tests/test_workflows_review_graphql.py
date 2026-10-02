@@ -42,19 +42,27 @@ def linked_decision(execution, register_step, composed_permissions):
 
         def ask(self, ctx):
             """Offer one seat to a person with no execution grants."""
-            return ctx.ask(DecisionRequest(
-                kind="review", subject=None, assignees=(assignee,), actions=self.actions,
-            ))
+            return ctx.ask(
+                DecisionRequest(
+                    kind="review",
+                    subject=None,
+                    assignees=(assignee,),
+                    actions=self.actions,
+                )
+            )
 
         def apply(self, ctx, settled):
             """Complete through the same declared action outcome."""
             return ctx.done(outcome=settled[0].action.outcome)
 
     register_step(Question)
-    workflow = load_workflow({
-        "nodes": {"entry": {"step": Question.key}},
-        "results": [{"from": "entry", "when": ["accepted"], "as": "accepted"}],
-    }, actor=admin)
+    workflow = load_workflow(
+        {
+            "nodes": {"entry": {"step": Question.key}},
+            "results": [{"from": "entry", "when": ["accepted"], "as": "accepted"}],
+        },
+        actor=admin,
+    )
     for person in (owner, stranger):
         workflow.with_actor(admin).grant_record_access("starter", person)
     run = start_run(workflow, actor=owner)
@@ -70,9 +78,12 @@ def linked_decision(execution, register_step, composed_permissions):
 def schema():
     """Use both addon buckets including the native output and input donors."""
 
-    return GraphQLSchemas([
-        SchemaAddon(decision_schema.schemas), SchemaAddon(workflow_schema.schemas),
-    ]).build("console")
+    return GraphQLSchemas(
+        [
+            SchemaAddon(decision_schema.schemas),
+            SchemaAddon(workflow_schema.schemas),
+        ]
+    ).build("console")
 
 
 def test_run_operator_reads_linked_decision_but_foreign_starter_cannot(schema, linked_decision):
@@ -81,14 +92,30 @@ def test_run_operator_reads_linked_decision_but_foreign_starter_cannot(schema, l
     workflow, run, step, decision, owner, operator, stranger, assignee = linked_decision
     query = """{ decisions { id group { step_run { id run { id version { workflow { id } } } } } } }"""
     assert result_data(execute_schema(schema, query, user=owner)) == {
-        "decisions": [{"id": decision.sqid, "group": {"step_run": {
-            "id": step.sqid, "run": {"id": run.sqid, "version": {"workflow": {"id": workflow.sqid}}},
-        }}}],
+        "decisions": [
+            {
+                "id": decision.sqid,
+                "group": {
+                    "step_run": {
+                        "id": step.sqid,
+                        "run": {"id": run.sqid, "version": {"workflow": {"id": workflow.sqid}}},
+                    }
+                },
+            }
+        ],
     }
     assert result_data(execute_schema(schema, query, user=operator)) == {
-        "decisions": [{"id": decision.sqid, "group": {"step_run": {
-            "id": step.sqid, "run": {"id": run.sqid, "version": None},
-        }}}],
+        "decisions": [
+            {
+                "id": decision.sqid,
+                "group": {
+                    "step_run": {
+                        "id": step.sqid,
+                        "run": {"id": run.sqid, "version": None},
+                    }
+                },
+            }
+        ],
     }
     assert result_data(execute_schema(schema, query, user=stranger)) == {"decisions": []}
     # A seat's own read permission does not disclose an unrelated execution.
@@ -110,15 +137,21 @@ def test_run_readers_do_not_inherit_review_evidence(schema, linked_decision, exe
     assert not decision.with_actor(viewer).has_access("read")
     assert not decision.group.with_actor(viewer).has_access("read")
     assert result_data(execute_schema(schema, "{ decisions { id } decision_groups { id } }", user=viewer)) == {
-        "decisions": [], "decision_groups": [],
+        "decisions": [],
+        "decision_groups": [],
     }
     assert decision.with_actor(operator).has_access("read")
     assert decision.with_actor(owner).has_access("read")
 
 
-@pytest.mark.parametrize("path,index", [
-    ("group__step_run", 2), ("group__step_run__run", 1), ("group__step_run__run__version__workflow", 0),
-])
+@pytest.mark.parametrize(
+    "path,index",
+    [
+        ("group__step_run", 2),
+        ("group__step_run__run", 1),
+        ("group__step_run__run__version__workflow", 0),
+    ],
+)
 def test_decision_execution_paths_filter_by_public_identity(schema, linked_decision, path, index):
     """Native nested filters expose each persisted link to inbox and dashboards."""
 
@@ -137,7 +170,8 @@ def test_decision_execution_paths_filter_by_public_identity(schema, linked_decis
         "decisions_aggregate": {"aggregate": {"count": 0 if index == 0 else 1}},
     }
     assert result_data(execute_schema(schema, query, {"id": target.sqid}, user=stranger)) == {
-        "decisions": [], "decisions_aggregate": {"aggregate": {"count": 0}},
+        "decisions": [],
+        "decisions_aggregate": {"aggregate": {"count": 0}},
     }
     resource = next(resource for resource in schema.angee_resources if resource.model_label == "decisions.Decision")
     assert resource.query.fields[path.replace("__", ".")].filter is not None
@@ -170,8 +204,10 @@ def test_workflow_key_filters_preserve_related_workflow_read_scope(schema, linke
         assert decision.with_actor(actor).has_access("read")
         assert not workflow.with_actor(actor).has_access("read")
         assert result_data(execute_schema(schema, query, {"key": workflow.key}, user=actor)) == {
-            "workflowrun": [], "workflowrun_aggregate": {"aggregate": {"count": 0}},
-            "decisions": [], "decisions_aggregate": {"aggregate": {"count": 0}},
+            "workflowrun": [],
+            "workflowrun_aggregate": {"aggregate": {"count": 0}},
+            "decisions": [],
+            "decisions_aggregate": {"aggregate": {"count": 0}},
             "visible": [{"id": decision.sqid}],
             "visible_count": {"aggregate": {"count": 1}},
         }
@@ -189,10 +225,22 @@ def test_run_and_decision_change_roots_scope_each_subscriber(schema, linked_deci
     resources = {resource.model_label: resource for resource in schema.angee_resources}
 
     for model, row, surface, field, readers, nonreaders in (
-        (type(run), run, workflow_schema.schemas["console"]["subscription"][0],
-         "workflowRunChanged", (owner, operator), (assignee, stranger)),
-        (type(decision), decision, decision_schema.schemas["console"]["subscription"][0],
-         "decisionChanged", (owner, operator, assignee), (stranger,)),
+        (
+            type(run),
+            run,
+            workflow_schema.schemas["console"]["subscription"][0],
+            "workflowRunChanged",
+            (owner, operator),
+            (assignee, stranger),
+        ),
+        (
+            type(decision),
+            decision,
+            decision_schema.schemas["console"]["subscription"][0],
+            "decisionChanged",
+            (owner, operator, assignee),
+            (stranger,),
+        ),
     ):
         assert resources[model._meta.label].roots.changes_name == field
         payload = ChangePayload.from_instance(row, action="update", update_fields=None).as_message()
@@ -201,7 +249,7 @@ def test_run_and_decision_change_roots_scope_each_subscriber(schema, linked_deci
             assert subscribed_model is model
             yield payload
 
-        monkeypatch.setattr(subscriptions, "_subscribe", stream)
+        monkeypatch.setattr(subscriptions, "subscribe", stream)
         resolver = surface.__strawberry_definition__.fields[0].base_resolver.wrapped_func
 
         async def receive(actor):
@@ -218,8 +266,11 @@ def test_decision_display_fields_follow_related_read_permissions(schema, linked_
     """Inbox columns do not disclose execution labels to a seat-only reader."""
     workflow, _run, step, decision, owner, operator, stranger, assignee = linked_decision
     query = "{ decisions { id workflow_name node_key } }"
-    for actor, name, key in ((owner, workflow.name, step.node_key), (operator, None, step.node_key),
-                             (assignee, None, None)):
+    for actor, name, key in (
+        (owner, workflow.name, step.node_key),
+        (operator, None, step.node_key),
+        (assignee, None, None),
+    ):
         assert result_data(execute_schema(schema, query, user=actor)) == {
             "decisions": [{"id": decision.sqid, "workflow_name": name, "node_key": key}],
         }

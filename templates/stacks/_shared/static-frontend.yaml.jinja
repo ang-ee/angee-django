@@ -25,7 +25,7 @@
         :80 {
           encode zstd gzip
 
-          @django path /graphql/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/* /mcp /mcp/*
+          @django path /graphql/* /acp/* /auth/csrf /auth/csrf/ /forms/* /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/* /mcp /mcp/*
           handle @django {
             reverse_proxy django:8000 {
               header_up X-Forwarded-For {client_ip}

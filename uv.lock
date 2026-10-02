@@ -9,6 +9,19 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-client-protocol"
+version = "1.0.0rc2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/ac/53520d32dd6afb8cef77bf2b731f9eb451d4a8dffbf0df104a1148724eed/agent_client_protocol-1.0.0rc2.tar.gz", hash = "sha256:c83b875efd036a95273d582daf02b29a509024d0232a2afd6187ce8d5564277d", size = 175309, upload-time = "2026-09-21T09:18:20.165Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/67/65/fefe1b5d234cb04e2e7e4fe3214865dfd01ced621a01eb00b58d26becfca/agent_client_protocol-1.0.0rc2-py3-none-any.whl", hash = "sha256:bd12a0b726c895353a6f7cf7b23d62d5f64191974a1cfadb83fe27ccdd8a0124", size = 125687, upload-time = "2026-09-21T09:18:18.997Z" },
+]
+
+[[package]]
 name = "aiofile"
 version = "3.12.3"
 source = { registry = "https://pypi.org/simple" }
@@ -706,6 +719,7 @@ postgres = [
 
 [package.dev-dependencies]
 addons = [
+    { name = "agent-client-protocol" },
     { name = "anthropic" },
     { name = "authlib" },
     { name = "channels" },
@@ -771,7 +785,7 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.25.0" },
+    { name = "django-zed-rebac", specifier = ">=0.25.2" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
@@ -783,6 +797,7 @@ provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 addons = [
+    { name = "agent-client-protocol", specifier = "==1.0.0rc2" },
     { name = "anthropic", specifier = ">=0.109.2" },
     { name = "authlib", specifier = ">=1.7.2" },
     { name = "channels", specifier = ">=4.0" },
@@ -792,7 +807,7 @@ addons = [
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-countries", specifier = ">=9,<10" },
     { name = "django-import-export", specifier = ">=4.4" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.25.0" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.25.2" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
@@ -992,14 +1007,14 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.25.0"
+version = "0.25.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/e0/91cd33bf0f92ae39348d750082433b61dc989cbb83ea333823291362a0aa/django_zed_rebac-0.25.0.tar.gz", hash = "sha256:ab3030bf9ca019cc94f06126e3ae7abdac3d8ba5e652f97304e66eafa1b0a0cb", size = 562102, upload-time = "2026-10-02T07:01:32.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/61/758c2fbced4620edaec9b4533eced1d53745fcb46a23fa652b39e80c8d0c/django_zed_rebac-0.25.2.tar.gz", hash = "sha256:fba993826f7f16e556606f192adb193b2b68ab4a915b2dfaab49a7ad989da25b", size = 565166, upload-time = "2026-10-02T14:48:59.019Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/65/334a0e790c283bf8e3bea856d3654845e140a1bc5237e52e2455eff01ed8/django_zed_rebac-0.25.0-py3-none-any.whl", hash = "sha256:ea1bf09c8d8bf13e2ca9b8e9bd34a2e246d98c3ac73a84290edfeb71cf58608b", size = 297726, upload-time = "2026-10-02T07:01:30.976Z" },
+    { url = "https://files.pythonhosted.org/packages/21/af/ea55483c0fd13551d8e05584d41411a12ceeed2a295c30902c5476166c8a/django_zed_rebac-0.25.2-py3-none-any.whl", hash = "sha256:1ef8cf3aef46cbde9f06b0911353270f5c95df9308e683d4c11a192fa1835d30", size = 298468, upload-time = "2026-10-02T14:48:57.785Z" },
 ]
 
 [package.optional-dependencies]

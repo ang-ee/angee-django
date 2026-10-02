@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from django.contrib.auth.models import Group
@@ -10,10 +10,12 @@ from django.db import models, transaction
 from django.db.models.deletion import Collector
 from django.test import override_settings
 from django.test.utils import isolate_apps
+from graphql import GraphQLError
 from rebac import RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
 import angee.graphql.deletion as deletion_module
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
     DeletePreviewGroup,
@@ -79,6 +81,11 @@ def test_deletion_preview_reports_protected_blockers() -> None:
 
         assert preview.has_blockers
         assert preview.blocked[0].count == 1
+        with pytest.raises(GraphQLError) as caught:
+            AngeeHasuraWriteBackend(PreviewParent).delete(cast(Any, None), str(parent.pk))
+        assert str(PreviewChild._meta.verbose_name_plural) in caught.value.message
+        assert caught.value.extensions == {"code": "BAD_USER_INPUT"}
+        assert PreviewParent.objects.filter(pk=parent.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -155,6 +162,11 @@ def test_deletion_preview_reports_restricted_blockers() -> None:
 
         assert preview.has_blockers
         assert preview.blocked[0].count == 1
+        with pytest.raises(GraphQLError) as caught:
+            AngeeHasuraWriteBackend(PreviewRestrictedParent).delete(cast(Any, None), str(parent.pk))
+        assert str(PreviewRestrictedChild._meta.verbose_name_plural) in caught.value.message
+        assert caught.value.extensions == {"code": "BAD_USER_INPUT"}
+        assert PreviewRestrictedParent.objects.filter(pk=parent.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)

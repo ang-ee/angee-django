@@ -430,8 +430,7 @@ class AngeeHasuraWriteBackend:
             queryset=self.write_target_queryset(),
             before_delete=guard,
         )
-        if preview.has_blockers:
-            return None
+        preview.require_no_blockers()
         return preview.deleted_instance
 
     def _decode_public_id_fields(

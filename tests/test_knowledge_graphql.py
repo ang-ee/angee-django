@@ -9,7 +9,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context
+from rebac import actor_context, system_context
+from rebac.roles import grant
 
 from tests.conftest import (
     MarkdownPage,
@@ -514,6 +515,39 @@ def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
         )
     )
     assert not Vault.objects.as_user(alice).exists()
+
+
+@pytest.mark.parametrize("resource", ["vault", "page"])
+@pytest.mark.parametrize("confirm", [False, True])
+def test_knowledge_delete_preview_requires_delete_permission(
+    composed_tables: None, resource: str, confirm: bool,
+) -> None:
+    """Readers cannot inspect deletion counts through either authored endpoint."""
+
+    owner = create_user("knowledge-delete-owner")
+    reader = create_user("knowledge-delete-reader")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Reading list")
+    with system_context(reason="test.knowledge.delete_permission"):
+        grant(actor=reader, role="knowledge/role:vault_viewer")
+    target = vault if resource == "vault" else page
+    with actor_context(reader):
+        readable = type(target).objects.get(pk=target.pk)
+        assert readable.has_access("read")
+        assert not readable.has_access("delete")
+    result = execute_schema(
+        _schema("public"),
+        f"""mutation Delete($id: ID!, $confirm: Boolean!) {{
+          delete_{resource}(id: $id, confirm: $confirm) {{ total_deleted_count blocked {{ label count }} }}
+        }}""",
+        {"id": _public_id(target), "confirm": confirm},
+        user=reader,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    assert result.data is None
+    assert type(target).objects.as_user(owner).filter(pk=target.pk).exists()
 
 
 def test_schema_exposes_revisions_and_subscriptions(composed_tables: None) -> None:

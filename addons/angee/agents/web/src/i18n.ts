@@ -19,7 +19,6 @@ export const enAgentsMessages: Record<string, string> = {
 
   // AgentChat — the live ACP chat surface (header, composer, settings cog).
   "chat.title": "Agent",
-  "chat.unavailable": "Chat is unavailable for this agent.",
   "chat.resolving": "Connecting to your agent…",
   "chat.empty": "Ask the agent about what you're looking at — it has the notes tools.",
   "chat.placeholder": "Message the agent…",
@@ -52,11 +51,31 @@ export const enAgentsMessages: Record<string, string> = {
   "chat.status.closed": "Disconnected",
   "chat.connectFailed": "Failed to connect to the agent.",
   "chat.responseFailed": "The agent did not respond.",
+  "chat.unsupportedProtocol": "This agent uses an unsupported chat protocol.",
+  "chat.turnFailed": "The agent could not complete this turn. You can send another message.",
+  "chat.failed": "Failed",
+  "chat.turnStopped": "The agent stopped before completing this turn. You can send another message.",
+  "chat.messageNotSent": "Your message was not sent. Try again when the agent is connected.",
+  "chat.modelUnavailable": "The selected model {model} is unavailable in this session.",
+  "permission.title": "Tool permission",
+  "permission.approve": "Approve",
+  "permission.approveAlways": "Always approve",
+  "permission.reject": "Reject",
+  "permission.rejectAlways": "Always reject",
+  "permission.reason": "Reason (optional)",
 
   // AgentSessionsPage — the full-page sessions view (left rail + conversation).
   "sessions.railLabel": "Running agents",
   "sessions.new": "New agent",
   "sessions.running": "Running",
+  "sessions.sessionsLabel": "Sessions",
+  "sessions.create": "New session",
+  "sessions.loadMore": "Load more sessions",
+  "sessions.live": "Live session",
+  "sessions.untitled": "Untitled session",
+  "sessions.unavailable": "This agent does not support session history.",
+  "sessions.listFailed": "Could not load this agent's sessions.",
+  "sessions.retry": "Retry",
 
   // Collection facets shared by the agents catalogue surfaces.
   "facet.vendor": "Vendor",
@@ -84,6 +103,7 @@ export const enAgentsMessages: Record<string, string> = {
     "Render this agent into an operator workspace and service from its templates.",
   "provisioning.provision": "Provision",
   "provisioning.deprovision": "Deprovision",
+  "provisioning.reprovision": "Reprovision",
   "provisioning.needsTemplate": "Set a workspace template on this agent first.",
   "provisioning.activityWaiting": "Waiting for the operator to create a workspace.",
   "provisioning.activityWaitingService": "Waiting for the operator to create a service.",
@@ -91,11 +111,36 @@ export const enAgentsMessages: Record<string, string> = {
   "provisioning.workspaceSourcesEmpty": "No workspace sources reported yet.",
   "provisioning.serviceLogs": "Service logs",
   "provisioning.none": "None",
-  "provisioning.actionFailed": "The action failed.",
-  "provisioning.provisionFailed": "Provisioning failed.",
-  "provisioning.confirmTitle": "Deprovision agent?",
-  "provisioning.confirmBody":
+  "provisioning.deprovisionTitle": "Deprovision agent?",
+  "provisioning.deprovisionBody":
     "The operator workspace and its services will be destroyed. This cannot be undone.",
+  "provisioning.deprovisionBody.workspace":
+    "The operator workspace “{name}” and the service mounting it are destroyed if they check out as this agent's; otherwise they are left in place and only this agent's record of them is cleared. This cannot be undone.",
+  "provisioning.deprovisionBody.service":
+    "This agent's workspace is destroyed, and the operator service “{name}” with it if the service mounts that workspace; otherwise the service is left in place. This cannot be undone.",
+  "provisioning.reprovisionTitle": "Rebuild the agent's service?",
+  "provisioning.reprovisionBody":
+    "The service is destroyed and rendered again from this agent's current settings and credentials. The workspace and its files are kept.",
+  "provisioning.adopt": "Adopt existing",
+  "provisioning.adoptTitle.workspace": "Adopt the existing workspace?",
+  "provisioning.adoptTitle.service": "Adopt the existing service?",
+  "provisioning.adoptBody.workspace":
+    "This agent takes over the operator workspace “{name}” and the service mounting it. The container is kept as it is, with the configuration and credentials it was created with, and started only if stopped. Reprovision afterwards to rebuild the service from this agent's current settings. The operator does not report which agent created a service, so the service is taken over because it mounts this workspace.",
+  "provisioning.adoptBody.service":
+    "This agent takes over the operator service “{name}”, which mounts this agent's workspace. The container is kept as it is, with the configuration and credentials it was created with, and started only if stopped. Reprovision afterwards to rebuild it from this agent's current settings. The operator does not report which agent created a service, so it is taken over because it mounts this workspace.",
+  "provisioning.replace": "Replace existing",
+  "provisioning.replaceTitle.workspace": "Replace the existing workspace?",
+  "provisioning.replaceTitle.service": "Replace the existing service?",
+  "provisioning.replaceBody.workspace":
+    "The operator workspace “{name}”, its files and the service mounting it are destroyed, then this agent is provisioned afresh. This cannot be undone.",
+  "provisioning.replaceBody.service":
+    "The operator service “{name}” and this agent's workspace are destroyed, then this agent is provisioned afresh. This cannot be undone.",
+  "provisioning.conflict.workspace":
+    "The operator already has a workspace named “{name}” that this agent does not record: adopt it, replace it, or deprovision to clear the record.",
+  "provisioning.conflict.service":
+    "The operator already has a service named “{name}” that this agent does not record: adopt it, replace it, or deprovision to clear the record.",
+  "provisioning.conflictSources": "Sources of the existing workspace",
+  "provisioning.conflictLogs": "Logs of the existing service",
 
   // SourcesPage — skill-source form.
   "sources.pointer": "Pointer",

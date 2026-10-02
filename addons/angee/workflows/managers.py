@@ -33,6 +33,7 @@ from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_q
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
+from angee.jobs.timeouts import task_time_budget
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, DefinitionInvalid, Issue
 from angee.workflows.states import (
     CANCELED_OUTCOME,
@@ -43,7 +44,7 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import StepMode, Superseded, io_timeout_budget
+from angee.workflows.steps import StepMode, Superseded
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
@@ -736,7 +737,7 @@ class StepRunQuerySet(AngeeQuerySet):
                 step = step_run.step
                 if step.mode == StepMode.IO:
                     deadline = step.timeout
-                    until = attempt.started_at + io_timeout_budget()
+                    until = attempt.started_at + task_time_budget()
                 step_run.input = step_run.run.version.definition.input_for(
                     step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
                     map_index=step_run.map_index,
