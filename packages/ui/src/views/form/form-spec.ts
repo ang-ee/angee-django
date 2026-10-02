@@ -369,7 +369,15 @@ function decimalUnion(alternatives: FormSpecWire["anyOf"] = []): boolean {
   const values = alternatives.filter((alternative) => alternative.type !== "null");
   return values.length === 2
     && values.some((alternative) => alternative.type === "number")
-    && values.some((alternative) => alternative.type === "string" && alternative.pattern !== undefined);
+    && values.some((alternative) => alternative.type === "string" && numericPattern(alternative.pattern));
+}
+
+function numericPattern(pattern: string | undefined): boolean {
+  try {
+    return pattern !== undefined && ["1.5", "-2"].every((sample) => new RegExp(pattern).test(sample));
+  } catch {
+    return false;
+  }
 }
 
 function formSpecFieldType(

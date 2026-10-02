@@ -686,14 +686,15 @@ describe("formSpecInitialValues", () => {
   });
 
   test("edits an unannotated decimal union as a number", () => {
-    const decimal = { type: "string", pattern: "^[0-9.]+$" };
+    const decimal = { type: "string", pattern: "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" };
     const fields = deserializeFormSpec({ properties: {
       quantity: { anyOf: [{ type: "number" }, decimal, { type: "null" }] },
       rate: { anyOf: [{ type: "number" }, decimal] },
       free: { anyOf: [{ type: "number" }, { type: "string" }] },
+      code: { anyOf: [{ type: "number" }, { type: "string", pattern: "^[A-Z]+$" }] },
     } }, defaultWidgets);
 
-    expect(fields.map((field) => field.widget)).toEqual(["float", "float", "json"]);
+    expect(fields.map((field) => field.widget)).toEqual(["float", "float", "json", "json"]);
     expect(fields[0]).toMatchObject({ nullable: true });
   });
 
