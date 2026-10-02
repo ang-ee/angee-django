@@ -12,6 +12,13 @@ import {
   type ThemeDefinition,
 } from "@angee/ui/theme-runtime";
 
+// Never watch Jujutsu's `.jj/` store: a watcher there slows Vitest startup, times
+// out `jj` commands, and corrupts `working_copy.lock` (see the jj FAQ). Vite
+// already ignores `.git/` and `node_modules/`. Kept inline here and in `./vitest.ts`:
+// these config modules load through Node's own ESM loader in consumers, which
+// does not resolve extensionless relative imports.
+const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
+
 // The framework owner of the web Vite defaults: the plugin pair, the dev-server
 // host/port/proxy wiring, the generated-schema alias, and the project-derived
 // `optimizeDeps` set. A project's `web/vite.config.ts` imports
@@ -314,6 +321,7 @@ export async function defineAngeeWebViteConfig({
     server: {
       host: true,
       ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),
+      watch: { ignored: [...ANGEE_WATCH_IGNORED] },
       port: uiPort,
       strictPort: true,
       proxy: {
