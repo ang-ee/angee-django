@@ -1,12 +1,12 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { rowValueAtPath } from "@angee/metadata";
+import { holdsPermission, rowValueAtPath, type Row } from "@angee/metadata";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useMemo, type ReactElement } from "react";
+import { useEffect, useMemo, type ReactElement } from "react";
 import {
-  Action, Column, ErrorBanner, Field, Form, Group, LabeledDescriptorField, List, LoadingPanel,
+  ActionFormDialog, Column, ErrorBanner, Field, Form, Group, LARGE_VIEWPORT_QUERY, LabeledDescriptorField, List, LoadingPanel,
   RecordReference, ResourceList, actionOutcomeSubmitResult, formSubmitError, useActionOutcomeMutation, useAppRuntime,
-  useEnumOptions, useRouteHref, useRuntimeAuth, useUiT,
-  type RecordPanelContext, type ResourceViewFilter, type StringIdRow,
+  useEnumOptions, useMediaQuery, useRecordPeek, useRouteHref, useRuntimeAuth, useUiT,
+  type ActionDescriptor, type RecordPanelContext, type ResourceViewFilter, type StringIdRow,
 } from "@angee/ui";
 import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
 import { parseFormSpecPayload } from "@angee/ui";
@@ -33,6 +33,29 @@ export function InboxPage(): ReactElement {
     return userId === undefined ? open : { ...open, assignees: { exact: userId } };
   }, [userId]);
   if (!user) return <LoadingPanel />;
+  // Actors answer on the decision page itself: the kind's registered content
+  // and the answer form render inline, beside the subject in the side peek.
+  const decideAction = (record: Row): ActionDescriptor => ({
+    id: "decide", label: t("decision.submit"), primary: true, icon: "check",
+    args: () => {
+      const definition = jsonSchemaActionArgs(record.form_schema, widgets, { initialValues: record.resolution, translate: uiT });
+      return { ...definition,
+        fields: (values) => (typeof definition.fields === "function" ? definition.fields(values) : definition.fields)
+          .map((field) => field.name === "action" ? { ...field, label: t("decision.action") } : field),
+        content: typeof record.id === "string" ? <DecisionDetails recordId={record.id} editing /> : undefined,
+      };
+    },
+    submit: async ({ action, ...values }, context) => {
+      const current = context.record;
+      if (typeof current?.id !== "string" || typeof current.revision !== "number") throw new Error(t("decision.unavailable"));
+      const result = await decide(current.id, { revision: current.revision, action, values })
+        .then(actionOutcomeSubmitResult).catch((cause) => formSubmitError(cause));
+      if (result.status !== "ok") {
+        try { await context.refresh?.(); } catch { /* Keep the server's answer errors if refresh is unavailable. */ }
+      }
+      return result.status === "conflict" ? { ...result, message: t("decision.conflict") } : result;
+    },
+  });
 
   return (
     <ResourceList<StringIdRow>
@@ -59,7 +82,7 @@ export function InboxPage(): ReactElement {
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
       <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "permissions", "form_schema", "resolution", "subject_model", "subject_id"]}
-        formExtras={({ record }) => {
+        formExtras={({ record, reload }) => {
           const assignees = Array.isArray(record?.assignees)
             ? record.assignees.map((value: unknown) => value && typeof value === "object" && "display_name" in value
               ? String(value.display_name) : "").filter(Boolean) : [];
@@ -78,6 +101,13 @@ export function InboxPage(): ReactElement {
             </div>
             {record?.is_open === false && record.verdict !== "PENDING" && record.resolution
               ? <DecisionAnswer schema={record.form_schema} resolution={record.resolution} /> : null}
+            {typeof record?.subject_model === "string" && typeof record.subject_id === "string"
+              ? <SubjectPeek model={record.subject_model} id={record.subject_id} /> : null}
+            {record?.is_open === true && typeof record.id === "string" && holdsPermission(record, "act")
+              ? <ActionFormDialog key={record.id} inline open onOpenChange={() => undefined}
+                  action={decideAction(record)} context={{ record, selectedIds: [], refresh: async () => { reload(); return record; } }}
+                  onSucceeded={() => reload()} />
+              : typeof record?.id === "string" ? <DecisionDetails recordId={record.id} /> : null}
           </div>;
         }}
         headerExtras={({ record }) => typeof record?.subject_model === "string" && typeof record.subject_id === "string"
@@ -98,30 +128,19 @@ export function InboxPage(): ReactElement {
           <Field name="resolved_at" label={t("decision.resolvedAt")} showWhen={(row) => row.is_open === false && Boolean(row.resolved_at)} />
           <Field name="closed_reason" label={t("decision.closedReason")} showWhen={(row) => row.is_open === false && Boolean(row.closed_reason)} />
         </Group>
-        <Action id="decide" label={t("decision.submit")} placement="toolbar" primary icon="check"
-          permission="act" visibleWhen={(record) => record.is_open === true}
-          args={({ record }) => {
-            const definition = jsonSchemaActionArgs(record?.form_schema, widgets, { initialValues: record?.resolution, translate: uiT });
-            return { ...definition, size: "lg" as const,
-              fields: (values) => (typeof definition.fields === "function" ? definition.fields(values) : definition.fields)
-                .map((field) => field.name === "action" ? { ...field, label: t("decision.action") } : field),
-              content: typeof record?.id === "string" ? <DecisionDetails recordId={record.id} editing /> : undefined,
-            };
-          }}
-          submit={async ({ action, ...values }, context) => {
-            const record = context.record;
-            if (typeof record?.id !== "string" || typeof record.revision !== "number") throw new Error(t("decision.unavailable"));
-            const result = await decide(record.id, { revision: record.revision, action, values })
-              .then(actionOutcomeSubmitResult).catch((cause) => formSubmitError(cause));
-            if (result.status !== "ok") {
-              try { await context.refresh?.(); } catch { /* Keep the server's answer errors if refresh is unavailable. */ }
-            }
-            return result.status === "conflict" ? { ...result, message: t("decision.conflict") } : result;
-          }}
-        />
       </Form>
     </ResourceList>
   );
+}
+
+/** Open the decision's subject beside the review on large screens, once per decision. */
+function SubjectPeek({ model, id }: { model: string; id: string }): null {
+  const openRecord = useRecordPeek();
+  const large = useMediaQuery(LARGE_VIEWPORT_QUERY);
+  useEffect(() => {
+    if (large) openRecord({ model, id }, { tabActivation: "initial" });
+  }, [large, model, id, openRecord]);
+  return null;
 }
 
 function DecisionAnswer({ schema, resolution }: { schema: unknown; resolution: unknown }): ReactElement {

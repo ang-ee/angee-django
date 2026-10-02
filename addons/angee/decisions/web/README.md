@@ -11,15 +11,18 @@ The rail entry is named Decisions; messaging retains Inbox. The backend's
 `is_open` field/filter owns the open view, and the `permissions` list's `act`
 value owns viewer editability.
 
-The record declares a read-only `Form` and a `Decide` action. Its dynamic args
+The record declares a read-only `Form`. For a viewer who can act on an open
+decision, the page renders the `Decide` form inline (the shared action form's
+`inline` presentation) with the kind's registered content, and opens the
+decision's subject beside it in the record peek on large screens; there is no
+Decide dialog. Others see the content read-only. The form's dynamic args
 use the shared `jsonSchemaActionArgs` owner for the retained JSON Schema,
 including offered actions, initial values, immutable fields and validation.
 The generated `decide` action receives the action separately from its values
 and the expected revision.
 Server field errors use the shared form-error owner. Invalid submissions advance
 the backend revision; the page refreshes that token while retaining the draft.
-A conflict locks the draft; closing and reopening the action reviews the
-refreshed question.
+A conflict locks the draft; reloading the page reviews the refreshed question.
 Changing actions replaces only branch values; consumer-content values outside
 those fields survive. Successful submissions use native model invalidation;
 only rejected submissions refresh the revision directly.
@@ -28,7 +31,7 @@ Consumers contribute `decisionContent(kind, Component)` through their addon's
 `slots` array. The helper targets the owned content slot, which accepts exactly one contribution per kind:
 the framework's composition collision check rejects duplicate claims. Content
 receives read-only `{decision, basis, context}` in the Context tab and in the
-Decide dialog, where it inherits the action's native React Hook Form context.
+inline Decide form, where it inherits the action's native React Hook Form context.
 The record tab disables consumer controls. Consumers parse their own basis/context
 payloads before using them. When a kind has registered content, the generic Facts
 region stays hidden to avoid duplicating its presentation. Otherwise the generic

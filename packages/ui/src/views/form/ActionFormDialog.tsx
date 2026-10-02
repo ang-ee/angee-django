@@ -37,6 +37,8 @@ export interface ActionFormDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Called once with the successful (`ok`) outcome — e.g. to reload or follow its record. */
   onSucceeded?: (outcome: ActionOutcome) => void;
+  /** Render the same form in the page flow instead of a dialog; success does not close it. */
+  inline?: boolean;
 }
 
 type ArgValues = Record<string, unknown>;
@@ -69,11 +71,12 @@ function ActionFormDialogOpening(props: ActionFormDialogProps): React.ReactEleme
       return { error };
     }
   });
-  if (resolved.args === undefined) return (
-    <DialogForm open={props.open} onOpenChange={props.onOpenChange} title={props.action.label}>
-      <ErrorBanner description={errorMessage(resolved.error, t("error.generic"))} />
-    </DialogForm>
-  );
+  if (resolved.args === undefined) {
+    const banner = <ErrorBanner description={errorMessage(resolved.error, t("error.generic"))} />;
+    return props.inline ? banner : (
+      <DialogForm open={props.open} onOpenChange={props.onOpenChange} title={props.action.label}>{banner}</DialogForm>
+    );
+  }
   return <ActionArgsDialog {...props} args={resolved.args} />;
 }
 
@@ -83,6 +86,7 @@ function ActionArgsDialog({
   open,
   onOpenChange,
   onSucceeded,
+  inline = false,
   args: declaredArgs,
 }: ActionFormDialogProps & { args: ActionArgs }): React.ReactElement {
   const t = useUiT();
@@ -102,7 +106,7 @@ function ActionArgsDialog({
     },
     onSuccess: (_values, outcome) => {
       onSucceeded?.(outcome);
-      onOpenChange(false);
+      if (!inline) onOpenChange(false);
     },
     fieldNames: argNames,
   });
@@ -119,38 +123,18 @@ function ActionArgsDialog({
     if (action.submit && !saveConflict) void actionForm.run();
   };
 
-  const footer = (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => onOpenChange(false)}
-        disabled={submitting}
-      >
-        {t("dialog.cancel")}
-      </Button>
-      <ActionSubmitButton
-        control={form.control}
-        args={args}
-        submitting={submitting}
-        disabled={saveConflict}
-        danger={action.danger}
-        label={action.label}
-      />
-    </>
+  const submitButton = (
+    <ActionSubmitButton
+      control={form.control}
+      args={args}
+      submitting={submitting}
+      disabled={saveConflict}
+      danger={action.danger}
+      label={action.label}
+    />
   );
-
-  return (
-    <ActionFormProvider {...form}>
-    <DialogForm
-      open={open}
-      onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}
-      title={action.label}
-      size={definition?.size}
-      footer={footer}
-      onSubmit={(event) => void submit(event)}
-    >
+  const body = (
+    <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
       {args.map((arg) => (
         <Controller
@@ -172,6 +156,45 @@ function ActionArgsDialog({
         />
       ))}
       <ErrorBanner description={formError} />
+    </>
+  );
+
+  // Inline forms usually sit inside a record form, and forms cannot nest, so
+  // the inline body is a section whose button runs the submit directly.
+  if (inline) return (
+    <ActionFormProvider {...form}>
+      <section aria-label={typeof action.label === "string" ? action.label : undefined} className="grid gap-4">
+        {body}
+        <div className="flex justify-end">
+          <ActionSubmitButton
+            control={form.control}
+            args={args}
+            submitting={submitting}
+            disabled={saveConflict}
+            danger={action.danger}
+            label={action.label}
+            onSubmit={() => { if (action.submit && !saveConflict) void actionForm.run(); }}
+          />
+        </div>
+      </section>
+    </ActionFormProvider>
+  );
+  return (
+    <ActionFormProvider {...form}>
+    <DialogForm
+      open={open}
+      onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}
+      title={action.label}
+      size={definition?.size}
+      footer={<>
+        <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={submitting}>
+          {t("dialog.cancel")}
+        </Button>
+        {submitButton}
+      </>}
+      onSubmit={(event) => void submit(event)}
+    >
+      {body}
     </DialogForm>
     </ActionFormProvider>
   );
@@ -189,6 +212,7 @@ function ActionSubmitButton({
   disabled,
   danger,
   label,
+  onSubmit,
 }: {
   control: Control<ArgValues>;
   args: readonly ActionArg[];
@@ -196,13 +220,16 @@ function ActionSubmitButton({
   disabled?: boolean;
   danger?: boolean;
   label: React.ReactNode;
+  /** Run the submit directly instead of submitting an enclosing form. */
+  onSubmit?: () => void;
 }): React.ReactElement {
   const values = useWatch({ control }) as ArgValues;
   const preview = useRuntimeViewAs();
   const ready = args.every((arg) => arg.optional || !emptyDialogValue(values[arg.name]));
   return (
     <Button
-      type="submit"
+      type={onSubmit ? "button" : "submit"}
+      onClick={onSubmit}
       variant={danger ? "danger" : "primary"}
       size="sm"
       disabled={!ready || submitting || disabled || Boolean(preview.viewAs || preview.pending)}
