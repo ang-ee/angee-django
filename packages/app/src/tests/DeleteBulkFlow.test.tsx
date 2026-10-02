@@ -222,7 +222,9 @@ describe("bulk delete flow", () => {
     expect(button.disabled).toBe(false);
     fireEvent.click(button);
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // A partial delete reports the refused record in a warning toast, so wait for
+    // the confirmation dialog itself to close.
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Delete \d+ records\?$/ })).toBeNull());
     expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-2", confirm: true });
     expect(sdkMocks.mutate).not.toHaveBeenCalledWith({ id: "record-1", confirm: true });
     expect(screen.queryByText("2 selected")).toBeNull();
