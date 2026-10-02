@@ -11,6 +11,7 @@ import { enStorageMessages } from "./i18n";
 import { RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
 import { FileRecordPreview } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
+import { fileForm } from "./views/file-form";
 import { folderForm } from "./views/folder-form";
 
 const STORAGE_ID = "storage";
@@ -51,7 +52,7 @@ const storage = defineBaseAddon({
   id: STORAGE_ID,
   routes: storageRoutes,
   menus: storageMenu,
-  forms: { "storage.Folder": folderForm },
+  forms: { "storage.File": fileForm, "storage.Folder": folderForm },
   slots: [{
     ...formViewSectionsSlot("storage.File"),
     id: "storage.file-preview",
