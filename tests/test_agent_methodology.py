@@ -79,23 +79,18 @@ def test_adapter_check_detects_drift_without_overwriting(tmp_path: Path) -> None
     assert target.read_text() == "# stale\n"
 
 
-def test_workspace_create_example_uses_declared_inputs_and_keeps_stack_defaults() -> None:
-    """The documented command actually selects the template ref without clearing work-state."""
-    manifest = yaml.safe_load((ROOT / "templates/workspaces/src/copier.yml").read_text())["_angee"]
+def test_workspace_create_example_adds_a_jj_workspace_and_never_an_operator_worktree() -> None:
+    """The documented create command is a colocated jj workspace under the stack's workspaces."""
     skill = (ROOT / ".agents/skills/angee-workspace/SKILL.md").read_text()
     blocks = re.findall(r"```sh\n(.*?)\n```", skill, re.DOTALL)
-    command = next(block for block in blocks if "ws create" in block)
-    argv = shlex.split(command.replace("\\\n", " "))
-    supplied = dict(argv[index + 1].split("=", 1) for index, arg in enumerate(argv) if arg == "--input")
-    assert supplied.keys() <= manifest["inputs"].keys()
-    ref_expression = re.fullmatch(r"\$\{inputs\.(\w+)\}", manifest["sources"]["angee"]["ref"])
-    assert ref_expression is not None
-    ref_input = ref_expression[1]
-    assert supplied[ref_input] == "<parent-ref>"
-    effective = {name: field["default"] for name, field in manifest["inputs"].items()}
-    effective.update(work_state_source="team-notes")
-    effective.update(supplied)
-    assert effective["work_state_source"] == "team-notes"
+    assert not any("ws create" in block for block in blocks)
+    lines = [line for block in blocks for line in block.replace("\\\n", " ").splitlines()]
+    argv = shlex.split(next(line for line in lines if "workspace add" in line))
+    assert argv[:2] == ["jj", "-R"]
+    assert "--colocate" in argv
+    assert argv[argv.index("--name") + 1] == "<stack>--<name>"
+    assert argv[argv.index("-r") + 1] == "<parent-ref>"
+    assert argv[-1] == "$angee_root/workspaces/<name>/angee"
 
 
 @pytest.fixture()

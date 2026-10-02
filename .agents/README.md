@@ -11,8 +11,8 @@ workflow can waive an invariant or excuse existing debt.
 
 Private task state follows `AGENTS.md` and the **Resolve Work-State** section of
 `skills/angee-workspace/SKILL.md`: use the optional workspace `work-state` slot,
-which lives beside this checkout in the src template. It may be a clone or a
-local-source symlink. If absent, keep task state in the conversation. Durable
+which lives beside this checkout in the src template. It may be a clone, a
+local-source symlink, or a Jujutsu workspace of a shared store. If absent, keep task state in the conversation. Durable
 conventions and pitfalls go in owning `docs/` guidelines; screenshots and logs
 go in the configured gitignored scratch directories.
 
