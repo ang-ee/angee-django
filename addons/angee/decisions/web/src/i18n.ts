@@ -22,6 +22,7 @@ export const enDecisionsMessages = {
   "decision.action": "Action",
   "decision.submit": "Decide",
   "decision.conflict": "This decision has changed. Reload the page to review the current question.",
+  "decision.previousAnswerRejected": "The previous answer was not accepted",
   "decision.unavailable": "This decision is unavailable.",
   "decision.requester": "Requester",
   "decision.assignees": "Assignees",

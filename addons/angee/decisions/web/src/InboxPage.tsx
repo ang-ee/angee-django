@@ -81,7 +81,7 @@ export function InboxPage(): ReactElement {
         <Column field="expires_at" header={t("inbox.expiresAt")} />
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
-      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "permissions", "form_schema", "resolution", "subject_model", "subject_id"]}
+      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "permissions", "form_schema", "resolution", "subject_model", "subject_id", "errors"]}
         formExtras={({ record, reload }) => {
           const assignees = Array.isArray(record?.assignees)
             ? record.assignees.map((value: unknown) => value && typeof value === "object" && "display_name" in value
@@ -103,6 +103,9 @@ export function InboxPage(): ReactElement {
               ? <DecisionAnswer schema={record.form_schema} resolution={record.resolution} /> : null}
             {typeof record?.subject_model === "string" && typeof record.subject_id === "string"
               ? <SubjectPeek model={record.subject_model} id={record.subject_id} /> : null}
+            {record?.is_open === true && previousAnswerErrors(record.errors).length
+              ? <ErrorBanner title={t("decision.previousAnswerRejected")} description={previousAnswerErrors(record.errors).join(" ")} />
+              : null}
             {record?.is_open === true && typeof record.id === "string" && holdsPermission(record, "act")
               ? <ActionFormDialog key={record.id} inline open onOpenChange={() => undefined}
                   action={decideAction(record)} context={{ record, selectedIds: [], refresh: async () => { reload(); return record; } }}
@@ -131,6 +134,12 @@ export function InboxPage(): ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+/** Messages a re-asked decision retains from the answer the server refused. */
+function previousAnswerErrors(errors: unknown): string[] {
+  if (!errors || typeof errors !== "object") return [];
+  return Object.values(errors).flat().filter((message): message is string => typeof message === "string");
 }
 
 /** Open the decision's subject beside the review on large screens, once per decision. */
