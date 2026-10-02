@@ -31,11 +31,6 @@ rows:
       model: agents_integrate_anthropic.model_claude_demo
       workspace_template: notes.tpl_agent_default
       runtime_class: claude_code
-      lifecycle: draft
-      runtime_status: stopped
-      workspace: ""
-      service: ""
-      last_error: ""
       mcp_servers:
         - agents.mcp_angee
   # The pre-created framework developer: PROVISIONABLE (unlike the template row below) so
@@ -57,11 +52,6 @@ rows:
       runtime_class: claude_code
       service_inputs:
         flavor: dev
-      lifecycle: draft
-      runtime_status: stopped
-      workspace: ""
-      service: ""
-      last_error: ""
       mcp_servers:
         - agents.mcp_angee
   # Showcase blueprint only: template rows have no clone/use action yet. Its src workspace
@@ -81,11 +71,6 @@ rows:
       runtime_class: claude_code
       service_inputs:
         flavor: dev
-      lifecycle: draft
-      runtime_status: stopped
-      workspace: ""
-      service: ""
-      last_error: ""
       mcp_servers:
         - agents.mcp_angee
   # The opencode counterpart. No `mcp_servers`: the agent-default workspace writes a
@@ -102,8 +87,3 @@ rows:
       model: agents_integrate_anthropic.model_opencode_demo
       workspace_template: notes.tpl_agent_default
       runtime_class: opencode
-      lifecycle: draft
-      runtime_status: stopped
-      workspace: ""
-      service: ""
-      last_error: ""
