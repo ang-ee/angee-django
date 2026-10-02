@@ -317,7 +317,8 @@ function deserializeField(
   const options = choices?.options;
   const widget = rowTemplate
     ? authoredWidget ?? "rows"
-    : authoredWidget ?? (relation ? "many2one" : options ? "select" : objectTemplate ? "object" : TYPE_WIDGETS[type]);
+    : authoredWidget ?? (relation ? "many2one" : options ? "select" : objectTemplate ? "object"
+      : decimalUnion(field.anyOf) ? TYPE_WIDGETS.number : TYPE_WIDGETS[type]);
   const definition = widgets[widget];
   if (!isWidgetDefinition(definition)) {
     throw new Error(
@@ -361,6 +362,14 @@ function deserializeField(
     ...(objectTemplate ? { objectTemplate } : {}),
     ...(itemTemplate ? { itemTemplate } : {}),
   };
+}
+
+/** A decimal accepted as a number or a numeric string (optionally null) edits as a number. */
+function decimalUnion(alternatives: FormSpecWire["anyOf"] = []): boolean {
+  const values = alternatives.filter((alternative) => alternative.type !== "null");
+  return values.length === 2
+    && values.some((alternative) => alternative.type === "number")
+    && values.some((alternative) => alternative.type === "string" && alternative.pattern !== undefined);
 }
 
 function formSpecFieldType(
