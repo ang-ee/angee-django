@@ -27,9 +27,11 @@ export function InboxPage(): ReactElement {
   const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", {
     dataProviderName: "console", invalidateModels: DECISION_MODELS,
   });
-  const defaultFilter = useMemo<ResourceViewFilter>(() => ({
-    assignees: { exact: user?.id }, is_open: { exact: true },
-  }), [user?.id]);
+  const userId = user?.id;
+  const defaultFilter = useMemo<ResourceViewFilter>(() => {
+    const open: ResourceViewFilter = { is_open: { exact: true } };
+    return userId === undefined ? open : { ...open, assignees: { exact: userId } };
+  }, [userId]);
   if (!user) return <LoadingPanel />;
 
   return (
