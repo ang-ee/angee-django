@@ -26,9 +26,9 @@ from rebac import (
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.messaging.testing.models import Person
+from angee.projects.testing.models import Project, Task
 from tests.conftest import Backend, Drive, create_platform_admin
-from tests.messaging_models import Person
-from tests.projects_models import Project, Task
 from tests.proposals_models import Answer, Proposal, Round, Topic
 from tests.test_project_access import project_access_schema as project_access_schema
 
@@ -284,6 +284,22 @@ def _review_round(admin, *, policy="drafts_and_tracks", **fields):
         )
         round.sudo(reason="tests.proposals.review_round").save()
     return round
+
+
+@pytest.mark.django_db(transaction=True)
+def test_submit_attributes_receipt_to_the_pinned_actor_over_the_ambient_actor(proposal_schema):
+    admin = create_platform_admin("submit-pinned-manager")
+    user_model = apps.get_model("iam", "User")
+    responder = user_model.objects.create_user(username="submit-pinned-responder")
+    ambient = user_model.objects.create_user(username="submit-ambient-person")
+    round = _review_round(admin)
+    with actor_context(admin):
+        proposal = round.with_actor(admin).admit(responder)
+    with actor_context(ambient):
+        proposal.with_actor(admin).submit()
+    stored = Proposal._base_manager.get(pk=proposal.pk)
+    assert stored.submitted_by_id == admin.pk
+    assert stored.updated_by_id == admin.pk
 
 
 @pytest.mark.django_db(transaction=True)

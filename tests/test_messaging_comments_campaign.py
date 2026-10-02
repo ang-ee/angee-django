@@ -6,10 +6,10 @@ import pytest
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedThread
+from angee.messaging.testing.models import Handle, Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import make_user
-from tests.messaging_models import Handle, Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
 from tests.test_messaging import _AT, _ingest, _parsed
 from tests.test_messaging import channel as channel
 

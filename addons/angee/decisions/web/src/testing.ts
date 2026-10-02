@@ -40,6 +40,9 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
     is_open: testQueryField("is_open", { scalar: "Boolean", nullable: false,
       filter: { field: "is_open", scalar: "Boolean", values: [], operators: ["exact"] },
     }),
+    can_act: testQueryField("can_act", { scalar: "Boolean", nullable: false,
+      filter: { field: "can_act", scalar: "Boolean", values: [], operators: ["exact"] },
+    }),
   } }),
 });
 

@@ -14,11 +14,7 @@ from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
-from angee.parties.backends import ParsedContact
-from angee.parties.connections import ParsedConnection, ingest_connection
-from angee.parties.mixins import LinkSource
-from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from tests.messaging_models import (
+from angee.messaging.testing.models import (
     Circle,
     CircleMember,
     Folder,
@@ -30,6 +26,10 @@ from tests.messaging_models import (
     Relationship,
     RelationshipKind,
 )
+from angee.parties.backends import ParsedContact
+from angee.parties.connections import ParsedConnection, ingest_connection
+from angee.parties.mixins import LinkSource
+from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from tests.test_messaging import _grant
 
 User = get_user_model()

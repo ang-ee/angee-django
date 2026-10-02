@@ -1,7 +1,7 @@
 // Request relationships are derived from Need.party; following grants no access.
 // @rebac_package: intake
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
 definition projects/task {
     relation requester: auth/user // rebac:field={"path":"needs__party__person__user","filters":{"needs__access_decision__verdict":"completed"}}
@@ -28,7 +28,7 @@ definition auth/user {
 definition decisions/decision {
     relation intake_need: intake/need // rebac:field=intake_need
     permission read = intake_need->share
-    permission act = (intake_need->share - requester) & person->active_member
+    permission eligible = (intake_need->share - requester) & person->active_member
 }
 
 definition decisions/group {

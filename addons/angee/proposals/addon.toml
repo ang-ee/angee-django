@@ -14,16 +14,6 @@ depends_on = [
   "angee.storage",
 ]
 
-[[migrations]]
-name = "derived_disclosure"
-app_label = "proposals"
-module = "runtime_migrations.derived_disclosure"
-
-[[migrations]]
-name = "legacy_disclosure"
-app_label = "proposals"
-module = "runtime_migrations.legacy_disclosure"
-
 [resources]
 master = []
 demo = [

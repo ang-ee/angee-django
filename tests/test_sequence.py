@@ -16,7 +16,7 @@ import pytest
 from django.db import connection, connections, transaction
 from rebac import system_context
 
-from tests.sequence_models import Sequence
+from angee.sequence.testing.models import Sequence
 
 
 def _make_sequence(**fields: Any) -> Any:

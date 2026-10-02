@@ -16,8 +16,8 @@ from rebac.managers import TrackedQuerySet
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import aggregate_scoped_queryset, lock_if_supported, read_scoped_queryset, system_queryset
+from angee.decisions.testing.models import DecisionEvidence
 from tests.conftest import Drive, File, Integration
-from tests.decisions_models import DecisionEvidence
 from tests.tables import model_tables
 
 POSTGRESQL_ONLY = pytest.mark.skipif(

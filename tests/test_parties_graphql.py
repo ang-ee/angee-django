@@ -11,7 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from tests import messaging_models
+from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
     SchemaAddon,
     assert_private_hasura_insert_access,

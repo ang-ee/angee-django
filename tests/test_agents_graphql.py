@@ -20,10 +20,10 @@ from rebac import system_context
 
 from angee.agents.context import render_view_context
 from angee.agents.models import MCPPlacement
+from angee.agents.testing.models import Agent, InferenceModel, InferenceProvider, MCPServer, Skill
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.operator.daemon import OperatorDaemonError, OperatorDaemonNotFound
-from tests.agents_models import Agent, InferenceModel, InferenceProvider, MCPServer, Skill
 from tests.conftest import (
     Credential,
     ExternalAccount,

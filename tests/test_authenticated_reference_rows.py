@@ -8,17 +8,17 @@ from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from tests.conftest import create_user
-from tests.portfolio_models import Initiative, InitiativeProject, ProductRow, ReferenceRelease, Update
-from tests.projects_models import Project
-from tests.tags_models import (
+from angee.portfolio.testing.models import Initiative, InitiativeProject, ProductRow, ReferenceRelease, Update
+from angee.projects.testing.models import Project
+from angee.tags.testing.models import (
     Tag,
     TagAssignment,
 )
-from tests.uom_models import (
+from angee.uom.testing.models import (
     Uom,
     UomCategory,
 )
+from tests.conftest import create_user
 
 
 @pytest.fixture

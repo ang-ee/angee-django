@@ -12,6 +12,7 @@ from django.db import connection
 from rebac import system_context
 
 from angee.integrate.http import HttpClient
+from angee.messaging.testing.models import Directory, Handle, Party, PartyHandle, Person
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
@@ -23,7 +24,6 @@ from angee.parties_integrate_carddav.backend import (
 )
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import Credential, Integration, Vendor, execute_schema
-from tests.messaging_models import Directory, Handle, Party, PartyHandle, Person
 
 _CONNECT_CARDDAV_MUTATION = """
 mutation ConnectCardDav(

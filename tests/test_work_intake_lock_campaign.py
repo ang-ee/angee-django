@@ -8,7 +8,7 @@ from django.db import connection
 from rebac import actor_context
 
 from angee.base.mixins import StaleRevisionError
-from tests.projects_models import Task
+from angee.projects.testing.models import Task
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema

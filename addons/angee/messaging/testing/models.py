@@ -6,6 +6,7 @@ creates the test database, without depending on a test module's import order.
 """
 
 from angee.intake.models import ChannelIntake
+from angee.integrate.testing.integration import Integration
 from angee.messaging.models import ActivityType as AbstractActivityType
 from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
@@ -39,8 +40,7 @@ from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
 from angee.spaces.models import ChannelSpace, ThreadSpace
-from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
-from tests.integrate_models import Integration
+from angee.spaces.testing import models as spaces_models  # noqa: F401 -- register Thread's group relation target
 
 
 class Directory(AbstractDirectory, Integration):

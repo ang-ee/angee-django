@@ -7,13 +7,11 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
-from django.db.migrations.state import ProjectState
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.errors import RecordAccessSubjectRefused
-from angee.intake.runtime_migrations.need_access_decision import forwards
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
 
@@ -44,11 +42,11 @@ class IntakeCampaign(IntakeAccessCase):
     def test_denial_supersession_retains_answer_and_approval_is_final(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         before = self.tuples()
-        need.decide_access("deny", reason="First answer")
+        need.decide_access("intake.deny", reason="First answer")
         denied = need.access_decision
         receipt = (denied.resolution, denied.resolved_by_id, denied.resolved_at)
         self.assertEqual(denied.verdict, "rejected")
-        need.decide_access("approve", reason="Reconsidered")
+        need.decide_access("intake.approve", reason="Reconsidered")
         self.assertEqual(need.access_verdict, "completed")
         self.assertNotEqual(denied.pk, need.access_decision_id)
         denied.refresh_from_db()
@@ -56,17 +54,17 @@ class IntakeCampaign(IntakeAccessCase):
         self.assertIsNone(denied.superseded_by_id)
         self.assertEqual(need.access_decision.group.reasked_from_id, denied.group_id)
         approved_id, revision = need.access_decision_id, need.revision
-        self.assertEqual(need.decide_access("approve").pk, self.reader.pk)
+        self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
         self.assertEqual((need.access_decision_id, need.revision), (approved_id, revision))
         with self.assertRaises(ValidationError):
-            need.decide_access("deny")
+            need.decide_access("intake.deny")
         self.assertEqual(self.tuples(), before)
 
     def test_pending_approval_uses_assigned_party_even_when_email_names_another_account(self):
         need = self.as_user(self.need(email=self.writer.email, party=self.party(self.reader)))
         self.assertEqual(need.access_verdict, "pending")
         before = self.tuples()
-        linked = need.decide_access("approve")
+        linked = need.decide_access("intake.approve")
         self.assertEqual(linked.pk, self.reader.pk)
         self.assertEqual(need.access_verdict, "completed")
         self.assertEqual(need.party_id, self.party(self.reader).pk)
@@ -74,7 +72,7 @@ class IntakeCampaign(IntakeAccessCase):
 
     def test_party_replacement_and_clear_supersede_without_rewriting_prior_approval(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
-        need.decide_access("approve")
+        need.decide_access("intake.approve")
         for replacement in (self.party(self.writer), None):
             previous = need.access_decision
             resolution = previous.resolution
@@ -122,7 +120,7 @@ class IntakeCampaign(IntakeAccessCase):
                     with self.assertRaises(RecordAccessSubjectRefused):
                         candidate.save(**({"update_fields": ("party",)} if partial else {}))
             with self.assertRaises(RecordAccessSubjectRefused):
-                self.as_user(need).decide_access("approve")
+                self.as_user(need).decide_access("intake.approve")
         need.refresh_from_db()
         self.assertEqual((need.party_id, need.access_decision_id, need.revision), before)
         self.assertEqual(set(followers._base_manager.values_list("pk", flat=True)), follower_ids)
@@ -172,8 +170,8 @@ class IntakeCampaign(IntakeAccessCase):
                 first.task.revoke_record_access("reader", user)
         for user in (self.reader, second_user):
             self.assertFalse(first.task.with_actor(user).has_access("comment"))
-        self.as_user(first).decide_access("approve")
-        self.as_user(second).decide_access("approve")
+        self.as_user(first).decide_access("intake.approve")
+        self.as_user(second).decide_access("intake.approve")
         for user in (self.reader, second_user):
             self.assertTrue(first.task.with_actor(user).has_access("comment"))
         self.assertFalse(first.task.with_actor(self.reader).has_access("write"))
@@ -197,27 +195,6 @@ class IntakeCampaign(IntakeAccessCase):
             row.refresh_from_db()
             self.assertEqual(row.party_id is None, row.pk == eligible.pk)
 
-    def test_historical_migration_creates_imported_and_pending_seats_idempotently(self):
-        # Legacy requests predate automatic seat admission.
-        with patch.object(self.Need, "_new_access_decision", return_value=None):
-            linked = self.need(email="", party=self.party(self.reader))
-            waiting = self.need(email="")
-        historical = ProjectState.from_apps(apps).apps
-        seats = historical.get_model("decisions", "Decision")
-        before = self.tuples()
-        with connection.schema_editor() as editor:
-            forwards(historical, editor)
-            count = seats._base_manager.count()
-            forwards(historical, editor)
-        self.assertEqual(seats._base_manager.count(), count)
-        self.assertEqual(self.tuples(), before)
-        for row, verdict in ((linked, "completed"), (waiting, "pending")):
-            row.refresh_from_db()
-            self.assertEqual(row.access_verdict, verdict)
-            self.assertIsNone(row.access_resolved_at)
-            self.assertIsNone(row.access_resolved_by_id)
-            self.assertEqual(row.access_decision.intake_need_id, row.pk)
-            self.assertEqual(row.access_decision.group.policy, "first")
 
 
 class IntakeDenormalizedCampaign(IntakeCampaign):

@@ -10,9 +10,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, current_actor, system_context
 
 from angee.messaging.managers import MessageQuerySet
+from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Party, Thread
 from tests.conftest import Vendor, execute_schema, make_integration, result_data
 from tests.messaging_campaign import grant
-from tests.messaging_models import Channel, Fragment, Handle, Message, Part, Party, Thread
 from tests.test_messaging_graphql import _platform_admin, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

@@ -14,9 +14,9 @@ from rebac.models import active_relationship_model
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.messaging.testing.models import Person
+from angee.projects.testing.models import Milestone, Project, Task
 from tests.conftest import Drive, File, FileAttachment
-from tests.messaging_models import Person
-from tests.projects_models import Milestone, Project, Task
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_models import Answer, Proposal, Round, Topic
 

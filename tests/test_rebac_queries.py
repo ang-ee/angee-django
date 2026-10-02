@@ -47,18 +47,29 @@ def test_large_permission_reads_keep_one_application_statement(
 
 
 @pytest.mark.parametrize("resource_type", ("storage/folder", "knowledge/page"))
-def test_recursive_read_sql_is_constant_across_fifty_levels(composed_tables: None, resource_type: str) -> None:
-    """A deeper hierarchy changes application rows, never the actor-scope SQL shape."""
+def test_recursive_reads_stay_bounded_across_fifty_levels(composed_tables: None, resource_type: str) -> None:
+    """Hierarchy reads stay correct and bounded as predecided row keys grow."""
 
     del composed_tables
     actor = create_user(f"depth-{resource_type.replace('/', '-')}")
     model = model_for_resource_type(resource_type)
     assert model is not None
+    rows = model.objects.all()
+    if resource_type == "storage/folder":
+        # Each user also owns a virtual Trash folder outside this hierarchy.
+        rows = rows.filter(is_virtual=False)
 
-    def scope_sql() -> str:
-        return str(model.objects.with_actor(actor).with_action("read").scoped().query)
+    def scope_pks(viewer) -> set:
+        with CaptureQueriesContext(connection) as queries:
+            pks = set(rows.with_actor(viewer).with_action("read").scoped().values_list("pk", flat=True))
+        # Include the compiler's policy/seed reads as well as the final query.
+        # Bound statements independently of the fifty application rows.
+        assert len(queries) <= 12, queries.captured_queries
+        assert max(len(query["sql"]) for query in queries) <= 32_768, queries.captured_queries
+        return pks
 
-    shallow = scope_sql()
+    assert scope_pks(actor) == set()
+    expected = set()
     with system_context(reason="tests.rebac.query.depth"):
         if resource_type == "storage/folder":
             storage = Backend.objects.create(slug="depth", label="Depth", backend_class="local")
@@ -66,9 +77,12 @@ def test_recursive_read_sql_is_constant_across_fifty_levels(composed_tables: Non
             parent = None
             for level in range(50):
                 parent = Folder.objects.create(drive=drive, parent=parent, name=f"level-{level}")
+                expected.add(parent.pk)
         elif resource_type == "knowledge/page":
             vault = Vault.objects.create(name="Depth", owner=actor)
             parent = None
             for level in range(50):
                 parent = Page.objects.create(vault=vault, parent=parent, title=f"level-{level}")
-    assert scope_sql() == shallow
+                expected.add(parent.pk)
+    assert scope_pks(actor) == expected
+    assert scope_pks(create_user(f"outsider-{resource_type.replace('/', '-')}")) == set()

@@ -43,10 +43,12 @@ function fixture(initialEntry = "/decisions", authenticated = true) {
   return { getList, router };
 }
 
-test("queries open readable seats, including delegated seats, and links the loaded decision", async () => {
+test("queries my open seats and links the loaded decision", async () => {
   const { getList } = fixture();
   expect(await screen.findByText("River")).toBeTruthy();
-  expect(getList.mock.calls[0]?.[0].meta?.gqlVariables?.where).toEqual({ is_open: { _eq: true } });
+  expect(getList.mock.calls[0]?.[0].meta?.gqlVariables?.where).toEqual({
+    _and: [{ assignees: { _eq: "user-1" } }, { is_open: { _eq: true } }],
+  });
   expect(screen.getByRole("link", { name: "Open Review" }).getAttribute("href")).toMatch(/^\/decisions\/decision-1\?recordNav=/);
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /New Decision/ })).toBeNull();
@@ -56,6 +58,7 @@ test("the native filter box edits personal predicates and preserves unrelated se
   const { getList, router } = fixture("/decisions?keep=external&page=3");
   await screen.findByText("River");
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Assigned to me" }));
   fireEvent.click(await screen.findByRole("button", { name: "Requested by me" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     _and: [{ is_open: { _eq: true } }, { requester: { _eq: "user-1" } }],
@@ -66,6 +69,17 @@ test("the native filter box edits personal predicates and preserves unrelated se
   }));
   expect(router.state.location.search).toMatchObject({ keep: "external" });
   expect(screen.queryByRole("combobox", { name: "Decisions" })).toBeNull();
+});
+
+test("finds delegated seats through the server authority filter", async () => {
+  const { getList } = fixture();
+  await screen.findByText("River");
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Assigned to me" }));
+  fireEvent.click(await screen.findByRole("button", { name: "I can act" }));
+  await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
+    _and: [{ can_act: { _eq: true } }, { is_open: { _eq: true } }],
+  }));
 });
 
 test("does not issue an unscoped read while the current user resolves", async () => {

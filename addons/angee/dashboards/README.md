@@ -48,10 +48,7 @@ Installed baselines have no actor owner. Their [permission policy](permissions.z
 derives shared reads through a filtered constant over that column, so bulk owner
 changes take effect without tuple reconciliation. Dashboard and widget reads use
 the same REBAC scope as authored dashboards; the shared reader grants no write
-access. The [runtime migration](runtime_migrations/shared_reader_cleanup.py)
-removes the retired wildcard tuples during `migrate`, with no prior permission
-sync required. Sync permissions afterwards to activate the new schema; resource
-reloads are unnecessary for shared access.
+access.
 
 ## Declared table columns
 

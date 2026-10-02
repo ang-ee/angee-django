@@ -78,10 +78,10 @@ describe("requester access cards", () => {
       .toBe("/decisions.inbox.record/decision-1");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Give access" })); });
     expect(mocks.decide).toHaveBeenCalledExactlyOnceWith("need-1", {
-      action: "APPROVE", expected_revision: 3,
+      action: "INTAKE_APPROVE", expected_revision: 3,
     });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Deny" })); });
-    expect(mocks.decide).toHaveBeenLastCalledWith("need-1", { action: "DENY", expected_revision: 3 });
+    expect(mocks.decide).toHaveBeenLastCalledWith("need-1", { action: "INTAKE_DENY", expected_revision: 3 });
     expect(mocks.actions.map((action) => action.permission)).toEqual(["write", "write"]);
   });
 

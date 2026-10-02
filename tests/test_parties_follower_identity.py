@@ -34,10 +34,10 @@ from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
 from angee.graphql.data import hasura_model_resource
+from angee.messaging.testing.models import Folder, Handle, Organization, Party, Person, Thread, ThreadFollower
+from angee.nexus.testing.models import Cadence, Tie
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import execute_schema, result_data
-from tests.messaging_models import Folder, Handle, Organization, Party, Person, Thread, ThreadFollower
-from tests.nexus_models import Cadence, Tie
-from tests.spaces_models import Group, Membership
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _schema as nexus_schema
 from tests.test_parties_graphql import parties_schema

@@ -23,6 +23,8 @@ from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
+from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
@@ -33,6 +35,7 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
+from angee.integrate.testing.integration import Integration
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
 from angee.integrate_vcs.models import Source as AbstractSource
@@ -43,6 +46,8 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
+from angee.messaging.testing import models as messaging_models
+from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
 from angee.platform_integrate_vcs.models import AddonCatalog as AbstractAddonCatalog
@@ -65,15 +70,8 @@ from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
-from tests import (  # noqa: F401 -- register shared FK targets before native database setup
-    agents_models,
-    decisions_models,
-    extraction_models,
-    messaging_models,
-)
+from tests import extraction_models  # noqa: F401 -- register shared FK targets before database setup
 from tests.extcontrib.models import Role
-from tests.integrate_models import Integration
-from tests.messaging_models import Channel
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
@@ -571,16 +569,14 @@ class ExtcontribRole(Role):
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 # Every installed backing needs its concrete model before native database setup.
-from tests import (  # noqa: E402, F401
-    nexus_models,
-    operator_models,
-    portfolio_models,
-    projects_models,
-    proposals_models,
-    sequence_models,
-    tags_models,
-    uom_models,
-)
+from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
+from angee.operator.testing import models as operator_models  # noqa: E402, F401
+from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
+from angee.projects.testing import models as projects_models  # noqa: E402, F401
+from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
+from angee.tags.testing import models as tags_models  # noqa: E402, F401
+from angee.uom.testing import models as uom_models  # noqa: E402, F401
+from tests import proposals_models  # noqa: E402, F401
 
 
 class Need(AbstractNeed):

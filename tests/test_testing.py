@@ -6,22 +6,36 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from rebac import actor_context, system_context
 
+from angee.agents.testing import models as agents_models
+from angee.decisions.testing import models as decisions_models
+from angee.integrate.testing import integration as integration_models
 from angee.integrate.testing import models as integrate_models
+from angee.messaging.testing import models as messaging_models
+from angee.nexus.testing import models as nexus_models
+from angee.portfolio.testing import models as portfolio_models
+from angee.projects.testing import models as projects_models
+from angee.sequence.testing import models as sequence_models
+from angee.spaces.testing import models as spaces_models
+from angee.tags.testing import models as tags_models
+from angee.uom.testing import models as uom_models
 from angee.workflows import models as workflow_sources
 from angee.workflows.states import RunOrigin
 from angee.workflows.testing import models as workflow_models
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
-from tests import decisions_models
 
 
-@pytest.mark.parametrize("shared_models", (integrate_models, workflow_models, decisions_models))
+@pytest.mark.parametrize("shared_models", (
+    agents_models, decisions_models, integrate_models, integration_models,
+    messaging_models, nexus_models, portfolio_models, projects_models,
+    sequence_models, spaces_models, tags_models, uom_models, workflow_models,
+))
 def test_native_database_setup_creates_shared_model_tables(transactional_db: None, shared_models) -> None:
     """Shared tables exist without requesting the permission-sync fixture."""
 
     tables = {
         model._meta.db_table
         for model in apps.get_models()
-        if model.__module__ == shared_models.__name__
+        if model.__module__ == shared_models.__name__ and model._meta.managed
     }
 
     assert tables

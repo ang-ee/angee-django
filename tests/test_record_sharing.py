@@ -18,10 +18,10 @@ from angee.graphql import sharing
 from angee.graphql.data import metadata
 from angee.graphql.sharing import RecordAccessType
 from angee.projects.models import Task
+from angee.projects.testing.models import Project
 from angee.storage.models import Drive
 from angee.workflows.models import Workflow
 from tests.conftest import create_user
-from tests.projects_models import Project
 
 
 @pytest.fixture

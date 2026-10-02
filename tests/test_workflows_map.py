@@ -14,6 +14,7 @@ from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
+from angee.decisions.testing.models import Decision, DecisionGroup
 from angee.workflows import schema as workflow_schema
 from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
@@ -22,7 +23,6 @@ from angee.workflows.steps import EmptyOutput, Retryable, RetryPolicy, Step, Ste
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
-from tests.decisions_models import Decision, DecisionGroup
 
 
 class MapEcho(Step[None, None, None]):

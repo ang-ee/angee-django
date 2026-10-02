@@ -8,6 +8,7 @@ from rebac import actor_context, system_context
 
 from angee.base.identity import public_id_of
 from angee.resources.testing.models import Resource
+from angee.spaces.testing.models import Group
 from angee.testing.fixtures import composed_tables as composed_tables
 from tests.conftest import (
     Page,
@@ -19,7 +20,6 @@ from tests.conftest import (
 from tests.conftest import (
     addon_fixture_resources as addon_fixture_resources,
 )
-from tests.spaces_models import Group
 
 
 @pytest.mark.usefixtures("composed_tables")

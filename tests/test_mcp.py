@@ -14,10 +14,10 @@ from rebac.backends import backend
 from angee.agents.grants import tool_grant_ref
 from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import MCPPlacement
+from angee.agents.testing.models import Agent, MCPServer, MCPTool
 from angee.integrate.credentials import CredentialKind
 from angee.mcp.verifier import _verifier
 from tests import test_integrate_vcs  # noqa: F401 -- register the concrete relation graph
-from tests.agents_models import Agent, MCPServer, MCPTool
 from tests.conftest import Credential
 
 User = get_user_model()

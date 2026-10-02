@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 
-from tests.messaging_models import Address, Party
+from angee.messaging.testing.models import Address, Party
 
 
 @pytest.mark.django_db(transaction=True)

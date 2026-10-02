@@ -35,6 +35,7 @@ from angee.integrate.events import EventKind
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
+from angee.messaging.testing.models import Channel
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph
@@ -54,7 +55,6 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
-from tests.messaging_models import Channel
 from tests.test_agents import InferenceProvider
 
 User = get_user_model()

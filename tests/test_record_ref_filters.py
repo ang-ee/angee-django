@@ -12,10 +12,10 @@ from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_group
+from angee.decisions.testing.models import Decision
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.relations import with_record_reference_access
 from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
-from tests.decisions_models import Decision
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)

@@ -7,12 +7,12 @@ according to their registered policy; a closed answer remains an audit fact.
 Human admission requires existing read access to the subject and evidence. It creates
 no grants. The requester cannot act on their own request unless they hold the
 administrative role, and every resolver must remain an active person.
-System admission may leave assignees delegated to a consumer's live `act`
-relation, but only when a current actor can answer. Such seats retain no extra
+System admission may leave assignees delegated to a consumer's live `eligible`
+permission, but only when a current domain actor can answer; the administrative
+override does not establish eligibility. Such seats retain no extra
 evidence without explicit readers. A group can be re-asked after settlement;
 its earlier answer stays final and the successor group links through
-`reasked_from`. The historical `imported` closure retains an answer without
-inventing a resolver or resolution time.
+`reasked_from`. Every resolved answer retains its resolver and resolution time.
 The shared base evidence owner checks frozen references at admission. An action
 class owns its `key`, typed Pydantic form and verdict; the decisions addon
 registers it and its group policies through the base implementation registry.

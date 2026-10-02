@@ -15,8 +15,8 @@ from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.testing.drivers import Accept, Reject, seed_group
+from angee.decisions.testing.models import Decision, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
-from tests.decisions_models import Decision, DecisionGroup
 
 
 @pytest.fixture
@@ -48,6 +48,19 @@ def test_requester_can_read_own_requested_question_and_group_without_being_issue
         "id": str(decision.sqid), "permissions": [], "is_open": True, "group": {"id": str(group.sqid)},
     }]}
     assert query(outsider, document) == {"decisions": []}
+
+
+def test_can_act_filter_uses_current_authority_and_keeps_read_scope(inbox):
+    issuer, requester, reviewer, outsider, _subject, _group, decision = inbox
+    document = "query { decisions(where: {can_act: {_eq: true}, is_open: {_eq: true}}) { id } }"
+    assert query(reviewer, document) == {"decisions": [{"id": str(decision.sqid)}]}
+    for viewer in (issuer, requester, outsider):
+        assert query(viewer, document) == {"decisions": []}
+    admin = create_platform_admin("inbox-filter-admin")
+    assert query(admin, document) == {"decisions": [{"id": str(decision.sqid)}]}
+    with system_context(reason="test.inbox_filter_inactive"):
+        type(reviewer).objects.filter(pk=reviewer.pk).update(is_active=False)
+    assert query(reviewer, document) == {"decisions": []}
 
 
 def test_superseded_link_redacts_a_replacement_in_another_group(inbox):
@@ -250,6 +263,7 @@ def test_inbox_sdl_and_resource_metadata_publish_backend_owned_facts():
     assert "is_open" in schema._schema.get_type(resource.type_names.filter).fields
     assert {"permissions", "is_open", "errors"} <= {field.name for field in resource.fields}
     assert resource.query.fields["is_open"].filter is not None
+    assert resource.query.fields["can_act"].filter is not None
     assert resource.query.fields["permissions"].filter is None
 
 

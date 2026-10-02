@@ -31,7 +31,10 @@ from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.access import bind, unbind
+from angee.projects.testing.models import Project, ProjectBinding, Task
+from angee.spaces.testing.models import Group, Membership
 from angee.testing.permissions import installed_field_owners
 from tests.conftest import (
     Backend,
@@ -46,9 +49,6 @@ from tests.conftest import (
     execute_schema,
     result_data,
 )
-from tests.messaging_models import Channel, Message, Person, Thread, ThreadAttachment
-from tests.projects_models import Project, ProjectBinding, Task
-from tests.spaces_models import Group, Membership
 
 
 @strawberry_django.type(Task)

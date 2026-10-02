@@ -8,11 +8,11 @@ from django.apps import apps
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.checks import check_ownership
+from angee.messaging.testing.models import Person, Thread
+from angee.projects.testing.models import Project, Queue, Task
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import Backend, Drive, File, Vault
 from tests.messaging_campaign import grant
-from tests.messaging_models import Person, Thread
-from tests.projects_models import Project, Queue, Task
-from tests.spaces_models import Group, Membership
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema

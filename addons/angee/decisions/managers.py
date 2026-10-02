@@ -325,7 +325,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             raise ValidationError({"expires_at": "A decision deadline must be in the future."})
         if request.assignees is None:
             eligible = backend().lookup_subjects(
-                resource=to_object_ref(decision), action="act", subject_type="auth/user",
+                resource=to_object_ref(decision), action="eligible", subject_type="auth/user",
             )
             if not any(eligible):
                 raise ValidationError({"assignees": "Every delegated seat needs a current actor who can act."})
@@ -433,11 +433,10 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         decision.require_access("read", actor)
         answer = None
         resolver = None
-        if decision.closed_reason in (ClosedReason.RESOLVED, ClosedReason.IMPORTED):
+        if decision.closed_reason == ClosedReason.RESOLVED:
             try:
-                resolver = _user(decision.resolved_by) if decision.resolved_by_id is not None else None
-                if resolver is not None:
-                    decision.require_access("act", resolver)
+                resolver = _user(decision.resolved_by)
+                decision.require_access("act", resolver)
             except PermissionDenied as error:
                 raise ResolverAuthorityError("The resolver no longer has authority to answer this decision.") from error
             value = decision.resolution["action"]

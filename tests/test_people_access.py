@@ -17,9 +17,9 @@ from rebac import (
     write_relationships,
 )
 
+from angee.messaging.testing.models import Person, ThreadFollower
+from angee.projects.testing.models import Project, Task
 from tests.chatterdemo.models import ChatterDoc
-from tests.messaging_models import Person, ThreadFollower
-from tests.projects_models import Project, Task
 
 pytest_plugins = ("tests.test_messaging_access",)
 
@@ -116,7 +116,7 @@ def test_record_readers_accepts_a_role_only_model(
 def test_accountless_party_can_follow_without_read(messaging_access_schema: str) -> None:
     """An external delivery route is outside the person-account read rule."""
 
-    from tests.messaging_models import Party
+    from angee.messaging.testing.models import Party
 
     del messaging_access_schema
     with system_context(reason="tests.people.external_follow"):

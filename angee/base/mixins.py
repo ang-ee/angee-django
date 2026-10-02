@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import copy
 from enum import Enum
 from typing import Any, ClassVar, Self, TypeVar, cast
 
@@ -14,6 +15,7 @@ from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import PermissionDenied, system_context
+from rebac.field_visibility import gated_read_fields
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from simple_history.models import HistoricalRecords
 
@@ -509,8 +511,8 @@ class ModelHistory(HistoricalRecords):
 
     Tracking belongs to an abstract source/donor that includes HistoryMixin.
     Inheriting only a concrete tracked parent does not create a second history
-    table for its MTI child. All copying, signals and history behavior stay with
-    django-simple-history.
+    table for its MTI child. Native history construction receives a detached
+    snapshot with stored gated values, never the caller's redacted projection.
     """
 
     def finalize(self, sender: type[models.Model], **kwargs: Any) -> None:
@@ -526,6 +528,31 @@ class ModelHistory(HistoricalRecords):
         if not tracked_abstract_parent:
             return
         super().finalize(sender, **kwargs)
+
+    def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
+        """Keep field redaction out of persisted history without changing the live instance."""
+
+        gated = gated_read_fields(type(instance))
+        attnames = [field.attname for field in self.fields_included(instance) if field.name in gated]
+        if attnames:
+            stored = system_queryset(type(instance)).values(*attnames).get(pk=instance.pk)
+            instance = copy(instance)
+            for attname, value in stored.items():
+                setattr(instance, attname, value)
+        super().create_historical_record(instance, history_type, using=using)
+
+    def pre_delete(self, instance: models.Model, **kwargs: Any) -> None:
+        """Snapshot while stored values exist, inside Django's delete transaction."""
+
+        super().pre_delete(instance, **kwargs)
+        if getattr(settings, "SIMPLE_HISTORY_ENABLED", True) and not self.cascade_delete_history:
+            self.create_historical_record(instance, "-", using=kwargs.get("using"))
+
+    def post_delete(self, instance: models.Model, using: str | None = None, **kwargs: Any) -> None:
+        """Retain native cascade cleanup; retained snapshots were written before deletion."""
+
+        if self.cascade_delete_history:
+            super().post_delete(instance, using=using, **kwargs)
 
     def get_meta_options(self, model: type[models.Model]) -> dict[str, Any]:
         options = super().get_meta_options(model)

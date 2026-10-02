@@ -150,14 +150,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, RecordRefMixin, AngeeDataMo
                 models.Q(verdict=Verdict.PENDING, resolved_at__isnull=True, resolved_by__isnull=True)
                 & (models.Q(closed_reason__isnull=True) | models.Q(closed_reason__in=[
                     reason for reason in ClosedReason.values
-                    if reason not in (ClosedReason.RESOLVED, ClosedReason.IMPORTED)
+                    if reason != ClosedReason.RESOLVED
                 ]))
             ) | models.Q(verdict__in=[v for v in Verdict.values if v != Verdict.PENDING],
                          resolved_at__isnull=False, resolved_by__isnull=False,
-                         closed_reason__isnull=False, closed_reason=ClosedReason.RESOLVED)
-                | models.Q(verdict__in=[v for v in Verdict.values if v != Verdict.PENDING],
-                           resolved_at__isnull=True, resolved_by__isnull=True,
-                           closed_reason__isnull=False, closed_reason=ClosedReason.IMPORTED),
+                         closed_reason__isnull=False, closed_reason=ClosedReason.RESOLVED),
                 name="decisions_resolution_consistent"),
         ]
         indexes = [

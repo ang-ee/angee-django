@@ -34,7 +34,7 @@ class FreshnessStage(AbstractStage):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(AbstractStage.Meta.constraints)
-        # Its own type: the production type has one concrete model, in tests.projects_models.
+        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_stage"
 
 
@@ -45,7 +45,7 @@ class FreshnessMilestone(AbstractMilestone):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(getattr(AbstractMilestone.Meta, "constraints", ()))
-        # Its own type: the production type has one concrete model, in tests.projects_models.
+        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_milestone"
 
 
@@ -69,7 +69,7 @@ class FreshnessTask(TaskWork, AbstractTask):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(AbstractTask.Meta.constraints[:2])
-        # Its own type: the production type has one concrete model, in tests.projects_models.
+        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_task"
 
 

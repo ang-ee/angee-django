@@ -26,7 +26,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from itertools import batched
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -39,19 +38,20 @@ from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
 from rebac import (
+    CheckItem,
     PermissionDenied,
     SubjectRef,
     current_actor,
     system_context,
+    to_object_ref,
     to_subject_ref,
 )
 from rebac.backends import backend
-from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
@@ -951,13 +951,11 @@ class ThreadedModelMixin(models.Model):
         return actor_user_id(to_subject_ref(user)) in self.thread_reader_ids((user,))
 
     def thread_reader_ids(self, accounts: Iterable[models.Model | SubjectRef]) -> set[Any]:
-        """Evaluate the audience against this record's native read scopes once.
+        """Return the accounts that hold this record's read permission.
 
-        Each EXISTS arm pins its account even under system-context fan-out. Only
-        recipient IDs selected by the record's complete permission are returned;
-        no relationship or visibility rule is reconstructed here. The native
-        evaluator scope shares schema reads across all arms. Fifty accounts per
-        statement bound SQL expression depth and size independently of the audience.
+        The permission backend decides the whole audience in one bulk check:
+        each item pins its account even under system-context fan-out, and no
+        relationship or visibility rule is reconstructed here.
         """
 
         subjects = (to_subject_ref(account) for account in accounts)
@@ -967,30 +965,15 @@ class ThreadedModelMixin(models.Model):
             return set()
         if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
             return set(account_subjects)
-        using = self._state.db or router.db_for_read(type(self), instance=self)
-        allowed: set[Any] = set()
-        with evaluator_scope():
-            for chunk in batched(account_subjects.items(), 50):
-                readers = models.Q(pk__in=[])
-                for account_id, account in chunk:
-                    predicate = backend().queryset_filter(
-                        model=type(self), subject=account,
-                        action=self.thread_read_access, using=using,
-                    )
-                    # The native predicate avoids a grants-all probe per account;
-                    # unsupported scopes retain the evaluator fallback.
-                    scope = (
-                        type(self)._base_manager.using(using).filter(predicate, pk=self.pk).order_by()
-                        if predicate is not None else
-                        type(self)._default_manager.using(using).with_actor(account)
-                        .with_action(self.thread_read_access).filter(pk=self.pk).order_by().scoped()
-                    )
-                    readers |= models.Q(pk=account_id) & models.Q(models.Exists(scope))
-                allowed.update(
-                    get_user_model()._base_manager.using(using)
-                    .filter(readers).values_list("pk", flat=True)
-                )
-        return allowed
+        resource = to_object_ref(self)
+        results = backend().check_bulk_permissions(
+            CheckItem(subject, self.thread_read_access, resource) for subject in account_subjects.values()
+        )
+        return {
+            account_id
+            for account_id, result in zip(account_subjects, results, strict=True)
+            if result.allowed
+        }
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:

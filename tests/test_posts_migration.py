@@ -13,10 +13,10 @@ from django.db import connection, models
 from django.db.migrations.state import ProjectState
 from rebac import actor_context, system_context
 
+from angee.integrate.testing.integration import Integration
+from angee.messaging.testing.models import Channel, Message
 from angee.posts.runtime_migrations import feed_channel_parent
 from tests.conftest import Feed, make_integration
-from tests.integrate_models import Integration
-from tests.messaging_models import Channel, Message
 
 
 def _legacy_state() -> ProjectState:

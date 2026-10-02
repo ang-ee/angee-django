@@ -8,9 +8,9 @@ from django.db import close_old_connections, connection, connections
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
+from angee.messaging.testing.models import ThreadNotification
 from tests.messaging_campaign import add_member, fanout
 from tests.messaging_campaign import audience_record as audience_record
-from tests.messaging_models import ThreadNotification
 from tests.test_spaces import spaces_tables as spaces_tables
 
 pytestmark = [

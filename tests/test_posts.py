@@ -31,7 +31,9 @@ from rebac import (
 )
 
 from angee.integrate import scheduler
+from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
+from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge, Reaction, Thread
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
@@ -45,8 +47,6 @@ from tests.conftest import (
     create_user,
     make_integration,
 )
-from tests.integrate_models import Integration
-from tests.messaging_models import Channel, Handle, Message, MessageEdge, Reaction, Thread
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 

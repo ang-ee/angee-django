@@ -11,8 +11,8 @@ from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeDataModel
 from angee.portfolio.models import InitiativeProject
+from angee.portfolio.testing.models import ProductRow
 from tests.hierdemo.models import HierNode
-from tests.portfolio_models import ProductRow
 
 
 class InitiativePlacementRow(AngeeDataModel):

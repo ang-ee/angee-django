@@ -2,21 +2,111 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
-from rebac import PermissionDenied, actor_context, system_context
-from rebac.models import active_relationship_model
+from rebac import PermissionDenied, actor_context, current_actor, sudo, system_context, to_subject_ref
+from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.conftest import Drive
-from tests.projects_models import Milestone, Project, ProjectBinding, Task
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_models import Proposal, Round, Topic
 
 pytest_plugins = ("tests.proposals_campaign",)
+
+
+@pytest.mark.parametrize("verb", ("submit", "create_track"))
+@pytest.mark.parametrize("elevation", ("system", "sudo", "instance"))
+def test_backed_edge_verbs_preserve_actorless_bypasses(
+    campaign: ProposalCampaign,
+    elevation: str,
+    verb: str,
+) -> None:
+    """Trusted actorless callers retain receipts and idempotent track creation."""
+    c = campaign
+    proposal = c.admit(c.round(), "responder")
+    proposal = Proposal._base_manager.get(pk=proposal.pk)
+    assert current_actor() is None and proposal.actor() is None
+    if elevation == "instance":
+        proposal.sudo(reason="tests.proposals.campaign.actorless")
+    context = {
+        "system": system_context(reason="tests.proposals.campaign.actorless"),
+        "sudo": sudo(reason="tests.proposals.campaign.actorless"),
+        "instance": nullcontext(),
+    }[elevation]
+    with context:
+        first = getattr(proposal, verb)()
+        stored = Proposal._base_manager.get(pk=proposal.pk)
+        second = getattr(proposal, verb)()
+        assert second.pk == first.pk
+        assert Proposal._base_manager.get(pk=proposal.pk).revision == stored.revision
+    assert proposal.is_sudo() is (elevation == "instance")
+    assert proposal.actor() is None
+    if verb == "submit":
+        assert stored.state == "submitted" and stored.submitted_at == c.now
+        assert stored.submitted_by_id == proposal.responder_id
+    else:
+        assert stored.track_id == first.pk
+        assert first.owner_id is None and first.owns_items and not first.is_sudo()
+        assert Drive._base_manager.filter(project_bindings__project=first).count() == 1
+
+
+@pytest.mark.parametrize("verb", ("submit", "create_track"))
+@pytest.mark.parametrize("fail_write", (False, True))
+def test_backed_edge_verbs_keep_pinned_attribution_and_clear_locked_sudo(
+    campaign: ProposalCampaign,
+    monkeypatch: pytest.MonkeyPatch,
+    verb: str,
+    fail_write: bool,
+) -> None:
+    """The authorized proposal write may cross its edge and always drops sudo."""
+    c = campaign
+    round = c.round()
+    proposal = c.admit(round, "responder")
+    responder, ambient = c.person("responder"), c.person("outsider")
+    proposal = as_actor(proposal, responder)
+    assert not as_actor(round, responder).has_access("write")
+    saved: list[Proposal] = []
+    save = Proposal.save
+
+    def observe_save(instance: Proposal, *args: Any, **kwargs: Any) -> Any:
+        if instance.pk == proposal.pk:
+            saved.append(instance)
+            assert instance.is_sudo()
+            if verb == "create_track":
+                assert not as_actor(instance.track, responder).has_access("write")
+            if fail_write:
+                raise ValidationError("Simulated backed-edge persistence failure")
+        return save(instance, *args, **kwargs)
+
+    monkeypatch.setattr(Proposal, "save", observe_save)
+    with actor_context(ambient):
+        with pytest.raises(ValidationError, match="Simulated backed-edge") if fail_write else nullcontext():
+            getattr(proposal, verb)()
+        assert current_actor() == to_subject_ref(ambient)
+    assert len(saved) == 1
+    assert not saved[0].is_sudo() and saved[0].actor() == to_subject_ref(responder)
+    assert not proposal.is_sudo()
+    stored = Proposal._base_manager.get(pk=proposal.pk)
+    if fail_write:
+        assert stored.state == "draft" and stored.submitted_at is None and stored.track_id is None
+    else:
+        assert stored.updated_by_id == responder.pk
+        if verb == "submit":
+            assert stored.submitted_by_id == responder.pk
+        reason = "proposals.proposal.submit" if verb == "submit" else "proposals.proposal.create_track.link"
+        actor = to_subject_ref(responder)
+        assert PermissionAuditEvent.objects.filter(
+            kind=PermissionAuditEvent.KIND_SUDO_BYPASS,
+            reason=reason,
+            actor_subject_type=actor.subject_type,
+            actor_subject_id=actor.subject_id,
+        ).exists()
 
 
 @pytest.mark.parametrize("policy", ("facilitator_only", "answers", "answers_and_tracks", "drafts_and_tracks"))

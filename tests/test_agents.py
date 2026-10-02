@@ -50,11 +50,11 @@ from angee.agents.models import (
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
+from angee.agents.testing.models import InferenceModel, InferenceProvider, Skill
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
-from tests.agents_models import InferenceModel, InferenceProvider, Skill
 from tests.conftest import make_integration
 from tests.test_integrate_vcs import (
     REPOS,
