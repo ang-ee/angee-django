@@ -4,7 +4,7 @@ import { makeContext, SlotOutlet, useSlot, type SlotContribution } from "@angee/
 import type { Decision } from "./documents.console";
 
 /** Exactly one consumer presentation may claim a decision kind. */
-export const DECISION_CONTENT_SLOT = "decisions.content";
+const DECISION_CONTENT_SLOT = "decisions.content";
 /** Waiting owners contribute their own links without adding dependencies here. */
 export const DECISION_ORIGIN_SLOT = "decisions.origin";
 

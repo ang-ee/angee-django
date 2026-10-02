@@ -25,7 +25,7 @@ those fields survive. Successful submissions use native model invalidation;
 only rejected submissions refresh the revision directly.
 
 Consumers contribute `decisionContent(kind, Component)` through their addon's
-`slots` array. `DECISION_CONTENT_SLOT` accepts exactly one contribution per kind:
+`slots` array. The helper targets the owned content slot, which accepts exactly one contribution per kind:
 the framework's composition collision check rejects duplicate claims. Content
 receives read-only `{decision, basis, context}` in the Context tab and in the
 Decide dialog, where it inherits the action's native React Hook Form context.

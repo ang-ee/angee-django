@@ -27,7 +27,7 @@ function Consumer({ decision: current, basis, context }: DecisionContentProps) {
 }
 function Origin() {
   const { decision: current } = useDecisionContent();
-  return <p>Waiting on {current.group.id}</p>;
+  return <p>Waiting on {current.group?.id}</p>;
 }
 function ContextWithContent() {
   const { decision: current } = useDecisionContent();

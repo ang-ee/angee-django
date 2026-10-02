@@ -2,7 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import { decisionFixture, decisionGroupFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { describe, expect, test } from "vitest";
 
-import decisions, { DECISION_CONTENT_SLOT, DECISION_MODEL, DECISION_ORIGIN_SLOT, decisionContent, decisionRecordTab } from "./index";
+import decisions, { DECISION_MODEL, DECISION_ORIGIN_SLOT, decisionContent, decisionRecordTab } from "./index";
 
 describe("decisions fragment", () => {
   test("satisfies the shared manifest contracts", () => expect(() => expectValidBaseAddon(decisions)).not.toThrow());
@@ -24,9 +24,8 @@ describe("decisions fragment", () => {
   });
   test("exports consumer and waiting-owner contracts without registering mandatory content", () => {
     expect(DECISION_MODEL).toBe("decisions.Decision");
-    expect(DECISION_CONTENT_SLOT).toBe("decisions.content");
     expect(DECISION_ORIGIN_SLOT).toBe("decisions.origin");
-    expect(decisionContent("review", () => null)).toMatchObject({ slot: DECISION_CONTENT_SLOT, id: "review" });
+    expect(decisionContent("review", () => null)).toMatchObject({ slot: "decisions.content", id: "review" });
     expect(decisions.slots).toBeUndefined();
     expect(decisionRecordTab("intake.Need")).toMatchObject({
       id: "decisions.subject.intake.Need", model: "intake.Need", slot: "form-view.sections",
