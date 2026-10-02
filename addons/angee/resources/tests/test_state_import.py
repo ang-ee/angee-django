@@ -7,18 +7,22 @@ import json
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import tablib
 import yaml
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
-from django.db import connection
+from django.core.exceptions import ImproperlyConfigured
+from django.db import connection, models
 from django.db.models.fields import NOT_PROVIDED
+from django.test.utils import CaptureQueriesContext
 from import_export.results import RowResult
 from rebac import system_context
 
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
+from angee.base.fields import EncryptedField
 from angee.base.transitions import StateTransitions
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -28,6 +32,7 @@ from angee.resources.tests.test_resources import addon
 from angee.resources.widgets import split_xref
 from tests.chatterdemo.models import TrackedRecordChild
 from tests.conftest import (  # noqa: F401 -- share fake-addon lifetime
+    OAuthClient,
     Repository,
     Source,
     Template,
@@ -49,6 +54,26 @@ def _write_rows(path: Path, model: str, rows: list[dict[str, Any]]) -> None:
         payload = {"_meta": {"model": model}, "rows": rows}
         content = json.dumps(payload) if path.suffix == ".json" else yaml.safe_dump(payload)
     path.write_text(content, encoding="utf-8")
+
+
+def _old_row_hash(row: dict[str, Any]) -> str:
+    """Reproduce the stored hash before transition-owned state was excluded."""
+
+    payload = {name: value for name, value in row.items() if name != "_xref"}
+    return "sha256:" + hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _assert_no_import_writes(queries: CaptureQueriesContext, model: type[models.Model]) -> None:
+    """Assert target and ledger skips while retaining native permission audit events."""
+
+    tables = {owner._meta.db_table for owner in (model, *model._meta.get_parent_list(), Resource)}
+    assert not [
+        query["sql"] for query in queries
+        if query["sql"].startswith(("INSERT", "UPDATE", "DELETE"))
+        and any(connection.ops.quote_name(table) in query["sql"] for table in tables)
+    ]
 
 
 def test_transition_field_names_include_inheritance_without_companion_fields() -> None:
@@ -201,30 +226,158 @@ def test_blank_tabular_state_uses_default_on_create_and_is_dropped_on_update(tmp
 
 
 @pytest.mark.django_db
-def test_old_state_inclusive_hash_reimports_once_without_resetting_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize("operation", ["load", "load_xref"])
+def test_unchanged_old_state_inclusive_hash_migrates_without_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
     path = tmp_path / "rows.yaml"
     model = TrackedRecordChild._meta.label
     row = {"_xref": "live", "title": "Seed title", "note": "Seed note", "status": "open"}
     _write_rows(path, model, [row])
     owner = addon(tmp_path, manifest={"master": ({"path": path.name, "model": model},)})
+    installed = tuple(apps.get_app_configs())
+    monkeypatch.setattr(apps, "get_app_configs", lambda: (*installed, owner))
 
     with system_context(reason="test resources previous hash"):
         Resource.objects.load_addons((owner,), tiers=["master"])
         live = TrackedRecordChild.objects.get()
         live.close()
-        old_payload = {name: value for name, value in row.items() if name != "_xref"}
-        old_hash = "sha256:" + hashlib.sha256(
-            json.dumps(old_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        live.title = "Operator title"
+        live.save(update_fields={"title"})
+        old_hash = _old_row_hash(row)
         Resource.objects.filter(source_addon=owner.name, xref="live").update(content_hash=old_hash)
 
-        refreshed = Resource.objects.load_addons((owner,), tiers=["master"])
-        assert refreshed.updated == 1
+        def load() -> None:
+            if operation == "load_xref":
+                selected = Resource.objects.load_xref(f"{owner.name}.live", model=TrackedRecordChild)
+                assert selected.pk == live.pk
+            else:
+                result = Resource.objects.load_addons((owner,), tiers=["master"])
+                assert (result.loaded, result.skipped) == (0, 1)
+
+        with patch.object(TrackedRecordChild, "save", autospec=True, side_effect=TrackedRecordChild.save) as save:
+            validated = Resource.objects.validate_addons((owner,), tiers=["master"])
+            assert validated.checked_rows == 1
+            assert Resource.objects.get(source_addon=owner.name, xref="live").content_hash == old_hash
+            save.assert_not_called()
+            load()
+            new_hash = _old_row_hash({name: value for name, value in row.items() if name != "status"})
+            assert Resource.objects.get(source_addon=owner.name, xref="live").content_hash == new_hash
+            with CaptureQueriesContext(connection) as queries:
+                load()
+            _assert_no_import_writes(queries, TrackedRecordChild)
+            save.assert_not_called()
         live.refresh_from_db()
-        assert live.status == "closed"
-        assert Resource.objects.get(source_addon=owner.name, xref="live").content_hash != old_hash
-        replay = Resource.objects.load_addons((owner,), tiers=["master"])
-        assert (replay.loaded, replay.skipped) == (0, 1)
+        assert (live.title, live.note, live.status) == ("Operator title", "Seed note", "closed")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("operation", ["load", "load_xref"])
+@pytest.mark.parametrize("change", ["value", "removed-keys"])
+def test_changed_seed_with_old_hash_imports_once_and_preserves_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, change: str,
+) -> None:
+    path = tmp_path / "rows.yaml"
+    model = TrackedRecordChild._meta.label
+    row = {"_xref": "live", "title": "Seed title", "note": "Seed note", "status": "open"}
+    _write_rows(path, model, [row])
+    owner = addon(tmp_path, manifest={"master": ({"path": path.name, "model": model},)})
+    installed = tuple(apps.get_app_configs())
+    monkeypatch.setattr(apps, "get_app_configs", lambda: (*installed, owner))
+
+    with system_context(reason="test changed resources previous hash"):
+        Resource.objects.load_addons((owner,), tiers=["master"])
+        live = TrackedRecordChild.objects.get()
+        live.close()
+        live.title, live.note = "Operator title", "Operator note"
+        live.save(update_fields={"title", "note"})
+        old_hash = _old_row_hash(row)
+        Resource.objects.filter(source_addon=owner.name, xref="live").update(content_hash=old_hash)
+        if change == "value":
+            row["title"] = "Changed seed title"
+        else:
+            del row["status"], row["note"]
+        _write_rows(path, model, [row])
+
+        def load(*, replay: bool = False) -> None:
+            if operation == "load_xref":
+                selected = Resource.objects.load_xref(f"{owner.name}.live", model=TrackedRecordChild)
+                assert selected.pk == live.pk
+            else:
+                result = Resource.objects.load_addons((owner,), tiers=["master"])
+                assert (result.updated, result.skipped) == ((0, 1) if replay else (1, 0))
+
+        Resource.objects.validate_addons((owner,), tiers=["master"])
+        live.refresh_from_db()
+        assert (live.title, live.note, live.status) == ("Operator title", "Operator note", "closed")
+        assert Resource.objects.get(source_addon=owner.name, xref="live").content_hash == old_hash
+        with patch.object(TrackedRecordChild, "save", autospec=True, side_effect=TrackedRecordChild.save) as save:
+            load()
+            assert save.call_count == 1
+            new_hash = Resource.objects.get(source_addon=owner.name, xref="live").content_hash
+            assert new_hash != old_hash
+            with CaptureQueriesContext(connection) as queries:
+                load(replay=True)
+            _assert_no_import_writes(queries, TrackedRecordChild)
+            assert save.call_count == 1
+            assert Resource.objects.get(source_addon=owner.name, xref="live").content_hash == new_hash
+        live.refresh_from_db()
+        assert (live.title, live.note, live.status) == (
+            row["title"], row.get("note", "Operator note"), "closed",
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("operation", ["load", "load_xref"])
+def test_unchanged_old_hash_does_not_touch_undecryptable_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    path = tmp_path / "bridges.yaml"
+    model = VcsBridge._meta.label
+    row = {"_xref": "bridge", "display_name": "Seed bridge", "lifecycle": "connected"}
+    _write_rows(path, model, [row])
+    owner = addon(tmp_path, manifest={"master": ({"path": path.name, "model": model},)})
+    installed = tuple(apps.get_app_configs())
+    monkeypatch.setattr(apps, "get_app_configs", lambda: (*installed, owner))
+
+    with system_context(reason="test unreadable resources previous hash"):
+        bridge = make_integration("unreadable-bridge", model=VcsBridge, backend_class="stub")
+        Resource.objects.create(
+            source_addon=owner.name, source_path=path.name, tier="master", xref="bridge",
+            target_model=model, target_id=bridge.public_id, content_hash=_old_row_hash(row),
+        )
+        secret = VcsBridge._meta.get_field("webhook_secret")
+        other_secret = OAuthClient._meta.get_field("client_secret")
+        assert isinstance(secret, EncryptedField) and isinstance(other_secret, EncryptedField)
+        # The field owner encrypts under another column's derived key.
+        ciphertext = other_secret.get_db_prep_save("unreadable secret", connection)
+        table = connection.ops.quote_name(VcsBridge._meta.db_table)
+        column = connection.ops.quote_name(secret.column)
+        pk_column = connection.ops.quote_name(VcsBridge._meta.pk.column)
+        with connection.cursor() as cursor:
+            cursor.execute(f"UPDATE {table} SET {column} = %s WHERE {pk_column} = %s", [ciphertext, bridge.pk])
+        with pytest.raises(ImproperlyConfigured, match="Cannot decrypt"):
+            VcsBridge.objects.get(pk=bridge.pk).webhook_secret
+
+        with patch.object(VcsBridge, "save", autospec=True, side_effect=VcsBridge.save) as save:
+            Resource.objects.validate_addons((owner,), tiers=["master"])
+            assert Resource.objects.get(source_addon=owner.name, xref="bridge").content_hash == _old_row_hash(row)
+            for _ in range(2):
+                if operation == "load_xref":
+                    selected = Resource.objects.load_xref(f"{owner.name}.bridge", model=VcsBridge)
+                    assert selected.pk == bridge.pk
+                else:
+                    result = Resource.objects.load_addons((owner,), tiers=["master"])
+                    assert (result.loaded, result.skipped) == (0, 1)
+            save.assert_not_called()
+        assert Resource.objects.get(source_addon=owner.name, xref="bridge").content_hash == _old_row_hash({
+            name: value for name, value in row.items() if name != "lifecycle"
+        })
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT {column} FROM {table} WHERE {pk_column} = %s", [bridge.pk])
+            assert cursor.fetchone()[0] == ciphertext
+        with pytest.raises(ImproperlyConfigured, match="Cannot decrypt"):
+            VcsBridge.objects.get(pk=bridge.pk).webhook_secret
 
 
 @pytest.mark.django_db

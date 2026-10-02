@@ -1079,6 +1079,8 @@ and current contracts before applying a historical example to a new deployment.
   (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
   such as `submitted_at`) remain ordinary seed fields and are not protected.
   Seeds must omit those fields to preserve their live values.
+  Unchanged rows with hashes from the previous state-inclusive rule migrate
+  only their ledger hash; changed seed values or keys still trigger import.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.

@@ -33,7 +33,7 @@ class Resource(AngeeModel):
     """Addon-local external reference for the source row."""
 
     content_hash = models.CharField(max_length=71)
-    """Hash of model field values from the source row."""
+    """Hash of updateable source values, excluding identity and transition-owned initial state."""
 
     target_model = ModelLabelField(max_length=120)
     """Django model label for the imported target row."""
