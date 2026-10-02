@@ -2236,7 +2236,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         Admission owns run eligibility. This compare-and-set may replace a
         terminal run awaiting delivery, but never a concurrently claimed run.
-        Repeating the same claim leaves its start time and telemetry intact.
+        Repeating a busy claim leaves its start time and telemetry intact. A
+        settled run may reclaim the bridge when its execution owner retries it.
         """
 
         if type(run_id) is not int or run_id <= 0:
@@ -2244,7 +2245,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         expected_run_id = self.sync_run_id
         with system_context(reason="integrate.bridge.claim_dispatch"), transaction.atomic():
             row = type(self).objects.lock_if_supported().get(pk=self.pk)
-            if row.sync_run_id != expected_run_id or row.sync_run_id == run_id:
+            if row.sync_run_id != expected_run_id or (row.sync_run_id == run_id and row.sync_is_dispatched):
                 return False
             row.sync_run_id = run_id
             row.next_sync_at = None
@@ -2330,8 +2331,10 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         return {**kept, **values}
 
     def mark_sync_started(self, *, now: datetime) -> None:
-        """Persist the start timestamp for one scheduler sync attempt."""
+        """Persist one scheduler attempt's start, preserving a repeated claim."""
 
+        if self.sync_stage == self.SyncStage.SYNCING and self.last_sync_started_at == now:
+            return
         self.last_sync_started_at = now
         self.sync_stage = self.SyncStage.SYNCING
         self.sync_error = ""

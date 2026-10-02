@@ -53,6 +53,17 @@ commit together. After commit, every ready row of an active run is sent to the j
 queue, including parallel branches whose earlier message encountered a busy run.
 Run admission stores its origin and exactly one protected cause in the same
 insert: a parent step, a prior run, or a trigger event. Manual runs have no cause.
+A subject model may implement [`RunSubject`](subjects.py) to own admission and
+settlement of root runs about its records. The engine locks the run, then the
+declared subject, and calls `admit_run(run)` after insertion and before retry
+replanning. A refusal raises `ValidationError` and rolls back admission or retry.
+The single terminal writer calls `settle_run(run, status)` in the same transaction
+as the first terminal transition; the callback sees the persisted terminal output.
+Children and repeated terminal operations do not invoke these hooks. Hooks must
+perform database work only, with settlement kept to a small compare-and-set.
+Deleting a subject does not prevent terminal settlement of its retained run;
+there is no subject row to notify. Admission and reopening require it to exist.
+Django's `workflows.E002` check rejects incomplete opt-ins.
 Each `TriggerSource` declares grant targets through
 `ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES`; a `record_changed` model opts in with
 `RecordChangedOptIn` and declares its own grant scope.
@@ -104,6 +115,11 @@ Retry refuses while other unrouted failures remain and names those nodes.
 Cancel also cancels open rows of a terminal run while preserving that run's
 terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
+
+**Named gap: run budgets.** The rebuilt engine bounds individual attempts,
+dispatch recovery and review rounds, but has no owner for an overall run budget
+or deadline. Workflows that need an aggregate time, page or resource budget still
+need that engine contract; step bounds do not establish a run-wide limit.
 
 Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 `subject_model` accepts a Django model label and stores the model's canonical

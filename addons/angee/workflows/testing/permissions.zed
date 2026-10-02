@@ -1,0 +1,10 @@
+// Permissions for the optional workflow test subject.
+
+definition workflows_testing/subject {
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}

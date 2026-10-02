@@ -70,6 +70,7 @@ from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
+from angee.workflows_integrate.testing import models as sync_cycle_models  # noqa: F401 -- register bridge test subject
 from tests import extraction_models  # noqa: F401 -- register shared FK targets before database setup
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes

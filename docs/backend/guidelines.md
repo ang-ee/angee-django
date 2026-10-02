@@ -1523,6 +1523,16 @@ validated at the driver boundary.
 
 ### Workflow execution
 
+- **Root subject lifecycle belongs to the record.** Models opt into
+  [`RunSubject`](../../addons/angee/workflows/subjects.py) to admit starts and
+  retries and settle the first terminal transition. The engine locks the run
+  before the subject and keeps these database-only hooks in its transaction;
+  UI cancellation, failures and timeouts use the same terminal writer. Bridge
+  cycles compose this contract through
+  [`SyncCycleBridge`](../../addons/angee/workflows_integrate/sync.py), while
+  integrate retains scheduling, queue tokens, advisory locks and dispatch
+  compare-and-set. Consumer bridges supply scope locks and an input snapshot;
+  they do not create another lifecycle or terminal signal receiver.
 - **`Definition` owns graph policy.** The immutable document owns validation,
   class resolution, input bindings, readiness, failure routing and result
   projection. Callers use its methods rather than inspecting node declarations

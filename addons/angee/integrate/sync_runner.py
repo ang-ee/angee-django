@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import datetime
 from typing import Any
 
 from django.apps import apps
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
@@ -26,18 +28,22 @@ def run_bridge_sync_job(
 
     now = _parse_timestamp(timestamp)
     model = _bridge_model(model_label)
-    with system_context(reason="integrate.bridge_sync_job"):
-        bridge = model._default_manager.get(pk=pk)
-        if require_queue_token and not bridge.sync_queue_token_matches(now):
-            return {"ok": True, "items": 0, "skipped": True, "stale": True}
-        with bridge_advisory_lock(bridge) as acquired:
+    with system_context(reason="integrate.bridge_sync_job"), ExitStack() as locks:
+        with transaction.atomic():
+            bridge = model._default_manager.lock_if_supported().get(pk=pk)
+            if require_queue_token and not bridge.sync_queue_token_matches(now):
+                return {"ok": True, "items": 0, "skipped": True, "stale": True}
+            acquired = locks.enter_context(bridge_advisory_lock(bridge))
             if not acquired:
                 # The holder owns this bridge; this run declines. Clear our own queue
                 # claim so the stale-queue recovery stops re-queuing a row nobody will
                 # ever pick up — a live session holds the lock for its whole life.
                 bridge.release_sync_queue(now=now)
                 return {"ok": True, "items": 0, "skipped": True}
-            items = bridge.run_sync(now=now)
+            if require_queue_token and not bridge.sync_is_dispatched:
+                # Consume the token before another delivery can decline and clear it.
+                bridge.mark_sync_started(now=now)
+        items = bridge.run_sync(now=now)
     if items is SyncDispatch.DISPATCHED:
         return {"ok": True, "items": 0, "skipped": False, "dispatched": True}
     return {"ok": True, "items": items, "skipped": False}
