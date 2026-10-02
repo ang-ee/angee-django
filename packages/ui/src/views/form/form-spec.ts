@@ -334,7 +334,6 @@ function deserializeField(
     kind: type,
     widget,
     ...(label ? { label } : {}),
-    ...(field.assignmentSubjectKinds ? { assignmentSubjectKinds: field.assignmentSubjectKinds } : {}),
     ...(addLabel ? { addLabel } : {}),
     ...(removeLabel ? { removeLabel } : {}),
     ...(description ? { description } : {}),

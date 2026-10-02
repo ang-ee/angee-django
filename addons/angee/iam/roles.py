@@ -38,6 +38,8 @@ from rebac.schema import (
 )
 
 from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
+from angee.base.scoping import read_scoped_queryset
+from angee.iam.identity import user_label
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -383,6 +385,25 @@ def validate_subject(
     if require_existing and subject not in resolve_subjects((subject,)):
         raise ValueError(f"Subject {value!r} was not found.")
     return subject
+
+
+def assignment_subject_labels(subjects: Iterable[str], *, actor: Any) -> dict[str, str]:
+    """Label stored IAM subjects through readable rows, independently of offerings."""
+    references: dict[str, SubjectRef] = {}
+    for value in subjects:
+        try:
+            references[value] = validate_subject(value, require_existing=False)
+        except ValueError:
+            continue
+    labels: dict[SubjectRef, str] = {}
+    for subject_type in sorted({ref.subject_type for ref in references.values()}):
+        model = model_for_resource_type(subject_type)
+        if model is None:
+            continue
+        ids = {ref.subject_id for ref in references.values() if ref.subject_type == subject_type}
+        for row in read_scoped_queryset(model, actor).filter(pk__in=ids):
+            labels[to_subject_ref(row)] = user_label(row) if subject_type == "auth/user" else str(row)
+    return {value: labels[ref] for value, ref in references.items() if ref in labels}
 
 
 def grant_role(

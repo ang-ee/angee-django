@@ -11,7 +11,7 @@ import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 import { enIamMessages } from "./i18n";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
 import { LOGIN_CALLBACK_PATH } from "./redirects";
-import { assignmentSubjectsWidget } from "./assignment-subject-widget";
+import { subjectsWidget } from "./assignment-subject-widget";
 import { oidcLoginSection } from "./views/oidc-section";
 
 export { useIssuePasswordAction } from "./password-actions";
@@ -72,7 +72,10 @@ const identityMenu: readonly BaseMenuItem[] = [
 
 const iam = defineBaseAddon({
   id: "iam",
-  widgets: { assignmentSubjects: assignmentSubjectsWidget },
+  widgets: {
+    assignmentSubjects: subjectsWidget({ kinds: ["user", "group"] }),
+    assignmentUsers: subjectsWidget({ kinds: ["user"] }),
+  },
   routes: [
     {
       name: "iam.login.callback",

@@ -1207,15 +1207,6 @@ def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_sha
         model_config_form_spec(Config, owner="Config")
 
 
-@pytest.mark.parametrize("kinds", ["user", [], ["uesr"], [1], ["user", "other"]])
-def test_assignment_subject_annotation_is_validated_by_the_form_owner(kinds):
-    from angee.base.impl import check_form_annotations
-
-    with pytest.raises(ValidationError, match="assignmentSubjectKinds"):
-        check_form_annotations({"assignmentSubjectKinds": kinds})
-    check_form_annotations({"assignmentSubjectKinds": ["user", "group"]})
-
-
 def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
     class Target(str, Enum):
         first = "first"
@@ -1232,7 +1223,6 @@ def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
 @pytest.mark.parametrize("annotation", [
     {"widget": ""}, {"widget": 1}, {"relation": {"resource": ""}},
     {"relation": {"resource": "iam.User"}, "widget": "text"},
-    {"assignmentSubjectKinds": ["uesr"]},
 ])
 def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, monkeypatch):
     class Nested(BaseModel):
@@ -1251,3 +1241,29 @@ def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, mon
     monkeypatch.setattr(importlib.import_module(__name__), "BadAnnotation", BadAnnotation, raising=False)
     with override_settings(ANGEE_TEST_IMPLS={BadAnnotation.key: "tests.test_impl.BadAnnotation"}):
         assert [error.id for error in check_impl_registry(_BaseImpl)] == ["angee.E005"]
+
+def test_relation_annotation_errors_retain_the_native_location_in_both_form_paths():
+    from angee.base.impl import check_form_annotations
+
+    relation = {"resource": "demo.Target", "create": {"resource": 0}}
+    with pytest.raises(ValidationError, match="invalid relation at create.resource"):
+        check_form_annotations({"type": "string", "relation": relation})
+
+    class Config(BaseModel):
+        target: str = Field(json_schema_extra={"relation": relation})
+
+    with pytest.raises(ImproperlyConfigured, match="invalid relation at create.resource"):
+        model_config_form_spec(Config, owner="Config", json_fields=True)
+    with pytest.raises(ValidationError, match="invalid relation at create.resource"):
+        materialize_form_schema(Config.model_json_schema())
+
+
+def test_namespaced_relation_widgets_survive_config_and_frozen_action_form_projection():
+    class Config(BaseModel):
+        target: str = Field(title="Target", json_schema_extra={
+            "widget": "demo.target", "relation": {"resource": "demo.Target"},
+        })
+
+    for schema in (model_config_form_spec(Config, owner="Config"), materialize_form_schema(Config.model_json_schema())):
+        assert schema["properties"]["target"]["widget"] == "demo.target"
+        assert schema["properties"]["target"]["relation"] == {"resource": "demo.Target"}

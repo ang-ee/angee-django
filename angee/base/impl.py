@@ -71,7 +71,7 @@ class ImplChoice:
     config_schema: dict[str, Any] | None
 
 
-_SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default", "widget", "relation", "assignmentSubjectKinds"})
+_SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default", "widget", "relation"})
 _POLICY_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 _FILTER_OPERATORS = (
     "eq",
@@ -164,7 +164,7 @@ FORM_SPEC_RELATION_VALIDATOR = validator(_FORM_SPEC_RELATION_SCHEMA)
 """Native validator for the shared FormSpec relation metadata contract."""
 
 FORM_SCHEMA_ANNOTATIONS = frozenset(
-    {"title", "description", "widget", "relation", "options", "readOnly", "assignmentSubjectKinds"}
+    {"title", "description", "widget", "relation", "options", "readOnly"}
 )
 """Presentation annotations shared by config forms and frozen form snapshots."""
 
@@ -229,19 +229,18 @@ def check_form_annotations(schema: dict[str, Any]) -> None:
             raise ValidationError(f"Form annotation {name} must be a string.")
     if "widget" in schema and not schema["widget"]:
         raise ValidationError("Form annotation widget must not be empty.")
-    if "assignmentSubjectKinds" in schema:
-        kinds = schema["assignmentSubjectKinds"]
-        if not isinstance(kinds, list) or not kinds or any(kind not in ("user", "group") for kind in kinds):
-            raise ValidationError("Form annotation assignmentSubjectKinds requires user/group kinds.")
     if "readOnly" in schema and not isinstance(schema["readOnly"], bool):
         raise ValidationError("Form annotation readOnly must be a boolean.")
     if "relation" in schema:
         if (_nullable_form_schema(schema) or schema).get("type") != "string":
             raise ValidationError("relation on a non-string field")
-        if schema.get("widget", "many2one") != "many2one":
+        widget = schema.get("widget", "many2one")
+        if widget != "many2one" and "." not in widget:
             raise ValidationError("relation with a non-relation widget")
-        if not FORM_SPEC_RELATION_VALIDATOR.is_valid(schema["relation"]):
-            raise ValidationError("invalid relation: requires a valid FormSpec relation.")
+        error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(schema["relation"]), None)
+        if error is not None:
+            location = ".".join(str(part) for part in error.absolute_path)
+            raise ValidationError(f"invalid relation{f' at {location}' if location else ''}: {error.message}")
     if "options" in schema:
         options = schema["options"]
         if not isinstance(options, list) or not options or any(
@@ -466,24 +465,9 @@ class _ConfigFormSpecProjector:
             result["defaultValue"] = copy.deepcopy(schema["default"])
         if "widget" in schema:
             result["widget"] = schema["widget"]
-        if "assignmentSubjectKinds" in schema:
-            result["assignmentSubjectKinds"] = copy.deepcopy(schema["assignmentSubjectKinds"])
         if "relation" in schema:
-            if projected.get("type") != "string":
-                raise ImproperlyConfigured(f"{self.owner}: relation on a non-string field")
-            if result.get("widget", "many2one") != "many2one":
-                raise ImproperlyConfigured(f"{self.owner}: relation with a non-relation widget")
-            result["relation"] = self._relation(schema["relation"])
+            result["relation"] = copy.deepcopy(schema["relation"])
         return result
-
-    def _relation(self, value: Any) -> dict[str, Any]:
-        error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
-        if error is not None:
-            location = ".".join(str(part) for part in error.absolute_path)
-            raise ImproperlyConfigured(
-                f"invalid relation{f' at {location}' if location else ''}: {error.message}",
-            )
-        return copy.deepcopy(value)
 
     def _reject_keywords(self, schema: dict[str, Any], allowed: set[str] | frozenset[str], path: str) -> None:
         unsupported = sorted(set(schema) - set(allowed))

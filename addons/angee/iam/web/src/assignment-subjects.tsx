@@ -1,5 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
-import type { SelectChoice, WidgetField } from "@angee/ui";
+import type { SelectChoice } from "@angee/ui";
 import { useMemo } from "react";
 
 import {
@@ -11,18 +11,22 @@ import { userDisplayName } from "./identity-labels";
 import { useIamT } from "./i18n";
 import { IAM_LIST_LIMIT } from "./list-config";
 
+export type AssignmentSubjectKind = "user" | "group";
+
 export interface AssignmentSubjectOption extends SelectChoice {
   value: string;
   label: string;
   group: string;
-  kind: NonNullable<WidgetField["assignmentSubjectKinds"]>[number];
+  kind: AssignmentSubjectKind;
   id: string;
 }
 
 export interface UseAssignmentSubjectsOptions {
   limit?: number;
+  /** Stored references to label, including inactive and beyond-limit subjects. */
+  subjects?: readonly string[];
   /** Native subjects offered by the IAM widget; omitted offers both kinds. */
-  kinds?: WidgetField["assignmentSubjectKinds"];
+  kinds?: readonly AssignmentSubjectKind[];
 }
 
 export interface AssignmentSubjectsResult {
@@ -37,7 +41,7 @@ export interface AssignmentSubjectsResult {
 export function assignmentSubjectOptions(
   data: IAMAssignmentSubjectsData | undefined,
   labels: { users: string; groups: string },
-  kinds?: WidgetField["assignmentSubjectKinds"],
+  kinds?: readonly AssignmentSubjectKind[],
 ): readonly AssignmentSubjectOption[] {
   const users = (data?.users ?? [])
     .filter((user) => user.is_active)
@@ -59,18 +63,18 @@ export function assignmentSubjectOptions(
 }
 
 export function useAssignmentSubjects(
-  { limit = IAM_LIST_LIMIT, kinds }: UseAssignmentSubjectsOptions = {},
+  { limit = IAM_LIST_LIMIT, kinds, subjects }: UseAssignmentSubjectsOptions = {},
 ): AssignmentSubjectsResult {
   const t = useIamT();
-  const variables = useMemo<IAMAssignmentSubjectsVariables>(() => ({ limit }), [limit]);
+  const variables = useMemo<IAMAssignmentSubjectsVariables>(() => ({ limit, subjects: [...(subjects ?? [])] }), [limit, subjects]);
   const query = useAuthoredQuery(IamAssignmentSubjects, variables);
   const groupLabels = useMemo(() => ({
       users: t("assignmentSubjects.users"),
       groups: t("assignmentSubjects.groups"),
   }), [t]);
   const options = useMemo(() => assignmentSubjectOptions(query.data, groupLabels, kinds), [query.data, groupLabels, kinds]);
-  const labels = useMemo(() => new Map(assignmentSubjectOptions(query.data, groupLabels)
-    .map((option) => [option.value, option.label])), [query.data, groupLabels]);
+  const labels = useMemo(() => new Map(query.data?.iam_assignment_subject_labels
+    .map(({ subject, label }) => [subject, label]) ?? []), [query.data]);
   const userCount = query.data?.users_aggregate.aggregate?.count ?? 0;
   const groupCount = query.data?.groups_aggregate.aggregate?.count ?? 0;
   return {

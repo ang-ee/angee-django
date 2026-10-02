@@ -11,7 +11,7 @@ import {
 
 test("FormSpec registers only its presentation annotations with JSON Schema validators", () => {
   expect(FORM_SPEC_ANNOTATIONS).toEqual([
-    "assignmentSubjectKinds", "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
+    "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
     "hidden", "layout", "omittable", "presenceRequired", "defaultValue", "options", "relation",
   ]);
 });
@@ -29,12 +29,6 @@ test("control-path checks reject row errors and apply the renderer's per-row vis
   expect(formSpecHasControlForPath(fields, "rows.2.target", values)).toBe(false);
 });
 
-test("invalid subject-kind annotations fail at the wire owner", () => {
-  expect(() => deserializeFormSpec({ properties: { people: {
-    type: "array", widget: "json", assignmentSubjectKinds: ["uesr"], items: { type: "string" },
-  } } }, defaultWidgets)).toThrow("assignmentSubjectKinds");
-});
-
 describe("deserializeFormSpec", () => {
   test("only rendered controls claim nested issue paths while atomic widgets retain child messages", () => {
     const fields = deserializeFormSpec({ type: "object", properties: {
@@ -49,11 +43,11 @@ describe("deserializeFormSpec", () => {
       expect(formSpecHasControlForPath(fields, path, { rows: [{ title: "" }] }), path).toBe(false);
   });
 
-  test("custom subject arrays carry typed widget options without becoming composite fields", () => {
+  test("registered custom arrays remain atomic fields", () => {
     const fields = deserializeFormSpec({ properties: { recipients: {
-      type: "array", widget: "recipients", assignmentSubjectKinds: ["user"], items: { type: "string" },
+      type: "array", widget: "recipients", items: { type: "string" },
     } } }, { ...defaultWidgets, recipients: defaultWidgets.text! });
-    expect(fields[0]).toMatchObject({ widget: "recipients", assignmentSubjectKinds: ["user"] });
+    expect(fields[0]).toMatchObject({ widget: "recipients" });
     expect(fields[0]?.itemTemplate).toBeUndefined();
   });
 

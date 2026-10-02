@@ -56,6 +56,7 @@ from angee.iam.roles import (
     IAMRoleRow,
     validate_subject,
 )
+from angee.iam.roles import assignment_subject_labels as _assignment_subject_labels_owner
 from angee.iam.roles import (
     grant_role as _grant_role_owner,
 )
@@ -828,8 +829,26 @@ class IAMQuery:
 
 
 @strawberry.type
+class IAMAssignmentSubjectLabel:
+    """A readable stored subject's label, preserving its authored reference."""
+
+    subject: str
+    label: str
+
+
+@strawberry.type
 class IAMConsoleQuery:
     """Session identity reads and admin permission-hub queries."""
+
+    @strawberry.field
+    def iam_assignment_subject_labels(
+        self, info: strawberry.Info, subjects: list[str],
+    ) -> list[IAMAssignmentSubjectLabel]:
+        """Resolve selected identities without the options list's pagination or active filter."""
+        return [
+            IAMAssignmentSubjectLabel(subject=subject, label=label)
+            for subject, label in _assignment_subject_labels_owner(subjects, actor=session_user(info)).items()
+        ]
 
     @strawberry.field
     def record_readers(

@@ -113,7 +113,6 @@ function FieldDescriptorControlInstance({
     visibilityAction: field.visibilityAction,
     label: field.label,
     options: field.options,
-    assignmentSubjectKinds: field.assignmentSubjectKinds,
     placeholder: field.placeholder,
     ...(controlProps ? { controlProps: {
         ...controlProps,

@@ -2,7 +2,6 @@ import * as v from "valibot";
 import type { CrudFilter } from "@refinedev/core";
 
 import { JsonValueSchema } from "../../widgets/json-value";
-import { ASSIGNMENT_SUBJECT_KINDS } from "../../widgets/types";
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const FieldTypeSchema = v.picklist(["string", "integer", "number", "boolean", "object", "array", "any"]);
@@ -66,7 +65,6 @@ const FieldKeywordSchema = v.object({
   discriminator: v.optional(v.object({ propertyName: NonEmptyString })),
 });
 const FieldAnnotationSchema = v.object({
-  assignmentSubjectKinds: v.optional(v.pipe(v.array(v.picklist(ASSIGNMENT_SUBJECT_KINDS)), v.minLength(1))),
   propertyOrder: v.optional(v.array(NonEmptyString)),
   widget: v.optional(NonEmptyString),
   label: v.optional(NonEmptyString),
