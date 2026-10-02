@@ -7,7 +7,7 @@ from angee.integrate.credentials import CredentialKind
 
 
 class PydanticAIRuntime(AgentRuntime):
-    """Run persisted chat turns inside the workflow worker with pydantic-ai."""
+    """Run persisted chat turns inside the task worker with pydantic-ai."""
 
     key = "pydantic"
     label = "In-process (pydantic-ai)"

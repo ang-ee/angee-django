@@ -9,6 +9,21 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — in-process agent sessions
+
+- Run one persisted chat turn per Celery task through the agent's runtime and
+  service-user actor. Model verbs own start, post, Stop, Close, streamed updates
+  and settlement; a partial unique constraint permits one active turn per
+  session. Add the `call` permission and console session mutations. Deprovision
+  closes sessions, and retained sessions block agent deletion.
+- Replace the session heartbeat with a bounded runtime deadline. Jobs owns the
+  worker time budget shared with workflows. Chat has no automatic retries or
+  crash recovery; Stop releases a stranded turn. Tool approval requests fail
+  readably until session approvals are implemented.
+- Protected relations now report readable GraphQL deletion errors. Sessions
+  can be deleted after their active turn is stopped; streamed batches emitted
+  before Stop is observed remain in the transcript.
+
 ## Unreleased — workflow and integration upgrades
 
 - Workflow IO steps commit claims before their bodies, fence results, reap
@@ -24,7 +39,7 @@ live in code docstrings.
   discovery no longer evaluates money settings prematurely, preserving the
   original dependency error during Django startup.
 - `AngeeModel.require_access(permission, actor)` resolves the explicit requester,
-  then ambient requester, then the instance's pinned actor, and returns the
+  then the instance's pinned actor, then the ambient requester, and returns the
   authorized actor. Missing actors fail closed outside system scope.
   `_require_record_access` remains a temporary alias for downstream callers;
   remove it after those callers migrate. Workflow starters can read identities

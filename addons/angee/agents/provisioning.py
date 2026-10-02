@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from django.apps import apps
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from rebac import system_context
 
 from angee.agents.grants import grant_resource_reader_role
@@ -186,7 +186,7 @@ def _provision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
             sync_service_user(agent, prefix="agent")
         if blocker := agent.provision_blocker():
             return ActionResult(ok=False, message=blocker)
-        in_process = agent.runtime_backend.runs_in_process
+        in_process = agent.runs_in_process
         try:
             agent.mark_provisioning()
             if in_process:
@@ -339,12 +339,15 @@ def _deprovision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
     A recorded conflicting instance that verifies as this agent's is recorded as its
     own first and destroyed with the rest. One that does not verify — or cannot be
     verified — is left in place and the record cleared: a non-destructive way out of
-    every conflict.
+    every conflict. An in-process agent has no operator instance; its teardown closes
+    its sessions instead (:func:`_deprovision_in_process`).
     """
 
     with system_context(reason="agents.graphql.deprovision_agent"):
         if blocker := agent.deprovision_blocker():
             return ActionResult(ok=False, message=blocker)
+    if agent.runs_in_process:
+        return _deprovision_in_process(agent)
     note = ""
     recorded: dict[str, str] = {}
     if agent.conflict_kind is not None:
@@ -379,6 +382,26 @@ def _deprovision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Teardown failed: {error}")
     return ActionResult(ok=True, message=f"Deprovisioned.{note}")
+
+
+def _deprovision_in_process(agent: Any) -> ActionResult:
+    """Tear down an in-process agent and close its sessions in one transaction.
+
+    The agent row is locked first — the lock :meth:`AgentSessionManager.start` takes —
+    so the order is always agent, then session, and no session can start after the
+    teardown commits. The caller's provisioning lock is a non-blocking try-lock, so it
+    never waits on, and cannot deadlock with, this row lock.
+    """
+
+    try:
+        with system_context(reason="agents.graphql.deprovision_agent.in_process"), transaction.atomic():
+            locked = type(agent).system_queryset(lock=("self",)).get(pk=agent.pk)
+            locked.mark_deprovisioning()
+            apps.get_model("agents", "AgentSession").objects.close_for_agent_as_system(locked)
+            locked.mark_deprovisioned()
+    except TransitionNotAllowed as error:
+        return ActionResult(ok=False, message=f"Teardown failed: {error}")
+    return ActionResult(ok=True, message="Deprovisioned.")
 
 
 def _inspect_conflict(agent: Any, daemon: OperatorDaemon) -> tuple[WorkspaceStatus | None, str | None]:

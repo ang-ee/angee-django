@@ -17,15 +17,24 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, connection, models, transaction
 from django.test import RequestFactory, override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import system_context
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.agents.context import render_view_context
 from angee.agents.models import MCPPlacement
-from angee.agents.testing.models import Agent, InferenceModel, InferenceProvider, MCPServer, Skill
+from angee.agents.testing.models import (
+    Agent,
+    AgentSession,
+    AgentTurn,
+    InferenceModel,
+    InferenceProvider,
+    MCPServer,
+    Skill,
+)
 from angee.base.transitions import TransitionNotAllowed
+from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.jobs.locks import task_lock
@@ -205,6 +214,31 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         assert not Agent.objects.filter(sqid=created["id"]).exists()
 
 
+def test_agent_delete_capability_has_constant_query_count(composed_tables: None) -> None:
+    """A narrow can_delete selection batches session existence and lifecycle facts."""
+
+    admin = _platform_admin("agt-delete-budget")
+    with system_context(reason="test.agents.delete_capability.seed"):
+        Agent.objects.create(name="A available", owner=admin)
+        retained = Agent.objects.create(name="B retained", owner=admin)
+        AgentSession.objects.create(agent=retained, owner=admin)
+        Agent.objects.create(name="C rendered", owner=admin, lifecycle="ready", service="agent-service")
+    query = """
+        query Capabilities($limit: Int!) {
+          agents(limit: $limit, order_by: {name: asc}) { can_delete }
+        }
+    """
+    console = _schema()
+    _data(_execute(console, query, {"limit": 1}, user=admin))
+    counts = []
+    for size in (1, 3):
+        with CaptureQueriesContext(connection) as captured:
+            rows = _data(_execute(console, query, {"limit": size}, user=admin))["agents"]
+        assert [row["can_delete"] for row in rows] == [True, False, False][:size]
+        counts.append(len(captured))
+    assert counts[0] == counts[1], counts
+
+
 def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> None:
     """Agent delete policy is enforced by the backend write owner, not only the UI."""
 
@@ -234,6 +268,113 @@ def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> No
     assert "Deprovision this agent before deleting it." in str(result.errors[0])
     with system_context(reason="test.agents.delete_block.verify"):
         assert Agent.objects.filter(pk=agent.pk).exists()
+
+
+def test_agent_delete_names_retaining_sessions_and_allows_deletion_after_theirs(composed_tables: None) -> None:
+    """Retained sessions explain a protected delete; only an admin deletes them first."""
+
+    owner = User.objects.create_user(username="agt-retained-session-owner")
+    admin = _platform_admin("agt-retained-session-admin")
+    with system_context(reason="test.agents.retained_sessions.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
+    console = _schema()
+    delete_agent = "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }"
+    blocked = _execute(console, delete_agent, {"id": str(agent.sqid)}, user=owner)
+    assert blocked.errors is not None
+    assert blocked.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert "agent sessions (1)" in blocked.errors[0].message
+
+    delete_session = "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }"
+    refused = _execute(console, delete_session, {"id": str(session.sqid)}, user=owner)
+    assert refused.errors is not None
+    assert refused.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    deleted = _data(_execute(console, delete_session, {"id": str(session.sqid)}, user=admin))[
+        "delete_agent_sessions_by_pk"
+    ]
+    assert deleted == {"id": str(session.sqid)}
+    assert _data(_execute(console, delete_agent, {"id": str(agent.sqid)}, user=owner))["delete_agents_by_pk"] == {
+        "id": str(agent.sqid),
+    }
+    with system_context(reason="test.agents.retained_sessions.verify"):
+        assert not Agent.objects.filter(pk=agent.pk).exists()
+        assert not AgentSession.objects.filter(pk=session.pk).exists()
+        assert not AgentTurn.objects.filter(session_id=session.pk).exists()
+
+
+@pytest.mark.parametrize("relation", ["reader", "editor"])
+def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    relation: str,
+) -> None:
+    """Read/write reach alone cannot lock a delete target or inspect its blockers."""
+
+    owner = User.objects.create_user(username="agt-delete-owner")
+    reader = User.objects.create_user(username="agt-delete-reader")
+    with system_context(reason="test.agents.delete_permission.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        AgentSession.objects.create(agent=agent, owner=owner)
+        write_relationships(
+            [
+                RelationshipTuple(resource=to_object_ref(agent), relation=relation, subject=to_subject_ref(reader)),
+            ]
+        )
+    with actor_context(reader):
+        readable = Agent.objects.get(pk=agent.pk)
+        assert readable.has_access("read")
+        assert not readable.has_access("delete")
+    locks: list[type[models.Model]] = []
+    previews: list[Any] = []
+    select_for_update = models.QuerySet.select_for_update
+    preview_from_instance = DeletePreview.from_instance
+
+    def record_lock(queryset: Any, *args: Any, **kwargs: Any) -> Any:
+        locks.append(queryset.model)
+        return select_for_update(queryset, *args, **kwargs)
+
+    def record_preview(instance: Any, *args: Any, **kwargs: Any) -> DeletePreview:
+        previews.append(instance)
+        return preview_from_instance(instance, *args, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "select_for_update", record_lock)
+    monkeypatch.setattr(DeletePreview, "from_instance", record_preview)
+    result = _execute(
+        _schema(),
+        "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }",
+        {"id": str(agent.sqid)},
+        user=reader,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    assert "agent sessions" not in result.errors[0].message
+    assert Agent not in locks
+    assert previews == []
+
+
+@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, status: str) -> None:
+    """Even an admin, who may delete sessions, must Stop an active turn first."""
+
+    owner = User.objects.create_user(username="agt-active-session-owner")
+    admin = _platform_admin(f"agt-active-session-admin-{status}")
+    with system_context(reason="test.agents.active_session_delete.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=owner, status=status)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status=status)
+    result = _execute(
+        _schema(),
+        "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }",
+        {"id": str(session.sqid)},
+        user=admin,
+    )
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert "active turn" in result.errors[0].message.lower()
+    with system_context(reason="test.agents.active_session_delete.verify"):
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
 def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> None:
@@ -791,9 +932,7 @@ def test_provision_agent_refuses_while_a_provision_is_under_way(composed_tables:
     assert _agent_state(agent, admin)["lifecycle"] == "PROVISIONING"
 
 
-def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(composed_tables: None, monkeypatch: Any) -> None:
     """A teardown retry for a stuck PROVISIONING row with no daemon names clears locally."""
 
     admin = _platform_admin("agt-empty-deprov-admin")
@@ -974,9 +1113,7 @@ def test_deprovision_agent_keeps_the_names_when_the_daemon_answers_a_plain_404(
     )
 
 
-def test_provision_agent_records_error_when_plan_resolution_fails(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_provision_agent_records_error_when_plan_resolution_fails(composed_tables: None, monkeypatch: Any) -> None:
     """A plan-resolution failure records ERROR — the agent never strands in PROVISIONING.
 
     `_render_plan` reads the credential chain and agent inputs before the daemon render; a
@@ -1013,9 +1150,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
         assert "credential is unreadable" in agent.last_error
 
 
-def test_reprovision_agent_recreates_service_over_existing_workspace(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_reprovision_agent_recreates_service_over_existing_workspace(composed_tables: None, monkeypatch: Any) -> None:
     """`reprovisionAgent` destroys the old service and recreates it over the kept workspace."""
 
     admin = _platform_admin("agt-reprov-admin")
@@ -1266,9 +1401,7 @@ def _agent_holding(owner: Any, *, workspace: str = "", service: str = "") -> Any
     """Seed another, provisioned agent that records ``workspace``/``service`` as its own."""
 
     with system_context(reason="test.agents.holding.seed"):
-        return Agent.objects.create(
-            name="Owner", owner=owner, workspace=workspace, service=service, lifecycle="ready"
-        )
+        return Agent.objects.create(name="Owner", owner=owner, workspace=workspace, service=service, lifecycle="ready")
 
 
 def _operator_holding(
@@ -1798,9 +1931,7 @@ def test_reprovision_agent_never_forgets_the_new_service_on_a_later_conflict(
     )
 
 
-def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(composed_tables: None, monkeypatch: Any) -> None:
     """It is never recorded as a conflict the agent "does not record"; the verb's own creation is undone."""
 
     admin = _platform_admin("agt-own-409-admin")
@@ -1903,9 +2034,7 @@ def test_a_service_conflict_without_a_recorded_workspace_cannot_be_verified(
         assert state["conflict_name"] == "agent-ws-orphan"
 
 
-def test_deprovision_agent_destroys_the_verified_conflicting_instance(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_deprovision_agent_destroys_the_verified_conflicting_instance(composed_tables: None, monkeypatch: Any) -> None:
     """Deprovision records the conflicting instance as the agent's own, then destroys it."""
 
     admin = _platform_admin("agt-deprov-conflict-admin")
@@ -1996,7 +2125,7 @@ def test_two_agents_cannot_record_the_same_operator_instance(composed_tables: No
 
 
 def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables: None) -> None:
-    """``can_*`` answer from each row's own columns, so a list costs the same at any size."""
+    """``can_*`` answer from each row's own columns and annotations, so a list costs the same at any size."""
 
     admin = _platform_admin("agt-eligibility-admin")
     query = """
@@ -2007,13 +2136,15 @@ def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables:
         with system_context(reason="test.agents.eligibility.seed"):
             existing = Agent.objects.count()
             for index in range(existing, count):
-                Agent.objects.create(
+                agent = Agent.objects.create(
                     name=f"Row {index}",
                     owner=admin,
                     runtime_class="claude_code",
                     conflict_kind="workspace" if index % 2 else None,
                     conflict_name=f"ws-row-{index}" if index % 2 else "",
                 )
+                if index % 3 == 0:
+                    AgentSession.objects.create(agent=agent, owner=admin)
         with CaptureQueriesContext(connection) as captured:
             rows = _data(_execute(_schema(), query, user=admin))["agents"]
         assert len(rows) == count
@@ -2093,9 +2224,7 @@ def test_agent_inference_credential_override_wins_over_model_chain(composed_tabl
         assert service_inputs["model"] == "claude-opus-4-8"
 
 
-def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(composed_tables: None, monkeypatch: Any) -> None:
     """`agentChatEndpoint` returns the routed url + per-actor route token + mcpServers.
 
     The daemon is mocked. Asserts the resolver looks the agent's `service` up, mints a
@@ -2140,11 +2269,11 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
             minted.append((actor, service, ttl))
             return {"token": "jwt-route", "expires_at": "2026-06-15T00:00:00Z"}
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+    monkeypatch.setattr("angee.agents.runtimes.OperatorDaemon", _FakeDaemon)
 
     query = """
         mutation Chat($id: ID!) {
-          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle }
+          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle protocol_version }
         }
     """
     assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
@@ -2154,6 +2283,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert endpoint["token"] == "jwt-route"
     assert endpoint["expires_at"] == "2026-06-15T00:00:00Z"
     assert endpoint["model_handle"] == "claude-opus-4-8"
+    assert endpoint["protocol_version"] == 1
     assert endpoint["mcp_servers"] == {
         "notes": {"type": "http", "url": "http://host.docker.internal:8101/mcp/notes/"},
     }
@@ -2162,6 +2292,54 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert len(minted) == 1
     actor, service, ttl = minted[0]
     assert actor.startswith("auth/user:") and service == "svc-chat" and ttl == "2h"
+
+
+@pytest.mark.parametrize("secure", [False, True])
+def test_in_process_chat_endpoint_uses_cookie_origin_and_call_permission(
+    composed_tables: None,
+    secure: bool,
+    settings: Any,
+) -> None:
+    settings.ALLOWED_HOSTS = ["localhost"]
+    owner = User.objects.create_user(username="agt-endpoint-owner")
+    stranger = User.objects.create_user(username="agt-endpoint-stranger")
+    with system_context(reason="test.agents.in_process_endpoint"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
+    query = """
+        mutation Chat($id: ID!) {
+          agent_chat_endpoint(id: $id) { url token expires_at protocol_version mcp_servers model_handle }
+        }
+    """
+    request = RequestFactory().post("/graphql/console/", secure=secure, HTTP_HOST="localhost:5173")
+    request.user = owner
+    console = _schema()
+    endpoint = _data(execute_schema(console, query, {"id": str(agent.sqid)}, request=request))["agent_chat_endpoint"]
+    assert endpoint == {
+        "url": f"{'wss' if secure else 'ws'}://localhost:5173/acp/agents/{agent.sqid}/",
+        "token": "",
+        "expires_at": "",
+        "protocol_version": 2,
+        "mcp_servers": {},
+        "model_handle": "",
+    }
+    assert _execute(console, query, {"id": str(agent.sqid)}, user=stranger).errors
+    with system_context(reason="test.agents.unavailable_endpoint"):
+        Agent.objects.filter(pk=agent.pk).update(runtime_status="stopped")
+    assert _execute(console, query, {"id": str(agent.sqid)}, user=owner).errors
+
+
+def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(composed_tables: None) -> None:
+    owner = User.objects.create_user(username="agt-container-owner")
+    with system_context(reason="test.agents.container_endpoint"):
+        agent = Agent.objects.create(name="Container", owner=owner, runtime_class="claude_code", service="svc")
+    result = _execute(
+        _schema(),
+        "mutation($id: ID!) { agent_chat_endpoint(id: $id) { url } }",
+        {"id": str(agent.sqid)},
+        user=owner,
+    )
+    assert result.errors
+    assert "Platform admin" in result.errors[0].message
 
 
 def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None) -> None:
@@ -2214,7 +2392,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
 
     query = """
         query Session($view: JSON!) {
-          resolve_session_for_view(view: $view) { agent_name status model_handle }
+          resolve_session_for_view(view: $view) { agent_name status model_handle runs_in_process }
         }
     """
     view = {"kind": "record", "type": "notes/note", "sqid": "nte_x"}
@@ -2223,6 +2401,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert session["agent_name"] == "Sidekick"
     assert session["status"] == "running"
     assert session["model_handle"] == "claude-opus-4-8"
+    assert session["runs_in_process"] is False
 
     # A platform admin with no running agent gets null, not an error.
     other = _platform_admin("agt-session-none")
@@ -2234,6 +2413,76 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     viewer = User.objects.create_user(username="agt-session-viewer", email="viewer@example.com")
     viewer_session = _data(_execute(console, query, {"view": view}, user=viewer))["resolve_session_for_view"]
     assert viewer_session is None
+
+
+def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_tasks: list[Any]) -> None:
+    """The GraphQL read side retains caller-scoped sessions, turns and view resolution."""
+
+    owner = User.objects.create_user(username="agt-chat-owner")
+    reader = User.objects.create_user(username="agt-chat-reader")
+    with system_context(reason="test.agents.chat.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
+        write_relationships(
+            [
+                RelationshipTuple(resource=to_object_ref(agent), relation="reader", subject=to_subject_ref(reader)),
+            ]
+        )
+    with actor_context(owner):
+        session = AgentSession.objects.start(agent, owner=owner, context={"kind": "list"})
+        turn = session.post("Private question")
+    console = _schema()
+    target = _data(
+        _execute(
+            console,
+            "{ resolve_session_for_view(view: {}) { runs_in_process session_id } }",
+            user=owner,
+        )
+    )["resolve_session_for_view"]
+    assert target == {"runs_in_process": True, "session_id": str(session.sqid)}
+    query = """
+        query Chat($id: String!) {
+          agent_sessions { id context agent { permissions } }
+          agent_turns { id prompt }
+          agent_turns_by_pk(id: $id) { id prompt }
+        }
+    """
+    mine = _data(_execute(console, query, {"id": str(turn.sqid)}, user=owner))
+    assert mine == {
+        "agent_sessions": [{"id": str(session.sqid), "context": {"kind": "list"}, "agent": {"permissions": ["call"]}}],
+        "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question"}],
+        "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question"},
+    }
+    hidden = _data(_execute(console, query, {"id": str(turn.sqid)}, user=reader))
+    assert hidden == {"agent_sessions": [], "agent_turns": [], "agent_turns_by_pk": None}
+
+
+def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None) -> None:
+    """In-process teardown closes persisted sessions through their cancellation verb."""
+
+    admin = _platform_admin("agt-chat-deprovision")
+    with system_context(reason="test.agents.deprovision_sessions.seed"):
+        agent = Agent.objects.create(
+            name="Assistant",
+            owner=admin,
+            runtime_class="pydantic",
+            runtime_status="running",
+            lifecycle="ready",
+        )
+        for status in ("running", "awaiting_approval"):
+            session = AgentSession.objects.create(agent=agent, owner=admin, status=status)
+            AgentTurn.objects.create(session=session, index=1, prompt="Message", status=status)
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation Deprovision($id: ID!) { deprovision_agent(id: $id) { ok message } }",
+            {"id": str(agent.sqid)},
+            user=admin,
+        )
+    )["deprovision_agent"]
+    assert result == {"ok": True, "message": "Deprovisioned."}
+    with system_context(reason="test.agents.deprovision_sessions.verify"):
+        assert set(agent.sessions.values_list("status", flat=True)) == {"closed"}
+        assert set(AgentTurn.objects.filter(session__agent=agent).values_list("status", flat=True)) == {"canceled"}
 
 
 def test_provision_workspace_inputs_from_agent_fields(composed_tables: None) -> None:

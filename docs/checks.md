@@ -54,7 +54,9 @@ test-harness and composed-consumer contracts, plus decision
 also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
-[inbox predicates](../tests/test_decisions_inbox.py). The selection
+[inbox predicates](../tests/test_decisions_inbox.py), plus the
+[agent session loop](../tests/test_agent_sessions.py) and its
+[locking races](../tests/test_agent_sessions_concurrency.py). The selection
 runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
 and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
 for each worker. The composed-host subprocess tests use Django's test runner to
@@ -216,7 +218,7 @@ pushes to `main`. The current tiers are:
 - **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
   and the 25 slowest test durations, with migrations enabled and `DATABASE_URL`
   unset. Structural tests remain part of this suite.
-- **PostgreSQL:** the named workflow and decision selection runs with
+- **PostgreSQL:** the named workflow, decision and agent session selection runs with
   `-n 4 --dist loadfile --nomigrations`, writes JUnit output, and checks that it
   did not skip tests.
 - **Packages:** framework package typecheck/test/build and export/distribution

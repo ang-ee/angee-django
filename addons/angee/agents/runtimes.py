@@ -27,11 +27,16 @@ import json
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils.module_loading import import_string
+from rebac import MissingActorError, current_actor, system_context
 
+from angee.agents.autoconfig import SETTINGS as AGENTS_SETTINGS
+from angee.agents.protocol import ACP_PATH
 from angee.agents.runners import SessionRunner
 from angee.base.impl import ImplBase
 from angee.integrate.credentials import CredentialKind
+from angee.operator.daemon import OperatorDaemon
 
 if TYPE_CHECKING:
     from angee.agents.backends import InferenceBackend
@@ -78,6 +83,7 @@ class AgentRuntime(ImplBase):
     verbatim. Subclasses override for runtime-specific auth shapes (claude-code's
     OAuth env) or handle conventions.
     """
+
     registry_setting = "ANGEE_AGENT_RUNTIME_CLASSES"
 
     category = "agent_runtime"
@@ -105,6 +111,61 @@ class AgentRuntime(ImplBase):
 
         return bool(self.session_runner_class)
 
+    @property
+    def chat_transport(self) -> str:
+        """The endpoint transport selected by this runtime."""
+
+        return "cookie" if self.runs_in_process else "operator"
+
+    @property
+    def chat_protocol_version(self) -> int:
+        return 2 if self.runs_in_process else 1
+
+    @property
+    def chat_requires_admin(self) -> bool:
+        return self.chat_transport == "operator"
+
+    def chat_endpoint(self, agent: Any, request: Any) -> dict[str, Any]:
+        """Resolve this runtime's browser transport facts, with authorization at the caller."""
+
+        if self.chat_transport == "cookie":
+            blocker = agent.chat_blocker()
+            if blocker:
+                raise ValidationError(blocker)
+            url = request.build_absolute_uri(f"{ACP_PATH}{agent.sqid}/")
+            endpoint = {
+                "url": url.replace("https://", "wss://", 1).replace("http://", "ws://", 1),
+                "token": "",
+                "expires_at": "",
+                "mcp_servers": {},
+            }
+        else:
+            actor = current_actor()
+            if actor is None:
+                raise MissingActorError("Authentication required.")
+            with system_context(reason="agents.runtime.chat_endpoint"):
+                service = agent.service
+                mcp_servers = agent.mcp_config().get("mcpServers", {})
+            if not service:
+                raise ValidationError("Agent is not running — provision it first.")
+            daemon = OperatorDaemon.from_settings()
+            routed = daemon.service_endpoint(service)
+            if not routed.get("routed"):
+                raise ValidationError("Agent service is not reachable over a routed endpoint.")
+            ttl = str(getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", AGENTS_SETTINGS["ANGEE_AGENT_CHAT_TOKEN_TTL"]))
+            token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
+            endpoint = {
+                "url": str(routed.get("url", "")),
+                "token": str(token.get("token", "")),
+                "expires_at": str(token.get("expires_at", "")),
+                "mcp_servers": mcp_servers,
+            }
+        return {
+            **endpoint,
+            "protocol_version": self.chat_protocol_version,
+            "model_handle": agent.service_model_handle(),
+        }
+
     def session_runner(self) -> SessionRunner:
         """Return this runtime's in-process session runner."""
 
@@ -112,9 +173,7 @@ class AgentRuntime(ImplBase):
             raise NotImplementedError(f"{type(self).__name__} does not define session_runner_class.")
         resolved = import_string(self.session_runner_class)
         if not isinstance(resolved, type) or not issubclass(resolved, SessionRunner):
-            raise TypeError(
-                f"{type(self).__name__}.session_runner_class must resolve to a SessionRunner subclass."
-            )
+            raise TypeError(f"{type(self).__name__}.session_runner_class must resolve to a SessionRunner subclass.")
         return resolved()
 
     def supports_credential(self, credential: Any) -> bool:

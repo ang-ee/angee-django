@@ -326,6 +326,7 @@ export async function defineAngeeWebViteConfig({
       strictPort: true,
       proxy: {
         "/graphql/": { target: django, changeOrigin: false, ws: true },
+        "/acp/agents/": { target: django, changeOrigin: false, ws: true },
         "/auth/csrf/": { target: django, changeOrigin: false },
         // Curated public-form description + submission endpoint. The React page
         // itself lives at /public/forms/:slug, keeping this exact API prefix
