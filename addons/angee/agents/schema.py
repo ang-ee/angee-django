@@ -342,7 +342,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
-        "lifecycle",
     ],
     updatable=[
         "name",
@@ -358,7 +357,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
-        "lifecycle",
     ],
     field_id_decode={
         "owner": public_pk_decoder(User),

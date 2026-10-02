@@ -11,6 +11,11 @@ live in code docstrings.
 
 ## Unreleased — in-process agent sessions
 
+- Enforce transition-owned state assignment guards on composed concrete models,
+  including inherited and deferred fields. Reload through `AngeeModel`, and copy
+  loaded persisted row values through `StateTransitions.copy_persisted_state`.
+  Remove `lifecycle` from agent generic update and insert inputs; lifecycle
+  changes use the owning actions, and the statusbar is read-only.
 - Run one persisted chat turn per Celery task through the agent's runtime and
   service-user actor. Model verbs own start, post, Stop, Close, streamed updates
   and settlement; a partial unique constraint permits one active turn per

@@ -3,8 +3,9 @@
 API contract:
 
 ``StateTransitions(field, graph, policy_setting=None)`` opts one ``StateField``
-into guarding and binds it to the declared source-to-target graph. Graph keys are
-source values or source lists; graph values are target values or target lists.
+on an ``AngeeModel`` host into guarding and binds it to the declared
+source-to-target graph. Graph keys are source values or source lists; graph
+values are target values or target lists.
 Values are normalized through the field, so callers may use enum members, stored
 values, or the enum member names the field accepts.
 
@@ -52,25 +53,34 @@ attname, or ``None``, for model save guards without inspecting private markers.
 ``StateTransitions.get_field_names(model)`` returns the names of fields guarded
 by declarations on the model or its ancestors, including multi-table parents.
 
+``StateTransitions.copy_persisted_state(instance, source, fields)`` copies named
+fields, including guarded state, from an owner's persisted copy of the same row.
+It asserts the same concrete model and primary key and a persisted source
+(``not source._state.adding``). All requested values must already be loaded on
+``source``; a deferred value raises ``KeyError`` before any copy. It uses normal
+field descriptors and invalidates relation caches without querying or saving.
+Use ``refresh_from_db`` for native database reloads; its authorization is private.
 
 Direct Python assignment to a guarded field is rejected at descriptor level after
-initial model construction. The descriptor still permits initial loading,
+initial model construction, including on composed and inherited concrete models.
+The descriptor still permits initial loading,
 idempotent field normalization, and the primitive's own target write, so existing
 ``StateField`` users are untouched unless they declare ``StateTransitions``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, NoReturn, cast
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
+from django.db.models.signals import class_prepared
 
 from angee.base.fields import StateField, enum_member_for
 from angee.base.scoping import system_queryset
@@ -165,9 +175,10 @@ class StateTransitions:
     ``status_transitions = StateTransitions(status, {Status.DRAFT: [Status.READY]})``
 
     Then decorate the model's own methods with ``@transition(status, ...)``.
-    The declaration installs the guarded descriptor only for that opted-in field
-    and validates decorated methods against the declared source-to-target graph. An
-    optional ``policy_setting`` names a composed settings key whose overlay enables
+    Django's ``class_prepared`` installs the guard for that opted-in field on
+    concrete hosts; the declaration validates decorated methods against its
+    source-to-target graph. An optional ``policy_setting`` names a composed
+    settings key whose overlay enables
     or disables edges over that graph at call time (see the module docstring). It
     is intentionally local to the model class: no global registry, no off-model
     flow object, and no hidden success dispatch.
@@ -190,7 +201,7 @@ class StateTransitions:
         self._declared: dict[str, set[str]] = {}
 
     def contribute_to_class(self, cls: type[models.Model], name: str) -> None:
-        """Attach the declaration, descriptor guard, method metadata, and helper."""
+        """Attach the declaration and validate the declaring class's methods."""
 
         self.name = name
         setattr(cls, name, self)
@@ -198,7 +209,6 @@ class StateTransitions:
             raise ImproperlyConfigured(f"{cls.__name__}.{name} must be declared after the StateField it guards.")
 
         self._declared = self._normalize_graph()
-        setattr(cls, self.field.attname, _GuardedStateDescriptor(self.field))
 
         method_map = self._method_map_for_class(cls)
         for method_name, value in cls.__dict__.items():
@@ -209,6 +219,17 @@ class StateTransitions:
             spec.declaration = self
             self._validate_declared_transition(spec)
             method_map[method_name] = spec
+
+    def _guard_for(self, cls: type[models.Model]) -> None:
+        """Guard the model's actual field, including Django's abstract-field copy."""
+
+        try:
+            field = cast(StateField, cls._meta.get_field(self.field.attname))
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{cls._meta.label}.{self.name} guards missing field {self.field.name!r}."
+            ) from error
+        setattr(cls, field.attname, _GuardedStateDescriptor(field))
 
     @classmethod
     def get_field_names(cls, model: type[models.Model]) -> frozenset[str]:
@@ -249,8 +270,9 @@ class StateTransitions:
     def revalidate_for(self, cls: type[models.Model]) -> None:
         """Re-run this declaration's class-build validation against ``cls``'s MRO.
 
-        ``contribute_to_class`` validates only the *declaring* class's own methods
-        and installs the guarded descriptor. The composer calls this instead after
+        ``contribute_to_class`` validates only the *declaring* class's own methods.
+        Django's ``class_prepared`` hook installs the guard on each final concrete
+        class, using its own field. The composer calls this after
         final concrete composition, so its MRO must satisfy the same class-build checks —
         every reachable ``@transition`` method still guards a declared or policy
         edge. It validates without mutating ``cls`` (no descriptor install).
@@ -466,18 +488,60 @@ class StateTransitions:
         return _state_key(self.field, value)
 
     def _write_target(self, instance: models.Model, target: Any) -> None:
-        active = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
-        created = active is None
-        if active is None:
-            active = set()
-            setattr(instance, "_angee_transition_write_fields", active)
-        active.add(self.field.attname)
-        try:
+        with self._allow_write(instance, {self.field.attname}):
             setattr(instance, self.field.attname, target)
+
+    @classmethod
+    @contextmanager
+    def _reload_state(cls, instance: models.Model) -> Iterator[None]:
+        """Authorize guarded hydration only inside AngeeModel.refresh_from_db."""
+
+        fields = {instance._meta.get_field(name).attname for name in cls.get_field_names(type(instance))}
+        with cls._allow_write(instance, fields):
+            yield
+
+    @classmethod
+    def copy_persisted_state(
+        cls, instance: models.Model, source: models.Model, fields: Iterable[str],
+    ) -> None:
+        """Copy loaded field values from the owner's persisted copy of the same row.
+
+        Both instances must have the same concrete model and primary key, and
+        ``source`` must be a row loaded by a queryset. Every named field must
+        already be loaded; copying never queries or saves. Relation caches are
+        invalidated through Django's field API. Transition and recovery writes
+        remain separate.
+        """
+
+        if instance._meta.concrete_model is not source._meta.concrete_model:
+            raise TypeError("Copy requires the same concrete model.")
+        if instance.pk != source.pk:
+            raise ValueError("Copy requires the same primary key.")
+        if source._state.adding:
+            raise ValueError("Copy requires a persisted source row.")
+        model_fields = (source._meta.get_field(name) for name in fields)
+        values = [(field, source.__dict__[field.attname]) for field in model_fields]
+        guarded = cls.get_field_names(type(instance))
+        with cls._allow_write(instance, {field.attname for field, _ in values if field.name in guarded}):
+            for field, value in values:
+                setattr(instance, field.attname, value)
+                if field.is_relation and field.is_cached(instance):
+                    field.delete_cached_value(instance)
+
+    @staticmethod
+    @contextmanager
+    def _allow_write(instance: models.Model, fields: set[str]) -> Iterator[None]:
+        """Authorize an owner write while preserving any enclosing context."""
+
+        previous = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
+        setattr(instance, "_angee_transition_write_fields", (previous or set()) | fields)
+        try:
+            yield
         finally:
-            active.discard(self.field.attname)
-            if created:
+            if previous is None:
                 delattr(instance, "_angee_transition_write_fields")
+            else:
+                setattr(instance, "_angee_transition_write_fields", previous)
 
     def _raise_not_allowed(self, source: Any, target: Any, reason: str) -> NoReturn:
         raise TransitionNotAllowed(_message(self.field, source, target, reason))
@@ -491,13 +555,16 @@ class _GuardedStateDescriptor(DeferredAttribute):
 
         field = cast(StateField, self.field)
         target = field.to_python(value)
+        active = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
+        authorized = active is not None and field.attname in active
         if field.attname not in instance.__dict__:
-            instance.__dict__[field.attname] = target
-            return
+            if instance._state.adding or authorized:
+                instance.__dict__[field.attname] = target
+                return
+            self.__get__(instance, type(instance))
 
         source = instance.__dict__[field.attname]
-        active = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
-        if (active is not None and field.attname in active) or _state_key(field, source) == _state_key(field, target):
+        if authorized or _state_key(field, source) == _state_key(field, target):
             instance.__dict__[field.attname] = target
             return
 
@@ -600,6 +667,24 @@ def revalidate_transition_metadata(cls: type[models.Model]) -> None:
 
     for declaration in StateTransitions._iter_declarations(cls):
         declaration.revalidate_for(cls)
+
+
+def _guard_transition_fields(sender: type[models.Model], **kwargs: Any) -> None:
+    """Restore inherited guards after Django installs concrete field descriptors."""
+
+    declarations = tuple(StateTransitions._iter_declarations(sender))
+    if not declarations:
+        return
+    # Django phase 2: AngeeModel imports this module before its class exists.
+    from angee.base.models import AngeeModel
+
+    if not issubclass(sender, AngeeModel):
+        raise ImproperlyConfigured(f"{sender._meta.label} must inherit AngeeModel to host StateTransitions.")
+    for declaration in declarations:
+        declaration._guard_for(sender)
+
+
+class_prepared.connect(_guard_transition_fields, dispatch_uid="angee.base.transitions.guards")
 
 
 def _state_key(field: StateField, value: Any) -> str:

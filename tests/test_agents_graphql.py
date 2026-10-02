@@ -95,7 +95,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
             """
             mutation CreateAgent($owner: ID!) {
               insert_agents_one(
-                object: {name: "InProcess", owner: $owner, runtime_class: "PYDANTIC", lifecycle: "DRAFT"}
+                object: {name: "InProcess", owner: $owner, runtime_class: "PYDANTIC"}
               ) {
                 id
                 runtime_class
@@ -151,7 +151,7 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
             console,
             """
             mutation CreateAgent($owner: ID!) {
-              insert_agents_one(object: {name: "Composer", owner: $owner, lifecycle: "draft"}) {
+              insert_agents_one(object: {name: "Composer", owner: $owner}) {
                 id
                 name
                 lifecycle
@@ -182,12 +182,42 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         "owner": {"username": "agt-hasura-admin"},
     }
 
+    rejected_insert = _execute(
+        console,
+        """
+        mutation SeedState($owner: ID!) {
+          insert_agents_one(object: {name: "Bypass", owner: $owner, lifecycle: "ready"}) { id }
+        }
+        """,
+        {"owner": str(admin.sqid)},
+        user=admin,
+    )
+    assert rejected_insert.errors
+    assert "lifecycle" in rejected_insert.errors[0].message
+
+    rejected = _execute(
+        console,
+        """
+        mutation ResetState($id: String!) {
+          update_agents_by_pk(pk_columns: {id: $id}, _set: {lifecycle: "deprovisioned"}) { id }
+        }
+        """,
+        {"id": created["id"]},
+        user=admin,
+    )
+    assert rejected.errors
+    assert "lifecycle" in rejected.errors[0].message
+    with system_context(reason="test.agents.hasura_update.transition"):
+        agent = Agent.objects.get(sqid=created["id"])
+        assert str(agent.lifecycle) == "draft"
+        agent.mark_deprovisioned()
+
     updated = _data(
         _execute(
             console,
             """
             mutation Rename($id: String!) {
-              update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed", lifecycle: "deprovisioned"}) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed"}) {
                 name
                 lifecycle
                 can_provision

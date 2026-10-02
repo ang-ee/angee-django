@@ -275,11 +275,12 @@ def test_final_composed_transition_metadata_is_validated(modules):
         """
 from django.db import models
 from angee.base.fields import StateField
+from angee.base.models import AngeeModel
 from angee.base.transitions import StateTransitions, transition, save_state
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
-class Root(models.Model):
+class Root(AngeeModel):
     runtime = True
     status = StateField(choices_enum=Status, default=Status.DRAFT)
     transitions = StateTransitions(status, {Status.DRAFT: [Status.DONE]})
@@ -583,12 +584,13 @@ def test_final_composition_rejects_a_donor_transition_outside_the_owner_graph(mo
         """
 from django.db import models
 from angee.base.fields import StateField
+from angee.base.models import AngeeModel
 from angee.base.transitions import StateTransitions, transition
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
     PAUSED = "paused", "Paused"
-class Root(models.Model):
+class Root(AngeeModel):
     runtime = True
     status = StateField(choices_enum=Status, default=Status.DRAFT)
     transitions = StateTransitions(status, {Status.DRAFT: [Status.DONE]})

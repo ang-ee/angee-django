@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
@@ -37,6 +37,7 @@ from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.tiers import ResourceTier
+from angee.base.transitions import StateTransitions
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -296,6 +297,17 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+
+    def refresh_from_db(
+        self,
+        using: str | None = None,
+        fields: Iterable[str] | None = None,
+        from_queryset: models.QuerySet[Any] | None = None,
+    ) -> None:
+        """Reload committed fields through Django without treating hydration as a transition."""
+
+        with StateTransitions._reload_state(self):
+            super().refresh_from_db(using=using, fields=fields, from_queryset=from_queryset)
 
     @property
     def record_display_label(self) -> str:
