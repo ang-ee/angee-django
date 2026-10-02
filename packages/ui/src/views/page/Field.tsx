@@ -26,6 +26,11 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Server-side filters narrowing the rows offered by a relation picker. */
   filters?: readonly CrudFilter[];
   widget?: string;
+  /** Adapt a stored value to a widget's control type without changing form values. */
+  valueCodec?: {
+    toControl: (value: unknown) => unknown;
+    fromControl: (value: unknown) => unknown;
+  };
   readOnly?: boolean;
   /** Require a value independently of generated model create metadata. */
   required?: boolean;

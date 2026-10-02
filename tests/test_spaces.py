@@ -12,8 +12,9 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
@@ -27,21 +28,22 @@ from angee.compose.permissions import (
 )
 from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.messaging.testing.models import Party, Person, Thread
+from angee.projects.testing.models import Queue
+from angee.spaces.testing.models import Group, Membership
+from angee.testing.permissions import installed_field_owners
 from tests import test_messaging_graphql
 from tests.conftest import (
+    MarkdownPage,
     Page,
     SchemaAddon,
     Vault,
     assert_private_hasura_insert_access,
     create_user,
     execute_schema,
-    installed_field_owners,
     result_data,
     vault_for,
 )
-from tests.projects_models import Queue
-from tests.spaces_models import Group, Membership
-from tests.test_messaging import Party, Person, Thread
 
 # These concrete test models register after Django's app population. The lazy
 # string relation resolves when ``Party`` registers, but Django may already have
@@ -645,13 +647,16 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
             denied.save(update_fields=["visibility", "updated_at"])
 
 
-def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], str]:
-    """Compile the actor's vault permission to one SQL predicate and return its rows."""
+def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], list[str]]:
+    """Return scoped rows and every executed policy/application statement."""
 
-    with patch.object(backend(), "accessible", side_effect=AssertionError("enumerated resource IDs")):
+    with (
+        patch.object(backend(), "accessible", side_effect=AssertionError("enumerated resource IDs")),
+        CaptureQueriesContext(connection) as queries,
+    ):
         scoped = Vault.objects.with_actor(actor).with_action(action).scoped()
-        sql, _params = scoped.order_by().query.sql_with_params()
-        return set(scoped.values_list("pk", flat=True)), sql
+        pks = set(scoped.values_list("pk", flat=True))
+    return pks, [query["sql"] for query in queries]
 
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
@@ -713,10 +718,16 @@ def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None, 
         (alice, "read", {private.pk}),
         (alice, "share", {private.pk}),
     ):
-        pks, sql = _vault_scope_pks(actor, action)
+        pks, statements = _vault_scope_pks(actor, action)
         assert pks == expected, (actor.username, action)
-        # The roster arrives as a join on the live membership rows, never as tuples.
-        assert Membership._meta.db_table in sql
+        # A policy predecision may read the live roster before the final query.
+        assert any(Membership._meta.db_table in sql for sql in statements)
+
+    with system_context(reason="spaces team vault revoke roster"):
+        Membership.objects.filter(group=group, party=member_person).update(is_confirmed=False)
+    pks, statements = _vault_scope_pks(member, "read")
+    assert pks == set()
+    assert any(Membership._meta.db_table in sql for sql in statements)
 
     with system_context(reason="spaces team vault unbinding"):
         Vault._base_manager.filter(pk=vault.pk).update(team=None)
@@ -736,7 +747,7 @@ def test_team_member_clones_an_ownerless_template_vault(spaces_tables: None) -> 
         group = Group.objects.create(name="Managers", slug="managers")
         Membership.objects.create(group=group, party=person, is_confirmed=True)
         template = Vault.objects.create(name="Intake template", team=group)
-        Page.objects.create(vault=template, title="Checklist", kind=Page.Kind.TEMPLATE)
+        MarkdownPage.objects.create(vault=template, title="Checklist", kind=Page.PageKind.TEMPLATE)
     assert template.owner_id is None
 
     with actor_context(member):

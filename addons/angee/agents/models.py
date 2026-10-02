@@ -21,7 +21,6 @@ from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.db.models.signals import class_prepared, post_delete
@@ -46,11 +45,13 @@ from angee.agents.backends import InferenceBackend
 from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.fields import StateField
+from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.iam.service_users import deactivate_service_user, sync_service_user
+from angee.integrate.models import IntegrationCreateMode
 
 
 class InferenceModelUse(models.TextChoices, StrEnum):
@@ -78,6 +79,10 @@ class InferenceModelStatus(models.TextChoices):
     PREVIEW = "preview", "Preview"
     DEPRECATED = "deprecated", "Deprecated"
     RETIRED = "retired", "Retired"
+
+
+class InferenceModelUnavailable(ValueError):
+    """A selected catalogue model cannot serve the requested inference role."""
 
 
 class MCPPlacement(models.TextChoices):
@@ -288,12 +293,9 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "FORM"
-    integration_kind_label = "Inference provider"
+    integration_create_mode = IntegrationCreateMode.FORM
 
-    backend_class = ImplClassField(
-        base_class=InferenceBackend,
-        registry_setting="ANGEE_INFERENCE_BACKEND_CLASSES",
+    backend_class = ImplClassField(InferenceBackend,
         default="manual",
         create_only=True,
     )
@@ -374,7 +376,7 @@ class InferenceModelManager(AngeeManager):
         return len(specs)
 
 
-class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
+class InferenceModel(AuditMixin, AngeeDataModel):
     """One model in a provider's catalogue, agents bind to by FK.
 
     ``publisher`` is the model's maker, reusing the ``integrate.Vendor`` catalogue
@@ -444,6 +446,19 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         backend = provider.backend
         return backend.model(self.provider_model_name, credential=credential)
 
+    def is_transient_error(self, error: Exception) -> bool:
+        """Classify a failure through this model's native provider backend."""
+
+        with system_context(reason="agents.inference_model.error"):
+            provider: Any = self.provider
+            return bool(provider.backend.is_transient_error(error))
+
+    def request_error_types(self) -> tuple[type[BaseException], ...]:
+        """Use the selected backend's native request exception types."""
+        with system_context(reason="agents.inference_model.error_types"):
+            provider: Any = self.provider
+            return provider.backend.request_error_types()
+
     def deployment_identity(self) -> InferenceDeploymentIdentity:
         """Return the non-secret endpoint binding used by role approval policy."""
 
@@ -481,9 +496,11 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         """Require a callable lifecycle and one of the declared model uses."""
 
         if self.status in {InferenceModelStatus.DEPRECATED, InferenceModelStatus.RETIRED}:
-            raise ValueError("Select an available inference model.")
+            raise InferenceModelUnavailable("Select an available inference model.")
         if self.model_use not in uses:
-            raise ValueError(f"Inference requires a model with one of these uses: {', '.join(sorted(uses))}.")
+            raise InferenceModelUnavailable(
+                f"Inference requires a model with one of these uses: {', '.join(sorted(uses))}."
+            )
 
     def require_usable(
         self,
@@ -583,7 +600,7 @@ class SkillManager(AngeeManager):
         return len(descriptors)
 
 
-class Skill(SqidMixin, AuditMixin, AngeeModel):
+class Skill(AuditMixin, AngeeDataModel):
     """One skill discovered under an ``integrate_vcs.Source`` (``source_kind="skill"``).
 
     The operator mounts the skill's directory into an agent's workspace; Django keeps
@@ -617,7 +634,7 @@ class Skill(SqidMixin, AuditMixin, AngeeModel):
         return self.name or self.path or f"skill:{self.public_id}"
 
 
-class MCPServer(SqidMixin, AuditMixin, AngeeModel):
+class MCPServer(AuditMixin, AngeeDataModel):
     """An MCP server an agent can reach — internal to the platform or external.
 
     An external server authenticates with an ``integrate.Credential``; the operator renders
@@ -775,7 +792,7 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
         return sqid, digest
 
 
-class MCPTool(SqidMixin, AuditMixin, AngeeModel):
+class MCPTool(AuditMixin, AngeeDataModel):
     """One tool an MCP server exposes; agents select the tools they may call."""
 
     runtime = True
@@ -803,60 +820,7 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class AgentManager(AngeeManager):
-    """Manager owning service-user lifecycle for agent principals."""
-
-    def service_username(self, agent: Any) -> str:
-        """Return the deterministic username for ``agent``'s service user."""
-
-        return f"agent-{agent.sqid}"
-
-    def sync_service_user(self, agent: Any) -> Any:
-        """Create or update ``agent``'s non-login service user.
-
-        The service row is system-owned attribution state, not actor-authored
-        profile data, so it is written elevated and keyed only by the agent's
-        stable sqid-derived username.
-        """
-
-        if agent.pk is None:
-            raise ValueError("Agent must be saved before syncing its service user.")
-        user_model = get_user_model()
-        username = self.service_username(agent)
-        defaults = {
-            "first_name": agent.name,
-            "last_name": "",
-            "email": "",
-            "kind": "service",
-        }
-        with system_context(reason="agents.service_user.sync"), transaction.atomic():
-            if agent.user_id:
-                user: Any = agent.user
-                changed: set[str] = set()
-                for field, value in {"username": username, **defaults}.items():
-                    if getattr(user, field) != value:
-                        setattr(user, field, value)
-                        changed.add(field)
-                if changed:
-                    user.save(update_fields=changed)
-                return user
-            user, _created = user_model._base_manager.update_or_create(username=username, defaults=defaults)
-            agent.user = user
-            type(agent)._base_manager.filter(pk=agent.pk).update(user_id=user.pk)
-            return user
-
-    def deactivate_service_user(self, agent: Any) -> None:
-        """Deactivate ``agent``'s linked service user, leaving attribution FKs intact."""
-
-        if not agent.user_id:
-            return
-        user_model = get_user_model()
-        manager = user_model._base_manager
-        with system_context(reason="agents.service_user.deactivate"):
-            manager.filter(pk=agent.user_id).update(is_active=False)
-
-
-class Agent(SqidMixin, AuditMixin, AngeeModel):
+class Agent(AuditMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -904,9 +868,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     skills = models.ManyToManyField("agents.Skill", blank=True, related_name="agents")
     mcp_servers = models.ManyToManyField("agents.MCPServer", blank=True, related_name="agents")
     mcp_tools = models.ManyToManyField("agents.MCPTool", blank=True, related_name="agents")
-    runtime_class = ImplClassField(
-        base_class=AgentRuntime,
-        registry_setting="ANGEE_AGENT_RUNTIME_CLASSES",
+    runtime_class = ImplClassField(AgentRuntime,
         default="none",
     )
     """Registry key for the agent runtime — the program this agent renders into. The
@@ -931,7 +893,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     runtime_status = StateField(choices_enum=RuntimeStatus, default=RuntimeStatus.STOPPED)
     """Observed run state (:class:`RuntimeStatus`) — the colored dot; ``ERROR`` pairs
     with ``last_error``. Set by the render flow; the daemon owns the live truth."""
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
 
     lifecycle_transitions = StateTransitions(
@@ -963,7 +925,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         },
     )
 
-    objects = AgentManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for agents."""
@@ -993,7 +955,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         with transaction.atomic():
             super().save(*args, **kwargs)
             if creating or (should_check_name and persisted_name != self.name):
-                type(self).objects.sync_service_user(self)
+                sync_service_user(self, prefix="agent")
 
     def principal_subject(self) -> SubjectRef:
         """Return the service user's REBAC subject for actions this agent performs.
@@ -1014,8 +976,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             model: Any = self.model
             if model is None:
                 return False
-            provider: Any = model.provider
-            return bool(provider.backend.is_transient_error(error))
+            return bool(model.is_transient_error(error))
 
     @property
     def runtime_backend(self) -> AgentRuntime:
@@ -1449,7 +1410,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         return model.credential
 
 
-class AgentSession(SqidMixin, AuditMixin, AngeeModel):
+class AgentSession(AuditMixin, AngeeDataModel):
     """Runtime-neutral persisted conversation backed by one workflow run."""
 
     runtime = True
@@ -1462,7 +1423,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
     status = StateField(choices_enum=SessionStatus, default=SessionStatus.IDLE)
     replay_state = models.JSONField(default=list, blank=True)
     usage = models.JSONField(default=dict, blank=True)
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
 
     status_transitions = StateTransitions(
         status,
@@ -1558,7 +1519,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         self._transition_fields = {"last_error"}
 
 
-class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
+class AgentTurn(AuditMixin, AngeeDataModel):
     """One prompt-to-response cycle with append-only ACP updates."""
 
     runtime = True
@@ -1571,7 +1532,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
     updates = models.JSONField(default=list, blank=True)
     text = models.TextField(blank=True)
     usage = models.JSONField(default=dict, blank=True)
-    error = models.TextField(blank=True)
+    error: str = DiagnosticTextField(blank=True)
 
     status_transitions = StateTransitions(
         status,
@@ -1668,7 +1629,7 @@ def _deactivate_agent_service_user(
     """Deactivate an agent service user after every delete path Django supports."""
 
     del sender, kwargs
-    type(instance).objects.deactivate_service_user(instance)
+    deactivate_service_user(instance)
 
 
 def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:

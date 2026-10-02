@@ -1,21 +1,17 @@
-"""GraphQL projection for channel-bound native workflow triggers."""
+"""Contribute the scoped channel through the native GraphQL type extension."""
 
 import strawberry_django
 from django.apps import apps
-from strawberry import auto
 
+from angee.graphql.relations import actor_scoped_to_one
 from angee.messaging.schema import ChannelType
 
-Trigger = apps.get_model("workflows", "Trigger")
+
+@strawberry_django.type(apps.get_model("workflows", "Trigger"), name="TriggerType", extend=True)
+class TriggerMessagingExtension:
+    """Expose the scope only when the viewer can read its channel."""
+
+    channel: ChannelType | None = actor_scoped_to_one("channel")
 
 
-@strawberry_django.type(Trigger, name="TriggerType", extend=True)
-class MessageTriggerExtension:
-    """Expose the message channel declared on an event Trigger."""
-
-    message_channel: ChannelType | None = auto
-
-
-schemas = {
-    "console": {"type_extensions": [MessageTriggerExtension]},
-}
+schemas = {"console": {"type_extensions": [TriggerMessagingExtension]}}

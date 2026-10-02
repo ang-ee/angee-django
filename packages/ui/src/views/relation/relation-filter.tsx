@@ -1,6 +1,6 @@
 import type { ModelMetadata, ResourceQuery, SchemaFieldMetadata } from "@angee/metadata";
 import type { ReactElement } from "react";
-import type { ResourceToolbarFilterField } from "../../toolbars";
+import type { FilterClauseField } from "../../toolbars";
 import {
   fieldLabel,
   relationFieldInfo,
@@ -42,7 +42,7 @@ export function relationFilterFields(
   query: ResourceQuery,
   modelMetadata: ModelMetadata | null,
   schemaMetadata: SchemaFieldMetadata,
-): readonly ResourceToolbarFilterField[] {
+): readonly FilterClauseField[] {
   return Object.entries(query.fields).flatMap(([fieldName, capability]) => {
     if (!capability.filter?.operators.length) return [];
     const relation = modelMetadata

@@ -26,7 +26,7 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.mcp import graphql as mcp_graphql
 from angee.mcp.graphql import GraphQLTool, _compile, execute_under_actor
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, create_user
 from tests.scopedemo.models import Scope, ScopedDoc
 
@@ -282,7 +282,7 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    install_manual_schema(parse_zed("""
+    install_permission_schema(parse_zed("""
         definition auth/user {}
         definition scopedemo/scope {
             relation reader: auth/user
@@ -294,7 +294,7 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
             permission read = reader + secret_reader
             permission read__title = secret_reader
         }
-    """), active=active)
+    """))
     try:
         resource = hasura_model_resource(
             McpDocType, model=ScopedDoc, name="mcp_docs",

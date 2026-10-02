@@ -112,28 +112,35 @@ describe("AddonSourceControls contribution", () => {
     ]);
   });
 
-  test("submits parsed source data without an id argument and toasts success once", async () => {
+  test("submits parsed source data and delegates its success message to the dialog", async () => {
     mocks.addSource.mockResolvedValue({ ok: true, message: "Source added." });
     render(<AddonSourceControls />);
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
-    await dialog.onSubmit(values);
+    const result = await dialog.onSubmit(values);
+    expect(result).toEqual({ status: "ok", data: { ok: true, message: "Source added." }, message: "Source added." });
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    if (result.status !== "ok") throw new Error("Expected a successful source addition.");
+    dialog.onSubmitted?.(result.data, values);
 
     expect(mocks.addSource).toHaveBeenCalledWith("", {
       data: { vcs_bridge_id: "bridge-1", name: "angee/framework" },
     });
-    expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith({ title: "Source added." });
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(dialog.onSubmitted).toBeUndefined();
     expect(mocks.settle).not.toHaveBeenCalled();
   });
 
   test("keeps domain failures available to MutationDialog's inline error owner", async () => {
-    mocks.addSource.mockResolvedValue({ ok: false, message: "Source refused." });
+    mocks.addSource.mockResolvedValue({ ok: false, message: "Source refused.", validationErrors: { name: ["Choose another name."] } });
     render(<AddonSourceControls />);
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
-    await expect(dialog.onSubmit(values)).rejects.toThrow("Source refused.");
+    await expect(dialog.onSubmit(values)).resolves.toEqual({
+      status: "invalid", issues: { fieldErrors: { name: ["Choose another name."] }, formErrors: ["Source refused."] },
+    });
 
     expect(mocks.toast.success).not.toHaveBeenCalled();
     expect(mocks.settle).not.toHaveBeenCalled();

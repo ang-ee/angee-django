@@ -8,7 +8,7 @@ import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, Self, TypeVar, cast
+from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -24,28 +24,21 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
-from rebac.actors import to_subject_ref
+from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
-from rebac.managers import RebacManager, RebacQuerySet
+from rebac.managers import RebacManager, RebacQuerySet, TrackedQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
+from angee.base.actors import instance_actor
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
-from angee.base.scoping import lock_if_supported
+from angee.base.querysets import _AngeeQuerySetMixin
+from angee.base.tiers import ResourceTier
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
-
-
-CATALOGUE_TIERS = ("master", "install", "demo")
-"""Resource tiers a catalogue model may declare.
-
-Mirrors :class:`angee.resources.tiers.ResourceTier`, the authoritative resource
-tier owner. ``angee.base`` cannot import the resources addon without reversing the
-dependency direction, so the resources test suite pins these literals in sync.
-"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,33 +47,6 @@ class DirectRecordAccess:
 
     relation: str
     subject: SubjectRef
-
-
-class _AngeeQuerySetMixin(Generic[_ModelT]):
-    """Query conveniences shared by scoped and explicitly unscoped managers."""
-
-    model: type[_ModelT]
-
-    def from_public_id(self, value: str) -> _ModelT | None:
-        """Return the row addressed by ``value`` within this queryset policy."""
-
-        if value == "":
-            return None
-        try:
-            lookup = cast(Any, self.model).public_id_lookup(value)
-            return cast(_ModelT | None, cast(Any, self).filter(**lookup).first())
-        except TypeError, ValueError:
-            return None
-
-    def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
-        """Expose shared lock intent on Angee querysets and managers."""
-
-        return cast(Self, lock_if_supported(cast(models.QuerySet[_ModelT], self), of=of))
-
-    def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
-        """Return one row under a database row lock when the backend supports it."""
-
-        return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
 
 
 class AngeeQuerySet(
@@ -213,12 +179,13 @@ class AngeeQuerySet(
 
 class AngeeUnscopedQuerySet(
     _AngeeQuerySetMixin[_ModelT],
-    models.QuerySet[_ModelT],
+    TrackedQuerySet[_ModelT],
 ):
     """Angee queryset API for intentionally permission-naive managers.
 
     Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics.
+    whose unfiltered relation reads must retain native Django semantics. It
+    composes the library's tracked writes required by a declared base manager.
     """
 
     def scoped_for_aggregate(self) -> Self:
@@ -310,7 +277,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     its own class body to opt in, matching ``runtime``'s structural-marker shape.
     """
 
-    catalogue_tier: str = CATALOGUE_TIERS[0]
+    catalogue_tier: str = ResourceTier.MASTER
     """Resource tier the catalogue rows belong to; read non-inherited."""
 
     catalogue_tiers: tuple[str, ...] | None = None
@@ -329,6 +296,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+
+    @property
+    def record_display_label(self) -> str:
+        """Return the record label used by generic GraphQL and record references."""
+
+        return str(self)
 
     @classmethod
     def system_queryset(
@@ -357,7 +330,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def get_catalogue_tier(cls) -> str:
         """Return this class's declared catalogue tier, defaulting to master."""
 
-        return str(cls.__dict__.get("catalogue_tier", CATALOGUE_TIERS[0]))
+        return str(cls.__dict__.get("catalogue_tier", ResourceTier.MASTER))
 
     @classmethod
     def get_catalogue_tiers(cls) -> tuple[str, ...]:
@@ -419,7 +392,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Grant through one model class's own record-share declaration."""
 
         permission = declaration_owner.record_access_permission(relation)
-        self._require_record_access(permission)
+        self.require_access(permission)
         self.validate_record_access_subject(relation, subject)
         write_relationships(
             [
@@ -446,7 +419,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Revoke through one model class's own record-share declaration."""
 
         permission = declaration_owner.record_access_permission(relation)
-        self._require_record_access(permission)
+        self.require_access(permission)
         delete_relationship(
             RelationshipTuple(
                 resource=to_object_ref(self),
@@ -475,7 +448,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
             )
         self.validate_record_access_target()
         for permission in sorted({declaration[relation] for relation in selected}):
-            self._require_record_access(permission)
+            self.require_access(permission)
 
         resource = to_object_ref(self)
         rows = (
@@ -515,11 +488,34 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return None
 
-    def _require_record_access(self, permission: str) -> None:
-        """Raise when the ambient actor lacks a declared share permission."""
+    def require_access(self, permission: str, actor: Any = None) -> Any:
+        """Authorize and return the explicit, pinned, or ambient actor, in that order.
 
+        The resolved requester is retained as the instance binding. Missing actors
+        are denied in every strict mode unless an explicit sudo scope is active.
+        A concrete requester always clears instance sudo and scopes the check.
+        """
+
+        actor = actor or instance_actor(self)
+        if actor is None:
+            if self.is_sudo() or is_sudo():
+                return None
+            raise PermissionDenied(f"Denied: {permission!r} requires an actor.")
+        self.with_actor(actor)
         if not self.has_access(permission):
-            raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {to_object_ref(self)}.")
+            target = self._meta.label if self._state.adding else to_object_ref(self)
+            raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
+        return actor
+
+    @classmethod
+    def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
+        """Opt a field's implementation metadata into a model-owned actor policy.
+
+        Console implementation metadata is administrator-only by default. A model
+        may additionally authorize its own authors through their existing policy;
+        this does not authorize reading or writing model records.
+        """
+        return False
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -541,15 +537,15 @@ class AngeeModel(TimestampMixin, RebacMixin):
         declared = cls.__dict__.get("catalogue_tiers")
         tiers = (default_tier,) if declared is None else declared
         if (
-            default_tier in CATALOGUE_TIERS
+            default_tier in ResourceTier.values
             and isinstance(tiers, tuple)
             and bool(tiers)
-            and all(isinstance(tier, str) and tier in CATALOGUE_TIERS for tier in tiers)
+            and all(isinstance(tier, str) and tier in ResourceTier.values for tier in tiers)
             and len(set(tiers)) == len(tiers)
             and default_tier in tiers
         ):
             return []
-        expected = ", ".join(repr(value) for value in CATALOGUE_TIERS)
+        expected = ", ".join(repr(value) for value in ResourceTier.values)
         return [
             checks.Error(
                 f"{cls._meta.label}.catalogue_tier must be a member of its nonempty, unique "
@@ -736,6 +732,12 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
+
+
+def record_display_label(record: models.Model) -> str:
+    """Ask an Angee record for its label, preserving Django's string fallback."""
+
+    return record.record_display_label if isinstance(record, AngeeModel) else str(record)
 
 
 def role_anchor(

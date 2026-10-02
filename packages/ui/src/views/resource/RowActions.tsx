@@ -201,9 +201,17 @@ export function useDescriptorRowActions<TRow extends Row>(
     onSelect: async (row) => {
       const record = options.contextRecord?.(row) ?? row;
       if (options.valuesFromRow) {
-        if (action.submit) await settle(() => Promise.resolve(action.submit!(options.valuesFromRow!(action, row), {
-          record, selectedIds: [String(row.id)],
-        })));
+        if (action.submit) await settle(async () => {
+          const result = await action.submit!(options.valuesFromRow!(action, row), {
+            record, selectedIds: [String(row.id)],
+          });
+          if (!result || !("status" in result)) return result;
+          if (result.status === "ok") return result.data;
+          return result.status === "conflict"
+            ? { ok: false, message: result.message }
+            : { ok: false, message: result.issues.formErrors.join(" ") || action.id,
+                validationErrors: result.issues.fieldErrors };
+        });
         return;
       }
       setActive({ action, row });

@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -18,11 +18,13 @@ from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
-from rebac import actor_context, system_context
+from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
-from angee.compose.model_composition import ModelComposition
+from angee.agents.backends import InferenceBackend, InferenceModelSpec
+from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
@@ -33,6 +35,8 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
+from angee.integrate.testing.integration import Integration
+from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
 from angee.integrate_vcs.models import Source as AbstractSource
 from angee.integrate_vcs.models import Template as AbstractTemplate
@@ -42,10 +46,13 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
+from angee.messaging.testing import models as messaging_models
+from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
 from angee.platform_integrate_vcs.models import AddonCatalog as AbstractAddonCatalog
 from angee.platform_integrate_vcs.models import CatalogProvenance as AbstractCatalogProvenance
+from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
@@ -62,11 +69,12 @@ from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
-from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
+from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
+from tests import extraction_models  # noqa: F401 -- register shared FK targets before database setup
 from tests.extcontrib.models import Role
-from tests.integrate_models import Integration
+from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
-pytest_plugins = ("angee.testing.fixtures", "tests.workflows")
+pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
 
 
 @pytest.fixture
@@ -77,12 +85,6 @@ def activity_catalog(composed_tables: None) -> None:
     with system_context(reason="tests.messaging.activity_catalog"):
         messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
-
-
-def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
-    """Use the source composition's field ownership in installed-schema callers."""
-
-    return ModelComposition.discover(app_configs).field_gate_owners()
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
@@ -150,10 +152,17 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(VaultSpace, VaultProjects, AbstractVault):
-    """Concrete knowledge vault carrying the projects binding and spaces team donors."""
+class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
+    """Concrete knowledge vault carrying workflow, projects and spaces donors."""
 
     rebac_grantable = AbstractVault.rebac_grantable
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger):
+        """The test source delegates its global role from workflow writers."""
+        return (TriggerGrantTarget(
+            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
+        ),)
 
     class Meta(AbstractVault.Meta):
         """Django model options for the canonical test vault."""
@@ -164,8 +173,15 @@ class Vault(VaultSpace, VaultProjects, AbstractVault):
         rebac_resource_type = "knowledge/vault"
 
 
-class Page(AbstractPage):
+class Page(RecordChangedOptIn, AbstractPage):
     """Concrete knowledge page used by source-addon tests."""
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger):
+        """Page read follows the vault permission boundary in this fixture."""
+        return (TriggerGrantTarget(
+            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
+        ),)
 
     class Meta(AbstractPage.Meta):
         """Django model options for the canonical test page."""
@@ -176,9 +192,12 @@ class Page(AbstractPage):
         rebac_resource_type = "knowledge/page"
 
 
-@reversion.register(fields=("body",))
-class MarkdownPage(AbstractMarkdownPage):
-    """Concrete knowledge markdown sidecar used by source-addon tests.
+reversion.register(Page, fields=())
+
+
+@reversion.register(fields=("body", "page_ptr"))
+class MarkdownPage(AbstractMarkdownPage, Page):
+    """Concrete knowledge markdown child used by source-addon tests.
 
     Registered with django-reversion the way the composer registers the
     completed runtime model.
@@ -307,6 +326,114 @@ def make_integration(
         if backend_class is not None:
             values["backend_class"] = backend_class
         return model.objects.create(**values)
+
+
+class StubVCSBackend(VCSBackend):
+    """In-memory VCS backend for tests; canned data rides on ``VcsBridge.config``.
+
+    Registered as the ``stub`` key in the test ``ANGEE_VCS_BACKEND_CLASSES`` so a
+    ``VcsBridge(backend_class="stub")`` resolves to it. Each test injects
+    ``stub_repos``/``stub_tree``/``stub_blobs`` through the bridge config.
+    """
+
+    key = "stub"
+    repository_search_scope_config_key = "stub_org"
+
+    def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
+        """Return the configured repositories (filtered to ``org`` when given)."""
+
+        repos = [RepoDescriptor(**spec) for spec in self.bridge.config.get("stub_repos", [])]
+        return [repo for repo in repos if not org or repo.org == org]
+
+    def get_repo(self, name: str) -> RepoDescriptor:
+        """Return one configured repository by name or raise."""
+
+        for spec in self.bridge.config.get("stub_repos", []):
+            if spec["name"] == name:
+                return RepoDescriptor(**spec)
+        raise FileNotFoundError(name)
+
+    def search_repos(self, query: str, *, org: str = "") -> list[RepoDescriptor]:
+        """Return configured repositories whose name contains ``query``."""
+
+        return [repo for repo in self.ls_repos(org=org) if query in repo.name]
+
+    def ls_tree(self, repository: Any, *, ref: str, path: str, recursive: bool = False) -> list[TreeEntry]:
+        """Return the configured tree entries under ``path``."""
+
+        del repository, ref, recursive
+        prefix = path.strip("/")
+        entries = [TreeEntry(**spec) for spec in self.bridge.config.get("stub_tree", [])]
+        return [entry for entry in entries if not prefix or entry.path == prefix or entry.path.startswith(f"{prefix}/")]
+
+    def cat_file(self, repository: Any, *, ref: str, path: str) -> bytes:
+        """Return the configured blob bytes for ``path`` or raise."""
+
+        del repository, ref
+        blobs = self.bridge.config.get("stub_blobs", {})
+        if path in blobs:
+            return str(blobs[path]).encode("utf-8")
+        raise FileNotFoundError(path)
+
+    def rev_parse(self, repository: Any, ref: str) -> str:
+        """Return a fixed stub commit oid."""
+
+        del repository, ref
+        return "stubsha"
+
+    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
+        """Accept every webhook in tests."""
+
+        del vcs_bridge, request
+        return True
+
+
+class StubInferenceBackend(InferenceBackend):
+    """In-memory inference backend for tests; canned models ride on ``provider.config``.
+
+    Registered as the ``stub_inference`` key in the test ``ANGEE_INFERENCE_BACKEND_CLASSES`` so
+    an ``InferenceProvider(backend_class="stub_inference")`` resolves to it. Each test injects
+    ``stub_models`` (a list of ``InferenceModelSpec`` kwargs) through the provider config.
+    """
+
+    key = "stub_inference"
+
+    def list_models(self) -> list[InferenceModelSpec]:
+        """Return the models configured on the provider's ``config``."""
+
+        return [InferenceModelSpec(**spec) for spec in self.provider.config.get("stub_models", [])]
+
+
+class StubFeedBackend(FeedBackend):
+    """In-memory feed backend for tests; canned posts are queued per feed row.
+
+    Registered as the ``stub`` key in the test ``ANGEE_POSTS_FEED_BACKEND_CLASSES`` so
+    a ``Feed(backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
+    dataclasses (not JSON), so a test queues the posts through :meth:`queue` keyed by
+    the feed row rather than riding them on the JSON ``config``; ``fetch_posts`` returns
+    what was queued for the bound feed.
+    """
+
+    key = "stub"
+    label = "Stub"
+    _posts: dict[Any, list[ParsedPost]] = {}
+
+    @classmethod
+    def queue(cls, feed: Any, posts: list[ParsedPost]) -> None:
+        """Queue the posts a subsequent ``feed.sync()`` should fetch."""
+
+        cls._posts[feed.pk] = list(posts)
+
+    @classmethod
+    def reset(cls) -> None:
+        """Drop every queued post (called on fixture teardown)."""
+
+        cls._posts.clear()
+
+    def fetch_posts(self) -> list[ParsedPost]:
+        """Return the posts queued for the bound feed row."""
+
+        return type(self)._posts.get(self.bridge.pk, [])
 
 
 class Link(AbstractLink):
@@ -441,7 +568,15 @@ class ExtcontribRole(Role):
 
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
-from tests import projects_models, proposals_models  # noqa: E402, F401
+# Every installed backing needs its concrete model before native database setup.
+from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
+from angee.operator.testing import models as operator_models  # noqa: E402, F401
+from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
+from angee.projects.testing import models as projects_models  # noqa: E402, F401
+from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
+from angee.tags.testing import models as tags_models  # noqa: E402, F401
+from angee.uom.testing import models as uom_models  # noqa: E402, F401
+from tests import proposals_models  # noqa: E402, F401
 
 
 class Need(AbstractNeed):
@@ -530,11 +665,11 @@ class AddonCatalog(AbstractAddonCatalog):
         rebac_resource_type = "platform_integrate_vcs/catalog"
 
 
-class Feed(AbstractFeed, Integration):
+class Feed(AbstractFeed, Channel):
     """Concrete public-content feed used by posts tests.
 
-    An ``integrate.Integration`` child + ``Bridge``, folded the way the composer emits
-    ``Feed(AbstractFeed, Integration)``. Lives in conftest (like ``VcsBridge``) because
+    A ``messaging.Channel`` child, folded the way the composer emits
+    ``Feed(AbstractFeed, Channel)``. Lives in conftest (like ``VcsBridge``) because
     ``angee.posts.schema`` binds its console types at import time via ``apps.get_model``.
     """
 
@@ -759,21 +894,6 @@ def assert_private_hasura_insert_access(
     )[detail_root]
     assert denied is None
     return created, readable, updated
-
-
-@pytest.fixture(autouse=True)
-def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Scope generated paths and source annotations with other test monkeypatches."""
-
-    from django.apps import apps
-
-    attributes = ("rebac_schema", "_angee_rebac_schema_source", "_angee_rebac_schema_effective")
-    for config in apps.get_app_configs():
-        for key in attributes:
-            existed = key in config.__dict__
-            monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
-            if not existed:
-                del config.__dict__[key]
 
 
 def create_platform_admin(username: str, **fields: Any) -> Any:

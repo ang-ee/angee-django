@@ -10,7 +10,7 @@ from rebac.schema import parse_zed
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.stages import Stage
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import Vault
 from tests.core_persistence import OwnedRow
 
@@ -99,7 +99,7 @@ definition scopedemo/subject_guarded_leaf {
 @pytest.fixture
 def subject_tables(ownership_tables):
     active = backend()
-    install_manual_schema(replace(active.schema(), definitions=[
+    install_permission_schema(replace(active.schema(), definitions=[
         *active.schema().definitions, *parse_zed(SUBJECT_SCHEMA).definitions,
     ]), active=active)
 
@@ -117,7 +117,7 @@ def constrained_vault_tables(composed_tables):
             permission write__owner = parent->transfer
         }
     """)
-    install_manual_schema(
+    install_permission_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
         active=active,
     )

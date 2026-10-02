@@ -28,6 +28,7 @@ import tests.test_agents_graphql  # noqa: F401 -- register related models before
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.messaging.testing.models import Channel
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
@@ -46,7 +47,6 @@ from tests.conftest import (
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
-from tests.messaging_models import Channel
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -132,7 +132,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     } == {
         "thread": ("messaging.Thread", "thread__title__text"),
         "sender": ("parties.Handle", "sender__display_name"),
-        "channel": ("integrate.Integration", "channel__display_name"),
+        "channel": ("messaging.Channel", "channel__display_name"),
         "subtype": ("messaging.MessageSubtype", "subtype__key"),
     }
 
@@ -217,9 +217,8 @@ def test_message_by_pk_serves_title_beside_a_parts_selection(composed_tables: No
     admin = _platform_admin("msg-bypk-title-admin")
     thread, message = _seed_thread_and_message(admin)
     with system_context(reason="test.messaging.bypk.title"):
-        # The channel FK targets the Integration MTI parent; resolving the object
-        # projection must serve the parent instance (regression: a ChannelType
-        # declaration crashed with "Expected ChannelType but got Integration").
+        # The channel FK targets Channel, also the MTI parent of a posts Feed.
+        # Its projection must use Channel's join key and permission scope.
         channel = make_integration("bypk-title-channel", model=Channel, backend_class="manual")
         message.channel = channel
         message.save(update_fields=("channel", "updated_at"))
@@ -1136,7 +1135,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             """
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
-                input: {model_label: $model, record_id: $id, body: $body, kind: "note"}
+                input: {model_label: $model, record_id: $id, body: $body, kind: NOTE}
                 client_creation_key: "note-request"
               ) {
                 error
@@ -2083,7 +2082,7 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     """can_edit/can_delete mirror the update/delete mutation authorization."""
 
     admin = _platform_admin("msg-capability-admin")
-    with system_context(reason="test.messaging.record_capability.seed"):
+    with actor_context(admin), system_context(reason="test.messaging.record_capability.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 808")
         ticket.message_post("Editable comment.")
         ticket.message_track(
@@ -2128,6 +2127,47 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     # A plain comment is editable and deletable; tracking and system notes are retained.
     assert capabilities["COMMENT"] == (True, True)
     assert capabilities["AUTO_COMMENT"] == (False, False)
+
+
+def test_record_message_capabilities_have_constant_query_count(composed_tables: None, record_property) -> None:
+    """Both capability fields share one tracking-existence projection per list."""
+
+    admin = _platform_admin("msg-capability-budget-admin")
+    with actor_context(admin), system_context(reason="test.messaging.capability.budget.seed"), mute_changes():
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Capability budget")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
+        sender = messaging_models.Handle.objects.for_user(admin)
+        expected = {}
+        for index in range(25):
+            message = messaging_models.Message.objects.create(
+                thread=attachment.thread, direction="internal", message_type="comment",
+                created_by=admin, sender=sender,
+            )
+            tracked = index % 2 == 0
+            if tracked:
+                messaging_models.TrackingValue.objects.create(message=message, field_name="status")
+            expected[str(message.sqid)] = not tracked
+    query = """
+        query Capabilities($id: ID!, $limit: Int!) {
+          record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id, message_limit: $limit}) {
+            messages { id can_edit can_delete }
+          }
+        }
+    """
+    schema = _schema()
+    _data(execute_schema(schema, query, {"id": ticket.sqid, "limit": 1}, request=_request(admin)))
+    counts = []
+    for size in (1, 25):
+        with CaptureQueriesContext(connection) as captured:
+            payload = _data(execute_schema(
+                schema, query, {"id": ticket.sqid, "limit": size}, request=_request(admin),
+            ))["record_thread"]
+        assert len(payload["messages"]) == size
+        for message in payload["messages"]:
+            assert message["can_edit"] == message["can_delete"] == expected[message["id"]]
+        counts.append(len(captured))
+        record_property(f"capability_queries_{size}", len(captured))
+    assert counts[0] == counts[1], counts
 
 
 def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) -> None:

@@ -141,6 +141,7 @@ export interface WidgetControlProps {
   "aria-describedby"?: string;
   "aria-labelledby"?: string;
   "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
   min?: number;
   max?: number;
   minLength?: number;
@@ -153,6 +154,7 @@ export interface WidgetFocusTarget {
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   value?: TValue | null;
+  /** Current sibling values in forms, or the source record in read/list views. */
   row?: TRow;
   /** Owning document for a widget rendered inside editable child lines. */
   parentRow?: unknown;
@@ -160,6 +162,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   /** Validation messages scoped to this widget's descriptor field. */
   messages?: readonly string[];
   readOnly?: boolean;
+  /** Temporarily lock a mounted editor while retaining its local draft. */
+  disabled?: boolean;
   onChange?: (value: TValue) => void;
   /** Atomically patch sibling fields of this editable line; stale rows are ignored. */
   onRowChange?: (patch: Record<string, unknown>) => void;
@@ -172,6 +176,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
 }
 
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {
+  /** Accepts a parsed `rowTemplate` for fixed-size arrays of objects in a form spec. */
+  acceptsRowTemplate?: true;
   edit?: ComponentType<WidgetRenderProps<TValue, TRow>>;
   read: ComponentType<WidgetRenderProps<TValue, TRow>>;
   cell?: ComponentType<WidgetRenderProps<TValue, TRow>>;

@@ -19,7 +19,7 @@ def historical_rebac(db):
     return loader.project_state(loader.graph.leaf_nodes("rebac"))
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money", "spaces"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "money", "spaces"])
 def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_rebac, addon, caplog):
     module = importlib.import_module(f"angee.{addon}.runtime_migrations.shared_reader_cleanup")
     assert module.applies(historical_rebac)
@@ -85,7 +85,7 @@ def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_
         ]
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money", "spaces"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "money", "spaces"])
 def test_tuple_cleanup_honors_router_denial_without_queries(
     historical_rebac, addon, settings, django_assert_num_queries,
 ):
@@ -99,7 +99,7 @@ def test_tuple_cleanup_honors_router_denial_without_queries(
         module.forwards(historical_rebac.apps, connection.schema_editor())
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money", "spaces"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "money", "spaces"])
 def test_tuple_cleanup_waits_for_both_historical_stores(addon):
     module = importlib.import_module(f"angee.{addon}.runtime_migrations.shared_reader_cleanup")
     state = ProjectState()

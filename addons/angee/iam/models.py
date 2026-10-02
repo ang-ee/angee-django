@@ -41,8 +41,7 @@ from rebac.roles import ROLE_RELATION
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import platform_admin_role
@@ -67,7 +66,7 @@ def bounded_limit(limit: int, *, maximum: int = VISIBLE_PEOPLE_MAX_LIMIT) -> int
     return max(1, min(int(limit), maximum))
 
 
-class Group(SqidMixin, AngeeModel):
+class Group(AngeeDataModel):
     """Named IAM principal set materialized into composed runtimes."""
 
     runtime = True
@@ -519,7 +518,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             return None
 
 
-class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:

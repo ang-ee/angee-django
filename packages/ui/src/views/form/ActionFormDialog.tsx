@@ -5,25 +5,28 @@ import type { ActionOutcome } from "@angee/refine";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { errorMessage } from "../../feedback";
 import { Button } from "../../ui/button";
 import { FieldDescription, FieldLabel, FieldRoot } from "../../ui/field";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
-import { formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
+import { useRuntimeViewAs } from "../../runtime";
 import {
   emptyDialogValue,
   emptyValueForField,
-  LabeledDescriptorField,
   mutationDialogValueCodecs,
 } from "./MutationDialog";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";
-import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
-import { useRuntimeViewAs } from "../../runtime";
+import { ActionFormProvider } from "./ActionFormProvider";
+import { DescriptorFieldList } from "./DescriptorFieldList";
+import { actionOutcomeSubmitResult } from "./validation-errors";
+import { fieldErrorMessages } from "./form-view-model";
+import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
 export interface ActionFormDialogProps {
   /** The action being collected — must declare `args` and `submit`. */
@@ -51,29 +54,51 @@ type ArgValues = Record<string, unknown>;
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
  * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner.
  */
-export function ActionFormDialog({
+export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
+  return props.open ? <ActionFormDialogOpening {...props} /> : null;
+}
+
+function ActionFormDialogOpening(props: ActionFormDialogProps): React.ReactElement {
+  const t = useUiT();
+  // Freeze the schema and seeds for this opening; live record refreshes update
+  // submit context without replacing the user's draft or its original schema.
+  const [resolved] = React.useState(() => {
+    try {
+      return { args: typeof props.action.args === "function" ? props.action.args(props.context) : props.action.args ?? EMPTY_ARGS };
+    } catch (error) {
+      return { error };
+    }
+  });
+  if (resolved.args === undefined) return (
+    <DialogForm open={props.open} onOpenChange={props.onOpenChange} title={props.action.label}>
+      <ErrorBanner description={errorMessage(resolved.error, t("error.generic"))} />
+    </DialogForm>
+  );
+  return <ActionArgsDialog {...props} args={resolved.args} />;
+}
+
+function ActionArgsDialog({
   action,
   context,
   open,
   onOpenChange,
   onSucceeded,
-}: ActionFormDialogProps): React.ReactElement {
+  args: declaredArgs,
+}: ActionFormDialogProps & { args: ActionArgs }): React.ReactElement {
   const t = useUiT();
-  const args = action.args ?? EMPTY_ARGS;
+  const definition = isActionFormDefinition(declaredArgs) ? declaredArgs : undefined;
+  const args = isActionFormDefinition(declaredArgs) ? EMPTY_ARGS : declaredArgs;
   const argNames = React.useMemo(
-    () => new Set(args.flatMap((arg) => arg.argKind === "formSpec"
-      ? arg.fields.map((field) => field.name) : [arg.name])),
-    [args],
+    () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
+      ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
+    [args, definition],
   );
-  const actionForm = useActionForm<ArgValues>({
-    defaultValues: argDefaultValues(args, context),
+  const actionForm = useActionForm<ArgValues, ActionOutcome>({
+    defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
+    resolver: definition?.resolver,
     submit: async (collected) => {
-      // `run` is reached only when `action.submit` is set (guarded below); the
-      // fallback just keeps the return total for the optional descriptor field.
-      if (!action.submit) return { ok: true, message: "" };
-      // An envelope-less response resolves `undefined`; the form owner reads
-      // `null` as its form-level failure, so fold the two here.
-      return (await action.submit(serializeActionArgValues(args, collected), context)) ?? null;
+      const result = await action.submit?.(serializeActionArgValues(args, collected), context);
+      return result && "status" in result ? result : actionOutcomeSubmitResult(result);
     },
     onSuccess: (_values, outcome) => {
       onSucceeded?.(outcome);
@@ -82,16 +107,16 @@ export function ActionFormDialog({
     fieldNames: argNames,
   });
   const {
-    fieldErrors: serverErrors,
     formError,
     submitting,
+    saveConflict,
     clearFieldError: clearServerError,
   } = actionForm;
 
   const form = actionForm.form;
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (action.submit) void actionForm.run(form.getValues());
+    if (action.submit && !saveConflict) void actionForm.run();
   };
 
   const footer = (
@@ -101,6 +126,7 @@ export function ActionFormDialog({
         variant="ghost"
         size="sm"
         onClick={() => onOpenChange(false)}
+        disabled={submitting}
       >
         {t("dialog.cancel")}
       </Button>
@@ -108,35 +134,35 @@ export function ActionFormDialog({
         control={form.control}
         args={args}
         submitting={submitting}
+        disabled={saveConflict}
+        danger={action.danger}
         label={action.label}
       />
     </>
   );
 
   return (
+    <ActionFormProvider {...form}>
     <DialogForm
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}
       title={action.label}
+      size={definition?.size}
       footer={footer}
       onSubmit={(event) => void submit(event)}
     >
-      {args.flatMap((arg) => arg.argKind === "formSpec" ? arg.fields.map((field) => (
-        <Controller key={`${arg.name}:${field.name}`} control={form.control} name={field.name}
-          render={({ field: binding }) => <LabeledDescriptorField field={field} value={binding.value}
-            messages={serverErrors[field.name] ?? []} readOnly={submitting || field.readOnly}
-            onChange={(next) => { clearServerError(field.name); binding.onChange(next); }} />} />
-      )) : [(
+      {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
+      {args.map((arg) => (
         <Controller
           key={arg.name}
           control={form.control}
           name={arg.name}
-          render={({ field }) => (
+          render={({ field, fieldState }) => (
             <ActionArgRow
               arg={arg}
               value={field.value}
-              messages={serverErrors[arg.name]}
-              readOnly={submitting}
+              messages={fieldState.error ? fieldErrorMessages([fieldState.error]) : []}
+              readOnly={submitting || saveConflict}
               onChange={(next) => {
                 clearServerError(arg.name);
                 field.onChange(next);
@@ -144,9 +170,10 @@ export function ActionFormDialog({
             />
           )}
         />
-      )])}
+      ))}
       <ErrorBanner description={formError} />
     </DialogForm>
+    </ActionFormProvider>
   );
 }
 
@@ -159,28 +186,49 @@ function ActionSubmitButton({
   control,
   args,
   submitting,
+  disabled,
+  danger,
   label,
 }: {
   control: Control<ArgValues>;
   args: readonly ActionArg[];
   submitting: boolean;
+  disabled?: boolean;
+  danger?: boolean;
   label: React.ReactNode;
 }): React.ReactElement {
   const values = useWatch({ control }) as ArgValues;
   const preview = useRuntimeViewAs();
-  const ready = args.every((arg) => arg.argKind === "formSpec"
-    ? arg.fields.every((field) => !field.required || !emptyDialogValue(values[field.name]))
-    : arg.optional || !emptyDialogValue(values[arg.name]));
+  const ready = args.every((arg) => arg.optional || !emptyDialogValue(values[arg.name]));
   return (
     <Button
       type="submit"
-      variant="primary"
+      variant={danger ? "danger" : "primary"}
       size="sm"
-      disabled={!ready || submitting || Boolean(preview.viewAs || preview.pending)}
+      disabled={!ready || submitting || disabled || Boolean(preview.viewAs || preview.pending)}
+      loading={submitting}
     >
       {label}
     </Button>
   );
+}
+
+function isActionFormDefinition(args: ActionArgs): args is ActionFormDefinition {
+  return !Array.isArray(args);
+}
+
+function ActionDescriptorFields({ definition, control, readOnly, disabled }: {
+  definition: ActionFormDefinition;
+  control: Control<ArgValues>;
+  readOnly: boolean;
+  disabled: boolean;
+}): React.ReactElement {
+  const values = useWatch({ control });
+  const fields = typeof definition.fields === "function" ? definition.fields(values) : definition.fields;
+  return <fieldset disabled={readOnly || disabled} className="grid gap-4">
+    {definition.content}
+    <DescriptorFieldList fields={fields} readOnly={readOnly} />
+  </fieldset>;
 }
 
 function ActionArgRow({
@@ -251,12 +299,11 @@ function ActionArgControl({
       />
     );
   }
-  if (arg.argKind === "formSpec") throw new Error("FormSpec arguments render their fields directly.");
   return (
     <FieldDescriptorControl
       field={arg}
       value={value}
-      readOnly={readOnly}
+      disabled={readOnly}
       onChange={onChange}
     />
   );
@@ -285,7 +332,7 @@ function ActionRelationControl({
       <FieldDescriptorControl
         field={arg}
         value={value}
-        readOnly={readOnly}
+        disabled={readOnly}
         onChange={onChange}
       />
     );
@@ -325,7 +372,7 @@ function ActionRelationListControl({
       <FieldDescriptorControl
         field={arg}
         value={value}
-        readOnly={readOnly}
+        disabled={readOnly}
         onChange={onChange}
       />
     );
@@ -352,11 +399,7 @@ export function serializeActionArgValues(
 ): ArgValues {
   const serialized = { ...values };
   for (const arg of args) {
-    if (arg.argKind === "formSpec") {
-      const packed = normalizeFormSpecValues(arg.fields, values);
-      for (const field of arg.fields) delete serialized[field.name];
-      serialized[arg.name] = packed;
-    } else if (arg.argKind === "relationList") {
+    if (arg.argKind === "relationList") {
       serialized[arg.name] = relationIdList(values[arg.name]);
     } else if (
       (arg.argKind === undefined || arg.argKind === "scalar") &&
@@ -375,9 +418,7 @@ function argDefaultValues(
 ): ArgValues {
   const values: ArgValues = {};
   for (const arg of args) {
-    if (arg.argKind === "formSpec") {
-      Object.assign(values, formSpecInitialValues(arg.fields, {}));
-    } else if (arg.argKind === "relationList") {
+    if (arg.argKind === "relationList") {
       const prefill = arg.fromContext ?? defaultRelationListPrefill;
       values[arg.name] = [...prefill(context)];
     } else if (arg.argKind === "relation") {

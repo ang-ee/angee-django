@@ -40,6 +40,22 @@ from tests.conftest import create_user
 from tests.linesdemo.models import Document
 
 
+@pytest.mark.parametrize("camel_case_keys", [True, False])
+def test_action_guard_preserves_authored_field_paths_when_requested(camel_case_keys: bool) -> None:
+    """Frozen JSON schemas retain field names through the shared guard."""
+
+    @action_guard("Invalid answer.", camel_case_keys=camel_case_keys)
+    def submit() -> ActionResult:
+        raise ValidationError({"review_note": ["Required."], "rows.0.target_id": ["Not accessible."]})
+
+    result = submit()
+    assert result.ok is False
+    assert result.validation_errors == {
+        "reviewNote" if camel_case_keys else "review_note": ["Required."],
+        "rows.0.targetId" if camel_case_keys else "rows.0.target_id": ["Not accessible."],
+    }
+
+
 def test_action_result_carries_created_record_id() -> None:
     """A create-and-return verb populates ``id``; a plain result leaves it ``None``."""
 
@@ -253,6 +269,7 @@ def test_action_result_from_error_keeps_non_field_errors_at_form_level() -> None
     error = ValidationError({NON_FIELD_ERRORS: ["The document is out of balance."]})
     result = ActionResult.from_error(error, "Cannot post.")
 
+    assert result.message == "The document is out of balance."
     assert result.validation_errors == {NON_FIELD_ERRORS: ["The document is out of balance."]}
 
 

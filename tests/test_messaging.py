@@ -1,7 +1,8 @@
 """Tests for the messaging ingest write path (the channel-sync map).
 
-The concrete messaging/parties models are composed here the way the composer folds
-each abstract source model onto one runtime table, so the manager write path runs
+The concrete messaging/parties models (``angee.messaging.testing.models``, registered from
+conftest) fold each abstract source model onto one runtime table the way the
+composer does, so the manager write path runs
 against real tables. The cases pin the ingest invariants the module docstring
 promises: channel-scoped idempotency on ``(channel, external_id)``, null-byte
 stripping, RFC-5322 thread resolution (with fragment-backed titles), the
@@ -37,10 +38,12 @@ from rebac import (
 )
 from rebac.actors import current_sudo_reason, is_sudo
 
-import tests.spaces_models  # noqa: F401 -- register related models before native database setup
+import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
+from angee.agents.testing.models import Agent
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -52,36 +55,23 @@ from angee.messaging.backends import (
     ParsedRecipient,
     ParsedThread,
 )
-from angee.messaging.managers import derived_part_name, normalize_subject, strip_null_bytes
-from angee.messaging.models import MessageEdge as AbstractMessageEdge
-from angee.messaging.models import MessageStar as AbstractMessageStar
-from angee.messaging.models import Participant as AbstractParticipant
-from angee.messaging.models import Reaction as AbstractReaction
+from angee.messaging.managers import derived_part_name, normalize_subject
 from angee.messaging.models import ThreadedModelMixin
-from angee.parties.managers import HandleAssociationStatus
-from angee.parties.mixins import LinkSource
-from angee.parties.models import Address as AbstractAddress
-from angee.parties.models import Circle as AbstractCircle
-from angee.parties.models import CircleMember as AbstractCircleMember
-from angee.parties.models import MergeVeto as AbstractMergeVeto
-from angee.parties.models import Organization as AbstractOrganization
-from angee.parties.models import Relationship as AbstractRelationship
-from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
-from tests.conftest import Backend, Drive, MimeType, make_integration
-from tests.conftest import (
-    File as StorageFile,
-)
-from tests.messaging_models import (
+from angee.messaging.testing.models import (
     Channel,
     Fragment,
     Handle,
     Message,
+    MessageEdge,
+    MessageStar,
     MessageSubtype,
+    Organization,
     Part,
+    Participant,
     Party,
     PartyHandle,
     Person,
+    Reaction,
     Thread,
     ThreadActivity,
     ThreadAttachment,
@@ -89,143 +79,14 @@ from tests.messaging_models import (
     ThreadNotification,
     TrackingValue,
 )
+from angee.parties.managers import HandleAssociationStatus
+from angee.parties.mixins import LinkSource
+from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
+from tests.conftest import Backend, Drive, MimeType, make_integration
+from tests.conftest import (
+    File as StorageFile,
+)
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.test_agents_graphql import Agent
-
-_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_AddressMeta = getattr(AbstractAddress, "Meta", object)
-
-
-class Organization(AbstractOrganization, Party):
-    """Concrete organization matching the composer inheritance shape."""
-
-    class Meta(_OrganizationMeta):
-        """Django model options for the canonical test organization."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_organization"
-        rebac_resource_type = "parties/organization"
-
-
-class MergeVeto(AbstractMergeVeto):
-    """Concrete keep-separate pair used by parties-schema imports across the suite."""
-
-    class Meta(AbstractMergeVeto.Meta):
-        """Django model options for the canonical test merge veto."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_merge_veto"
-        rebac_resource_type = "parties/merge_veto"
-
-
-class Address(AbstractAddress):
-    """Concrete party address used by contact-ingest tests."""
-
-    class Meta(_AddressMeta):
-        """Django model options for the canonical test address."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_address"
-        rebac_resource_type = "parties/address"
-
-
-class Circle(AbstractCircle):
-    """Concrete circle used by parties-schema imports across the suite."""
-
-    class Meta(AbstractCircle.Meta):
-        """Django model options for the canonical test circle."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_circle"
-        rebac_resource_type = "parties/circle"
-
-
-class CircleMember(AbstractCircleMember):
-    """Concrete circle membership used by parties-schema imports across the suite."""
-
-    class Meta(AbstractCircleMember.Meta):
-        """Django model options for the canonical test circle membership."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_circle_member"
-        rebac_resource_type = "parties/circle_member"
-
-
-class RelationshipKind(AbstractRelationshipKind):
-    """Concrete relationship kind used by parties-schema imports across the suite."""
-
-    class Meta(AbstractRelationshipKind.Meta):
-        """Django model options for the canonical test relationship kind."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_relationship_kind"
-        rebac_resource_type = "parties/relationship_kind"
-
-
-class Relationship(AbstractRelationship):
-    """Concrete relationship edge used by parties-schema imports across the suite."""
-
-    class Meta(AbstractRelationship.Meta):
-        """Django model options for the canonical test relationship."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_relationship"
-        rebac_resource_type = "parties/relationship"
-
-
-class Reaction(AbstractReaction):
-    """Concrete message reaction used by messaging tests."""
-
-    class Meta(AbstractReaction.Meta):
-        """Django model options for the canonical test reaction."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_reaction"
-        rebac_resource_type = "messaging/reaction"
-
-
-class MessageStar(AbstractMessageStar):
-    """Concrete message star used by messaging tests."""
-
-    class Meta(AbstractMessageStar.Meta):
-        """Django model options for the canonical test message star."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_message_star"
-        rebac_resource_type = "messaging/message_star"
-
-
-class MessageEdge(AbstractMessageEdge):
-    """Concrete cross-message edge used by messaging tests."""
-
-    class Meta(AbstractMessageEdge.Meta):
-        """Django model options for the canonical test message edge."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_message_edge"
-        rebac_resource_type = "messaging/message_edge"
-
-
-class Participant(AbstractParticipant):
-    """Concrete participant used by messaging tests."""
-
-    class Meta(AbstractParticipant.Meta):
-        """Django model options for the canonical test participant."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_participant"
-        rebac_resource_type = "messaging/participant"
 
 
 class ThreadedTicket(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
@@ -724,20 +585,21 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
 
     del composed_tables
     user_model = get_user_model()
-    with system_context(reason="test threaded model unlink setup"):
-        user = user_model.objects.create_user(username="unlinker", email="unlinker@example.com")
+    user = user_model.objects.create_user(username="unlinker", email="unlinker@example.com")
+    with actor_context(user), system_context(reason="test threaded model unlink setup"):
         ticket = ThreadedTicket.objects.create(title="Unlink case")
         first = ticket.message_post("First message.")
         second = ticket.message_post("Second message.")
         ticket.message_reaction(first, reaction="👍", user=user)
         other = ThreadedTicket.objects.create(title="Other unlink case")
         other_message = other.message_post("Different thread.")
+        before_count = Message._base_manager.filter(thread=first.thread).count()
 
-    with system_context(reason="test threaded model unlink"):
+    with actor_context(user), system_context(reason="test threaded model unlink"):
         thread = ticket.message_unlink(first)
 
     thread.refresh_from_db()
-    assert thread.message_count == 2
+    assert thread.message_count == before_count - 1
     assert thread.last_message_at == second.sent_at
     assert not Message._base_manager.filter(pk=first.pk).exists()
     assert not Part._base_manager.filter(message_id=first.pk).exists()
@@ -2571,7 +2433,7 @@ def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> N
 def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> None:
     """A thread-less message re-homed on re-sync still bumps the winning thread (H1).
 
-    Deleting a thread ``SET_NULL``s its messages, leaving a live message with no thread.
+    An explicitly detached message can survive without its former thread.
     A later re-sync that resolves that message onto thread B must bump B's ``message_count``
     even though the prior thread was NULL — the winner gains the message whenever the
     resolved thread differs from the prior one, and there is simply no losing thread to
@@ -2582,8 +2444,9 @@ def test_resync_rehomes_null_thread_message_and_bumps_winner(channel: Any) -> No
     b_sent = _AT + timedelta(days=1)
     _ingest([_parsed("b", subject="Beta topic", references=("a",), sent_at=b_sent)], channel=channel)
     orphan_thread = Message._base_manager.get(external_id="b").thread
-    # Delete the message's thread; its FK SET_NULLs, leaving the message thread-less.
+    # Detach first: thread deletion owns and cascades every message still attached.
     with system_context(reason="test null-thread re-home setup"):
+        Message._base_manager.filter(external_id="b").update(thread=None)
         Thread._base_manager.filter(pk=orphan_thread.pk).delete()
     assert Message._base_manager.get(external_id="b").thread_id is None
 

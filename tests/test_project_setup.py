@@ -406,7 +406,7 @@ class ServerVerbCase(ProjectSetupFixture):
     def approved_request(self):
         project = self.setup_project()
         with actor_context(self.admin):
-            self.as_user(self.need, self.admin).decide_access("approve")
+            self.as_user(self.need, self.admin).decide_access("intake.approve")
         self.need.refresh_from_db()
         return project, self.Round._base_manager.get(project=project)
 

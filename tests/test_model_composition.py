@@ -357,9 +357,10 @@ class Child(ResourceLoadMixin):
     )
     composition = ModelComposition.discover((config,))
     Child = emit(composition)[config.label].Child
-    Child.after_resource_load(["row"], tier="demo", source="test", publish=True)
+    Child.after_resource_load(["row"], tier="demo", source="test")
     assert [event[0] for event in module.events] == ["child", "first", "second", "shared"]
     assert all(event[1] is Child and event[2] == ("row",) for event in module.events)
+    assert all(event[3] == {"tier": "demo", "source": "test"} for event in module.events)
     assert "after_resource_load" not in render_models(composition, config.label)
 
 

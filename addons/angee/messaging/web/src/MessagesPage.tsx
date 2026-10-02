@@ -41,9 +41,8 @@ export function MessagesPage(): React.ReactElement {
           header={t("messages.sender")}
         />
         <Column field="thread_title" header={t("messages.thread")} />
-        {/* The channel FK targets the Integration parent (a Channel or a posts
-            Feed), so the vendor — not the channel's own backend_class — is the
-            projected fact that names the platform for every row. */}
+        {/* A Feed is also a Channel; the vendor names its platform, while the
+            Channel backend_class identifies its parent transport kind. */}
         <Column field="channel_vendor_name" header={t("messages.channelType")} />
         <Column field="status" widget="statusBadge" />
         <Column field="sent_at" />

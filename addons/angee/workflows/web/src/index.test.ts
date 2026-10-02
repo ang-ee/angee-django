@@ -1,36 +1,25 @@
-import { expectValidBaseAddon } from "@angee/app/testing";
-import { FORM_VIEW_RECORD_CHROME_SLOT, IMPLEMENTATION_DETAIL_SLOT } from "@angee/ui";
-import { describe, expect, test } from "vitest";
+// @vitest-environment happy-dom
+import { chromeSnapshotForRoute, expectValidBaseAddon, TEST_SCHEMAS } from "@angee/app/testing";
+import { expect, test } from "vitest";
+import { DECISION_ORIGIN_SLOT } from "@angee/decisions";
+import addon from "./index";
+import { runResourceFixture, workflowResourceFixture } from "./testing";
+import { triggerEventResourceFixture, triggerResourceFixture } from "./trigger-testing";
 
-import workflows from "./index";
+test("registers read-only workflow and run pages with additive record and decision context", () => {
+  expectValidBaseAddon(addon);
+  expect(addon.routes?.map((route) => route.name)).toContain("workflows.runs.record");
+  expect(addon.slots?.some((slot) => slot.slot === DECISION_ORIGIN_SLOT)).toBe(true);
+  expect(addon.chatter?.map((entry) => entry.id)).toEqual(["workflows"]);
+});
 
-describe("workflows addon manifest", () => {
-  test("satisfies the rendered-addon invariants", () => {
-    expect(() => expectValidBaseAddon(workflows)).not.toThrow();
-  });
-
-  test("contributes Run workflow to the saved-record toolbar", () => {
-    expect(workflows.slots).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          slot: FORM_VIEW_RECORD_CHROME_SLOT,
-          id: "workflows.run-workflow",
-        }),
-      ]),
-    );
-  });
-
-  test("registers configured steps and contributes Step implementation inspection", () => {
-    expect(workflows.routes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "workflows.steps", path: "/workflows/steps" }),
-      expect.objectContaining({ name: "workflows.step" }),
-    ]));
-    expect(workflows.slots).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        slot: IMPLEMENTATION_DETAIL_SLOT,
-        model: "workflows.Step",
-        id: "workflows.step-implementation-details",
-      }),
-    ]));
-  });
+test("trigger record breadcrumbs inherit the declared Triggers collection label", async () => {
+  const chrome = await chromeSnapshotForRoute({ addons: [addon], path: "/workflows/triggers/wft_review", schemas: {
+    ...TEST_SCHEMAS,
+    console: { ...TEST_SCHEMAS.console, metadata: { angee: { resources: [
+      workflowResourceFixture, runResourceFixture, triggerResourceFixture, triggerEventResourceFixture,
+    ] } } },
+  } });
+  expect(chrome.breadcrumbs).toContainEqual({ label: "Triggers", to: "/workflows/triggers" });
+  expect(chrome.breadcrumbs.map(({ label }) => label)).not.toContain("trigger.trigger");
 });

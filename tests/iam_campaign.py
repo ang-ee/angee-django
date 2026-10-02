@@ -8,8 +8,8 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 
 from angee.iam.events import person_created
+from angee.messaging.testing.models import Person as Person
 from tests.conftest import create_platform_admin
-from tests.test_messaging import Person as Person
 
 User = get_user_model()
 

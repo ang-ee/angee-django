@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { formSubmitError, savedFormSubmitResult } from "./validation-errors";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
@@ -12,7 +13,7 @@ import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import type { MetaQuery } from "@refinedev/core";
-import { defaultWidgets } from "../../widgets";
+import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
@@ -22,7 +23,7 @@ import {
   type FormViewAcknowledgedSource,
   type FormViewSaveSurface,
 } from "./use-form-view-save";
-import type { MutationDialogField } from "./MutationDialog";
+import type { DescriptorField } from "./DescriptorFieldList";
 import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { RecordTabDescriptor } from "./form-view-surface";
 
@@ -66,7 +67,7 @@ const preview: RuntimeViewAs = {
 };
 
 test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {
-  const submit = vi.fn(async () => ({ id: "created" }));
+  const submit = vi.fn(async () => ({ status: "ok" as const, data: { id: "created" } }));
   const f = await fixture({ preview, publicView: true, id: null, submit });
   f.rerender({ viewFields: [{ name: "title", label: "Title" }] });
   const button = await screen.findByRole("button", { name: "Create" });
@@ -82,7 +83,7 @@ test("preview keeps form submit visible and disabled, including Enter and native
 });
 
 test("preview blocks imperative form saves and patches without changing write capabilities", async () => {
-  const submit = vi.fn(async () => ({ id: "note-1", title: "Changed" }));
+  const submit = vi.fn(async () => ({ status: "ok" as const, data: { id: "note-1", title: "Changed" } }));
   const f = await fixture({ preview, submit });
   expect(f.surface().formReadOnly).toBe(false);
   act(() => f.surface().form.setValue("title", "Changed", { shouldDirty: true }));
@@ -147,6 +148,7 @@ async function fixture(options: {
   preview?: RuntimeViewAs;
   rootArguments?: boolean;
   resourceMetadata?: DataResourceMetadata;
+  widgets?: Record<string, WidgetDefinition>;
   readOnlyWhen?: (record: Row) => boolean;
   id?: string | null;
   submit?: FormSubmit;
@@ -154,7 +156,7 @@ async function fixture(options: {
   presenceValues?: boolean;
   relationValues?: boolean;
   acknowledgedSource?: FormViewAcknowledgedSource;
-  boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[];
+  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[];
   publicView?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
@@ -198,7 +200,7 @@ async function fixture(options: {
           creatable: false, updatable: false, aggregatable: false, requiredOnCreate: false,
         }],
       } : resource);
-  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
+  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: formResource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
@@ -213,9 +215,9 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     return <Provider dataProvider={provider} queryClient={client}>
-      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets,
+      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
       }}>
         {options.publicView ? (
@@ -256,7 +258,7 @@ test("dirty scalar edits keep their original saved revision across a refreshed r
     record: { id: "note-1", title: "First", draft_revision: "rev-1" },
     values: { title: "First", body: "Original body" },
   };
-  const submit = vi.fn(async () => null);
+  const submit = vi.fn<FormSubmit>(async () => formSubmitError("No record returned."));
   const f = await fixture({ acknowledgedSource: source, submit });
   edit("title", "My edit");
   f.setAcknowledgedSource({
@@ -283,6 +285,15 @@ test("form extras receive the native create and edit form contexts", async () =>
   f.rerender({ recordId: "note-1" });
   expect((await screen.findAllByText("note-1")).length).toBeGreaterThan(0);
   expect(extras).toHaveBeenCalled();
+});
+
+test("registry widgets receive live sibling values in record forms", async () => {
+  const read: WidgetDefinition["read"] = ({ row }) => <output aria-label="Sibling title">{row && typeof row === "object" && "title" in row ? String(row.title) : ""}</output>;
+  const f = await fixture({ publicView: true, widgets: { sibling: { read, edit: read } } });
+  f.rerender({ viewFields: [{ name: "title", label: "Title" }, { name: "body", widget: "sibling" }] });
+  await waitFor(() => expect(screen.getByLabelText("Sibling title").textContent).toBe("First"));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
+  expect(screen.getByLabelText("Sibling title").textContent).toBe("Changed");
 });
 
 test("header extras render from the same live record context as the title", async () => {
@@ -485,7 +496,7 @@ test("an explicitly empty external source never falls back to the native detail 
   expect(f.getOne).not.toHaveBeenCalled();
   expect(f.surface().displayRecord).toBeNull();
   expect(f.surface().formReadOnly).toBe(true);
-  act(() => f.surface().reload());
+  await act(async () => { await f.surface().reload(); });
   expect(f.getOne).not.toHaveBeenCalled();
 });
 
@@ -605,13 +616,13 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
     record: { id: "note-1", title: "First" },
     values: { title: "First", definition: { node: { operation: "old", config: null } } },
   } satisfies FormViewAcknowledgedSource;
-  const operation: MutationDialogField = {
+  const operation: DescriptorField = {
     name: "operation",
     label: "Operation",
     prefill: () => ({ config: { mode: "fresh" } }),
     prefillReplace: ["config"],
   };
-  const optional: MutationDialogField = {
+  const optional: DescriptorField = {
     name: "optional", label: "Optional", nullable: true, omittable: true,
   };
   const f = await fixture({
@@ -633,7 +644,7 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
 });
 
 test("a stateful bound widget remounts when its nested scope changes", async () => {
-  const until: MutationDialogField = { name: "until", label: "Until", widget: "datetime" };
+  const until: DescriptorField = { name: "until", label: "Until", widget: "datetime" };
   const f = await fixture({
     acknowledgedSource: {
       record: { id: "note-1", title: "First" },
@@ -699,7 +710,7 @@ test("updates send the edit baseline revision and retain a stale draft", async (
   expect(f.update).toHaveBeenCalledWith(expect.objectContaining({
     variables: { title: "Local edit" }, meta: expect.objectContaining({ gqlVariables: { expected_revision: 1 } }),
   }));
-  expect(f.surface().staleRevision).toBe(true);
+  expect(f.surface().saveConflict).toBe(true);
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
@@ -736,7 +747,7 @@ test("a creation-key conflict keeps the draft and renews the next attempt's key"
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Conflict", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBe("form.creationKeyConflict");
+  expect(f.surface().saveConflict).toBe(true);
   expect(f.surface().form.getValues("title")).toBe("My record");
   const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
   await act(async () => f.surface().submitForm());
@@ -747,7 +758,7 @@ test("a creation-key conflict keeps the draft and renews the next attempt's key"
 
 test("custom create owners receive a retry-stable key that clears on acceptance", async () => {
   const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(new Error("Unavailable"))
-    .mockImplementation(async (data) => ({ id: "note-1", ...data }));
+    .mockImplementation(async (data) => ({ status: "ok", data: { id: "note-1", ...data } }));
   const f = await fixture({ id: null, submit, mountedFields: ["title", "body", "deadline"] });
   edit("title", "One");
   edit("deadline", "2026-09-28");
@@ -804,7 +815,7 @@ test("partial custom saves preserve omitted fields and refetch canonical detail 
   let f!: Awaited<ReturnType<typeof fixture>>;
   const submit = vi.fn(async () => {
     f.setRecord({ id: "note-1", title: "Canonical title", body: "Original body" });
-    return { id: "note-1" };
+    return { status: "ok" as const, data: { id: "note-1" } };
   });
   f = await fixture({ submit });
   edit("title", "Canonical title");
@@ -815,10 +826,11 @@ test("partial custom saves preserve omitted fields and refetch canonical detail 
   expect(f.getOne.mock.calls.length).toBeGreaterThan(1);
 });
 
-test("a no-row custom response retains dirty state and does not invent a successful save", async () => {
-  const f = await fixture({ submit: async () => null });
+test("a missing custom response reports failure and retains the draft", async () => {
+  const f = await fixture({ submit: async () => savedFormSubmitResult<Row>(undefined, "No record returned.") });
   edit("title", "Unsaved");
   await act(async () => f.surface().submitForm());
+  expect(f.surface().saveError).toBe("No record returned.");
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
@@ -839,7 +851,7 @@ test("nested server errors and root failures share the native form store", async
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
-  expect(f.surface().saveError).toBe("Cannot save");
+  expect(f.surface().saveError).toBe("Cannot save lines.0.title: Invalid line");
   expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
@@ -847,7 +859,7 @@ test("nested server errors and root failures share the native form store", async
 
 test("duplicate submits are ignored and a previous record save cannot reset or notify the new form", async () => {
   let resolve!: (value: Row) => void;
-  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }));
+  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })));
   const f = await fixture({ submit });
   edit("title", "Old edit");
   let first!: Promise<void>;
@@ -866,7 +878,7 @@ test("duplicate submits are ignored and a previous record save cannot reset or n
 
 test("same-record refresh during custom submit cannot clear the transport pending state", async () => {
   let resolve!: (value: Row) => void;
-  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }));
+  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })));
   const f = await fixture({ submit });
   edit("title", "Submitting");
   let saving!: Promise<void>;
@@ -882,7 +894,7 @@ test("same-record refresh during custom submit cannot clear the transport pendin
 });
 
 test("a partial response changing another selected field preserves omitted submitted values until canonical reload completes", async () => {
-  const f = await fixture({ submit: async () => ({ id: "note-1", body: "Normalized body" }) });
+  const f = await fixture({ submit: async () => ({ status: "ok", data: { id: "note-1", body: "Normalized body" } }) });
   let resolve!: (value: { data: Row }) => void;
   f.getOne.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
   edit("title", "Accepted title");
@@ -894,7 +906,7 @@ test("a partial response changing another selected field preserves omitted submi
 
 test("a delayed custom save preserves later edits and rebases only the accepted submission", async () => {
   let resolve!: (value: Row) => void;
-  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }));
+  const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })));
   const f = await fixture({ submit });
   edit("title", "Submitted title");
   let saving!: Promise<void>;
@@ -936,7 +948,7 @@ test("native Refine write acceptance keeps later edits available to the next sav
 
 test("a change back to the old value during save stays dirty against the accepted submission", async () => {
   let resolve!: (value: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("title", "Submitted title");
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
@@ -952,7 +964,7 @@ test("a change back to the old value during save stays dirty against the accepte
 test.each(["failure", "no row"])("later edits survive a delayed %s without advancing defaults", async (outcome) => {
   let resolve!: (value: Row | null) => void;
   let reject!: (reason: Error) => void;
-  const f = await fixture({ submit: () => new Promise<Row | null>((done, fail) => { resolve = done; reject = fail; }) });
+  const f = await fixture({ submit: () => new Promise<Row | null>((done, fail) => { resolve = done; reject = fail; }).then((data) => savedFormSubmitResult(data, "No record returned.")) });
   edit("title", "Submitted title");
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
@@ -970,7 +982,7 @@ test.each(["failure", "no row"])("later edits survive a delayed %s without advan
 
 test("a delayed toolbar patch preserves a dirty draft while adopting clean response fields", async () => {
   let resolve!: (value: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("title", "Draft title");
   let saving!: Promise<Row | null>;
   act(() => { saving = f.surface().applyPatch({ body: "Patched body" }); });
@@ -981,6 +993,35 @@ test("a delayed toolbar patch preserves a dirty draft while adopting clean respo
   await act(async () => { resolve(accepted); await saving; });
   expect(f.surface().form.getValues()).toMatchObject({ title: "Later draft", body: "Patched body" });
   expect(f.surface().formIsDirty).toBe(true);
+});
+
+test.each([false, true])("a native create accepts an unmounted server-assigned relation and preserves later edits (%s)", async (laterEdit) => {
+  const title: FieldDescriptor = { name: "title", label: "Title", prefill: () => ({ parent: null }) };
+  const f = await fixture({ id: null, mountedFields: [], boundFields: [{ field: title }] });
+  f.rerender({ viewFields: fields.map((field) => field.name === "parent"
+    ? { ...field, omittable: false, readOnly: true } : field) });
+  let resolve!: (value: { data: Row }) => void;
+  f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Submitted title" } });
+  expect(f.surface().form.getValues("parent")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Parent" })).toBeNull();
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title", body: "" } }));
+  if (laterEdit) fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Later title" } });
+  const parent = { id: "note-parent", title: "Server-assigned parent" };
+  const accepted = { id: "note-created", title: "Submitted title", body: "", parent };
+  await act(async () => { resolve({ data: accepted }); await saving; });
+  expect(f.surface().form.getValues("parent")).toEqual(parent);
+  expect(f.surface().form.formState.defaultValues?.parent).toEqual(parent);
+  expect(f.surface().form.getFieldState("parent").isDirty).toBe(false);
+  expect(f.surface().form.getValues("title")).toBe(laterEdit ? "Later title" : "Submitted title");
+  expect(f.surface().formIsDirty).toBe(laterEdit);
+  expect(f.onSaved).toHaveBeenCalledWith(accepted);
+  const leaving = f.surface().requestLeave();
+  if (laterEdit) fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
+  await expect(leaving).resolves.toBe(!laterEdit);
 });
 
 test("recreated field descriptors read the accepted native cache and retain later edits", async () => {
@@ -997,9 +1038,48 @@ test("recreated field descriptors read the accepted native cache and retain late
   expect(f.surface().formIsDirty).toBe(true);
 });
 
+test.each([false, true])("a created record survives descriptor rerenders and preserves later edits (%s)", async (laterEdit) => {
+  const f = await fixture({ id: null });
+  let resolve!: (value: { data: Row }) => void;
+  f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
+  edit("title", "Submitted title");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  if (laterEdit) edit("title", "Later title");
+  const accepted = { id: "note-created", title: "Submitted title", body: "", deadline: "" };
+  await act(async () => { resolve({ data: accepted }); await saving; });
+  f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
+  expect(f.surface().form.getValues("title")).toBe(laterEdit ? "Later title" : "Submitted title");
+  expect(f.surface().form.formState.defaultValues?.title).toBe("Submitted title");
+  expect(f.surface().formIsDirty).toBe(laterEdit);
+  expect(f.onSaved).toHaveBeenCalledWith(accepted);
+  if (laterEdit) {
+    const leaving = f.surface().requestLeave();
+    fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
+    await expect(leaving).resolves.toBe(false);
+  } else {
+    await expect(f.surface().requestLeave()).resolves.toBe(true);
+  }
+  act(() => f.surface().discardChanges());
+  f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
+  expect(f.surface().form.getValues("title")).toBe("");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("a new create seed replaces a locally acknowledged create", async () => {
+  const f = await fixture({ id: null });
+  edit("title", "Saved title");
+  await act(async () => f.surface().submitForm());
+  f.rerender({ viewFields: fields.map((field) => field.name === "title"
+    ? { ...field, defaultValue: "Next draft" } : { ...field }) });
+  expect(f.surface().form.getValues("title")).toBe("Next draft");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
 test("a later edit equal to the canonical accepted value becomes clean", async () => {
   let resolve!: (value: Row) => void;
-  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("title", "  Normalized title  ");
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
@@ -1072,4 +1152,135 @@ test("native bound widgets delimit text, discrete, structured and presence inter
   expect(commits).toHaveBeenCalledWith("settings.optional");
   expect(starts).not.toHaveBeenCalledWith("settings.locked");
   expect(commits).not.toHaveBeenCalledWith("settings.locked");
+});
+
+test.each(["invalid", "conflict"] as const)("a typed %s result keeps the edit baseline until a successful retry", async (status) => {
+  const failed = status === "invalid"
+    ? { status, issues: { fieldErrors: { title: ["Choose another title."] }, formErrors: [] } }
+    : { status, message: "The record changed." };
+  const submit = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce({
+    status: "ok", data: { id: "note-1", title: "Draft", body: "Original body", deadline: "" },
+  });
+  const f = await fixture({ submit });
+  edit("title", "Draft");
+  await act(async () => f.surface().submitForm());
+  expect(f.surface().form.getValues("title")).toBe("Draft");
+  expect(f.surface().form.formState.defaultValues?.title).toBe("First");
+  expect(f.surface().formIsDirty).toBe(true);
+  expect(f.onSaved).not.toHaveBeenCalled();
+  expect(f.surface().form.formState.errors.root?.server?.type).toBe(status === "conflict" ? "conflict" : "server");
+  await act(async () => f.surface().submitForm());
+  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().form.getFieldState("title").error).toBeUndefined();
+  expect(f.surface().formIsDirty).toBe(false);
+  expect(f.onSaved).toHaveBeenCalledTimes(1);
+});
+
+test("a post-save callback failure does not convert an acknowledged save into a rejected draft", async () => {
+  const f = await fixture();
+  f.onSaved.mockImplementationOnce(() => { throw new Error("Continuation failed"); });
+  edit("title", "Accepted");
+  await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow("Continuation failed"); });
+  expect(f.surface().formIsDirty).toBe(false);
+  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().form.getValues("title")).toBe("Accepted");
+});
+
+test("the record chrome distinguishes conflicts and reloads the saved record", async () => {
+  let surface!: FormViewSaveSurface;
+  const submit = vi.fn<FormSubmit>(async () => ({ status: "conflict", message: "A newer edit was saved." }));
+  const f = await fixture({ publicView: true, submit, formExtras: (context) => { surface = context.form; return null; } });
+  const title = await screen.findByLabelText("Title");
+  await waitFor(() => expect((title as HTMLInputElement).value).toBe("First"));
+  fireEvent.change(title, { target: { value: "Local edit" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("Record changed")).toBeTruthy();
+  expect(surface.saveConflict).toBe(true);
+  expect(surface.formIsDirty).toBe(true);
+  expect(surface.history.canUndo).toBe(true);
+  f.setRecord({ id: "note-1", title: "Saved elsewhere", body: "Latest body", deadline: "" });
+  fireEvent.click(screen.getByRole("button", { name: "Reload saved record" }));
+  await waitFor(() => expect((title as HTMLInputElement).value).toBe("Saved elsewhere"));
+  expect(surface.saveConflict).toBe(false);
+  expect(surface.formIsDirty).toBe(false);
+  expect(surface.history.canUndo).toBe(false);
+  expect(surface.history.canRedo).toBe(false);
+  expect(submit).toHaveBeenCalledTimes(1);
+});
+
+test("accepted saves clear history and later field interactions start a fresh group", async () => {
+  const f = await fixture();
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Accepted title");
+  expect(f.surface().history.canUndo).toBe(true);
+  await act(async () => f.surface().submitForm());
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(f.surface().history.canRedo).toBe(false);
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Later edit");
+  act(() => {
+    f.surface().commitFieldInteraction("title");
+    f.surface().history.undo();
+  });
+  expect(f.surface().form.getValues("title")).toBe("Accepted title");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("overlapping field interactions keep history groups independent of observer deduplication", async () => {
+  const started = vi.fn();
+  const f = await fixture({ onFieldInteractionStart: started });
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Local title");
+  act(() => f.surface().startFieldInteraction("body"));
+  edit("body", "Local body");
+  act(() => {
+    f.surface().commitFieldInteraction("body");
+    f.surface().startFieldInteraction("title");
+  });
+  edit("title", "Later title");
+  act(() => { f.surface().commitFieldInteraction("title"); f.surface().history.undo(); });
+  expect(f.surface().form.getValues("title")).toBe("Local title");
+  expect(f.surface().form.getValues("body")).toBe("Local body");
+  expect(started.mock.calls).toEqual([["title"], ["body"]]);
+});
+
+test("accepting a remote baseline clears old undo frames without losing local edits", async () => {
+  const f = await fixture({ acknowledgedSource: {
+    record: { id: "note-1", title: "First", body: "Original body" },
+    values: { title: "First", body: "Original body" },
+  } });
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Local title");
+  expect(f.surface().history.canUndo).toBe(true);
+  f.setAcknowledgedSource({
+    record: { id: "note-1", title: "First", body: "Remote body" },
+    values: { title: "First", body: "Remote body" },
+  });
+  f.rerender({});
+  await waitFor(() => expect(f.surface().form.getValues("body")).toBe("Remote body"));
+  expect(f.surface().history.canUndo).toBe(false);
+  act(() => f.surface().history.undo());
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Local title", body: "Remote body" });
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Later title");
+  act(() => { f.surface().commitFieldInteraction("title"); f.surface().history.undo(); });
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Local title", body: "Remote body" });
+  expect(f.surface().form.getFieldState("body").isDirty).toBe(false);
+});
+
+test("the form save owner displays an explicit success message once", async () => {
+  const f = await fixture({ submit: async () => ({ status: "ok", data: { id: "note-1", title: "Saved", body: "Original body", deadline: "" }, message: "Accepted edit" }) });
+  edit("title", "Saved");
+  await act(async () => f.surface().submitForm());
+  expect(await screen.findAllByText("Accepted edit")).toHaveLength(1);
+  expect(f.onSaved).toHaveBeenCalledTimes(1);
+});
+
+test("an outdated custom save result fails loudly without presenting a retry banner", async () => {
+  const submit = vi.fn().mockResolvedValue({ id: "note-1", title: "Already saved" });
+  const f = await fixture({ submit });
+  edit("title", "Already saved");
+  await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow(/FormSubmitResult contract/); });
+  expect(f.surface().saveError).toBeNull();
+  expect(f.onSaved).not.toHaveBeenCalled();
 });

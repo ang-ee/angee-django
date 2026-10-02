@@ -8,7 +8,7 @@ contact is created as a person or an organisation and deleted through the party
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, cast
 
 import strawberry
@@ -47,6 +47,7 @@ Circle = apps.get_model("parties", "Circle")
 CircleMember = apps.get_model("parties", "CircleMember")
 MergeVeto = apps.get_model("parties", "MergeVeto")
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
+strawberry.enum(cast(Any, RelationshipKind.PartyKind))
 Relationship = apps.get_model("parties", "Relationship")
 
 _PARTY_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Party, "hasura_updatable_fields")
@@ -86,7 +87,7 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     updated_at: auto
 
     @strawberry.field
-    def concrete_kind(self) -> str | None:
+    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 
         return Party.concrete_kind.fget(self)
@@ -345,7 +346,7 @@ class DuplicatePartyCandidateType:
 
 
 @strawberry.enum
-class PeopleWorkbenchScope(Enum):
+class PeopleWorkbenchScope(StrEnum):
     """The bounded smart-view vocabulary for the People workbench."""
 
     ALL = "all"
@@ -928,14 +929,13 @@ _DIRECTORY_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
     ],
     sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "sync_stage"],
     insert=False,
     update=False,
     delete=False,

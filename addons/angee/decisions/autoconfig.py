@@ -1,6 +1,8 @@
 """Decision policy registrations and expiry scheduling defaults."""
 
 SETTINGS = {
+    "ANGEE_IMPL_REGISTRIES:append": ["angee.decisions.policies.DecisionPolicy", "angee.decisions.forms.Action"],
+    "ANGEE_DECISION_ACTION_CLASSES": {},
     "ANGEE_DECISION_POLICY_CLASSES": {
         "first": "angee.decisions.policies.First",
         "all": "angee.decisions.policies.All",

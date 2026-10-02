@@ -8,15 +8,12 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.functions import Coalesce, NullIf
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.mixins import StaleRevisionError
-from angee.decisions.exceptions import RetryableDecisionError
-from angee.decisions.schema import DecisionVerdict, HumanDecisionType
+from angee.decisions.schema import DecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -44,7 +41,8 @@ Queue = apps.get_model("work", "Queue")
 
 NeedImportance = Need._meta.get_field("importance").choices_enum
 strawberry.enum(cast(Any, NeedImportance))
-NeedAccessVerdict = DecisionVerdict
+NeedAccessVerdict = apps.get_model("decisions", "Decision")._meta.get_field("verdict").choices_enum
+strawberry.enum(cast(Any, NeedAccessVerdict))
 strawberry.enum(cast(Any, NeedAccessAction))
 
 
@@ -87,7 +85,7 @@ class NeedType(AngeeNode):
         """Project the linked account without resolving each party separately."""
 
         return optional_public_id(user_public_id(cast(Any, self)._requester_user_id))
-    access_decision: HumanDecisionType | None = actor_scoped_to_one("access_decision")
+    access_decision: DecisionType | None = actor_scoped_to_one("access_decision")
     access_verdict: NeedAccessVerdict | None = strawberry_django.field(  # type: ignore[valid-type]
         only=["access_decision_id"], prefetch_related=["access_decision"],
     )
@@ -263,10 +261,7 @@ class IntakeActionMutation:
         """Apply the need owner's access decision and return the approved account."""
 
         target = authorized_permission_target(info, Need, need, "write")
-        try:
-            user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
-        except (StaleRevisionError, RetryableDecisionError) as error:
-            raise ValidationError({"conflict": error.code}) from error
+        user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
 
     @strawberry.mutation

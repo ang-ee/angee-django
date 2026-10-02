@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from angee.messaging import _wire, identity
-from angee.workflows_integrate import archive_steps, steps
 from tests.test_base_layering import _module_imports
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -146,13 +145,6 @@ def test_integrate_does_not_import_workflows() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
-def test_workflows_integrate_public_archive_extension_imports() -> None:
-    """Released bridge extractors share the framework's canonical archive contracts."""
-
-    assert steps.ArchiveExtractor is archive_steps.ArchiveExtractor
-    assert steps.ArchiveExecutionReporter is archive_steps.ArchiveExecutionReporter
-
-
 def test_messaging_identity_public_owner() -> None:
     """Bridge identity adapters have a vendor-free public coercion owner."""
 
@@ -188,6 +180,19 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
         )
         for root in (PROJECT_ROOT / "angee", PROJECT_ROOT / "addons" / "angee")
         for path in sorted(root.rglob("*.py"))
+    }
+    assert not {path: names for path, names in violations.items() if names}
+
+
+def test_addon_test_harness_does_not_import_the_composer() -> None:
+    """Build-time permission composition belongs to core test support."""
+    root = PROJECT_ROOT / "addons/angee/workflows/testing"
+    violations = {
+        path.relative_to(PROJECT_ROOT).as_posix(): sorted(
+            name for name in _module_imports(path)
+            if name == "angee.compose" or name.startswith("angee.compose.")
+        )
+        for path in root.rglob("*.py")
     }
     assert not {path: names for path, names in violations.items() if names}
 

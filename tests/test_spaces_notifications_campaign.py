@@ -7,14 +7,13 @@ from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.checks import check_ownership
 from angee.messaging.models import NotificationPolicy
+from angee.messaging.testing.models import MessageSubtype, Party, Person, ThreadFollower
+from angee.spaces.testing.models import Membership
 from tests.conftest import create_user, execute_schema, result_data
-from tests.messaging_models import MessageSubtype, Party, ThreadFollower
 from tests.spaces_campaign_helpers import ROLES
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console
 from tests.spaces_campaign_helpers import spaces_storage as spaces_storage
-from tests.spaces_models import Membership
-from tests.test_messaging import Person
 from tests.test_productivity_write_behavior import Queue
 from tests.test_spaces import spaces_tables as spaces_tables
 
@@ -137,7 +136,7 @@ def test_graphql_generated_writes_do_not_accept_preference_columns(roster, space
     assert not Membership._base_manager.filter(group=roster.group, party=roster.people["outsider"]).exists()
 
 
-def test_audience_has_exactly_one_query_at_two_sizes_and_keeps_external_parties(roster, django_assert_num_queries):
+def test_audience_has_one_audited_read_at_two_sizes_and_keeps_external_parties(roster, django_assert_num_queries):
     expected = {roster.people[role].pk: (NotificationPolicy.INBOX, ()) for role in ("owner", "moderator", "member")}
     for size in (3, 20):
         with system_context(reason="grow audience"):
@@ -148,7 +147,8 @@ def test_audience_has_exactly_one_query_at_two_sizes_and_keeps_external_parties(
                     notification_policy="email", subtype_keys=["comment"],
                 )
                 expected[party.pk] = (NotificationPolicy.EMAIL, ("comment",))
-        with django_assert_num_queries(1):
+        # One system-queryset audit INSERT and one roster SELECT at either size.
+        with django_assert_num_queries(2):
             actual = {member.party_id: (member.notification_policy, member.subtype_keys)
                       for member in roster.group.thread_audience()}
         assert actual == expected
@@ -165,11 +165,11 @@ def test_queue_inherits_parent_audience_and_roster_changes_never_create_follower
         )
     assert queue._meta.get_field("owner").model is type(roster.group)
     assert not [error for error in check_ownership([apps.get_app_config("work")]) if error.obj is Queue]
-    with django_assert_num_queries(1):
+    with django_assert_num_queries(2):
         audience = [(member.party_id, member.notification_policy) for member in queue.thread_audience()]
     assert audience == [(row.party_id, NotificationPolicy.MUTED)]
     with system_context(reason="remove audience member"):
         row.delete()
-    with django_assert_num_queries(1):
+    with django_assert_num_queries(2):
         assert list(queue.thread_audience()) == []
     assert not ThreadFollower._base_manager.exists()

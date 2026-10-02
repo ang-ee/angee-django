@@ -362,13 +362,12 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Apply demo provisioning, then continue the resource hook chain."""
 
         if tier == "demo":
             cls._seed_demo_reports(instances)
-        super().after_resource_load(instances, tier=tier, source=source, publish=publish)
+        super().after_resource_load(instances, tier=tier, source=source)
 
     @classmethod
     def _seed_demo_reports(cls, instances: Iterable[Any]) -> None:
@@ -607,7 +606,6 @@ class ProjectPortfolio(models.Model):
     """
 
     extends = "projects.Project"
-    runtime = False
 
     hasura_readable_fields = (
         "product",
@@ -668,7 +666,6 @@ class TaskPortfolio(models.Model):
     """Same-row release attribution folded into ``projects.Task``."""
 
     extends = "projects.Task"
-    runtime = False
 
     hasura_readable_fields = ("release",)
     hasura_filterable_fields = hasura_readable_fields

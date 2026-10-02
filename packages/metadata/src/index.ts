@@ -22,6 +22,7 @@ export {
   isClientRowModel,
   lineReadSelectionPaths,
   modelMetadataForLabel,
+  modelFieldForPath,
   relationModelLabelForField,
   relationRepresentationForPath,
   resourceReadSelectionPaths,

@@ -22,6 +22,7 @@ from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -36,8 +37,6 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from django.utils.module_loading import import_string
-from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
     app_settings,
@@ -52,12 +51,17 @@ from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.fields import EncryptedField, StateField
-from angee.base.identity import public_id_for
+from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
-from angee.base.refs import RecordRefMixin
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
+from angee.base.refs import (
+    RecordRefMixin,
+    canonical_record_target,
+    concrete_child,
+    concrete_child_accessor,
+    concrete_child_models,
+)
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
@@ -257,7 +261,7 @@ class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # ty
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
+class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
@@ -277,8 +281,7 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     sqid_prefix = "clt_"
     slug = models.SlugField()
     provider_type = ImplClassField(
-        base_class=OAuthProviderType,
-        registry_setting="ANGEE_OAUTH_PROVIDER_TYPES",
+        OAuthProviderType,
         default="generic_oauth2",
     )
     """Provider preset key whose defaults seed this OAuth client."""
@@ -649,7 +652,7 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
                 return None
 
 
-class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
+class ExternalAccount(AuditMixin, AngeeDataModel):
     """A user's identity at a provider, shared by principals through REBAC grants.
 
     Connection identity only: which client minted it (``oauth_client``), which
@@ -679,7 +682,7 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
     )
     status = StateField(choices_enum=AccountStatus, default=AccountStatus.ACTIVE)
     identity_claims = models.JSONField(default=dict, blank=True)
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
 
@@ -993,7 +996,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         }
 
 
-class Credential(SqidMixin, AuditMixin, AngeeModel):
+class Credential(AuditMixin, AngeeDataModel):
     """Per-user credential material for acting against a vendor OAuth client."""
 
     runtime = True
@@ -1293,7 +1296,7 @@ class VendorManager(AngeeManager):
             ) from error
 
 
-class Vendor(SqidMixin, AuditMixin, AngeeModel):
+class Vendor(AuditMixin, AngeeDataModel):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -1398,6 +1401,11 @@ def integration_status_axes(status: object) -> tuple[str, str]:
 class IntegrationQuerySet(AngeeQuerySet[Any]):
     """Chainable collection scopes for integration and bridge rows."""
 
+    def of_concrete_type(self) -> Any:
+        """Keep rows whose declared final MTI kind is this queryset's model."""
+
+        return self.filter(concrete_type=ContentType.objects.get_for_model(self.model))
+
     def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Any:
         """Return bridge rows due for a new queue attempt or stale recovery."""
 
@@ -1433,46 +1441,41 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
         )
 
     def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Any:
-        """Prefetch installed and actor-readable concrete children in fixed queries."""
+        """Prefetch installed and actor-readable MTI descendants in fixed queries."""
 
         prefetches: list[Prefetch] = []
-        for child_model in _integration_child_models(cast(type[Integration], self.model)):
-            accessor = self.model.concrete_child_accessor(child_model)
-            prefetches.append(
-                Prefetch(
-                    accessor,
-                    queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
-                    to_attr=self.model.concrete_child_cache_attr(child_model, authorized=False),
-                )
-            )
-            if child_model._meta.label in exposed_model_labels:
+
+        def add_children(parent_model: type[models.Model], prefix: str = "") -> None:
+            for child_model in concrete_child_models(parent_model):
+                accessor = concrete_child_accessor(parent_model, child_model)
+                path = f"{prefix}__{accessor}" if prefix else accessor
+                integrity_attr = self.model.concrete_child_cache_attr(child_model, authorized=False)
                 prefetches.append(
                     Prefetch(
-                        accessor,
-                        queryset=child_model.objects.with_actor(actor),
-                        to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
+                        path,
+                        queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
+                        to_attr=integrity_attr,
                     )
                 )
+                if child_model._meta.label in exposed_model_labels:
+                    prefetches.append(
+                        Prefetch(
+                            path,
+                            queryset=child_model.objects.with_actor(actor),
+                            to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
+                        )
+                    )
+                add_children(child_model, f"{prefix}__{integrity_attr}" if prefix else integrity_attr)
+
+        add_children(self.model)
         return self.prefetch_related(*prefetches)
 
 
 class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
-    """Manager factories for invariants that span Integration and its impl row."""
-
-    def sync_kinds(self) -> int:
-        """Backfill parent rows with the concrete integration kind they materialize."""
-
-        parent = self.model._base_manager
-        count = parent.filter(kind="").update(kind=self.model.integration_kind_value())
-        for child_model in _integration_child_models(cast(type[Integration], self.model)):
-            if not child_model._meta.can_migrate(connection):
-                continue
-            kind = child_model.integration_kind_value()
-            count += parent.filter(pk__in=child_model._base_manager.values("pk")).exclude(kind=kind).update(kind=kind)
-        return count
+    """Manager for integration and bridge collection scopes."""
 
 
-class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
+class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a
@@ -1484,32 +1487,41 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     runtime = True
     rebac_grantable = {"reader": "write"}
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = None
 
     Lifecycle = IntegrationLifecycle
     """Expose the lifecycle vocabulary off the row for callers that cannot import this module."""
 
     sqid_prefix = "int_"
-    integration_kind_label = "Integration"
-    """Human kind label for parent-level integration grouping."""
     # Operator-given label (the connect flow sets it); blank falls back to the
     # vendor-derived :attr:`display_label`. The one human name for every child
     # (directory, channel, …), so it is not re-buried in each child's config.
     display_name = models.CharField(max_length=255, blank=True, default="")
-    kind = models.CharField(max_length=80, db_index=True, default=integration_kind_label)
-    """Human integration type/kind label, denormalized for server-side grouping."""
+    concrete_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, null=True, editable=False)
+    """Concrete MTI model identity used for server-side grouping."""
+
+    def declared_concrete_model(self) -> type[Integration] | None:
+        """Resolve the saved final MTI kind through Django's ContentType cache."""
+
+        if self.concrete_type_id is None:
+            return None
+        return cast(type[Integration] | None, ContentType.objects.get_for_id(self.concrete_type_id).model_class())
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
-        """Reject concrete descendants whose native parent path cannot be routed."""
+        """Require one unambiguous primary-key path for each capability child."""
 
         errors = super().check(**kwargs)
-        for child_model in _integration_child_models(cls):
-            if child_model._meta.parents.get(cls) is None:
+        for child in (
+            model for model in cls._meta.apps.get_models()
+            if model is not cls and issubclass(model, cls)
+        ):
+            if len(child._meta.parents) > 1:
                 errors.append(
                     checks.Error(
-                        f"{child_model._meta.label} is an indirect Integration descendant.",
-                        hint="Declare routed integration capabilities as direct Integration MTI children.",
-                        obj=child_model,
+                        f"{child._meta.label} has more than one Integration parent path.",
+                        hint="Declare one primary-key MTI parent for a routed capability.",
+                        obj=child,
                         id="integrate.E004",
                     )
                 )
@@ -1517,21 +1529,9 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     @classmethod
     def concrete_child_models(cls) -> tuple[type[Integration], ...]:
-        """Return installed concrete descendants in stable model-label order."""
+        """Return installed direct children in stable model-label order."""
 
-        return _integration_child_models(cls)
-
-    @classmethod
-    def concrete_child_accessor(cls, child_model: type[Integration]) -> str:
-        """Return the native reverse accessor for one direct concrete child."""
-
-        parent_link = child_model._meta.parents.get(cls)
-        if parent_link is None:
-            raise ImproperlyConfigured(
-                f"{child_model._meta.label} is an indirect Integration descendant; "
-                "concrete-target routing requires a direct capability owner."
-            )
-        return str(parent_link.remote_field.get_accessor_name())
+        return cast(tuple[type[Integration], ...], concrete_child_models(cls))
 
     @classmethod
     def concrete_child_cache_attr(cls, child_model: type[Integration], *, authorized: bool) -> str:
@@ -1543,18 +1543,34 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def _concrete_child(self, model: type[Integration], *, actor: Any, authorized: bool) -> Integration | None:
         """Return one child from this row's collection cache or scoped storage."""
 
-        cache_name = type(self).concrete_child_cache_attr(model, authorized=authorized)
-        if hasattr(self, cache_name):
-            value = getattr(self, cache_name)
-            if isinstance(value, list | tuple):
-                return value[0] if value else None
-            return cast(Integration | None, value)
         queryset = (
             model.objects.with_actor(actor)
             if authorized
             else model.objects.sudo(reason="integrate.integration.child_integrity")
         )
-        return cast(Integration | None, queryset.filter(pk=self.pk).first())
+        if type(self) not in model._meta.parents:
+            parent_model = next(iter(model._meta.parents))
+            parent = self._concrete_child(cast(type[Integration], parent_model), actor=actor, authorized=False)
+            if parent is None:
+                return None
+            return cast(
+                Integration | None,
+                concrete_child(
+                    parent,
+                    model,
+                    queryset=queryset,
+                    cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
+                ),
+            )
+        return cast(
+            Integration | None,
+            concrete_child(
+                self,
+                model,
+                queryset=queryset,
+                cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
+            ),
+        )
 
     def concrete_children(
         self, *, actor: Any, exposed_model_labels: set[str]
@@ -1563,7 +1579,10 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
         integrity: list[Integration] = []
         authorized: list[Integration] = []
+        declared = self.declared_concrete_model()
         for child_model in type(self).concrete_child_models():
+            if declared is not None and declared is not child_model and issubclass(declared, child_model):
+                child_model = cast(type[Integration], declared)
             child = self._concrete_child(child_model, actor=actor, authorized=False)
             if child is None:
                 continue
@@ -1615,6 +1634,10 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         """
 
         actor, unscoped = self.effective_actor(strict=True)
+        declared = self.declared_concrete_model()
+        if declared is not None and declared is not type(self) and issubclass(declared, type(self)):
+            child = self._concrete_child(cast(type[Integration], declared), actor=actor, authorized=not unscoped)
+            return child if child is not None else self
         for child_model in type(self).concrete_child_models():
             child = self._concrete_child(child_model, actor=actor, authorized=not unscoped)
             if child is not None:
@@ -1692,7 +1715,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     last_used_status = models.CharField(max_length=64, blank=True)
     use_count_24h = models.PositiveIntegerField(default=0)
     error_count_24h = models.PositiveIntegerField(default=0)
-    last_error = models.TextField(blank=True)
+    last_error: str = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
 
     lifecycle_transitions = StateTransitions(
@@ -1717,6 +1740,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         """Django model options for integrations."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
 
@@ -1726,31 +1750,16 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
         return f"{vendor_slug}:{self.public_id}"
 
-    @classmethod
-    def integration_kind_value(cls) -> str:
-        """Return the grouping label this integration concrete model contributes."""
-
-        if _is_integration_child_model(cls):
-            for base in cls.__mro__:
-                label = base.__dict__.get("integration_kind_label")
-                meta = getattr(base, "_meta", None)
-                if label and getattr(meta, "label_lower", "") != "integrate.integration":
-                    return str(label)
-        else:
-            own_label = cls.__dict__.get("integration_kind_label")
-            if own_label:
-                return str(own_label)
-        return capfirst(cls._meta.verbose_name)
-
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the parent grouping kind when a concrete child row saves."""
+        """Keep the grouping content type aligned with the row's concrete model."""
 
-        current_kind = self.kind
-        if _is_integration_child_model(type(self)) or not self.kind:
-            self.kind = type(self).integration_kind_value()
-        update_fields = kwargs.get("update_fields")
-        if update_fields is not None and self.kind != current_kind:
-            kwargs["update_fields"] = {*update_fields, "kind"}
+        if self.concrete_type_id is None or type(self) is not self._meta.apps.get_model("integrate", "Integration"):
+            content_type = ContentType.objects.get_for_model(type(self))
+            changed = self.concrete_type_id != content_type.pk
+            self.concrete_type = content_type
+            update_fields = kwargs.get("update_fields")
+            if changed and update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "concrete_type"}
         super().save(*args, **kwargs)
 
     @property
@@ -1766,6 +1775,12 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         vendor = getattr(self, "vendor", None)
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
         return f"{label} ({self.lifecycle})"
+
+    @property
+    def record_display_label(self) -> str:
+        """Use the same operator label as the Integration GraphQL record."""
+
+        return self.display_label
 
     @transition(
         lifecycle,
@@ -1901,31 +1916,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
             )
 
 
-def _is_integration_child_model(model: type[models.Model]) -> bool:
-    """Return whether ``model`` is an MTI child of the Integration parent."""
-
-    return any(parent._meta.label_lower == "integrate.integration" for parent in model._meta.parents)
-
-
-def _integration_child_models(parent_model: type[Integration]) -> tuple[type[Integration], ...]:
-    """Return concrete Integration children in deterministic model-label order."""
-
-    return tuple(
-        cast(type[Integration], model)
-        for model in sorted(
-            (
-                model
-                for model in apps.get_models()
-                if model is not parent_model
-                and not model._meta.abstract
-                and not model._meta.proxy
-                and issubclass(model, parent_model)
-            ),
-            key=lambda model: model._meta.label_lower,
-        )
-    )
-
-
 def merge_json_state(
     instance: Any,
     field_name: str,
@@ -1956,6 +1946,13 @@ def merge_json_state(
         row.save(update_fields=[field_name, "updated_at"])
     setattr(instance, field_name, document)
     return document
+
+
+class IntegrationCreateMode(StrEnum):
+    """How the console starts creation of a concrete integration."""
+
+    FORM = "form"
+    CONNECT = "connect"
 
 
 class Bridge(models.Model, metaclass=RebacModelBase):
@@ -1995,9 +1992,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     scheduler, but the live-session reconciler does not inspect or dispatch them.
     """
 
-    sync_workflow_key: ClassVar[str] = ""
-    """Optional workflow lineage selected through the installed sync dispatch hook."""
-
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
     cursor = models.JSONField(default=dict, blank=True)
@@ -2006,15 +2000,10 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
     last_sync_started_at = models.DateTimeField(null=True, blank=True)
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
-    last_sync_status = models.CharField(max_length=64, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
-    sync_stage = models.CharField(
-        max_length=32,
-        choices=SyncStage.choices,
-        default=SyncStage.IDLE,
-        db_index=True,
-    )
-    sync_error = models.TextField(blank=True, default="")
+    sync_stage = StateField(choices_enum=SyncStage, max_length=32, default=SyncStage.IDLE, db_index=True)
+    """Messaging channels keep their existing varchar(32) column on upgrade."""
+    sync_error: str = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
     sync_progress = models.JSONField(default=dict, blank=True)
@@ -2212,13 +2201,13 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     # Direct syncs hold their advisory lock; dispatched syncs retain a run pointer
     # until their execution owner durably reports the terminal outcome.
-    LIVE_SYNC_STAGES: ClassVar[tuple[str, ...]] = (
-        str(SyncStage.DISCOVERING),
-        str(SyncStage.SYNCING),
+    LIVE_SYNC_STAGES: ClassVar[tuple[SyncStage, ...]] = (
+        SyncStage.DISCOVERING,
+        SyncStage.SYNCING,
     )
 
     @property
-    def effective_sync_stage(self) -> str:
+    def effective_sync_stage(self) -> SyncStage:
         """Reconcile direct workers against their lock; dispatched runs settle durably.
 
         Queued work has not acquired a lock yet. A retained dispatch is owned by
@@ -2226,14 +2215,14 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         prove another worker's liveness, so that backend trusts the stored stage.
         """
 
-        stage = str(self.sync_stage)
+        stage = self.SyncStage(self.sync_stage)
         if (
             stage in self.LIVE_SYNC_STAGES
             and not self.sync_is_dispatched
             and task_locks_are_cross_process()
             and not self.is_syncing
         ):
-            return str(self.SyncStage.FAILED)
+            return self.SyncStage.FAILED
         return stage
 
     @property
@@ -2438,7 +2427,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Persist one successful scheduler sync result and healthy status report."""
 
         self.last_sync_completed_at = now
-        self.last_sync_status = "ok"
         self.last_sync_items = result
         self.sync_stage = self.SyncStage.COMPLETED
         self.sync_error = ""
@@ -2461,7 +2449,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "last_sync_summary",
                     "last_sync_completed_at",
                     "last_sync_items",
-                    "last_sync_status",
                     "next_sync_at",
                     "sync_error",
                     "sync_progress",
@@ -2475,7 +2462,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         failure = _safe_integration_failure(error)
         error_message = failure.message
-        self.last_sync_status = "error"
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
@@ -2484,7 +2470,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
-                    "last_sync_status",
                     "next_sync_at",
                     "sync_error",
                     "sync_progress",
@@ -2497,7 +2482,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Clear a stale failure once a live session proves the account healthy.
 
         The mirror of :meth:`record_sync_error` — that method is the only writer
-        of ``sync_error``, ``last_sync_status == "error"``, and the ``error``
+        of ``sync_error``, ``sync_stage == FAILED``, and the ``error``
         outcome key, and only the poll scheduler's start/finish markers drop them
         again. A live-desired bridge never enters the poll loop
         (:meth:`Channel._next_sync_at` returns ``None`` while ``desired`` is
@@ -2522,20 +2507,20 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 type(self).objects.sudo(reason="integrate.bridge.clear_sync_error").lock_if_supported().get(pk=self.pk)
             )
             progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
-            if not row.sync_error and row.last_sync_status != "error" and "error" not in progress:
+            if not row.sync_error and row.sync_stage != row.SyncStage.FAILED and "error" not in progress:
                 return
-            row.last_sync_status = "ok"
+            row.sync_stage = row.SyncStage.COMPLETED if row.last_sync_completed_at else row.SyncStage.IDLE
             row.sync_error = ""
             row.sync_progress = row._sync_marker()
             row.save(
                 update_fields=[
-                    "last_sync_status",
+                    "sync_stage",
                     "sync_error",
                     "sync_progress",
                     "updated_at",
                 ],
             )
-        self.last_sync_status = row.last_sync_status
+        self.sync_stage = row.sync_stage
         self.sync_error = row.sync_error
         self.sync_progress = row.sync_progress
 
@@ -2544,8 +2529,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if self.sync_is_dispatched:
             return SyncDispatch.DISPATCHED
-        if not self.sync_workflow_key:
-            self.mark_sync_started(now=now)
+        self.mark_sync_started(now=now)
         try:
             with bridge_sync_context(), bridge_progress_context(self):
                 result = self.sync()
@@ -2567,25 +2551,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def sync(self) -> int | SyncDispatch:
         """Drive backend streams; concrete bridges may override this sync seam."""
 
-        dispatched = self.dispatch_sync()
-        if dispatched is not None:
-            return dispatched
         return sync_bridge(self)
-
-    def dispatch_sync(self) -> SyncDispatch | None:
-        """Hand a declared cycle to the composition addon's durable admission hook."""
-
-        if not self.sync_workflow_key:
-            return None
-        handler = getattr(settings, "ANGEE_BRIDGE_SYNC_DISPATCH", "")
-        if not handler:
-            raise ImproperlyConfigured("A sync_workflow_key requires the workflows_integrate addon.")
-        return import_string(handler)(self)
-
-    def sync_workflow_input(self) -> dict[str, Any]:
-        """Snapshot immutable cycle input; connectors may add their admitted facts."""
-
-        return {"bridge": {"model": self._meta.label_lower, "id": public_id_for(type(self), self.pk)}}
 
     def handle_webhook(self, payload: Any) -> None:
         """Apply one verified inbound webhook payload to this bridge."""
@@ -2732,7 +2698,7 @@ class WebhookSubscriptionManager(AngeeManager):
         return queryset.order_by("pk")
 
 
-class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
+class WebhookSubscription(AuditMixin, AngeeDataModel):
     """Outbound webhook endpoint owned by one user."""
 
     runtime = True
@@ -2756,7 +2722,7 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     enabled = models.BooleanField(default=True, db_index=True)
     last_delivery_at = models.DateTimeField(null=True, blank=True)
     last_delivery_status = models.CharField(max_length=64, blank=True, default="")
-    last_error = models.TextField(blank=True, default="")
+    last_error: str = DiagnosticTextField(blank=True, default="")
     consecutive_failures = models.PositiveIntegerField(default=0)
 
     objects = WebhookSubscriptionManager()
@@ -3044,7 +3010,7 @@ class SyncStreamManager(AngeeManager):
             return stream
 
 
-class SyncStream(SqidMixin, AuditMixin, AngeeModel):
+class SyncStream(AuditMixin, AngeeDataModel):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     runtime = True
@@ -3090,6 +3056,7 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
+        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/sync_stream"
         rebac_id_attr = "pk"
         constraints = (
@@ -3186,8 +3153,8 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                     "absence_count",
                     "metadata",
                     "parent_id",
-                    "target_ct_id",
-                    "target_id",
+                    "target_content_type_id",
+                    "target_object_id",
                     "updated_at",
                 ],
             )
@@ -3243,8 +3210,8 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                 locked.status = LinkStatus.WITHDRAWN
             locked.tombstoned_at = None
             fields = [
-                "target_ct_id",
-                "target_id",
+                "target_content_type_id",
+                "target_object_id",
                 "remote_base_hash",
                 "local_base_hash",
                 "remote_version",
@@ -3259,12 +3226,13 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
 
     def _set_target(self, link: Any, target: models.Model | None) -> None:
         if target is None:
-            link.target_ct_id = link.target_id = None
+            link.target_content_type_id = link.target_object_id = None
         else:
             if target.pk is None:
                 raise ValidationError("A record target must be saved.")
-            link.target_ct = ContentType.objects.get_for_model(target)
-            link.target_id = str(target.pk)
+            canonical = canonical_record_target(target)
+            link.target_content_type = canonical.content_type
+            link.target_object_id = str(canonical.object_id)
 
     def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
         """Count a bounded batch of missing keys, retaining tombstones.
@@ -3307,7 +3275,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             return link
 
 
-class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
+class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
     """A stable remote identity with the two last-applied comparison bases."""
 
     runtime = True
@@ -3315,9 +3283,11 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     external_key = models.CharField(max_length=512)
-    target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
-    target_id = models.CharField(max_length=255, null=True, blank=True)
-    target = GenericForeignKey("target_ct", "target_id")
+    target_content_type = models.ForeignKey(
+        ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    target_object_id = models.CharField(max_length=255, null=True, blank=True)
+    target = GenericForeignKey("target_content_type", "target_object_id")
     status = StateField(choices_enum=LinkStatus, default=LinkStatus.OBSERVED)
     remote_version = models.CharField(max_length=512, blank=True)
     remote_base_hash = models.CharField(max_length=64, blank=True)
@@ -3331,14 +3301,9 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     objects = RecordLinkManager()
     unscoped_objects = AngeeUnscopedManager()
 
-    @classmethod
-    def record_ref_fields(cls) -> tuple[str, str]:
-        """Return the custom backing columns for this record reference."""
-
-        return "target_ct", "target_id"
-
     class Meta:
         abstract = True
+        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/record_link"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
@@ -3384,7 +3349,7 @@ class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):
             )
 
 
-class RecordRevision(SqidMixin, AuditMixin, AngeeModel):
+class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
     """Immutable observed and mapped payload history for one replica identity.
 
     Retention is unbounded by design. Full payload evidence grows with every
@@ -3409,18 +3374,6 @@ class RecordRevision(SqidMixin, AuditMixin, AngeeModel):
         rebac_resource_type = "integrate/record_revision"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("link", "number"), name="uniq_record_revision_number"),)
-
-    def save(self, *args: Any, using: str | None = None, **kwargs: Any) -> None:
-        """Permit insertion only; applied evidence never changes in place."""
-
-        if self.pk and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValidationError("Record revisions are immutable.")
-        super().save(*args, using=using, **kwargs)
-
-    def delete(self, *args: Any, using: str | None = None, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Refuse deletion even when no successor references the revision."""
-
-        raise ValidationError("Record revisions are immutable.")
 
 
 class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
@@ -3637,7 +3590,7 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
             return tuple(rows if limit is None else rows[:limit])
 
 
-class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
+class SyncDiscrepancy(AuditMixin, AngeeDataModel):
     """A per-source-version failure to revisit through the adapter's rescan."""
 
     runtime = True
@@ -3661,6 +3614,8 @@ class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
+        base_manager_name = "unscoped_objects"
+        verbose_name_plural = "sync discrepancies"
         rebac_resource_type = "integrate/sync_discrepancy"
         rebac_id_attr = "pk"
         constraints = (

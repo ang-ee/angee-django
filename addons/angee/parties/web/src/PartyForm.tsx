@@ -22,10 +22,10 @@ export function PartyForm(props: RegisteredFormProps): React.ReactElement {
   // Only block on the first load; keep the resolved concrete form mounted across
   // background refetches so in-flight edits, the active tab, and scroll survive.
   if (query.isFetching && !party) return <LoadingPanel message={t("partyRedirect.loading")} />;
-  if (party?.concrete_kind === "organization") {
+  if (party?.concrete_kind === "ORGANIZATION") {
     return <OrganizationForm {...props} resource="parties.Organization" />;
   }
-  if (party?.concrete_kind === "person") {
+  if (party?.concrete_kind === "PERSON") {
     return <PersonForm {...props} resource="parties.Person" />;
   }
   return <EmptyState icon="parties" title={t("partyRedirect.unavailable")} />;

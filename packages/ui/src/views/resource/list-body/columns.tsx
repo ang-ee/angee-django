@@ -116,6 +116,7 @@ export function ListCellContent<TRow extends Row>({
 }): React.ReactNode {
   const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
+  if (column.showWhen && !column.showWhen(row)) return null;
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
     return (

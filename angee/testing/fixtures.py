@@ -1,7 +1,21 @@
 """Framework-generic fixtures requiring pytest and pytest-django."""
 
 import pytest
+from django.apps import apps
 from django.core.management import call_command
+
+from angee.testing.permissions import composed_permissions as composed_permissions
+
+
+@pytest.fixture(autouse=True)
+def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore generated permission paths and source annotations after each test."""
+    for config in apps.get_app_configs():
+        for key in ("rebac_schema", "_angee_rebac_schema_source", "_angee_rebac_schema_effective"):
+            existed = key in config.__dict__
+            monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
+            if not existed:
+                del config.__dict__[key]
 
 
 @pytest.fixture()

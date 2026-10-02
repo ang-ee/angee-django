@@ -1,17 +1,35 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { expect, test } from "vitest";
-import decisions, { DECISION_MODEL, decisionRecordTab } from "./index";
+import { decisionFixture, decisionGroupFixture, decisionResourceFixture } from "@angee/decisions/testing";
+import { describe, expect, test } from "vitest";
 
-test("decisions own their route and record verbs", () => {
-  expect(() => expectValidBaseAddon(decisions)).not.toThrow();
-  expect(decisions.routes?.map(({ name }) => name)).toEqual(["decisions.decisions", "decisions.decisions.record"]);
-  expect(decisions.slots).toEqual([expect.objectContaining({ model: DECISION_MODEL, slot: "form-view.record-actions" })]);
-});
+import decisions, { DECISION_CONTENT_SLOT, DECISION_MODEL, DECISION_ORIGIN_SLOT, decisionContent, decisionRecordTab } from "./index";
 
-test("subject tabs are generic and have distinct contribution identities", () => {
-  const first = decisionRecordTab("projects.Task");
-  const second = decisionRecordTab("projects.Project");
-  expect(first.model).toBe("projects.Task");
-  expect(first.slot).toBe("form-view.sections");
-  expect(first.id).not.toBe(second.id);
+describe("decisions fragment", () => {
+  test("satisfies the shared manifest contracts", () => expect(() => expectValidBaseAddon(decisions)).not.toThrow());
+  test("publishes its neutral fixtures through the testing entry", () => {
+    expect(decisionFixture().kind).toBe("review");
+    expect(decisionResourceFixture).toBeTruthy();
+    expect(decisionGroupFixture).toBeTruthy();
+  });
+  test("registers one routed inbox and an inherited record route", () => {
+    expect(decisions.menus).toEqual([{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.inbox" }]);
+    expect(decisions.routes?.map(({ name, path }) => ({ name, path }))).toEqual([
+      { name: "decisions.inbox", path: "/decisions" },
+      { name: "decisions.inbox.record", path: "/decisions/$id" },
+    ]);
+    expect(decisions.routes?.[0]?.component).toBeTypeOf("function");
+    expect(decisions.routes?.[0]?.indexComponent).toBeUndefined();
+    expect(decisions.routes?.[1]?.component).toBeUndefined();
+    expect(Object.keys(decisions.i18n ?? {})).toEqual(["decisions"]);
+  });
+  test("exports consumer and waiting-owner contracts without registering mandatory content", () => {
+    expect(DECISION_MODEL).toBe("decisions.Decision");
+    expect(DECISION_CONTENT_SLOT).toBe("decisions.content");
+    expect(DECISION_ORIGIN_SLOT).toBe("decisions.origin");
+    expect(decisionContent("review", () => null)).toMatchObject({ slot: DECISION_CONTENT_SLOT, id: "review" });
+    expect(decisions.slots).toBeUndefined();
+    expect(decisionRecordTab("intake.Need")).toMatchObject({
+      id: "decisions.subject.intake.Need", model: "intake.Need", slot: "form-view.sections",
+    });
+  });
 });

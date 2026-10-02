@@ -730,7 +730,7 @@ class ProposalActionMutation:
 
         target = authorized_action_target(info, Round, round, "write")
         target.cancel(expected_revision=expected_revision)
-        return ActionResult(ok=True, message="Proposal round cancelled.", id=target.sqid)
+        return ActionResult(ok=True, message="Proposal round canceled.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Transfer facilitation failed.", errors=(StaleRevisionError,))

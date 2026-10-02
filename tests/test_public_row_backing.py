@@ -16,11 +16,11 @@ from rebac.models import Relationship, RelationshipRegistry
 from rebac.preflight import _check_new_model
 from rebac.schema import parse_zed
 
-from angee.testing.rebac import install_manual_schema
+from angee.projects.testing.models import Queue
+from angee.spaces.testing.models import Group
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_platform_admin, create_user
 from tests.money_models import Currency, CurrencyRate
-from tests.projects_models import Queue
-from tests.spaces_models import Group
 from tests.test_dashboards import DashboardTarget
 
 
@@ -35,7 +35,7 @@ def public_policy(request, db, settings):
     active = backend()
     assert isinstance(active, LocalBackend)
     root = Path(__file__).parents[1] / "addons/angee"
-    install_manual_schema(parse_zed("\n".join(
+    install_permission_schema(parse_zed("\n".join(
         (root / addon / "permissions.zed").read_text()
         for addon in ("iam", "dashboards", "money", "spaces", "work")
     )), active=active)
@@ -156,7 +156,7 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
             if permission.name == "create" else permission
             for permission in definition.permissions
         ))
-        install_manual_schema(replace(schema, definitions=[
+        install_permission_schema(replace(schema, definitions=[
             updated if item.resource_type == resource_type else item for item in schema.definitions
         ]), active=public_policy)
     before = _relationship_counts()
@@ -224,13 +224,14 @@ def test_creation_and_column_updates_change_reads_without_tuples(public_policy, 
             (private, nonmatching, {shared.pk}),
         ):
             # Rate identity remains immutable through its public queryset. A
-            # trusted data migration can update columns via Django's base manager;
-            # the derived permission must immediately follow those persisted facts.
+            # trusted data migration uses Django's base manager with explicit system
+            # authority; derived permissions immediately follow the persisted facts.
             queryset = (
                 Group.system_queryset().filter(pk=row.pk)
                 if issubclass(model, Group) else model._base_manager.filter(pk=row.pk)
             )
-            assert queryset.update(**values) == 1
+            with system_context(reason="test.public_row.trusted_column_update"):
+                assert queryset.update(**values) == 1
             assert set(model.objects.with_actor(reader).values_list("pk", flat=True)) == expected
             for persisted in (shared, private):
                 assert public_policy.check_access(

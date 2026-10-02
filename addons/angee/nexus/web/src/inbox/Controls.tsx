@@ -7,7 +7,7 @@ import {
   useResourceView,
   useRelationSelectedOption,
   useEnumOptions,
-  type ResourceToolbarFilterField,
+  type FilterClauseField,
   type ResourceToolbarFilterOption,
   type ResourceViewFilter,
 } from "@angee/ui";
@@ -195,7 +195,7 @@ export function useResultControls(lens: ResultLens) {
         }))
       : []),
   ];
-  const customFilterFields: ResourceToolbarFilterField[] = [
+  const customFilterFields: FilterClauseField[] = [
     {
       id: "period",
       label: t("inbox.period"),
@@ -293,7 +293,7 @@ export function useNavigatorControls(lens: NavigatorLens) {
         ]
       : []),
   ];
-  const customFilterFields: ResourceToolbarFilterField[] = identity
+  const customFilterFields: FilterClauseField[] = identity
     ? [
         {
           id: "link",

@@ -161,6 +161,7 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
 
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """One replica stream per address book, mapped through Party.ingest_contact."""
+    registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
 
     category = "directory"
     label = "Directory"
@@ -259,7 +260,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         linked = {link.external_key: link for link in links if link.external_key in keys}
         people = tuple(
             apps.get_model("parties", "Person").objects.filter(
-                Q(pk__in=[link.target_id for link in linked.values() if link.target_id]) | Q(source_uid__in=keys),
+                Q(pk__in=[link.target_object_id for link in linked.values() if link.target_object_id])
+                | Q(source_uid__in=keys),
                 folder=self._folder(stream),
             )
         )
@@ -270,7 +272,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         states = {}
         for key in keys:
             link = linked.get(key)
-            person = by_id.get(str(link.target_id)) if link is not None else None
+            person = by_id.get(str(link.target_object_id)) if link is not None else None
             if person is None:
                 person = by_uid.get(key)
             projection = projections.get(person.pk) if person is not None else None
@@ -450,7 +452,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             .exclude(
                 Exists(
                     stream_links.filter(
-                        Q(target_id=Cast(OuterRef("pk"), output_field=CharField()))
+                        Q(target_object_id=Cast(OuterRef("pk"), output_field=CharField()))
                         | Q(external_key=OuterRef("source_uid"))
                     )
                 )

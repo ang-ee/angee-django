@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 from django.views.decorators.debug import sensitive_variables
-from rebac import system_context
+from rebac import current_actor, system_context
 
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import (
@@ -14,9 +16,11 @@ from angee.integrate.live import (
     armed_material_key,
     await_session_exit,
     reset_session_store,
+    session_store_path,
     skipped_password_marker,
 )
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
+from angee.jobs.locks import task_locks_are_cross_process
 
 
 class PairingActionError(ValueError):
@@ -30,14 +34,53 @@ def channel_pairing(channel: Any) -> PairingProjection:
 
 
 def resume_channel_pairing(channel: Any) -> None:
-    """Declare a live channel connected, clear its runtime error, and start it."""
+    """Start a live channel, clearing its runtime error but retaining identity.
 
-    _live_impl(channel)
+    A stale pairing report (a dead QR, a rejected account) is dropped only when
+    no session provably runs: a running session owns the report it is showing,
+    and a process-local lock backend cannot see a worker's session at all.
+    """
+
+    impl = _live_impl(channel)
     with system_context(reason="messaging.resume_channel_pairing"):
         channel.refresh_from_db(from_queryset=type(channel)._base_manager.select_related("credential"))
+        if task_locks_are_cross_process() and not channel.is_syncing:
+            channel.update_live_state(identity_key=impl.state_identity_key, drop_pairing_report=True)
         channel.set_lifecycle(IntegrationLifecycle.CONNECTED)
         channel.report_status(IntegrationRuntimeStatus.OK)
         channel.start_live()
+
+
+def resume_or_create_channel(user: Any, *, name: str, backend_class: str) -> Any:
+    """Restart the user's newest unfinished pairing channel, or create one.
+
+    A reused channel keeps its display name; ``name`` applies only to creation.
+    Reuse resets an existing session store: a released claim can follow a
+    duplicate-account rejection while the store still holds that linked
+    account. Without a store there is nothing to wipe, so the channel simply
+    resumes. A process-local lock backend cannot prove the reset safe, so there
+    a channel with a store is left alone and a new one is created. Reset errors
+    propagate without creating another channel, so an unproven shutdown leaves
+    the store intact and the caller can retry shortly.
+    """
+
+    channel_model = apps.get_model("messaging", "Channel")
+    impl_class = channel_model.resolve_impl_class(channel_model.live_impl_field, backend_class)
+    if not issubclass(impl_class, LiveBridgeImpl):
+        raise PairingActionError("This action requires a live channel.")
+    actor = current_actor() or user
+    with system_context(reason="messaging.resume_or_create_channel"), transaction.atomic():
+        channel = channel_model.objects.unfinished_pairing(user, backend_class).first()
+        if channel is not None and session_store_path(channel).exists() and not task_locks_are_cross_process():
+            channel = None
+        reused = channel is not None
+        if channel is None:
+            channel = channel_model.objects.create_disconnected(user, name=name, backend_class=backend_class)
+    if reused and session_store_path(channel).exists():
+        reset_channel_pairing(channel)
+    else:
+        resume_channel_pairing(channel)
+    return channel.with_actor(actor)
 
 
 @sensitive_variables("password", "material")

@@ -2,6 +2,17 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 
+export { SchemaPathPicker, type SchemaPathPickerProps, type SchemaPath, type SchemaPathSchema } from "./SchemaPathPicker";
+export { useFormHistory, type FormHistory } from "./form/use-form-history";
+export {
+  keyedCollectionFromRecord,
+  createKeyedEntry,
+  keyedCollectionToRecord,
+  type KeyedEntry,
+  type KeyedCollection,
+  type KeyedCollectionSnapshot,
+} from "./form/keyed-collection";
+
 export { List, type ListComponent, type ListProps } from "./resource/List";
 export {
   ListView,
@@ -66,26 +77,20 @@ export {
   type ImplementationDetailContext,
 } from "./relation/implementation-details";
 export {
-  LabeledDescriptorField,
   MutationDialog,
-  type MutationDialogControlProps,
-  type MutationDialogField,
   type MutationDialogParseValues,
   type MutationDialogProps,
-  type MutationDialogRelation,
-  type MutationDialogValidationResult,
   type MutationDialogValues,
   mutationDialogValueCodecs,
 } from "./form/MutationDialog";
 export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
-  formSpecBranches,
   formSpecInitialValues,
   normalizeFormSpecValues,
+  resolveSchemaReference,
   useFormSpecFields,
   type FormSpecFieldDescriptor,
-  type FormSpecBranch,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
 } from "./form/form-spec";
@@ -102,14 +107,22 @@ export {
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
+export { useWatch, type ResolverResult } from "react-hook-form";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
-  formLevelMessage,
   useActionForm,
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
+export { ActionFormProvider } from "./form/ActionFormProvider";
 export {
+  actionFormSubmitResult,
+  actionOutcomeSubmitResult,
+  invalidFormSubmit,
+  formSubmitError,
+  savedFormSubmitResult,
+  applyFormErrors,
+  type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
   lineRowErrorsFromDottedPaths,
@@ -121,6 +134,14 @@ export {
   type DottedPathFieldErrors,
   type ValidationErrors,
 } from "./form/validation-errors";
+export {
+  DescriptorFieldList,
+  LabeledDescriptorField,
+  type DescriptorFieldListProps,
+  type DescriptorField,
+  type DescriptorFieldRelation,
+  type DescriptorFieldControlProps,
+} from "./form/DescriptorFieldList";
 export { fieldErrorMessages, isCompositeFieldDescriptor } from "./form/form-view-model";
 export {
   FieldDescriptorControl,
@@ -140,14 +161,25 @@ export {
   type GraphViewActivation,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
-  type GraphViewGeometry,
   type GraphViewLayout,
   type GraphViewNode,
   type GraphViewNodeStyle,
   type GraphViewProps,
   type GraphViewConnection,
   type GraphViewPosition,
+  type GraphViewPort,
+  type GraphViewStatus,
 } from "./GraphView";
+export {
+  GraphEditor,
+  type GraphEditorNode,
+  type GraphEditorLink,
+  type GraphEditorLayout,
+  type GraphEditorSelection,
+  type GraphEditorNodeAction,
+  type GraphEditorProps,
+} from "./GraphEditor";
+export { layoutGraph, findFreeGraphPosition, placeGraphNodeBeside } from "./graph-layout";
 export {
   DashboardView,
   type DashboardViewProps,
@@ -157,6 +189,7 @@ export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
 } from "./relation/RelationFieldWidget";
+export { RecordReference, type RecordReferenceProps } from "./relation/RecordReference";
 export {
   CollectionTreeView,
   type CollectionTreeViewProps,
@@ -384,15 +417,18 @@ export {
 } from "./page";
 export type {
   ActionArg,
+  ActionArgs,
   ActionConfirm,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
   ColumnAggregate,
   ColumnDescriptor,
   ColumnProps,

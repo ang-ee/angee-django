@@ -38,3 +38,8 @@ module = "runtime_migrations.channel_ownerless"
 name = "activity_type_key"
 app_label = "messaging"
 module = "runtime_migrations.activity_type_key"
+
+[[migrations]]
+name = "channel_sync_status"
+app_label = "messaging"
+module = "runtime_migrations.channel_sync_status"

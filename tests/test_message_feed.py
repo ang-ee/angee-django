@@ -16,8 +16,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
-from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
-from tests.test_messaging import (
+from angee.messaging.testing.models import (
     Circle,
     CircleMember,
     Fragment,
@@ -29,8 +28,9 @@ from tests.test_messaging import (
     Party,
     Reaction,
     Thread,
-    ThreadedTicket,
 )
+from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
+from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _grant, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

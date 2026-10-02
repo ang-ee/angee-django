@@ -6,10 +6,10 @@ import pytest
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedThread
+from angee.messaging.testing.models import Handle, Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import make_user
-from tests.messaging_models import Handle, Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
 from tests.test_messaging import _AT, _ingest, _parsed
 from tests.test_messaging import channel as channel
 
@@ -37,6 +37,28 @@ def test_only_untracked_comments_can_be_deleted_through_projection_and_locked_ow
             with pytest.raises(ValueError, match="comment|tracking"):
                 Message.objects.unlink_from_thread(message, thread=attachment.thread)
     assert Message._base_manager.filter(pk=message.pk).exists() is not allowed
+
+
+@pytest.mark.parametrize("verb", ["edit", "delete"])
+def test_comment_writes_refresh_stale_tracking_projection_under_lock(comment_record, verb):
+    """Tracking added after a list read still blocks the owning mutation."""
+
+    case = comment_record
+    with actor_context(case.author):
+        message = case.record.message_post("Before tracking")
+    with system_context(reason="test.comments.stale_tracking"):
+        message = Message.objects.annotate(
+            _has_tracking_values=Message.has_tracking_values_expression(),
+        ).get(pk=message.pk)
+        assert message.content_edit_error() is None
+        assert message.delete_error() is None
+        TrackingValue.objects.create(message=message, field_name="status")
+    with actor_context(case.writer), pytest.raises(ValueError, match="tracking values"):
+        if verb == "edit":
+            case.record.message_update_content(message, body="Must be refused")
+        else:
+            case.record.message_unlink(message)
+    assert Message._base_manager.get(pk=message.pk).preview == "Before tracking"
 
 
 @pytest.mark.parametrize("seat", ["author", "peer", "writer", "outsider"])

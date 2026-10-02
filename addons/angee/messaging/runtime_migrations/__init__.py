@@ -1,1 +1,1 @@
-"""Addon-owned follower data transitions, materialized by the composer."""
+"""Historical upgrade paths owned by the messaging addon."""

@@ -37,13 +37,14 @@ requires-python = ">=3.14"
 # build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
   "celery[redis]>=5.5",
+  "billiard>=4.2.1,<4.3",
   "django-celery-beat>=2.9",
   "channels>=4.0",
   "cryptography>=44",
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac>=0.24.1",
+  "django-zed-rebac>=0.25.0",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
@@ -51,7 +52,7 @@ dependencies = [
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
-  "jsonschema>=4.26",
+  "jsonschema[format-nongpl]>=4.26",
   "pydantic>=2.13",
   "referencing>=0.37",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
@@ -102,18 +103,17 @@ addons = [
     "authlib>=1.7.2",
     "channels-redis>=4.2",
     "channels>=4.0",
-    "croniter>=6.0",
     "defusedxml>=0.7,<1",
     "django-anymail>=15.1",
     "django-axes>=8.0",
     "django-countries>=9,<10",
     "django-import-export>=4.4",
-    "django-zed-rebac[strawberry-django]>=0.24.1",
+    "django-zed-rebac[strawberry-django]>=0.25.0",
     "fastmcp>=3.4.2,<4",
     "httpcore>=1.0,<2",
     "httpx>=0.28.1,<0.29",
     "imapclient>=3.1.0",
-    "jsonschema[format-nongpl]>=4.26",
+    "jsonpointer>=3.1",
     "mail-parser-reply>=1.36",
     "markdown-it-py>=4.2",
     "mcp>=1.2",
@@ -131,7 +131,6 @@ addons = [
     "python-magic>=0.4.27",
     "pyyaml>=6",
     "qrcode[pil]>=8.2",
-    "referencing>=0.37",
     "ruamel.yaml>=0.18",
     "slack-sdk>=3.43.0",
     "strawberry-django-aggregates>=0.13.0",
@@ -197,8 +196,8 @@ only-include = [
 [tool.pytest.ini_options]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
-python_files = ["test_*.py", "addons/angee/workflows_integrate/tests_*.py"]
-testpaths = ["tests", "addons/angee/resources/tests", "addons/angee/workflows_integrate"]
+python_files = ["test_*.py"]
+testpaths = ["tests", "addons/angee/resources/tests"]
 pythonpath = [".", "addons", "examples/addons"]
 addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
 

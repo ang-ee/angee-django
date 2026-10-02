@@ -327,6 +327,44 @@ def test_resource_subtitle_rejects_relation_valued_terminal_field() -> None:
         )
 
 
+def test_computed_filter_expressions_preserve_nested_boolean_inputs_and_aggregate(transactional_db):
+    """Native input donors remain visible to the upstream dataclass visitor."""
+
+    @strawberry_django.type(HasuraResourceThing)
+    class FilteredThingType(AngeeNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        FilteredThingType, model=HasuraResourceThing, name="filtered_things",
+        filterable=["id", "name", "has_words"], sortable=["name"], aggregatable=["id"],
+        filter_expressions={"has_words": models.ExpressionWrapper(
+            models.Q(word_count__gt=0), output_field=models.BooleanField(),
+        )}, insert=False, update=False, delete=False,
+    )
+    schemas = GraphQLSchemas([SchemaAddon({"public": {
+        "query": [resource.query], "types": [FilteredThingType, *resource.types],
+    }})])
+    schema = schemas.build("public")
+    with model_tables((HasuraResourceThing,)), system_context(reason="test computed filters"):
+        HasuraResourceThing.objects.create(name="Empty", word_count=0)
+        HasuraResourceThing.objects.create(name="Written", word_count=2)
+        result = result_data(execute_schema(schema, """{
+          filtered_things(where: {_and: [{_not: {has_words: {_eq: false}}}, {_or: [
+            {name: {_eq: "Written"}}, {name: {_eq: "Missing"}}
+          ]}]}) { name }
+          filtered_things_aggregate(where: {_not: {has_words: {_eq: true}}}) { aggregate { count } }
+        }"""))
+    assert result == {
+        "filtered_things": [{"name": "Written"}],
+        "filtered_things_aggregate": {"aggregate": {"count": 1}},
+    }
+    metadata = schema.angee_resources[0]
+    assert metadata.query.fields["has_words"].filter is not None
+    # Rebuilding uses native schema-local extension composition, never mutations
+    # to a previously generated type's dataclass field inventory.
+    assert schemas.build("public").as_str() == schema.as_str()
+
+
 def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     """The Hasura builder remains external while Angee owns resource metadata."""
 
@@ -1539,7 +1577,7 @@ def test_relation_filter_decoders_covers_public_id_relations_only() -> None:
 
 
 def test_relation_filter_decoders_never_overrides_a_declared_decoder() -> None:
-    """A caller-declared field decoder wins over the auto-derived one."""
+    """A caller-declared conversion is retained behind the relation read preflight."""
 
     sentinel = lambda value: value  # noqa: E731 - test double
     decoders = _relation_filter_decoders(
@@ -1548,7 +1586,7 @@ def test_relation_filter_decoders_never_overrides_a_declared_decoder() -> None:
         declared={"parent": sentinel},
     )
     assert decoders is not None
-    assert decoders["parent"] is sentinel
+    assert decoders["parent"].decoder is sentinel
 
 
 def test_filterable_relation_filters_by_public_id_without_field_id_decode(

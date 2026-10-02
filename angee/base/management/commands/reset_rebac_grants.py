@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 from rebac import app_settings
@@ -41,7 +40,6 @@ def reset_rebac_grants() -> GrantCounts:
         Relationship._base_manager.all().delete()
         RelationshipRegistry._base_manager.all().delete()
         RebacResource._base_manager.all().delete()
-        call_command("rebac", "index", "rebuild", verbosity=0)
         transaction.on_commit(mark_relationships_changed)
     return counts
 

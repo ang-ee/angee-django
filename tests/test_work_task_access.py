@@ -10,7 +10,7 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.schema.parser import parse_zed
 
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -29,8 +29,8 @@ def withhold_assignees(case):
         else definition
         for definition in schema.definitions
     ]
-    install_manual_schema(schema)
-    case.addCleanup(install_manual_schema, original)
+    install_permission_schema(schema)
+    case.addCleanup(install_permission_schema, original)
 
 
 class TaskAccessTests(WorkCase):
@@ -48,7 +48,8 @@ class TaskAccessTests(WorkCase):
             self.assertTrue(self.scoped(task, user))
         for user in (self.owner, self.assignee):
             self.assertTrue(self.scoped(task, user, "write"))
-        self.Task._base_manager.filter(pk=task.pk).update(stage=None, visibility="inherited")
+        with system_context(reason="tests.work.null_stage"):
+            self.Task._base_manager.filter(pk=task.pk).update(stage=None, visibility="inherited")
         self.assertFalse(self.scoped(task, self.member))
 
     def test_stage_position_controls_order(self):

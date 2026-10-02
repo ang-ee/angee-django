@@ -5,6 +5,7 @@
 export {
   defineAngeeSchemaMetadata,
   lineReadSelectionPaths,
+  modelFieldForPath,
   modelMetadataForLabel,
   relationModelLabelForField,
   relationRepresentationForPath,

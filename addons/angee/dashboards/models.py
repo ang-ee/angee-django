@@ -13,6 +13,7 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
+from angee.base.fields import StateField
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -75,10 +76,9 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
     allowed = [False] * len(policies)
     for (model, key), entries in scopes.items():
         rows = read_scoped_queryset(model, actor)
-        if rows is not None:
-            readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
-            for index, value in entries:
-                allowed[index] = value in readable
+        readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
+        for index, value in entries:
+            allowed[index] = value in readable
     return allowed
 
 
@@ -648,7 +648,7 @@ class Dashboard(
     creation_key_scope = "owner"
     rebac_grantable = {"viewer": "share", "editor": "share"}
 
-    class Scope(models.TextChoices):
+    class DashboardScope(models.TextChoices):
         PERSONAL = "personal", "Personal"
         ADDON = "addon", "Addon"
         RESOURCE = "resource", "Resource"
@@ -660,7 +660,7 @@ class Dashboard(
         null=True,
         blank=True,
     )
-    scope = models.CharField(max_length=16, choices=Scope, db_index=True)
+    scope = StateField(choices_enum=DashboardScope, db_index=True)
     scope_key = models.CharField(max_length=255, null=True, blank=True)
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
@@ -714,7 +714,7 @@ class Dashboard(
     def set_personal_archived(self, *, archived: bool, expected_revision: int) -> Any:
         """Archive one personal dashboard under its revision lock and actor gate."""
 
-        if self.scope != self.Scope.PERSONAL:
+        if self.scope != self.DashboardScope.PERSONAL:
             raise ValidationError("Only personal dashboards can be archived.")
         actor = self.actor()
         if not self.has_access("archive"):
@@ -758,7 +758,7 @@ class Dashboard(
 
         if self.owner_id is not None:
             raise ValidationError({"owner": "Resource-installed dashboards cannot name an actor owner."})
-        if self.scope not in {self.Scope.ADDON, self.Scope.RESOURCE}:
+        if self.scope not in {self.DashboardScope.ADDON, self.DashboardScope.RESOURCE}:
             raise ValidationError({"scope": "Resource-installed dashboards require addon or resource scope."})
         snapshot = self.snapshot()
         canonical = canonical_dashboard_snapshot(snapshot)
@@ -775,7 +775,6 @@ class Dashboard(
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Validate snapshots, including unchanged resource rows."""
 
@@ -783,7 +782,7 @@ class Dashboard(
         for instance in loaded:
             dashboard = cast("Dashboard", instance)
             dashboard.validate_installed_snapshot()
-        super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
+        super().after_resource_load(loaded, tier=tier, source=source)
 
 
 class DashboardWidgetQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
@@ -845,7 +844,6 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
         *,
         tier: str,
         source: str,
-        publish: bool = False,
     ) -> None:
         """Revalidate installed parents when a widget resource is loaded alone."""
 
@@ -854,4 +852,4 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
         dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
         for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, owner__isnull=True):
             dashboard.validate_installed_snapshot()
-        super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
+        super().after_resource_load(loaded, tier=tier, source=source)

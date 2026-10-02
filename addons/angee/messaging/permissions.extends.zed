@@ -15,3 +15,11 @@ definition parties/person {
 
     permission read = followed_thread->read
 }
+
+// A file referenced by a message part follows that part's read permission.
+// The reverse path is live-backed by Part.file, so deleting or changing a part
+// immediately removes its read reach without granting access to the drive.
+definition storage/file {
+    relation message_part: messaging/part // rebac:field=message_parts
+    permission read = message_part->read
+}

@@ -26,15 +26,13 @@ export type RecordActionRunner = (
   context: ActionContext,
 ) => ActionResult | Promise<ActionResult>;
 
-export interface UseRecordActionOptions {
+export interface UseRecordActionOptions extends UseActionResultMutationOptions {
   /** Backend argument carrying the record id; defaults to `id`. */
   idArgument?: string;
   /** Extra generated action arguments derived from the current record id. */
   actionArguments?: (id: string) => ActionArguments;
   /** Message returned when the action itself returns no message. */
   defaultMessage?: string;
-  /** Extra Angee model labels whose refine caches this action mutates. */
-  invalidateModels?: readonly string[];
   /** Error thrown when the form action is invoked before a saved record exists. */
   missingRecordMessage?: string;
   /** Refresh the form record after a successful run. Defaults to true. */
@@ -93,17 +91,7 @@ export function useRecordActionMutation<TField extends string = string>(
   field: TField,
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
-  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
-    options?.invalidateModels,
-  );
-  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
-  const [mutate, state] = useActionMutation<TField>(field, {
-    ...(options?.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
-    ...(options?.invalidateModels !== undefined
-      ? { invalidateModels: canonicalInvalidateModels }
-      : {}),
-    invalidates,
-  });
+  const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
   const settleOptions = React.useMemo<ActionResultRunOptions | null>(() => {
     if (options?.settle === false) return null;
     if (options?.settle && typeof options.settle === "object") {

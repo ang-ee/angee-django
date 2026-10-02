@@ -1,4 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
@@ -41,8 +42,6 @@ const FINISHED_UPLOAD_STATUSES = new Set<UploadTask["status"]>([
   "deduped",
   "failed",
 ]);
-
-type ChatterPostKind = "comment" | "note";
 
 interface RecipientOption {
   id: string;
@@ -90,7 +89,7 @@ export interface RecordThreadConversationProps {
     prompt?: string;
     submitLabel?: string;
     readerLine?: string;
-    postKind?: ChatterPostKind;
+    postKind?: RecordMessagePostKind;
     verbs?: { root: string; reply: string };
     search?: boolean;
     kindSwitch?: boolean;
@@ -146,8 +145,7 @@ export function RecordThreadConversation({
     models: READ_MODELS,
   });
   const threadPayload = threadQuery.data?.record_thread;
-  const offeredKinds = (threadPayload ? threadPayload.post_kinds ?? ["COMMENT", "NOTE"] : [])
-    .map((kind) => kind.toLowerCase());
+  const offeredKinds: readonly RecordMessagePostKind[] = threadPayload ? threadPayload.post_kinds ?? ["COMMENT", "NOTE"] : [];
   const canPost = Boolean(
     enabled && !threadQuery.error && !threadPayload?.error_code &&
     threadPayload?.thread_post_access &&
@@ -189,11 +187,11 @@ export function RecordThreadConversation({
     errorFrom: (data) => data?.set_record_message_starred,
   });
 
-  const [postKind, setPostKind] = React.useState<ChatterPostKind>(stream?.postKind ?? "comment");
+  const [postKind, setPostKind] = React.useState<RecordMessagePostKind>(stream?.postKind ?? "COMMENT");
   React.useEffect(() => { if (stream?.postKind) setPostKind(stream.postKind); }, [stream?.postKind]);
   const selectedPostKind = offeredKinds.includes(postKind)
     ? postKind
-    : offeredKinds[0] as ChatterPostKind | undefined;
+    : offeredKinds[0];
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -257,7 +255,7 @@ export function RecordThreadConversation({
     setError(null);
     setEditingMessageId(null);
     setReplyToMessage(message);
-    if (!streamMode) setPostKind(message.message_type === "NOTIFICATION" ? "note" : "comment");
+    if (!streamMode) setPostKind(message.message_type === "NOTIFICATION" ? "NOTE" : "COMMENT");
   }, [canPost, readOnly, streamMode]);
 
   const handleDeleteMessage = React.useCallback(
@@ -321,19 +319,19 @@ export function RecordThreadConversation({
 
   const handlePost = React.useCallback(
     async (args: PostArgs): Promise<boolean> => {
-      if (!canPost || readOnly) return false;
+      if (!canPost || readOnly || !selectedPostKind) return false;
       setError(null);
       try {
         const input = {
           modelLabel,
           recordId,
           body: args.body,
-          kind: selectedPostKind ?? "comment",
+          kind: selectedPostKind,
           parentMessageId: replyToMessage?.id ?? null,
           attachmentIds: [...args.attachmentIds],
-          recipientUserIds: selectedPostKind === "comment" ? [...args.recipientUserIds] : [],
+          recipientUserIds: selectedPostKind === "COMMENT" ? [...args.recipientUserIds] : [],
           autofollowRecipients:
-            selectedPostKind === "comment" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
+            selectedPostKind === "COMMENT" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
         };
         // Retain identity after a failed response; an edited submission starts a new request.
         const intent = JSON.stringify(input);
@@ -349,7 +347,7 @@ export function RecordThreadConversation({
         setError(
           errorMessage(
             cause,
-            t(selectedPostKind === "note" ? "error.postNote" : "error.postComment"),
+            t(selectedPostKind === "NOTE" ? "error.postNote" : "error.postComment"),
           ),
         );
         return false;
@@ -457,7 +455,7 @@ export function RecordThreadConversation({
           copy={composerCopy}
           submitKey={submitKey}
           readOnly={readOnly}
-          selectedPostKind={selectedPostKind ?? "comment"}
+          selectedPostKind={selectedPostKind ?? "COMMENT"}
           offeredKinds={offeredKinds}
           stream={stream ? { ...stream, audience: stream.audience ?? threadPayload?.audience_label ?? undefined } : undefined}
           onPostKindChange={setPostKind}
@@ -581,10 +579,10 @@ interface ChatterComposerProps {
   copy: RecordThreadConversationProps["composerCopy"];
   submitKey: NonNullable<RecordThreadConversationProps["submitKey"]>;
   readOnly: boolean;
-  selectedPostKind: ChatterPostKind;
-  offeredKinds: readonly string[];
+  selectedPostKind: RecordMessagePostKind;
+  offeredKinds: readonly RecordMessagePostKind[];
   stream?: RecordThreadConversationProps["stream"];
-  onPostKindChange: (kind: ChatterPostKind) => void;
+  onPostKindChange: (kind: RecordMessagePostKind) => void;
   replyToMessage: RecordMessageRow | null;
   onClearReply: () => void;
   recipientOptions: readonly RecipientOption[];
@@ -628,10 +626,10 @@ function ChatterComposer({
   const taskRows = uploads.tasks.filter(isVisibleComposerUploadTask);
   const canSubmit = body.trim() !== "" || ((stream?.attachments ?? !stream) && attachmentDrafts.length > 0);
 
-  function handleKindChange(next: ChatterPostKind): void {
+  function handleKindChange(next: RecordMessagePostKind): void {
     if (disabled) return;
     onPostKindChange(next);
-    if (next === "note") {
+    if (next === "NOTE") {
       setSelectedRecipientIds([]);
       setAutofollowRecipients(false);
     }
@@ -682,9 +680,9 @@ function ChatterComposer({
 
   return <StreamComposer value={body} onChange={setBody} onSubmit={() => void submit()}
     disabled={disabled || uploadBusy} ready={canSubmit} submitKey={submitKey}
-    prompt={stream?.prompt ?? (selectedPostKind === "note" ? t("composer.logNote") : t("composer.writeComment"))}
+    prompt={stream?.prompt ?? (selectedPostKind === "NOTE" ? t("composer.logNote") : t("composer.writeComment"))}
     submitLabel={stream?.submitLabel ?? <><Glyph name="send" />
-      {selectedPostKind === "note" ? t("composer.log") : t("composer.send")}</>}
+      {selectedPostKind === "NOTE" ? t("composer.log") : t("composer.send")}</>}
     readerLine={stream?.readerLine ?? (stream?.audience ? undefined : copy?.audience ?? t("composer.audience"))}
     audience={stream?.audience}
     before={readOnly ? <Banner tone="warning">{uiT("viewAs.readOnly")}</Banner> : null}
@@ -702,13 +700,13 @@ function ChatterComposer({
         <Button type="button" variant="ghost" size="iconSm" aria-label={t("composer.cancelReply")}
           disabled={disabled} onClick={onClearReply}><Glyph name="x" /></Button>
       </div> : null}
-      {showKindSwitch && offeredKinds.length > 1 ? <SegmentedControl<ChatterPostKind>
+      {showKindSwitch && offeredKinds.length > 1 ? <SegmentedControl<RecordMessagePostKind>
         disabled={disabled} value={selectedPostKind} onValueChange={handleKindChange}
         options={[
-          { value: "comment" as const, label: t("composer.comment") },
-          { value: "note" as const, label: t("composer.note") },
+          { value: "COMMENT" as const, label: t("composer.comment") },
+          { value: "NOTE" as const, label: t("composer.note") },
         ].filter((option) => offeredKinds.includes(option.value))} /> : null}
-      {showRecipients && selectedPostKind === "comment" ? <ComposerRecipients
+      {showRecipients && selectedPostKind === "COMMENT" ? <ComposerRecipients
         t={t} disabled={disabled} selected={selectedRecipients} available={availableRecipients}
         loading={recipientsLoading} autofollow={autofollowRecipients}
         onAdd={(id) => setSelectedRecipientIds((current) => current.includes(id) ? current : [...current, id])}

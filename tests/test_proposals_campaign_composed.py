@@ -69,8 +69,8 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
     __test__ = False
     with_work = False
 
-    def test_permission_index_checks_after_sync(self) -> None:
-        """Every composed profile passes the database-aware 0.23 index checks."""
+    def test_permission_checks_after_sync(self) -> None:
+        """Every composed profile passes the database-aware permission checks."""
 
         failures = [
             issue.id
@@ -105,12 +105,12 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
         self.assertIsNotNone(row["opened_at"])
         self.assertFalse(row["can_open"])
 
-    def test_cancelled_round_can_lift_without_reopening(self) -> None:
+    def test_canceled_round_can_lift_without_reopening(self) -> None:
         with actor_context(self.manager):
             self.as_user(self.round, self.manager).cancel()
             self.assertTrue(self.as_user(self.round, self.manager).can_open())
             lifted = self.as_user(self.round, self.manager).open()
-        self.assertEqual(lifted.status, "cancelled")
+        self.assertEqual(lifted.status, "canceled")
         self.assertIsNotNone(lifted.opened_at)
         result = self.execute_named(
             """query($id: String!) {
@@ -121,7 +121,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             "console",
         )
         row = self.data(result)["proposal_rounds_by_pk"]
-        self.assertEqual(row["status"], "CANCELLED")
+        self.assertEqual(row["status"], "CANCELED")
         self.assertIsNotNone(row["opened_at"])
 
     def test_project_editor_cannot_comment_on_widened_question(self) -> None:
@@ -179,8 +179,11 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 task.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            self.assertEqual(len(queries), 1)
-            self.assertIn("EXISTS", queries[0]["sql"].upper())
+            # Auditing the two task scopes and the message scope adds three
+            # INSERTs; the publication check itself remains one SELECT.
+            self.assertEqual(len(queries), 4, queries.captured_queries)
+            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
+            self.assertIn("EXISTS", queries[3]["sql"].upper())
         before = self.Task._base_manager.filter(pk=task.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):
@@ -235,11 +238,11 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
         for kind in ("comment", "note"):
             result = self.data(
                 self.execute(
-                    """mutation($id: ID!, $kind: String!) {
+                    """mutation($id: ID!, $kind: RecordMessagePostKind!) {
                   post_record_message(input: {model_label: "projects.Task", record_id: $id,
                     body: "Must not disclose the asker", kind: $kind}) { message { id } error_code }
                 }""",
-                    {"id": str(task.sqid), "kind": kind},
+                    {"id": str(task.sqid), "kind": kind.upper()},
                     self.asker,
                 )
             )["post_record_message"]
@@ -466,9 +469,13 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
         for actor, expected in (
             (
                 self.manager,
-                ({"manage", "write", "ask"}, {"write", "publish", "withdraw"}, {"write", "narrow", "manage"}),
+                (
+                    {"manage", "write", "ask"},
+                    {"write", "publish", "withdraw", "share", "read_offer"},
+                    {"write", "narrow", "manage"},
+                ),
             ),
-            (self.asker, ({"respond", "ask"}, {"write", "withdraw"}, {"write", "narrow"})),
+            (self.asker, ({"respond", "ask"}, {"write", "withdraw", "read_offer"}, {"write", "narrow"})),
         ):
             for name in ("public", "console"):
                 data = self.data(
@@ -487,7 +494,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
                     set(data[root]["permissions"])
                     for root in ("proposal_rounds_by_pk", "proposals_by_pk", "proposal_answers_by_pk")
                 )
-                self.assertEqual(actual, expected)
+                self.assertEqual(actual, expected, repr(actual))
 
     def test_passed_question_content_update_is_refused_and_manager_can_complete(self) -> None:
         """D25 reserves stage exits for managers; D35 leaves recipients discussion-only."""

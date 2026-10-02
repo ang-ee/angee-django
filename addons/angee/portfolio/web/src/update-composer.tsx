@@ -4,13 +4,14 @@ import {
   Glyph,
   MutationDialog,
   RelativeTime,
+  actionOutcomeSubmitResult,
   canonicalOptionValue,
   mutationDialogValueCodecs,
   useStatusTone,
   useActionOutcomeMutation,
   useEnumOptions,
   useRecordChromeContext,
-  type MutationDialogField,
+  type DescriptorField,
   type MutationDialogValues,
   type WidgetOption,
 } from "@angee/ui";
@@ -142,13 +143,11 @@ export function PortfolioUpdateComposer({
       const outcome = action === "report_project_update"
         ? await reportProject(targetId, values)
         : await reportInitiative(targetId, values);
-      if (!outcome?.ok) {
-        throw new Error(outcome?.message || t("update.error"));
-      }
+      return actionOutcomeSubmitResult(outcome);
     },
-    [action, reportInitiative, reportProject, t, targetId],
+    [action, reportInitiative, reportProject, targetId],
   );
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "health",

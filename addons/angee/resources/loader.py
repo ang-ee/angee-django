@@ -635,16 +635,18 @@ class AngeeResource(resources.ModelResource):
         """Return whether ``field_names`` match a unique constraint and its condition."""
 
         expected = frozenset(field_names)
-        for unique_together in self._meta.model._meta.unique_together:
-            if frozenset(unique_together) == expected:
-                return True, None
-        for constraint in self._meta.model._meta.constraints:
-            if not isinstance(constraint, models.UniqueConstraint):
-                continue
-            if getattr(constraint, "expressions", ()):
-                continue
-            if frozenset(getattr(constraint, "fields", ())) == expected:
-                return True, getattr(constraint, "condition", None)
+        model = self._meta.model
+        for owner in (model, *model._meta.get_parent_list()):
+            for unique_together in owner._meta.unique_together:
+                if frozenset(unique_together) == expected:
+                    return True, None
+            for constraint in owner._meta.constraints:
+                if not isinstance(constraint, models.UniqueConstraint):
+                    continue
+                if constraint.expressions:
+                    continue
+                if frozenset(constraint.fields) == expected:
+                    return True, constraint.condition
         return False, None
 
     def _is_adoptable_field(self, field: models.Field[Any, Any]) -> bool:
@@ -748,7 +750,7 @@ def build_resource(
         raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")
     custom_fields = {"_xref": fields.Field(attribute=None, column_name="_xref", readonly=True)}
     if issubclass(model, RecordRefMixin):
-        prefix = model.record_ref_field_prefix
+        prefix = model.record_ref_field().name
         if prefix in resource_class.fields:
             raise ImproperlyConfigured(f"{model._meta.label}: resource field {prefix!r} is owned by RecordRefMixin")
         custom_fields[prefix] = RecordRefField(model)

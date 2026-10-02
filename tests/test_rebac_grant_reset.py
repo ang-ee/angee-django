@@ -11,7 +11,7 @@ from rebac.backends.local import LocalBackend
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.schema import parse_zed
 
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 
 
 @pytest.mark.django_db(transaction=True)
@@ -41,7 +41,7 @@ def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
         optional_subject_relation="",
     )
     backend = LocalBackend()
-    install_manual_schema(
+    install_permission_schema(
         parse_zed("""
         definition auth/user {}
         definition tests/document {
@@ -70,4 +70,3 @@ def test_reset_rebac_grants_previews_then_clears_both_stores() -> None:
     assert not RelationshipRegistry._base_manager.exists()
     assert not RebacResource._base_manager.exists()
     assert not backend.check_access(subject=actor, action="read", resource=document).allowed
-    call_command("rebac", "index", "verify", verbosity=0)

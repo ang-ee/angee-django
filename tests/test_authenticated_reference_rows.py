@@ -3,28 +3,22 @@
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
 from rebac import SubjectRef, actor_context, system_context
 from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.portfolio.models import Release as AbstractRelease
+from angee.portfolio.testing.models import Initiative, InitiativeProject, ProductRow, ReferenceRelease, Update
+from angee.projects.testing.models import Project
+from angee.tags.testing.models import (
+    Tag,
+    TagAssignment,
+)
+from angee.uom.testing.models import (
+    Uom,
+    UomCategory,
+)
 from tests.conftest import create_user
-from tests.projects_models import Project
-from tests.test_portfolio import ProductRow
-from tests.test_productivity_deferred_save import Initiative, InitiativeProject, Update
-from tests.test_tags import Tag, TagAssignment
-from tests.test_uom import Uom, UomCategory
-
-
-class ReferenceRelease(AbstractRelease):
-    product = models.ForeignKey(ProductRow, on_delete=models.CASCADE, related_name="+")
-
-    class Meta(AbstractRelease.Meta):
-        abstract = False
-        app_label = "portfolio"
-        rebac_resource_type = "portfolio/release"
 
 
 @pytest.fixture

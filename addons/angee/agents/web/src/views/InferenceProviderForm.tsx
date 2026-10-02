@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Action, Field, Form, Group, registerForm, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
+import { Action, Field, Form, Group, registerForm, savedFormSubmitResult, useUiT, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
 import type { DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
@@ -14,6 +14,7 @@ const PROVIDER_MODEL = "agents.InferenceProvider";
 const MODEL_MODEL = "agents.InferenceModel";
 
 function InferenceProviderForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const uiT = useUiT();
   const t = useAgentsT();
   const [refreshModels] = useRecordActionMutation<ActionFieldName>(
     "refresh_provider_models",
@@ -34,7 +35,7 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
         const variables: DocumentVariables<typeof CreateInferenceProvider> = {
           data: data as DocumentVariables<typeof CreateInferenceProvider>["data"],
         };
-        return (await createProvider(variables))?.create_inference_provider ?? null;
+        return savedFormSubmitResult((await createProvider(variables))?.create_inference_provider, uiT("form.genericSaveError"));
       }
       if (!context.id) throw new Error("Inference provider update requires a saved record.");
       // `data` is FormView's already-normalized payload: relation fields arrive
@@ -47,9 +48,9 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
         >["data"],
       };
       const result = await updateProvider(variables);
-      return result?.update_inference_provider ?? null;
+      return savedFormSubmitResult(result?.update_inference_provider, uiT("form.genericSaveError"));
     },
-    [createProvider, updateProvider],
+    [createProvider, updateProvider, uiT],
   );
 
   return (
@@ -82,4 +83,3 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
 }
 
 export const inferenceProviderForm = registerForm(PROVIDER_MODEL, InferenceProviderForm);
-

@@ -82,9 +82,8 @@ from angee.base.mixins import (
     ItemOwnershipMixin,
     OwnerMixin,
     OwnerQuerySet,
-    SqidMixin,
 )
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
@@ -145,7 +144,7 @@ StorageMasterManager = AngeeManager.from_queryset(StorageMasterQuerySet)
 """Default manager for the archivable storage master rows (Backend, Drive)."""
 
 
-class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
+class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
     """Credentialed storage backend instance.
 
     One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
@@ -159,7 +158,7 @@ class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     sqid_prefix = "bkd_"
     slug = models.SlugField(unique=True)
     label = models.CharField(max_length=200)
-    backend_class = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")
+    backend_class = ImplClassField(StorageBackend)
     backend_config = models.JSONField(default=dict, blank=True)
 
     objects = StorageMasterManager()
@@ -248,7 +247,7 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
         return drive
 
 
-class Drive(SqidMixin, OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeModel):
+class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -457,7 +456,7 @@ class FolderManager(AngeeManager):
             return pruned
 
 
-class Folder(SqidMixin, AuditMixin, AngeeModel):
+class Folder(AuditMixin, AngeeDataModel):
     """Tree node inside a drive, or a per-user smart folder.
 
     A real folder has a ``drive`` and filesystem-style uniqueness on
@@ -594,7 +593,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         return bool({"drive", "drive_id", "parent", "parent_id", "is_virtual"} & set(update_fields))
 
 
-class MimeType(SqidMixin, AngeeModel):
+class MimeType(AngeeDataModel):
     """Reference row for one MIME type.
 
     The master-tier taxonomy seed is the source of truth; rows are read-only
@@ -696,7 +695,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         edge in the same transaction. It never returns an existing dedup row.
         """
 
-        drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug)
+        drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug, folder_id=folder_id)
         if not drive.storage.writable:
             raise exceptions.UploadConflict("drive is read-only")
         folder = self._folder_for(folder_id, drive=drive)
@@ -1169,12 +1168,20 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             raise exceptions.UploadDenied("read access to the file is required")
         return row
 
-    def _drive_for(self, *, drive_id: str, drive_slug: str) -> Any:
-        """Return the actor-readable, unarchived drive a draft targets."""
+    def _drive_for(self, *, drive_id: str, drive_slug: str, folder_id: str = "") -> Any:
+        """Return the actor-readable, unarchived drive a draft targets.
+
+        A named folder belongs to exactly one drive, so a draft that names only
+        its folder targets that folder's drive.
+        """
 
         drive_model = self.model._meta.get_field("drive").related_model
         if drive_id:
             drive = drive_model._default_manager.all().from_public_id(str(drive_id))
+        elif folder_id and not drive_slug:
+            folder_model = self.model._meta.get_field("folder").related_model
+            folder = folder_model._default_manager.all().from_public_id(str(folder_id))
+            drive = None if folder is None or folder.is_virtual else folder.drive
         else:
             slug = drive_slug or str(settings.ANGEE_STORAGE_DEFAULT_DRIVE)
             drive = drive_model._default_manager.filter(slug=slug).first()
@@ -1210,7 +1217,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             locked.grant_record_access("viewer", user)
 
 
-class File(SqidMixin, OwnerMixin, AngeeModel):
+class File(OwnerMixin, AngeeDataModel):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.
@@ -1414,6 +1421,33 @@ class File(SqidMixin, OwnerMixin, AngeeModel):
         """Open this file's stored bytes for reading (the download view streams it)."""
 
         return self.storage.open(self.storage_path, "rb")
+
+    def read_verified(self, *, max_bytes: int, expected_digest: str = "") -> bytes:
+        """Read bounded bytes and verify their stored size and SHA-256 identity.
+
+        Callers own actor-scoped access before reading. ``expected_digest`` also
+        checks a retained reference against this row's current content identity.
+        Backend IO errors propagate; invalid state or bytes raise ValidationError.
+        """
+
+        if max_bytes < 0:
+            raise ValueError("A file read requires a nonnegative byte limit.")
+        if self.upload_state != UploadState.READY:
+            raise ValidationError("The file is not ready.")
+        if expected_digest and self.content_hash != expected_digest:
+            raise ValidationError("The file content identity changed.")
+        if self.size_bytes > max_bytes:
+            raise ValidationError("The file exceeds the byte limit.")
+        try:
+            with self.open_stream() as stream:
+                digest, size, content = sha256_stream(
+                    cast(BinaryIO, CappedReader(stream, max_bytes=max_bytes)), capture_head=max_bytes,
+                )
+        except BodyTooLarge as error:
+            raise ValidationError("The file exceeds the byte limit.") from error
+        if size != self.size_bytes or digest != self.content_hash:
+            raise ValidationError("The stored bytes do not match the file identity.")
+        return content
 
     def issue_upload_token(self) -> str:
         """Return a one-shot signed token authorizing a proxy byte push.
@@ -1799,7 +1833,7 @@ class FileAttachmentManager(AngeeManager):
         return attachment
 
 
-class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` (which keys

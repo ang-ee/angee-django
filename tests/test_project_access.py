@@ -31,7 +31,11 @@ from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.access import bind, unbind
+from angee.projects.testing.models import Project, ProjectBinding, Task
+from angee.spaces.testing.models import Group, Membership
+from angee.testing.permissions import installed_field_owners
 from tests.conftest import (
     Backend,
     Drive,
@@ -43,12 +47,8 @@ from tests.conftest import (
     create_platform_admin,
     create_user,
     execute_schema,
-    installed_field_owners,
     result_data,
 )
-from tests.messaging_models import Channel, Message, Person, Thread, ThreadAttachment
-from tests.projects_models import Project, ProjectBinding, Task
-from tests.spaces_models import Group, Membership
 
 
 @strawberry_django.type(Task)
@@ -139,7 +139,7 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
         "knowledge/record_binding",
     ):
         assert f"definition {definition}" in projects
-    assert "relation channel: integrate/integration // rebac:field=channel" in messaging
+    assert "relation channel: messaging/channel // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
 
 
@@ -385,11 +385,10 @@ def test_project_drive_access_reaches_folders_and_files(project_access_schema: A
 
 
 def test_projects_app_ready_does_not_require_composed_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Native deletion dispatch starts without looking up composed models or data."""
+    """Native deletion dispatch enumerates installed models without named lookups."""
 
     def refuse_model_lookup(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Project startup must not look up composed models.")
 
     monkeypatch.setattr(apps, "get_model", refuse_model_lookup)
-    monkeypatch.setattr(apps, "get_models", refuse_model_lookup)
     apps.get_app_config("projects").ready()

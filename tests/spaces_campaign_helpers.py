@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 from rebac import system_context
 
+from angee.messaging.testing.models import Party, Person
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import create_platform_admin, create_user
-from tests.spaces_models import Group, Membership
-from tests.test_messaging import Party, Person
 from tests.test_spaces import _person_for, _schema
 
 ROLES = ("owner", "moderator", "member", "viewer")

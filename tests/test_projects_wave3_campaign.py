@@ -10,14 +10,14 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 
+from angee.messaging.testing.models import Person
 from angee.projects.access import bind, unbind
+from angee.projects.testing.models import Milestone, Project, Task
+from angee.spaces.testing.models import Group, Membership
 from angee.storage.exceptions import UploadDenied
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import Backend, Drive, File, FileAttachment, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
-from tests.messaging_models import Person
-from tests.projects_models import Milestone, Project, Task
-from tests.spaces_models import Group, Membership
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
@@ -113,7 +113,7 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
         else definition
         for definition in schema.definitions
     ]
-    install_manual_schema(schema, active=active)
+    install_permission_schema(schema, active=active)
     try:
         assert task.with_actor(submitter).promoted_phase() == phase.name
         assert not Project.objects.with_actor(submitter).filter(pk=promoted.pk).exists()
@@ -125,9 +125,10 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
             with CaptureQueriesContext(connection) as queries:
                 values = list(query.filter(pk=task.pk).values_list("_promoted_phase", flat=True))
             assert values == [phase.name]
-            assert len(queries) == 1
+            # Actor-set expansion, six arrow sources, then the projected row SELECT.
+            assert len(queries) == 8, queries.captured_queries
     finally:
-        install_manual_schema(original, active=active)
+        install_permission_schema(original, active=active)
 
 
 def test_record_file_follows_task_and_download_rechecks_after_narrowing(project_case):

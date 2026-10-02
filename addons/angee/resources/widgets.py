@@ -68,8 +68,8 @@ class RecordRefField(fields.Field):
         """Declare the model's import column and its xref widget."""
 
         super().__init__(
-            attribute=model.record_ref_field_prefix,
-            column_name=model.record_ref_field_prefix,
+            attribute=model.record_ref_field().name,
+            column_name=model.record_ref_field().name,
             widget=RecordRefWidget(),
         )
 
@@ -83,7 +83,8 @@ class RecordRefField(fields.Field):
         """Reject conflicting columns before resolution, then assign both fields."""
 
         del is_m2m
-        field_names = instance.record_ref_fields()
+        reference = instance.record_ref_field()
+        field_names = (reference.ct_field, reference.fk_field)
         if any(name in row for name in field_names):
             raise ValueError(f"{self.column_name} cannot be combined with its backing columns")
         target = self.clean(row, **kwargs)

@@ -170,8 +170,6 @@ class ChangeReadGate:
             except (LookupError, ValueError):
                 continue
             scope = read_scoped_queryset(model, self.actor)
-            if scope is None:
-                continue
             if instance_from_public_id(model, reference.id, queryset=scope) is not None:
                 readable.append(reference)
         return replace(change, related_records=tuple(readable))

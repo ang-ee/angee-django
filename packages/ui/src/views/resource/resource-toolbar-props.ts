@@ -79,10 +79,10 @@ export function useResourceToolbarProps({
       onViewChange: view && (props.availableViews?.length ?? 2) > 1 ? resourceView.setView : undefined,
       onCustomFilterAdd: (customFilter) =>
         resourceView.setFilter(
-          addCustomFilterToFilter(resourceView.state.filter, customFilter),
+          (current) => addCustomFilterToFilter(current, customFilter),
         ),
       onCustomFilterRemove: (id) =>
-        resourceView.setFilter(removeCustomFilter(resourceView.state.filter, id)),
+        resourceView.setFilter((current) => removeCustomFilter(current, id)),
       onFavoriteSave: resourceView.saveFavorite,
       onFavoriteSelect: resourceView.applyFavorite,
       onFavoriteRename: resourceView.renameFavorite,
@@ -96,7 +96,7 @@ export function useResourceToolbarProps({
       queryDirty: resourceView.queryDirty,
       onFilterToggle: (id) =>
         resourceView.setFilter(
-          nextFacetFilter(resourceView.state.filter, filterOptions, id),
+          (current) => nextFacetFilter(current, filterOptions, id),
         ),
       onFacetChange: (field, optionId) => {
         const active = activeFilterIdsFor(resourceView.state.filter, filterOptions)
@@ -110,7 +110,7 @@ export function useResourceToolbarProps({
       },
       onFilterTextChange: textFilterField === null ? undefined : (value) =>
         resourceView.setFilter(
-          nextTextFilter(resourceView.state.filter, value, textFilterField),
+          (current) => nextTextFilter(current, value, textFilterField),
         ),
     });
     },

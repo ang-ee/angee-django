@@ -13,6 +13,7 @@ import pytest
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
+from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
@@ -255,6 +256,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.operator",
         "angee.agents.apps.AgentsConfig",
         "angee.agents_integrate_anthropic",
+        "angee.decisions.apps.DecisionsConfig",
         "angee.storage.apps.StorageConfig",
         "angee.parties.apps.PartiesConfig",
         # OIDC login now composes parties (it claims the signed-in user's own
@@ -392,6 +394,36 @@ def test_jobs_use_celery_broker_url_from_environment(
 
     assert settings["CELERY_BROKER_URL"] == "redis://127.0.0.1:6379/1"
     assert settings["CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP"] is True
+
+
+@pytest.mark.parametrize("environment", [False, True])
+def test_autoconfig_environment_precedence_is_shared_by_declared_and_derived_settings(monkeypatch, environment):
+    """Composer environment overrides project values; bare settings retain project values."""
+
+    monkeypatch.setenv("CELERY_BROKER_URL", "redis://broker.example.test/1")
+    monkeypatch.setenv("CHANNEL_REDIS_URL", "redis://channels.example.test/2")
+    monkeypatch.setenv("ANGEE_OPERATOR_URL", "https://operator.example.test")
+    monkeypatch.setenv("ANYMAIL", '{"MAILGUN_API_KEY": "environment"}')
+    namespace = {
+        "INSTALLED_APPS": ["angee.jobs", "angee.graphql", "angee.operator", "angee.messaging"],
+        "CELERY_BROKER_URL": "redis://project.example.test/0",
+        "CHANNEL_REDIS_URL": "redis://project.example.test/1",
+        "ANGEE_OPERATOR_URL": "https://project.example.test",
+        "ANYMAIL": {"MAILGUN_API_KEY": "project"},
+    }
+
+    AutoConfig.apply_installed(namespace, environment=environment)
+
+    assert namespace["CELERY_BROKER_URL"] == (
+        "redis://broker.example.test/1" if environment else "redis://project.example.test/0"
+    )
+    assert namespace["CHANNEL_LAYERS"]["default"]["CONFIG"]["hosts"] == [
+        "redis://channels.example.test/2" if environment else "redis://project.example.test/1"
+    ]
+    assert namespace["ANGEE_OPERATOR_URL"] == (
+        "https://operator.example.test" if environment else "https://project.example.test"
+    )
+    assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment" if environment else "project"}
 
 
 def test_data_dir_is_host_owned_not_composed(tmp_path: Path) -> None:
@@ -1136,7 +1168,7 @@ def test_addon_autoconfig_merges_resource_source_classes(
     _write_addon(
         tmp_path,
         "alpha",
-        autoconfig=("SETTINGS = {\n    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.url_source',\n}\n"),
+        autoconfig=("SETTINGS = {\n    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.UrlSource',\n}\n"),
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
@@ -1144,14 +1176,14 @@ def test_addon_autoconfig_merges_resource_source_classes(
         "INSTALLED_APPS": ("alpha",),
         "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
         "ANGEE_RESOURCE_SOURCE_CLASSES": {
-            "path": "angee.resources.sources.path_source",
+            "path": "angee.resources.sources.PathSource",
         },
     }
     Composer(settings).compose_settings()
 
     assert settings["ANGEE_RESOURCE_SOURCE_CLASSES"] == {
-        "path": "angee.resources.sources.path_source",
-        "url": "alpha.sources.url_source",
+        "path": "angee.resources.sources.PathSource",
+        "url": "alpha.sources.UrlSource",
     }
 
 
@@ -1586,8 +1618,6 @@ def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_pa
 
     import django_yamlconf
 
-    from angee.compose.autoconfig import AutoConfig
-
     _write_addon(tmp_path, "pipeline_first", autoconfig="SETTINGS = {'ITEMS:append': ['first']}\n")
     _write_addon(
         tmp_path,
@@ -1619,8 +1649,6 @@ def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_pa
 def test_autoconfig_nested_contributions_do_not_mutate_addon_defaults(tmp_path, monkeypatch):
     """A composed registry belongs to its host; imported declarations remain reusable."""
 
-    from angee.compose.autoconfig import AutoConfig
-
     _write_addon(tmp_path, "registry_owner", autoconfig="SETTINGS = {'REGISTRY': {'core': 'core.Impl'}}\n")
     _write_addon(tmp_path, "registry_extension", autoconfig="SETTINGS = {'REGISTRY.extension': 'extra.Impl'}\n")
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -1635,9 +1663,124 @@ def test_autoconfig_nested_contributions_do_not_mutate_addon_defaults(tmp_path, 
     assert second["REGISTRY"] == {"core": "core.Impl"}
 
 
+@pytest.mark.parametrize("entry_kind", ["module", "config_path", "config_instance"])
+def test_autoconfig_applies_installed_entries_without_populating_apps(tmp_path, monkeypatch, entry_kind):
+    """Bare settings use native app identity and ordered merges without runtime loading."""
+
+    _write_addon(
+        tmp_path,
+        "bare_first",
+        depends_on=("not_installed",),
+        autoconfig="SETTINGS = {'VALUE': 'default', 'ITEMS:append': ['first'], 'REGISTRY': {'first': 'first.Impl'}}\n",
+    )
+    _write_addon(
+        tmp_path,
+        "bare_second",
+        autoconfig=(
+            "def settings(namespace):\n"
+            "    assert namespace['ITEMS'] == ['project', 'first']\n"
+            "    return {'ITEMS:append': ['second'], 'REGISTRY.second': 'second.Impl'}\n"
+        ),
+    )
+    (tmp_path / "bare_first" / "models.py").write_text("raise AssertionError('models imported')\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    first_config = AppConfig.create("bare_first")
+
+    def forbidden_ready():
+        pytest.fail("Applying autoconfig must not populate Django's app registry")
+
+    monkeypatch.setattr(type(first_config), "ready", lambda self: forbidden_ready())
+    first_entry = {
+        "module": "bare_first",
+        "config_path": "bare_first.apps.TestConfig",
+        "config_instance": first_config,
+    }[entry_kind]
+    installed = [first_entry, "bare_second"]
+    namespace = {"INSTALLED_APPS": installed, "VALUE": "project", "ITEMS": ["project"]}
+
+    AutoConfig.apply_installed(namespace)
+
+    assert namespace["INSTALLED_APPS"] is installed
+    assert namespace["VALUE"] == "project"
+    assert namespace["ITEMS"] == ["project", "first", "second"]
+    assert namespace["REGISTRY"] == {"first": "first.Impl", "second": "second.Impl"}
+    assert "bare_first.models" not in sys.modules
+    assert "ANGEE_RUNTIME_DIR" not in namespace
+
+
+@pytest.mark.parametrize("name", ["INSTALLED_APPS", "ROOT_URLCONF", "ASGI_APPLICATION", "ANGEE_RUNTIME_DIR"])
+def test_autoconfig_installed_apps_cannot_change_composer_settings(tmp_path, monkeypatch, name):
+    """Bare and composed settings share the same reserved declaration policy."""
+
+    _write_addon(tmp_path, "bare_mutator", autoconfig=f"SETTINGS = {{'{name}': 'unexpected'}}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(ImproperlyConfigured, match=f"must not define {name}"):
+        AutoConfig.apply_installed({"INSTALLED_APPS": ["bare_mutator"]})
+
+
+def test_autoconfig_installed_apps_preserve_broken_module_imports(tmp_path, monkeypatch):
+    """An existing autoconfig module's missing dependency must fail settings loading."""
+
+    _write_addon(tmp_path, "bare_broken", autoconfig="import missing_autoconfig_dependency\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(ModuleNotFoundError, match="missing_autoconfig_dependency"):
+        AutoConfig.apply_installed({"INSTALLED_APPS": ["bare_broken"]})
+
+
+def test_bare_settings_use_addon_owned_defaults(settings):
+    """Source tests share production policy and provider defaults with fixture additions."""
+
+    assert settings.REBAC_LOCAL_BACKEND_STORAGE == "registry"
+    assert settings.REBAC_STRICT_MODE is True
+    assert settings.CELERY_WORKER_PREFETCH_MULTIPLIER == 1
+    steps = settings.ANGEE_WORKFLOW_STEP_CLASSES
+    assert steps["review"] == "angee.workflows.reviews.Review"
+    assert steps["map"] == "angee.workflows.maps.Map"
+    assert steps["await_run"] == "angee.workflows.awaits.AwaitRun"
+    assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10
+    assert settings.ANGEE_WORKFLOW_RETENTION_DAYS == 90
+    assert {
+        "prepare_pages", "recognize_page", "process_evidence", "infer_evidence",
+    } <= steps.keys()
+    assert {"none", "retention_notes", "step_text"} <= settings.ANGEE_EXTRACTION_PROFILE_CLASSES.keys()
+    assert not hasattr(settings, "ANGEE_EXTRACTION_BACKEND_CLASSES")
+    assert {"email", "webform", "manual", "fake_live"} <= settings.ANGEE_CHANNEL_BACKEND_CLASSES.keys()
+    assert {"anthropic", "openai", "ollama", "stub_inference"} <= settings.ANGEE_INFERENCE_BACKEND_CLASSES.keys()
+    assert "pydantic" in settings.ANGEE_AGENT_RUNTIME_CLASSES
+    assert "stub" in settings.ANGEE_VCS_BACKEND_CLASSES
+    assert "stub" in settings.ANGEE_POSTS_FEED_BACKEND_CLASSES
+
+
+def test_bare_autoconfig_ignores_all_environment_sources(monkeypatch):
+    """Bare settings cannot pick up shell broker, channel, mail or operator services."""
+
+    for name, value in {
+        "REDIS_URL": "redis://cache.example.test/0",
+        "CHANNEL_REDIS_URL": "redis://channels.example.test/1",
+        "CELERY_BROKER_URL": "redis://broker.example.test/2",
+        "ANYMAIL": "not valid JSON",
+        "ANYMAIL_MAILGUN_API_KEY": "shell-value",
+        "ANGEE_OPERATOR_GRAPHQL_ENDPOINT": "https://operator.example.test/graphql",
+        "ANGEE_OPERATOR_URL": "https://operator.example.test",
+        "ANGEE_OPERATOR_TOKEN": "shell-token",
+    }.items():
+        monkeypatch.setenv(name, value)
+    namespace = {"INSTALLED_APPS": ["angee.jobs", "angee.graphql", "angee.messaging", "angee.operator"]}
+
+    AutoConfig.apply_installed(namespace, environment=False)
+
+    assert namespace["CHANNEL_LAYERS"] == {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+    assert "CELERY_BROKER_URL" not in namespace
+    assert "ANYMAIL" not in namespace
+    assert "ANYMAIL_MAILGUN_API_KEY" not in namespace
+    assert namespace["ANGEE_OPERATOR_GRAPHQL_ENDPOINT"] == "/operator/graphql"
+    assert namespace["ANGEE_OPERATOR_URL"] is None
+    assert namespace["ANGEE_OPERATOR_TOKEN"] is None
+
+
 @pytest.mark.parametrize("include_messaging", [False, True])
 def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, include_messaging):
-    """Provider defaults are addon-owned; explicit project values still win."""
+    """Installed messaging derives provider values with the shared environment precedence."""
 
     monkeypatch.setenv("ANYMAIL", '{"MAILGUN_API_KEY": "environment"}')
     monkeypatch.setenv("ANYMAIL_MAILGUN_SENDER_DOMAIN", "example.test")
@@ -1648,7 +1791,7 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
         "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
     Composer(namespace).compose_settings()
-    assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "project"}
+    assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment" if include_messaging else "project"}
     if include_messaging:
         assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
         assert namespace["ANGEE_EMAIL_DELIVERY_CONFIGURED"] is True

@@ -11,30 +11,49 @@ import copy
 import math
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import cache
 from typing import Any, ClassVar, NoReturn, cast, get_args
 
+from django.apps import apps
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.module_loading import import_string
+from django.utils.text import capfirst
 from django_choices_field import TextChoicesField
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
-from angee.base.jsonschema import LocalSchemaReferences
-from angee.base.validation import validate_model
+from angee.base.jsonschema import (
+    LocalSchemaReferences,
+    materialize_schema,
+    schema_nodes,
+    validation_issues,
+    validator,
+)
+from angee.base.validation import validate_value
 
 __all__ = [
+    "FORM_SCHEMA_ANNOTATIONS",
+    "FORM_SPEC_RELATION_VALIDATOR",
+    "check_form_annotations",
+    "freeze_form_schema",
+    "materialize_form_schema",
     "ImplBase",
     "ImplChoice",
     "ImplClassField",
     "ImplDefaultsMixin",
+    "check_impl_registry",
+    "impl_choices",
+    "impl_choices_enum",
     "impl_registry",
     "resolve_all_impl_classes",
+    "resolve_hook",
+    "resolve_hooks",
     "resolve_impl_class",
     "model_config_form_spec",
 ]
@@ -101,7 +120,102 @@ _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
         },
     },
 }
-_FORM_SPEC_RELATION_VALIDATOR = Draft202012Validator(_FORM_SPEC_RELATION_SCHEMA)
+FORM_SPEC_RELATION_VALIDATOR = validator(_FORM_SPEC_RELATION_SCHEMA)
+"""Native validator for the shared FormSpec relation metadata contract."""
+
+FORM_SCHEMA_ANNOTATIONS = frozenset({"title", "description", "widget", "relation", "options", "readOnly"})
+"""Presentation annotations shared by config forms and frozen form snapshots."""
+
+_FORM_SCHEMA_KEYS = frozenset(Draft202012Validator.VALIDATORS) | FORM_SCHEMA_ANNOTATIONS | {
+    "$schema", "$defs", "$anchor", "default",
+}
+_SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
+_FORM_MISSING = object()
+
+
+def materialize_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Compile a finite form schema using the shared annotation vocabulary."""
+    for node in schema_nodes(schema):
+        if node.keys() - _FORM_SCHEMA_KEYS:
+            raise ValidationError("Forms contain unsupported schema keywords or nested discriminators.")
+        if "$ref" in node and node.keys() - FORM_SCHEMA_ANNOTATIONS - {"$ref", "default"}:
+            raise ValidationError("Reference siblings must be form annotations.")
+        if "format" in node and node["format"] not in FormatChecker.checkers:
+            raise ValidationError(f"Unsupported form format: {node['format']}.")
+    result = materialize_schema(schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"})
+    nodes = list(schema_nodes(result))
+    for node in nodes:
+        check_form_annotations(node)
+    for node in nodes:
+        if "title" in node:
+            continue
+        relation = node.get("relation")
+        plural = False
+        if node.get("type") == "array" and isinstance(node.get("items"), dict):
+            relation = node["items"].get("relation")
+            plural = relation is not None
+        if relation is not None:
+            try:
+                model = apps.get_model(relation["resource"])
+            except (LookupError, ValueError) as error:
+                raise ValidationError(f"Unknown form relation target {relation['resource']!r}.") from error
+            node["title"] = capfirst(str(model._meta.verbose_name_plural if plural else model._meta.verbose_name))
+    return result
+
+
+def check_form_annotations(schema: dict[str, Any]) -> None:
+    """Validate shared form annotations and their declared field values."""
+    for name in ("title", "description", "widget"):
+        if name in schema and not isinstance(schema[name], str):
+            raise ValidationError(f"Form annotation {name} must be a string.")
+    if "readOnly" in schema and not isinstance(schema["readOnly"], bool):
+        raise ValidationError("Form annotation readOnly must be a boolean.")
+    if "relation" in schema and (
+        not FORM_SPEC_RELATION_VALIDATOR.is_valid(schema["relation"])
+        or schema.get("type") != "string"
+    ):
+        raise ValidationError("Relation fields require a string value and a valid FormSpec relation.")
+    if "options" in schema:
+        options = schema["options"]
+        if not isinstance(options, list) or not options or any(
+            not isinstance(option, dict) or set(option) != {"value", "label"}
+            or not isinstance(option["label"], str) or validation_issues(schema, option["value"])
+            for option in options
+        ):
+            raise ValidationError("Field options require valid values and labels.")
+
+
+def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
+    """Freeze copied defaults, option enums and read-only values into a form schema."""
+    if not isinstance(schema, dict):
+        return
+    if "options" in schema:
+        schema["enum"] = [copy.deepcopy(option["value"]) for option in schema["options"]]
+    if initial is not _FORM_MISSING:
+        if "const" in schema and schema["const"] != initial:
+            raise ValidationError("An initial value cannot change a declared constant.")
+        schema["default"] = copy.deepcopy(initial)
+    value = schema.get("default", _FORM_MISSING)
+    if schema.get("readOnly"):
+        if value is _FORM_MISSING:
+            raise ValidationError("A readOnly field requires an initial value or declared default.")
+        schema["const"] = copy.deepcopy(value)
+    for name, child in schema.get("properties", {}).items():
+        freeze_form_schema(child, value.get(name, _FORM_MISSING) if isinstance(value, dict) else _FORM_MISSING)
+        if isinstance(child, dict) and child.get("readOnly") and name not in schema.get("required", []):
+            schema.setdefault("required", []).append(name)
+    for key in _SCHEMA_LISTS:
+        for child in schema.get(key, []):
+            freeze_form_schema(child, value)
+    if isinstance(value, list) and "items" in schema:
+        if not value:
+            return
+        # Per-row immutable values require per-row schemas, not one mutable shared item schema.
+        schema["prefixItems"] = [copy.deepcopy(schema["items"]) for _ in value]
+        for child, item in zip(schema["prefixItems"], value, strict=True):
+            freeze_form_schema(child, item)
+    elif "items" in schema:
+        freeze_form_schema(schema["items"])
 
 
 class _ConfigFormSpecProjector:
@@ -278,7 +392,7 @@ class _ConfigFormSpecProjector:
         return result
 
     def _relation(self, value: Any) -> dict[str, Any]:
-        error = next(_FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
+        error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
         if error is not None:
             location = ".".join(str(part) for part in error.absolute_path)
             self._unsupported(
@@ -340,19 +454,23 @@ def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, A
 
 
 class ImplBase:
-    """Base for an implementation selectable by an ``ImplClassField`` key.
+    """Base for a keyed implementation selected by a field or rowless contract.
 
-    Subclasses declare class-level ``key``/``label``/``icon``/``category`` and a
-    ``defaults`` mapping of model-field values to seed. Behaviour lives on the
+    Registry bases name their composed setting. Subclasses declare class-level
+    ``key``/``label``/``icon``/``category`` and a ``defaults`` mapping of model-field
+    values to seed. Behaviour lives on the
     domain subclass (e.g. ``IntegrationImpl``, ``OAuthProviderType``).
     """
 
     key: ClassVar[str] = ""
+    registry_setting: ClassVar[str] = ""
     label: ClassVar[str] = ""
     icon: ClassVar[str] = ""
     category: ClassVar[str] = ""
     defaults: ClassVar[dict[str, Any]] = {}
     config_model: ClassVar[type[BaseModel] | None] = None
+    check_config_form_spec: ClassVar[bool] = True
+    """False for rowless contracts whose typed config is never offered as a FormSpec."""
 
     @classmethod
     def effective_defaults(cls) -> dict[str, Any]:
@@ -388,7 +506,7 @@ class ImplBase:
         """Return non-empty static input suggestions from Pydantic's JSON Schema.
 
         Pydantic's validation schema owns default encoding and omits factories;
-        ``normalize_config`` resolves those when validating runtime input.
+        ``parse_config`` resolves those when validating runtime input.
         FormSpec support does not determine which backend defaults are available.
         """
 
@@ -425,20 +543,34 @@ class ImplBase:
         )
 
     @classmethod
-    def normalize_config(cls, value: Any) -> dict[str, Any]:
-        """Validate and normalize adapter-owned JSON through its optional model."""
+    def parse_config(cls, value: Any) -> BaseModel | None:
+        """Return the declared config model, rejecting non-empty config without one."""
 
         if cls.config_model is None:
-            return cast(dict[str, Any], value)
-        validated = validate_model(cls.config_model, value, field="config")
-        return validated.model_dump(mode="json", by_alias=True)
+            if value:
+                raise ValidationError({"config": f"{cls.__name__} does not accept configuration."})
+            return None
+        return cast(BaseModel, cls.parse_value(value, cls.config_model, "config"))
+
+    @classmethod
+    def normalize_config(cls, value: Any) -> dict[str, Any]:
+        """Parse config once and serialize the model with its declared wire aliases."""
+
+        validated = cls.parse_config(value)
+        return validated.model_dump(mode="json", by_alias=True) if validated is not None else {}
+
+    @classmethod
+    def parse_value(cls, value: Any, type_: Any, path: str) -> Any:
+        """Validate through the cached native adapter, translating Django field paths."""
+
+        return validate_value(type_, value, field=path)
 
     @classmethod
     def declared_config_keys(cls) -> frozenset[str] | None:
-        """Return the top-level config wire names this impl accepts.
+        """Return the top-level config wire names accepted by model-row validation.
 
-        ``None`` means the config is untyped or open (``extra="allow"``), so every
-        key is accepted.
+        ``None`` means row config is untyped or open (``extra="allow"``), so
+        every key is accepted. Explicit typed parsing uses ``parse_config``.
         """
 
         if cls.config_model is None or cls.config_model.model_config.get("extra") == "allow":
@@ -516,13 +648,74 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) -> type[T]:
-    """Return the impl class ``registry_setting`` binds to ``key``.
+def declared_impl_registries() -> tuple[str, ...]:
+    """Return dotted implementation bases listed by installed addons."""
+
+    declared = getattr(settings, "ANGEE_IMPL_REGISTRIES", ())
+    if not isinstance(declared, list | tuple) or not all(isinstance(path, str) for path in declared):
+        raise ImproperlyConfigured("settings.ANGEE_IMPL_REGISTRIES must be a list of dotted base classes.")
+    return tuple(declared)
+
+
+def declared_hooks() -> tuple[str, ...]:
+    """Return hook setting names declared by installed addons."""
+
+    declared = getattr(settings, "ANGEE_HOOKS", ())
+    if not isinstance(declared, list | tuple) or not all(isinstance(name, str) for name in declared):
+        raise ImproperlyConfigured("settings.ANGEE_HOOKS must be a list of hook setting names.")
+    return tuple(declared)
+
+
+def _hook_paths(setting: str, *, sorted_unique: bool = False) -> tuple[str, ...]:
+    """Read one single or ordered multi-hook declaration without importing it."""
+
+    configured = getattr(settings, setting, "")
+    if isinstance(configured, str):
+        paths = (configured,) if configured else ()
+    elif isinstance(configured, list | tuple) and all(isinstance(path, str) for path in configured):
+        paths = tuple(configured)
+    else:
+        raise ImproperlyConfigured(f"settings.{setting} must be a dotted path or a list of dotted paths.")
+    if not all(paths):
+        raise ImproperlyConfigured(f"settings.{setting} contains an empty hook path.")
+    return tuple(sorted(set(paths))) if sorted_unique else paths
+
+
+def _resolve_hook_path(setting: str, path: str) -> Callable[..., Any]:
+    """Import and validate one hook path from trusted settings."""
+
+    try:
+        hook = import_string(path)
+    except ImportError as error:
+        raise ImproperlyConfigured(f"settings.{setting} hook {path!r} cannot be imported: {error}") from error
+    if not callable(hook):
+        raise ImproperlyConfigured(f"settings.{setting} hook {path!r} is not callable.")
+    return hook
+
+
+def resolve_hooks(setting: str, *, sorted_unique: bool = False) -> tuple[Callable[..., Any], ...]:
+    """Resolve an ordered hook list; owners may request sorted unique paths."""
+
+    return tuple(_resolve_hook_path(setting, path) for path in _hook_paths(setting, sorted_unique=sorted_unique))
+
+
+def resolve_hook(setting: str) -> Callable[..., Any] | None:
+    """Resolve one optional hook from a setting."""
+
+    paths = _hook_paths(setting)
+    if len(paths) > 1:
+        raise ImproperlyConfigured(f"settings.{setting} must name at most one hook.")
+    return _resolve_hook_path(setting, paths[0]) if paths else None
+
+
+def resolve_impl_class[T](base_class: type[T], key: str) -> type[T]:
+    """Return the impl class the base's named registry binds to ``key``.
 
     The dotted path comes from composed, trusted settings and is checked against
     ``base_class`` before returning.
     """
 
+    registry_setting = getattr(base_class, "registry_setting")
     registry = impl_registry(registry_setting)
     try:
         dotted = registry[key]
@@ -535,32 +728,32 @@ def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) 
     if not (isinstance(base_class, type) and isinstance(impl, type) and issubclass(impl, base_class)):
         base_name = getattr(base_class, "__name__", base_class)
         raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
+    declared_key = getattr(impl, "key", None)
+    if declared_key is not None and declared_key != key:
+        raise ImproperlyConfigured(
+            f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {declared_key!r}."
+        )
     return impl
 
 
 def resolve_all_impl_classes[T](
-    registry_setting: str,
     base_class: type[T],
     *,
     on_error: Callable[[Exception], None] | None = None,
 ) -> tuple[type[T], ...]:
     """Resolve and validate every configured impl in deterministic key order.
 
-    ``ImplBase`` owns stable class keys, which must agree with their registry
-    keys. Native implementation classes without that contract use the registry
-    key alone. System-check callers may supply ``on_error`` to collect every
+    Implementations that declare class keys must agree with their registry keys.
+    Native implementation classes without that contract use the registry key
+    alone. System-check callers may supply ``on_error`` to collect every
     invalid declaration while ordinary callers retain fail-fast resolution.
     """
 
+    registry_setting = getattr(base_class, "registry_setting")
     classes: list[type[T]] = []
     for key in sorted(impl_registry(registry_setting)):
         try:
-            impl = resolve_impl_class(registry_setting, key, base_class)
-            if issubclass(impl, ImplBase) and impl.key != key:
-                raise ImproperlyConfigured(
-                    f"settings.{registry_setting}[{key!r}] resolves "
-                    f"{impl.__name__} with key {impl.key!r}."
-                )
+            impl = resolve_impl_class(base_class, key)
         except (ImportError, ImproperlyConfigured) as error:
             if on_error is None:
                 raise
@@ -570,19 +763,90 @@ def resolve_all_impl_classes[T](
     return tuple(classes)
 
 
+def check_impl_registry(
+    base_class: type[object],
+    *,
+    obj: object | None = None,
+) -> list[checks.CheckMessage]:
+    """Check registry declarations and offered config forms, including rowless registries.
+
+    Empty registries are valid catalogues. Model fields and enum projections
+    require entries, and consumers own any required selected-key policy.
+    """
+
+    errors: list[checks.CheckMessage] = []
+    try:
+        classes = resolve_all_impl_classes(
+            base_class,
+            on_error=lambda error: errors.append(
+                checks.Error(
+                    str(error),
+                    obj=obj,
+                    id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
+                )
+            ),
+        )
+    except ImproperlyConfigured as error:
+        return [checks.Error(str(error), obj=obj, id="angee.E002")]
+    for impl in classes:
+        if issubclass(impl, ImplBase) and impl.check_config_form_spec:
+            try:
+                impl.config_form_spec()
+            except ImproperlyConfigured as error:
+                errors.append(checks.Error(str(error), obj=obj, id="angee.E005"))
+    return errors
+
+
+def impl_choices(base_class: type[object]) -> list[ImplChoice]:
+    """Project pickable metadata in registry-key order, without requiring a column."""
+
+    registry_setting = getattr(base_class, "registry_setting")
+    choices: list[ImplChoice] = []
+    for key in sorted(impl_registry(registry_setting)):
+        impl = resolve_impl_class(base_class, key)
+        if issubclass(impl, ImplBase):
+            choices.append(replace(impl.choice(), key=key))
+        else:
+            choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}, config_schema=None))
+    return choices
+
+
+def impl_choices_enum(base_class: type[object]) -> type[models.TextChoices]:
+    """Return the shared native enum for the current non-empty registry key set."""
+
+    registry_setting = getattr(base_class, "registry_setting")
+    keys = tuple(sorted(impl_registry(registry_setting)))
+    if not keys:
+        raise ImproperlyConfigured(
+            f"Implementation registry settings.{registry_setting} is empty; "
+            "at least one implementation is required to build its enum."
+        )
+    return _impl_choices_enum(registry_setting, keys)
+
+
+@cache
+def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[models.TextChoices]:
+    """Share enum identity across projections while settings changes select new keys."""
+
+    core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
+    camel = "".join(part.capitalize() for part in core.split("_") if part)
+    members = [(key.upper(), (key, key)) for key in keys]
+    return cast("type[models.TextChoices]", models.TextChoices(f"{camel or 'Impl'}Impl", members))
+
+
 class ImplClassField(TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
-    ``registry_setting`` names the Django setting that maps keys to dotted import
-    paths. Addons contribute impls into that setting through autoconfig, making
+    The base names the Django setting that maps keys to dotted import paths.
+    Addons contribute impls into that setting through autoconfig, making
     the key set closed at composition time. The field renders as a
     ``TextChoices`` enum and resolves only configured, trusted paths.
     """
 
     def __init__(
         self,
-        *,
         base_class: type[object] | None = None,
+        *,
         registry_setting: str = "",
         create_only: bool = False,
         **kwargs: Any,
@@ -591,8 +855,10 @@ class ImplClassField(TextChoicesField):
 
         if base_class is not None and not isinstance(base_class, type):
             raise ImproperlyConfigured("ImplClassField base_class must be a type.")
+        if base_class is not None and registry_setting:
+            raise ImproperlyConfigured("ImplClassField registry_setting is only for historical migration fields.")
         self.base_class = base_class
-        self.registry_setting = registry_setting
+        self.registry_setting = getattr(base_class, "registry_setting") if base_class is not None else registry_setting
         self.create_only = create_only
         self._historical_default = kwargs.get("default")
         kwargs.setdefault("max_length", 100)
@@ -609,14 +875,14 @@ class ImplClassField(TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Validate the declaration, registry key agreement, and config forms."""
+        """Validate the field's base declaration; the base check owns registry content."""
 
         errors = super().check(**kwargs)
         if not isinstance(self.base_class, type):
             errors.append(
                 checks.Error(
                     "ImplClassField requires a base_class type.",
-                    hint="Pass base_class=... naming the implementation base.",
+                    hint="Pass the implementation base as the first argument.",
                     obj=self,
                     id="angee.E001",
                 )
@@ -629,34 +895,27 @@ class ImplClassField(TextChoicesField):
                     id="angee.E002",
                 )
             )
-        elif isinstance(self.base_class, type):
-            for impl in resolve_all_impl_classes(
-                self.registry_setting,
-                self.base_class,
-                on_error=lambda error: errors.append(
-                    checks.Error(
-                        str(error),
-                        obj=self,
-                        id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
-                    )
-                ),
-            ):
-                if issubclass(impl, ImplBase):
-                    try:
-                        impl.config_form_spec()
-                    except ImproperlyConfigured as error:
-                        errors.append(checks.Error(str(error), obj=self, id="angee.E005"))
+        elif isinstance(self.base_class, type) and (
+            f"{self.base_class.__module__}.{self.base_class.__qualname__}" not in declared_impl_registries()
+        ):
+            errors.append(
+                checks.Error(
+                    f"{self.base_class.__name__} is not declared in settings.ANGEE_IMPL_REGISTRIES.",
+                    obj=self,
+                    id="angee.E032",
+                )
+            )
         return errors
 
     def resolve_class(self, key: Any) -> type:
         """Return the impl class the configured mapping binds to ``key``."""
 
-        return resolve_impl_class(self.registry_setting, self.key_for(key), cast(type, self.base_class))
+        return resolve_impl_class(cast(type, self.base_class), self.key_for(key))
 
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
 
-        return tuple(sorted(self._registry()))
+        return tuple(sorted(impl_registry(self.registry_setting)))
 
     def resolve_for(self, instance: models.Model) -> type:
         """Return the impl class selected by this field on ``instance``."""
@@ -674,57 +933,20 @@ class ImplClassField(TextChoicesField):
     def _build_enum(self) -> type[models.TextChoices]:
         """Return a ``TextChoices`` enum over the registered keys, in deterministic order."""
 
-        keys = sorted(self._registry())
-        if not keys:
-            if self.base_class is None:
-                # A migration-state field (``deconstruct`` drops ``base_class`` and
-                # ``choices``) only describes its varchar column, so it must load
-                # even when its registry was renamed or retired after the migration
-                # was written.
+        if self.base_class is None:
+            # Migration-state fields retain their serialized setting, even after
+            # the active base and its setting have changed or been retired.
+            keys = tuple(sorted(impl_registry(self.registry_setting)))
+            if not keys:
                 default = self._historical_default
-                key = default if isinstance(default, str) and default else "historical"
-                members = [(key.upper(), (key, key))]
-                return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
-            raise ImproperlyConfigured(
-                f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
-                "contribute at least one impl (e.g. a noop/null-object default) before the field is built."
-            )
-        members = [(key.upper(), (key, key)) for key in keys]
-        return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
-
-    def _enum_name(self) -> str:
-        """Return a stable PascalCase GraphQL enum name derived from ``registry_setting``."""
-
-        core = self.registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
-        camel = "".join(part.capitalize() for part in core.split("_") if part)
-        return f"{camel or 'Impl'}Impl"
+                keys = (default if isinstance(default, str) and default else "historical",)
+            return _impl_choices_enum(self.registry_setting, keys)
+        return impl_choices_enum(self.base_class)
 
     def impl_choices(self) -> list[ImplChoice]:
         """Return pickable choices for the registry in deterministic key order."""
 
-        choices: list[ImplChoice] = []
-        for key in sorted(self._registry()):
-            impl = self.resolve_class(key)
-            if isinstance(impl, type) and issubclass(impl, ImplBase):
-                choice = impl.choice()
-                choices.append(
-                    ImplChoice(
-                        key=key,
-                        label=choice.label,
-                        icon=choice.icon,
-                        category=choice.category,
-                        defaults=choice.defaults,
-                        config_schema=choice.config_schema,
-                    )
-                )
-            else:
-                choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}, config_schema=None))
-        return choices
-
-    def _registry(self) -> dict[str, str]:
-        """Return the configured ``key -> dotted path`` mapping for this field."""
-
-        return impl_registry(self.registry_setting)
+        return impl_choices(cast(type, self.base_class))
 
 
 class ImplDefaultsMixin(models.Model):
@@ -827,9 +1049,7 @@ class ImplDefaultsMixin(models.Model):
                 if updated is not None and field.name not in updated and field.attname not in updated:
                     continue
                 with system_context(reason="base.impl.validate_stored_key"):
-                    stored_row = (
-                        type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
-                    )
+                    stored_row = type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
                 if stored_row is None and self._state.adding:
                     continue
                 if stored_row is None:
@@ -863,7 +1083,7 @@ class ImplDefaultsMixin(models.Model):
         return {"config"}
 
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
-        """Validate every declared adapter config before any model save ingress."""
+        """Validate declared config models on save, leaving untyped row config alone."""
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return

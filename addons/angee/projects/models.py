@@ -1540,7 +1540,6 @@ class ThreadActivityProjects(models.Model):
     """Contribute Activity-to-Task maturation onto messaging.ThreadActivity."""
 
     extends = "messaging.ThreadActivity"
-    runtime = False
 
     class Meta:
         """Abstract same-row behavior donor for messaging.ThreadActivity."""

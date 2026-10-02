@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.conf import settings
 from django.core import checks
 from django.core.checks.registry import registry
 from django.db import models
@@ -16,11 +17,107 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_hierarchy_queryset_order, check_ownership, check_rebac_database
+from angee.base.checks import (
+    check_hierarchy_queryset_order,
+    check_hooks,
+    check_impl_registries,
+    check_ownership,
+    check_rebac_database,
+)
 from angee.base.fields import StateField
-from angee.base.mixins import HierarchyQuerySet, OwnerMixin
-from angee.base.models import AngeeModel
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, HierarchyQuerySet, OwnerMixin
+from angee.base.models import AngeeManager, AngeeModel
 from tests.proposals_models import Round
+from tests.test_impl import _BaseImpl
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_append_only_default_manager_check(guarded: bool) -> None:
+    """Django's model checks catch a concrete retained row with an ordinary manager."""
+
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class Retained(AppendOnlyModel):
+            objects = AngeeManager.from_queryset(AppendOnlyQuerySet)() if guarded else AngeeManager()
+
+            class Meta(AppendOnlyModel.Meta):
+                app_label = "contenttypes"
+                abstract = False
+
+        errors = checks.run_checks(app_configs=list(isolated.get_app_configs()), tags=[checks.Tags.models])
+        append_errors = [error for error in errors if error.id == "angee.E034"]
+        assert len(append_errors) == (0 if guarded else 1)
+        if append_errors:
+            assert append_errors[0].obj is Retained
+
+
+def test_installed_append_only_default_managers_compose_guard() -> None:
+    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
+    assert models
+    assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
+
+
+def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
+    """The base check validates rowless catalogues without a model field."""
+
+    with override_settings(
+        ANGEE_IMPL_REGISTRIES=["tests.test_impl._BaseImpl", "tests.test_impl.MissingBase"],
+        ANGEE_TEST_IMPLS={
+            "missing": "tests.test_impl.MissingImpl",
+            "wrong_base": "builtins.str",
+            "wrong_key": "tests.test_impl._BaseImpl",
+        },
+    ):
+        errors = check_impl_registries()
+    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004", "angee.E031"]
+    assert "MissingImpl" in errors[0].msg
+    assert "is not a _BaseImpl" in errors[1].msg
+    assert "with key 'base'" in errors[2].msg
+    assert "MissingBase" in errors[3].msg
+
+
+def test_impl_registry_check_accepts_empty_catalogue_and_rejects_unlisted_field() -> None:
+    """An empty rowless registry is valid, while model selectors must be declared."""
+
+    with override_settings(ANGEE_IMPL_REGISTRIES=["tests.test_impl._EmptyImpl"], ANGEE_EMPTY_IMPLS={}):
+        assert check_impl_registries() == []
+    with override_settings(ANGEE_IMPL_REGISTRIES=[], ANGEE_TEST_IMPLS={"base": "tests.test_impl._BaseImpl"}):
+        [error] = ImplClassField(_BaseImpl).check()
+    assert error.id == "angee.E032"
+
+
+def test_hook_check_imports_every_declared_path() -> None:
+    """A bad optional hook and each bad list entry fail at Django startup."""
+
+    with override_settings(
+        ANGEE_HOOKS=["ANGEE_TEST_SINGLE_HOOK", "ANGEE_TEST_HOOKS"],
+        ANGEE_TEST_SINGLE_HOOK="builtins.MissingHook",
+        ANGEE_TEST_HOOKS=["builtins.len", "builtins.Ellipsis", "builtins.MissingHook"],
+    ):
+        errors = check_hooks()
+    assert [error.id for error in errors] == ["angee.E033"] * 3
+    assert "MissingHook" in errors[0].msg
+    assert "not callable" in errors[1].msg
+    assert "MissingHook" in errors[2].msg
+
+
+def test_hook_check_accepts_unset_optional_hook_and_declared_list_order() -> None:
+    with override_settings(
+        ANGEE_HOOKS=["ANGEE_TEST_SINGLE_HOOK", "ANGEE_TEST_HOOKS"],
+        ANGEE_TEST_SINGLE_HOOK="",
+        ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len"],
+    ):
+        assert check_hooks() == []
+
+
+def test_installed_hook_owners_declare_their_settings() -> None:
+    assert {
+        "ANGEE_MCP_ACTOR_VERIFIER",
+        "ANGEE_WEBFORM_TOKEN_HOOK",
+        "ANGEE_TASK_LOCK_BACKEND",
+        "ANGEE_WORK_MERGE_CONTRIBUTORS",
+    } <= set(settings.ANGEE_HOOKS)
+    assert check_hooks() == []
 
 
 @pytest.mark.parametrize("value", ("names", "values", "labels", "choices"))
@@ -48,6 +145,7 @@ def test_rebac_check_requires_default_write_routing(
     """The native router determines writes; unrelated models and reads are ignored."""
 
     with isolate_apps("django.contrib.contenttypes") as registry:
+
         class Managed(RebacMixin):
             class Meta:
                 app_label = "contenttypes"
@@ -93,12 +191,16 @@ def test_rebac_database_check_registered_by_base() -> None:
     assert checks.Tags.models in check_rebac_database.tags
     assert sum(check is check_hierarchy_queryset_order for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_hierarchy_queryset_order.tags
+    assert sum(check is check_hooks for check in registry.registered_checks) == 1
+    assert checks.Tags.models in check_hooks.tags
 
 
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])
 @pytest.mark.parametrize("selected_apps", [False, True])
 def test_hierarchy_queryset_order_checks_every_declared_manager(
-    monkeypatch: pytest.MonkeyPatch, ordering: str, selected_apps: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    ordering: str,
+    selected_apps: bool,
 ) -> None:
     """Path maintenance may skip its own guard, but must retain other update guards."""
 
@@ -121,6 +223,7 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(
 
     queryset = {"first": First, "last": Last, "override": Override, "inherited": Inherited, "plain": Guard}[ordering]
     with isolate_apps("django.contrib.contenttypes") as registry:
+
         class Node(models.Model):
             objects = models.Manager()
             hierarchy = models.Manager.from_queryset(queryset)()

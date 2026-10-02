@@ -112,7 +112,7 @@ const markdownPreviewWidget = lazyWidget(
  */
 const rowsWidget = lazyWidget(
   () => import("../views/form/RowsField").then((m) => m.rowsWidget),
-  { edit: true },
+  { edit: true, acceptsRowTemplate: true },
 );
 const objectWidget = lazyWidget(
   () => import("../views/form/StructuredField").then((m) => m.objectWidget),

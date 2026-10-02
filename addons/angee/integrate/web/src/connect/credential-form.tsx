@@ -1,7 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
-  Action,
+  savedFormSubmitResult, useUiT, Action,
   Field,
   Form,
   Group,
@@ -33,6 +33,7 @@ export function CredentialForm({
   resource: _resource,
   ...props
 }: RegisteredFormProps): React.ReactElement {
+  const uiT = useUiT();
   const t = useIntegrateT();
   const isCreate = props.id == null;
   const [revealCredential] = useAuthoredMutation(IntegrateRevealCredential, { transient: true });
@@ -77,9 +78,9 @@ export function CredentialForm({
         },
       } as DocumentVariables<typeof IntegrateCreateCredential>;
       const result = await createCredential(variables);
-      return result?.create_credential ?? null;
+      return savedFormSubmitResult(result?.create_credential, uiT("form.genericSaveError"));
     },
-    [createCredential],
+    [createCredential, uiT],
   );
 
   return (

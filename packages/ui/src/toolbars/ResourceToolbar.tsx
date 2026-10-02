@@ -1,6 +1,5 @@
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
-import type { FilterValue } from "@angee/metadata";
 import { useDebouncedText } from "../lib/use-debounced-text";
 import { useContainerQuery } from "../lib/use-container-query";
 import { Glyph } from "../chrome/Glyph";
@@ -31,17 +30,18 @@ import type {
   ResourceViewGroup,
   ResourceViewGroupGranularity,
   ResourceViewKind,
-  ResourceViewLookupOperator,
 } from "../views/resource/resource-view-model";
 import {
   resourceViewGroupsEqual,
   resourceViewKindCapabilities,
 } from "../views/resource/resource-view-model";
 import { groupFieldLabel } from "../views/resource/resource-view-list-body";
+import { labelText } from "../views/resource/resource-view-utils";
 import {
-  filterOperatorLabel,
-  labelText,
-} from "../views/resource/resource-view-utils";
+  FilterClauseEditor,
+  type FilterClause,
+  type FilterClauseField,
+} from "./FilterClauseEditor";
 
 export interface ResourceToolbarChrome {
   viewSwitcher?: boolean;
@@ -61,7 +61,7 @@ export interface ResourceToolbarProps {
    * back to `groupOptions` for standalone callers that omit it. */
   customGroupOptions?: readonly ResourceToolbarGroupOption[];
   filterOptions?: readonly ResourceToolbarFilterOption[];
-  customFilterFields?: readonly ResourceToolbarFilterField[];
+  customFilterFields?: readonly FilterClauseField[];
   customFilterChips?: readonly ResourceToolbarCustomFilterChip[];
   favorites?: readonly ResourceViewFavorite[];
   /** Present filter-option or shipped-preset ids and facets in a compact row. */
@@ -95,7 +95,7 @@ export interface ResourceToolbarProps {
   pagerPageSizeOptions?: readonly number[];
   pagerMaxPageSize?: number;
   onViewChange?: (view: ResourceViewKind) => void;
-  onCustomFilterAdd?: (filter: ResourceToolbarCustomFilter) => void;
+  onCustomFilterAdd?: (filter: FilterClause) => void;
   onCustomFilterRemove?: (id: string) => void;
   onFavoriteSave?: (label: string) => void;
   onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
@@ -144,45 +144,6 @@ export interface ResourceToolbarGroupOption {
   group: ResourceViewGroup;
   type?: "date" | "value";
   granularities?: readonly ResourceViewGroupGranularity[];
-}
-
-export type ResourceToolbarFilterFieldType =
-  | "text"
-  | "number"
-  | "date"
-  | "datetime"
-  | "selection"
-  | "boolean";
-
-export type ResourceToolbarCustomFilterOperator =
-  | ResourceViewLookupOperator
-  | "isNotNull";
-
-export interface ResourceToolbarFilterChoice {
-  value: string;
-  label: ReactNode;
-}
-
-export interface ResourceToolbarFilterField {
-  id: string;
-  field?: string;
-  label: ReactNode;
-  group?: string;
-  type?: ResourceToolbarFilterFieldType;
-  options?: readonly ResourceToolbarFilterChoice[];
-  operators?: readonly ResourceToolbarCustomFilterOperator[];
-  /** Declared value picker, for example an authorized relation search. */
-  renderValue?: (props: {
-    value: string;
-    onValueChange: (value: string) => void;
-  }) => ReactNode;
-}
-
-export interface ResourceToolbarCustomFilter {
-  field: string;
-  operator: ResourceToolbarCustomFilterOperator;
-  value?: FilterValue;
-  type?: ResourceToolbarFilterFieldType;
 }
 
 export interface ResourceToolbarCustomFilterChip {
@@ -477,7 +438,7 @@ function FilterRow({
   facetIds: readonly string[];
   facetLabels?: Readonly<Record<string, ReactNode>>;
   filterOptions: readonly ResourceToolbarFilterOption[];
-  customFilterFields: readonly ResourceToolbarFilterField[];
+  customFilterFields: readonly FilterClauseField[];
   activeFilterIds: readonly string[];
   activeFavoriteIds: readonly string[];
   queryDirty: boolean;
@@ -574,7 +535,7 @@ function FilterPicker({
 }: {
   compact: boolean;
   filterOptions: readonly ResourceToolbarFilterOption[];
-  customFilterFields: readonly ResourceToolbarFilterField[];
+  customFilterFields: readonly FilterClauseField[];
   customFilterChips: readonly ResourceToolbarCustomFilterChip[];
   favorites: readonly ResourceViewFavorite[];
   activeFilters: readonly ResourceToolbarFilterOption[];
@@ -582,7 +543,7 @@ function FilterPicker({
   filterText: string;
   onFilterTextChange?: (value: string) => void;
   onFilterToggle?: (id: string) => void;
-  onCustomFilterAdd?: (filter: ResourceToolbarCustomFilter) => void;
+  onCustomFilterAdd?: (filter: FilterClause) => void;
   onCustomFilterRemove?: (id: string) => void;
   onFavoriteSave?: (label: string) => void;
   onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
@@ -604,19 +565,6 @@ function FilterPicker({
     }
     return [...sections];
   }, [filterOptions]);
-  const [customFieldId, setCustomFieldId] = React.useState("");
-  const [customOperator, setCustomOperator] =
-    React.useState<ResourceToolbarCustomFilterOperator>("contains");
-  const [customValue, setCustomValue] = React.useState("");
-  const [customValueError, setCustomValueError] = React.useState<string>();
-  const customEditorRef = React.useRef<HTMLDivElement | null>(null);
-  const selectedCustomField =
-    customFilterFields.find((field) => field.id === customFieldId) ??
-    customFilterFields[0];
-  const effectiveCustomOperator = operatorForField(
-    selectedCustomField,
-    customOperator,
-  );
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [editingFavoriteId, setEditingFavoriteId] = React.useState<string | null>(null);
   const [favoriteLabel, setFavoriteLabel] =
@@ -627,42 +575,6 @@ function FilterPicker({
     setDraft: setDraftFilterText,
     commit: commitFilterText,
   } = useDebouncedText(filterText, onFilterTextChange);
-
-  function addCustomFilter() {
-    if (!selectedCustomField || !onCustomFilterAdd) return;
-    const needsValue = customFilterNeedsValue(effectiveCustomOperator);
-    let value: FilterValue | undefined;
-    try {
-      value = needsValue
-        ? coerceFilterValue(
-            selectedCustomField,
-            customValue,
-            effectiveCustomOperator,
-          )
-        : undefined;
-    } catch {
-      setCustomValueError(t("resourceToolbar.invalidJson"));
-      return;
-    }
-    if (needsValue && value === undefined) {
-      setCustomValueError(t("resourceToolbar.invalidValue"));
-      return;
-    }
-    setCustomValueError(undefined);
-    onCustomFilterAdd({
-      field: selectedCustomField.field ?? selectedCustomField.id,
-      operator: effectiveCustomOperator,
-      ...(value !== undefined ? { value } : {}),
-      ...(selectedCustomField.type ? { type: selectedCustomField.type } : {}),
-    });
-    setCustomValue("");
-    globalThis.requestAnimationFrame(() => {
-      const target = customEditorRef.current?.querySelector<HTMLElement>(
-        "input:not([disabled]), button:not([disabled]), [tabindex='0']",
-      );
-      target?.focus();
-    });
-  }
 
   function saveFavorite() {
     const label = favoriteLabel.trim();
@@ -827,32 +739,10 @@ function FilterPicker({
                 {t("resourceToolbar.addCustomFilter")}
               </PickerButton>
               {customFilterOpen ? (
-                <CustomFilterEditor
-                  editorRef={customEditorRef}
+                <FilterClauseEditor
+                  className="mt-2"
                   fields={customFilterFields}
-                  field={selectedCustomField}
-                  fieldId={selectedCustomField?.id ?? ""}
-                  operator={effectiveCustomOperator}
-                  value={customValue}
-                  error={customValueError}
-                  onField={(id) => {
-                    const nextField = customFilterFields.find(
-                      (field) => field.id === id,
-                    );
-                    setCustomFieldId(id);
-                    setCustomOperator(defaultOperator(nextField));
-                    setCustomValue("");
-                    setCustomValueError(undefined);
-                  }}
-                  onOperator={(operator) => {
-                    setCustomOperator(operator);
-                    setCustomValueError(undefined);
-                  }}
-                  onValue={(value) => {
-                    setCustomValue(value);
-                    setCustomValueError(undefined);
-                  }}
-                  onAdd={addCustomFilter}
+                  onSubmit={(clause) => onCustomFilterAdd?.(clause)}
                 />
               ) : null}
             </PickerColumn>
@@ -1000,125 +890,6 @@ function PickerButton({
     >
       {children}
     </button>
-  );
-}
-
-function CustomFilterEditor({
-  editorRef,
-  fields,
-  field,
-  fieldId,
-  operator,
-  value,
-  error,
-  onField,
-  onOperator,
-  onValue,
-  onAdd,
-}: {
-  editorRef: React.Ref<HTMLDivElement>;
-  fields: readonly ResourceToolbarFilterField[];
-  field: ResourceToolbarFilterField | undefined;
-  fieldId: string;
-  operator: ResourceToolbarCustomFilterOperator;
-  value: string;
-  error?: string;
-  onField: (id: string) => void;
-  onOperator: (operator: ResourceToolbarCustomFilterOperator) => void;
-  onValue: (value: string) => void;
-  onAdd: () => void;
-}): ReactElement {
-  const t = useUiT();
-  const operators = operatorsForField(field);
-  const needsValue = customFilterNeedsValue(operator);
-  return (
-    <div ref={editorRef} className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs">
-      {fields.length === 0 ? (
-        <PickerMuted>{t("resourceToolbar.noFilterFields")}</PickerMuted>
-      ) : (
-        <>
-          <Select
-            size="sm"
-            value={fieldId}
-            aria-label={t("resourceToolbar.filterField")}
-            options={fields.map((item) => ({
-              value: item.id,
-              label: item.label,
-              group: item.group,
-            }))}
-            onValueChange={onField}
-          />
-          <div className="flex min-w-0 flex-col gap-2">
-            <Select
-              size="sm"
-              value={operator}
-              className="min-w-0 flex-1"
-              aria-label={t("resourceToolbar.filterOperator")}
-              options={operators.map((item) => ({
-                value: item,
-                label: filterOperatorLabel(item),
-              }))}
-              onValueChange={(next) =>
-                onOperator(next as ResourceToolbarCustomFilterOperator)
-              }
-            />
-            {needsValue ? (
-              field?.renderValue && !structuredFilterOperand(operator) ? (
-                field.renderValue({ value, onValueChange: onValue })
-              ) : (field?.options || field?.type === "boolean") &&
-                !structuredFilterOperand(operator) ? (
-                <Select
-                  size="sm"
-                  value={value}
-                  className="min-w-0 flex-1"
-                  aria-label={t("resourceToolbar.filterValue")}
-                  placeholder={t("resourceToolbar.value")}
-                  options={
-                    field.type === "boolean"
-                      ? [
-                          { value: "true", label: t("list.yes") },
-                          { value: "false", label: t("list.no") },
-                        ]
-                      : field.options ?? []
-                  }
-                  onValueChange={onValue}
-                />
-              ) : (
-                <Input
-                  size="sm"
-                  type={
-                    structuredFilterOperand(operator)
-                      ? "text"
-                      : filterInputType(field)
-                  }
-                  value={value}
-                  placeholder={t("resourceToolbar.value")}
-                  aria-label={t("resourceToolbar.filterValue")}
-                  aria-invalid={Boolean(error)}
-                  className="min-w-0 flex-1"
-                  onChange={(event) => onValue(event.currentTarget.value)}
-                />
-              )
-            ) : null}
-          </div>
-          {error ? (
-            <p role="alert" className="text-xs text-danger-text">
-              {error}
-            </p>
-          ) : null}
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="justify-center"
-            disabled={!field || (needsValue && value.trim() === "")}
-            onClick={onAdd}
-          >
-            {t("resourceToolbar.add")}
-          </Button>
-        </>
-      )}
-    </div>
   );
 }
 
@@ -1376,69 +1147,4 @@ function groupGranularity(
   return declared && supported.includes(declared)
     ? declared
     : supported[0] ?? "day";
-}
-
-function operatorsForField(
-  field: ResourceToolbarFilterField | undefined,
-): readonly ResourceToolbarCustomFilterOperator[] {
-  return field?.operators ?? ["exact"];
-}
-
-function defaultOperator(
-  field: ResourceToolbarFilterField | undefined,
-): ResourceToolbarCustomFilterOperator {
-  const operators = operatorsForField(field);
-  const preferred = field?.type === "text"
-    ? (["iContains", "contains", "exact"] as const)
-    : (["exact"] as const);
-  return preferred.find((operator) => operators.includes(operator))
-    ?? operators[0]
-    ?? "exact";
-}
-
-function operatorForField(
-  field: ResourceToolbarFilterField | undefined,
-  operator: ResourceToolbarCustomFilterOperator,
-): ResourceToolbarCustomFilterOperator {
-  return operatorsForField(field).includes(operator)
-    ? operator
-    : defaultOperator(field);
-}
-
-function customFilterNeedsValue(
-  operator: ResourceToolbarCustomFilterOperator,
-): boolean {
-  return operator !== "isNull" && operator !== "isNotNull";
-}
-
-function filterInputType(field: ResourceToolbarFilterField | undefined): string {
-  if (field?.type === "number") return "number";
-  if (field?.type === "date") return "date";
-  if (field?.type === "datetime") return "datetime-local";
-  return "text";
-}
-
-function coerceFilterValue(
-  field: ResourceToolbarFilterField,
-  value: string,
-  operator: ResourceToolbarCustomFilterOperator,
-): FilterValue | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (structuredFilterOperand(operator)) {
-    return JSON.parse(trimmed) as FilterValue;
-  }
-  if (field.type === "number") {
-    const number = Number(trimmed);
-    return Number.isFinite(number) ? number : undefined;
-  }
-  if (field.type === "boolean") {
-    return trimmed === "true" ? true : trimmed === "false" ? false : undefined;
-  }
-  return trimmed;
-}
-
-/** Multi-value and JSON operands are authored as JSON, then checked by ResourceQuery. */
-function structuredFilterOperand(operator: ResourceToolbarCustomFilterOperator): boolean {
-  return ["inList", "notInList", "hasKeysAny", "hasKeysAll", "jsonContains", "jsonContainedIn"].includes(operator);
 }

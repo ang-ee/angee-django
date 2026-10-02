@@ -1,110 +1,27 @@
 import * as React from "react";
-import { Controller, set, useForm, useWatch, type FieldErrors } from "react-hook-form";
-import {
-  canonicalModelLabelOrNull,
-  modelMetadataForLabel,
-  useSchemaFieldMetadata,
-} from "@angee/metadata";
-import type { CrudFilter } from "@refinedev/core";
+import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { stringValue as wireStringValue } from "@angee/refine";
 import { format } from "date-fns";
 
-import { errorMessage } from "../../feedback";
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { Button } from "../../ui/button";
-import {
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-  FieldRoot,
-} from "../../ui/field";
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
+import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
-import { relationValueId } from "../../widgets/types";
 import { dateFromUnknown } from "../../widgets/date-format";
-import { FieldDescriptorControl } from "./field-descriptor-control";
-import type { FormSpecFieldDescriptor } from "./form-spec";
-import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
-import { RelationPicker, type RelationCreateConfig } from "../relation/RelationPicker";
-import { useRelationPickerOptions } from "../relation/relation-options";
-import type { FieldDescriptor } from "../page";
-import { directDottedPathMessages } from "./validation-errors";
-import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
-import { DescriptorPresenceControl } from "./descriptor-presence-control";
+import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
+import { applyFormErrors, formSubmitError, invalidFormSubmit, type FormSubmitResult, type ValidationErrors } from "./validation-errors";
+import { useFieldValidation } from "./use-field-validation";
+import { ActionFormProvider } from "./ActionFormProvider";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 
+export {
+  LabeledDescriptorField,
+} from "./DescriptorFieldList";
 export { emptyValueForField } from "./field-values";
-
-/** What a dialog field needs to offer (and optionally create) a related row. */
-export interface MutationDialogRelation {
-  /** Related model label, e.g. `"integrate.Credential"`. */
-  resource: string;
-  /** Field shown as the option label; defaults to the model's record representation. */
-  labelField?: string;
-  /**
-   * Server-side filters narrowing which rows are offered — for a target holding
-   * more kinds of row than this field accepts.
-   */
-  filters?: readonly CrudFilter[];
-  /**
-   * Enables native in-place creation, including an optional visible action.
-   * Unlike a form's auto-wired relation field, a dialog states this explicitly:
-   * the dialog is not a model form, so there is no metadata to derive
-   * creatability from.
-   */
-  create?: RelationCreateConfig;
-}
-
-export interface MutationDialogField extends FieldDescriptor {
-  /** Client-side gate for simple mutation dialogs. Server validation remains authoritative. */
-  required?: boolean;
-  /** JSON-schema presence facts used by FormSpec-backed fields. */
-  nullable?: boolean;
-  omittable?: boolean;
-  hasDefault?: boolean;
-  /** Disable editing for this field against the current dialog values. */
-  readOnlyWhen?: (values: Record<string, unknown>) => boolean;
-  /**
-   * Render this field as a searchable relation picker over `relation.resource`
-   * instead of through the widget registry; the value is the selected row's
-   * public id. The dialog analog of a form's `many2one` field — but it only
-   * selects and creates, offering neither the pencil nor the follow arrow, since
-   * a dialog must not navigate away from itself mid-edit.
-   */
-  relation?: MutationDialogRelation;
-  /**
-   * Render an addon-supplied control in place of the registry widget, while the
-   * dialog keeps owning the surrounding label/description/error/required chrome
-   * and the submit lifecycle. The seam for a field whose options are neither a
-   * static list nor a resource relation — e.g. candidates searched live from a
-   * remote host — so the addon that owns that vocabulary supplies the control
-   * without the framework primitive learning the domain.
-   *
-   * Takes precedence over `relation`; `dialogValues` lets the control react to
-   * the dialog's other fields (a picker scoped by a bridge chosen above it).
-   */
-  control?: (props: MutationDialogControlProps) => React.ReactElement;
-  /** How a custom control receives its authored field label. */
-  controlLabelMode?: "input" | "group";
-}
-
-/** What {@link MutationDialogField.control} receives to render one dialog field. */
-export interface MutationDialogControlProps {
-  id: string;
-  value: unknown;
-  readOnly: boolean;
-  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
-  describedBy: string | undefined;
-  /** Present when the custom control declares `controlLabelMode: "group"`. */
-  labelledBy: string | undefined;
-  onChange: (value: unknown) => void;
-  onCommit?: () => void;
-  /** Every current dialog value, so a control can scope itself by a sibling field. */
-  dialogValues: Record<string, unknown>;
-}
 
 /** Raw values held by dialog controls before the authored mutation boundary. */
 export type MutationDialogValues = Readonly<Record<string, unknown>>;
@@ -113,12 +30,6 @@ export type MutationDialogValues = Readonly<Record<string, unknown>>;
 export type MutationDialogParseValues<TValues> = (
   values: MutationDialogValues,
 ) => TValues;
-
-/** Server-side validation returned before a mutation dialog submits its values. */
-export interface MutationDialogValidationResult {
-  fieldErrors?: Readonly<Record<string, readonly string[]>>;
-  formError?: string;
-}
 
 /**
  * Shared scalar codecs for {@link MutationDialogParseValues} implementations.
@@ -203,7 +114,7 @@ export interface MutationDialogProps<
   trigger?: React.ReactElement;
   title: React.ReactNode;
   description?: React.ReactNode;
-  fields: readonly MutationDialogField[];
+  fields: readonly DescriptorField[];
   /** Seeds raw control state; parsed mutation variables may use different keys. */
   initialValues?: Readonly<Record<string, unknown>>;
   submitLabel: React.ReactNode;
@@ -215,8 +126,8 @@ export interface MutationDialogProps<
   /** Optional authoritative validation step that can bind errors to declared fields. */
   validate?: (
     values: TValues,
-  ) => MutationDialogValidationResult | null | undefined | Promise<MutationDialogValidationResult | null | undefined>;
-  onSubmit: (values: TValues) => TResult | Promise<TResult>;
+  ) => ValidationErrors | null | undefined | Promise<ValidationErrors | null | undefined>;
+  onSubmit: (values: TValues) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
   /** Additional domain readiness gate evaluated from the current raw form values. */
@@ -271,14 +182,16 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
   const t = useUiT();
+  const toast = useToast();
   const preview = useRuntimeViewAs();
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const previewBlockedRef = useLatestRef(previewBlocked);
+  const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<Record<string, unknown>>({
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
     resolver: (formValues) => {
-      const resolved = visibleDialogFields(fields, formValues);
+      const resolved = resolveDescriptorFields(fields, formValues);
       const editable = resolved.filter((field) => !field.readOnly && !field.readOnlyWhen?.(formValues));
       const missing = editable.flatMap((field) => {
         if (isStructuredPresenceField(field)) {
@@ -288,9 +201,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         }
         return field.required && emptyDialogValue(formValues[field.name]) ? [field.name] : [];
       });
-      return missing.length ? {
-        values: {}, errors: requiredDialogErrors(missing, t("form.required")),
-      } : { values: formValues, errors: {} };
+      const errors = requiredDialogErrors(missing, t("form.required"));
+      validateFields(formValues, (name, error) => set(errors, name, error));
+      return Object.keys(errors).length ? { values: {}, errors } : { values: formValues, errors: {} };
     },
   });
   const session = React.useRef(0);
@@ -306,7 +219,8 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
-  const visibleFields = visibleDialogFields(fields, values);
+  const visibleFields = resolveDescriptorFields(fields, values);
+  const renderedFieldNames = visibleFields.filter((field) => !field.hidden).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
@@ -340,32 +254,47 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     </>
   );
 
+  const errorOptions = { fieldNames: renderedFieldNames, fallback: errorFallback ?? t("error.generic") };
+  const allowRootErrorRetry = async (): Promise<void> => {
+    if (!renderedFieldNames.some((name) => form.getFieldState(name).invalid)) {
+      await form.trigger(visibleFields.map((field) => field.name));
+    }
+  };
+
   const submitReady = form.handleSubmit(async (collected) => {
     if (submittingRef.current || previewBlockedRef.current) return;
     submittingRef.current = true;
     const submittedSession = session.current;
     form.clearErrors();
+    let accepted: { result: Extract<FormSubmitResult<TResult>, { status: "ok" }>; values: TValues } | undefined;
     try {
       const submittedValues = parseValues(collected);
       const validation = await validate?.(submittedValues);
-      if (previewBlockedRef.current) return;
-      if (validation && applyDialogValidation(form, validation)) return;
+      if (!mounted.current || session.current !== submittedSession) return;
+      if (validation) {
+        applyFormErrors(form, invalidFormSubmit(validation), errorOptions);
+        await allowRootErrorRetry();
+        return;
+      }
       const result = await onSubmit(submittedValues);
       if (!mounted.current || session.current !== submittedSession) return;
-      onSubmitted?.(result, submittedValues);
-      if (closeOnSubmit) onOpenChange(false);
+      if (applyFormErrors(form, result, errorOptions)) {
+        await allowRootErrorRetry();
+        return;
+      }
+      accepted = { result, values: submittedValues };
     } catch (cause) {
       if (mounted.current && session.current === submittedSession) {
-        form.setError("root.server", {
-          type: "server",
-          message: errorMessage(cause, errorFallback ?? t("error.generic")),
-        });
-        // Root transport errors must not lock a valid form out of retrying.
-        // Revalidate the fields while retaining the root error for display.
-        await form.trigger(visibleFields.map((field) => field.name));
+        applyFormErrors(form, formSubmitError(cause, errorOptions.fallback), errorOptions);
+        await allowRootErrorRetry();
       }
     } finally {
       if (session.current === submittedSession) submittingRef.current = false;
+    }
+    if (accepted) {
+      if (accepted.result.message) toast.success({ title: accepted.result.message });
+      if (closeOnSubmit) onOpenChange(false);
+      onSubmitted?.(accepted.result.data, accepted.values);
     }
   });
   const submit = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -388,68 +317,12 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       placement={placement}
       trigger={trigger}
     >
-      {visibleFields.map((field) => (
-          <Controller key={field.name} name={field.name} control={form.control}
-            render={({ field: control, fieldState }) => (
-              <LabeledDescriptorField
-                field={field}
-                value={control.value}
-                dialogValues={values}
-                messages={fieldState.error ? fieldErrorMessages(
-                  [fieldState.error],
-                  isCompositeFieldDescriptor(field) ? field.name : undefined,
-                ) : []}
-                readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
-                onChange={(next) => {
-                  form.clearErrors(field.name);
-                  control.onChange(next);
-                  const seeds = field.prefill?.(next);
-                  if (!seeds) return;
-                  for (const [name, seed] of Object.entries(seeds)) {
-                    form.clearErrors(name);
-                    form.setValue(name, seed, {
-                      shouldDirty: true,
-                      shouldTouch: true,
-                      shouldValidate: true,
-                    });
-                  }
-                }}
-              />
-            )}
-          />
-      ))}
+      <ActionFormProvider {...{ ...form, registerFieldValidation }}>
+        <DescriptorFieldList resolvedFields={visibleFields} />
+      </ActionFormProvider>
       <ErrorBanner description={error} />
     </DialogForm>
   );
-}
-
-function visibleDialogFields(
-  fields: readonly MutationDialogField[],
-  values: Record<string, unknown>,
-): MutationDialogField[] {
-  return fields
-    .map((declared) => ({
-      ...resolveField(declared, values),
-      name: declared.name,
-    } as MutationDialogField))
-    .filter((field) => isFieldVisible(field, values));
-}
-
-function applyDialogValidation(
-  form: ReturnType<typeof useForm<Record<string, unknown>>>,
-  validation: MutationDialogValidationResult,
-): boolean {
-  let invalid = false;
-  for (const [name, messages] of Object.entries(validation.fieldErrors ?? {})) {
-    if (messages.length === 0) continue;
-    invalid = true;
-    form.setError(name, { type: "server", message: messages.join(", ") });
-  }
-  if (validation.formError) {
-    invalid = true;
-    form.setError("root.server", { type: "server", message: validation.formError });
-  }
-  return invalid;
 }
 
 function requiredDialogErrors(names: readonly string[], message: string): FieldErrors<Record<string, unknown>> {
@@ -458,241 +331,8 @@ function requiredDialogErrors(names: readonly string[], message: string): FieldE
   return errors;
 }
 
-/**
- * Field chrome for one descriptor: label, description, invalid state, and
- * messages around the bare registry-rendering {@link FieldDescriptorControl}.
- */
-export function LabeledDescriptorField({
-  field,
-  value,
-  dialogValues,
-  readOnly,
-  messages = [],
-  showLabel = true,
-  showDescription = true,
-  onChange,
-  onCommit,
-  controlRef,
-}: {
-  field: MutationDialogField & {
-    rowTemplate?: readonly FormSpecFieldDescriptor[];
-    objectTemplate?: readonly FormSpecFieldDescriptor[];
-    itemTemplate?: FormSpecFieldDescriptor;
-    addLabel?: string;
-    removeLabel?: string;
-    nullable?: boolean;
-    omittable?: boolean;
-    hasDefault?: boolean;
-  };
-  value: unknown;
-  /** The sibling dialog values a `field.control` may scope itself by. */
-  dialogValues?: Record<string, unknown>;
-  readOnly?: boolean;
-  messages?: readonly string[];
-  showLabel?: boolean;
-  showDescription?: boolean;
-  onChange: (value: unknown) => void;
-  onCommit?: () => void;
-  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
-}): React.ReactElement | null {
-  const generatedId = React.useId();
-  if (field.hidden) return null;
-  const controlId = `mutation-field-${generatedId}`;
-  const labelId = `${controlId}-label`;
-  const isCompositeField = isCompositeFieldDescriptor(field);
-  const groupLabel = field.controlLabelMode === "group" || isCompositeField;
-  const displayedMessages = isCompositeField
-    ? directDottedPathMessages(messages, field.name)
-    : messages;
-  const descriptionId = showDescription && field.description
-    ? `${controlId}-description`
-    : undefined;
-  const errorId = displayedMessages.length > 0
-    ? `${controlId}-error`
-    : undefined;
-  const describedBy =
-    [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
-
-  return (
-    <FieldRoot invalid={displayedMessages.length > 0}>
-      {showLabel ? (
-        <FieldLabel
-          id={groupLabel ? labelId : undefined}
-          htmlFor={isCompositeField || groupLabel ? undefined : controlId}
-          required={field.required}
-        >
-          {field.label ?? field.name}
-        </FieldLabel>
-      ) : null}
-      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
-      {field.control ? (
-        field.control({
-          id: controlId,
-          value,
-          readOnly: Boolean(readOnly),
-          controlRef,
-          describedBy,
-          labelledBy: groupLabel ? labelId : undefined,
-          onChange,
-          onCommit,
-          dialogValues: dialogValues ?? {},
-        })
-      ) : field.relation ? (
-        <MutationDialogRelationControl
-          controlId={controlId}
-          describedBy={describedBy}
-          field={field}
-          relation={field.relation}
-          value={value}
-          readOnly={readOnly}
-          onChange={onChange}
-          onCommit={onCommit}
-          controlRef={controlRef}
-        />
-      ) : (
-        <FieldDescriptorControl
-          field={field}
-          value={value}
-          messages={messages}
-          readOnly={readOnly}
-          controlProps={{
-            id: controlId,
-            ...(describedBy ? { "aria-describedby": describedBy } : {}),
-            ...(groupLabel ? { "aria-labelledby": labelId } : {}),
-            ...(field.required ? { "aria-required": true } : {}),
-          }}
-          onChange={onChange}
-          onCommit={onCommit}
-          controlRef={controlRef}
-        />
-      )}
-      </DescriptorPresenceControl>
-      {showDescription && field.description ? (
-        <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
-      ) : null}
-      {displayedMessages.length > 0 ? (
-        <FieldError id={errorId} match>
-          {displayedMessages.join(", ")}
-        </FieldError>
-      ) : null}
-    </FieldRoot>
-  );
-}
-
-/**
- * One dialog field rendered as a relation picker: the offered rows come from the
- * related resource's list root (narrowed by the field's `filters`), and "Create …"
- * opens the field's own create form. The option query is deferred until the
- * popover first opens; an existing bare-id value resolves through its independent
- * record read. A dialog with an empty untouched relation still performs no work.
- */
-function MutationDialogRelationControl({
-  controlId,
-  describedBy,
-  field,
-  relation,
-  value,
-  readOnly,
-  onChange,
-  onCommit,
-  controlRef,
-}: {
-  controlId: string;
-  describedBy?: string;
-  field: MutationDialogField;
-  relation: MutationDialogRelation;
-  value: unknown;
-  readOnly?: boolean;
-  onChange: (value: unknown) => void;
-  onCommit?: () => void;
-  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
-}): React.ReactElement {
-  const metadata = useSchemaFieldMetadata();
-  const resource = React.useMemo(
-    () =>
-      canonicalModelLabelOrNull(
-        metadata.resources ?? [],
-        relation.resource,
-        "mutation dialog relation",
-      ) ?? "",
-    [metadata, relation.resource],
-  );
-  const model = React.useMemo(
-    () => modelMetadataForLabel(metadata, resource),
-    [metadata, resource],
-  );
-  const info = React.useMemo(
-    () => relationFieldInfoForResource(resource, model),
-    [resource, model],
-  );
-  const optionInfo = React.useMemo(
-    () => info && relation.labelField
-      ? { ...info, labelField: relation.labelField }
-      : info,
-    [info, relation.labelField],
-  );
-  const create = React.useMemo(
-    () => {
-      if (!relation.create) return undefined;
-      const createResource = canonicalModelLabelOrNull(
-        metadata.resources ?? [],
-        relation.create.resource,
-        "mutation dialog relation create",
-      );
-      return createResource
-        ? { ...relation.create, resource: createResource }
-        : undefined;
-    },
-    [metadata, relation.create],
-  );
-  const selectedValue = relationValueId(value);
-  const picker = useRelationPickerOptions(optionInfo, {
-    value: selectedValue,
-    ...(relation.filters ? { filters: relation.filters } : {}),
-  });
-  if (!info) {
-    // Metadata not yet loaded / the resource is unknown in this schema: retain
-    // the relation control's shape, but disable it rather than throwing from
-    // render or presenting a text input that could submit an unvalidated id.
-    return (
-      <RelationPicker
-        id={controlId}
-        value={selectedValue}
-        options={[]}
-        readOnly
-        placeholder={field.placeholder}
-        aria-label={typeof field.label === "string" ? field.label : field.name}
-        aria-describedby={describedBy}
-        aria-required={field.required || undefined}
-        onChange={onChange}
-        onCommit={onCommit}
-      />
-    );
-  }
-  return (
-    <RelationPicker
-      controlRef={controlRef}
-      id={controlId}
-      value={selectedValue}
-      onChange={onChange}
-      onCommit={onCommit}
-      options={picker.options}
-      readOnly={readOnly}
-      placeholder={field.placeholder}
-      aria-label={typeof field.label === "string" ? field.label : field.name}
-      aria-describedby={describedBy}
-      aria-required={field.required || undefined}
-      {...(create ? { create } : {})}
-      onCreated={() => picker.list.refetch()}
-      onOpenChange={picker.onOpenChange}
-      onSearchChange={picker.onSearchChange}
-      searchState={picker.searchState}
-    />
-  );
-}
-
 function initialDialogValues(
-  fields: readonly MutationDialogField[],
+  fields: readonly DescriptorField[],
   initialValues: Readonly<Record<string, unknown>> | undefined,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};

@@ -136,6 +136,17 @@ test("object fields select only their declared row projection paths", () => {
   expect([...paths]).toEqual(["payload.kind", "payload.target.id"]);
 });
 
+test("nested object fields qualify their owning model's row projection", () => {
+  const paths = new Set<string>();
+  addFieldSelection(paths, { name: "version.payload" }, undefined,
+    { name: "payload", kind: "object" }, {
+      kind: "object", scalar: null, values: [], nullable: true,
+      row: { path: "payload", paths: ["payload.kind", "payload.target.id"] },
+      filter: null, sort: null, relation: null,
+    });
+  expect([...paths]).toEqual(["version.payload.kind", "version.payload.target.id"]);
+});
+
 describe("dotted form fields", () => {
   test("seed and read nested record values through native RHF-shaped data", () => {
     expect(emptyDraft(fields, { config: { local_root: "/srv/repo" } })).toEqual({

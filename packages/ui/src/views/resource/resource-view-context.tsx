@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type VisibilityState } from "@tanstack/react-table";
+import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Updater, type VisibilityState } from "@tanstack/react-table";
 import { stableSerialize } from "@angee/refine";
 import { Filter, ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { validateResourceViewState } from "./model/state";
@@ -84,7 +84,7 @@ export interface ResourceViewContextValue {
   setPagination: OnChangeFn<PaginationState>;
   setSorting: OnChangeFn<SortingState>;
   setRowSelection: OnChangeFn<RowSelectionState>;
-  setFilter: (filter: ResourceViewFilter) => void;
+  setFilter: OnChangeFn<ResourceViewFilter>;
   resetQuery: () => void;
   /** Whether editable query state differs from this collection's default view. */
   queryDirty: boolean;
@@ -568,8 +568,8 @@ function useResourceViewContextValue({
         setPagination((current) => ({ ...current, pageIndex: page - 1 })),
       setPageSize: (pageSize: number) =>
         setPagination((current) => ({ ...current, pageSize })),
-      setFilter: (filter: ResourceViewFilter) =>
-        resetScope((current) => ({ ...current, filter, queryError: null })),
+      setFilter: (filter: Updater<ResourceViewFilter>) =>
+        resetScope((current) => ({ ...current, filter: functionalUpdate(filter, current.filter), queryError: null })),
       resetQuery: () =>
         resetScope((current) => ({
           ...current,

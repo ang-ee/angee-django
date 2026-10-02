@@ -129,7 +129,7 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
     assert "1 addon" in result["message"]
     with system_context(reason="test.marketplace.scan.verify"):
         row = Addon.objects.get(name="angee.demo")
-    assert str(row.source) == Addon.Source.REMOTE
+    assert str(row.source) == Addon.AddonSource.REMOTE
     assert row.vcs_path == "addons/angee/demo"
 
 

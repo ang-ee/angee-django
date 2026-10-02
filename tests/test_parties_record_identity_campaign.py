@@ -7,15 +7,15 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
+from angee.messaging.testing.models import Party, Person, ThreadFollower
+from angee.nexus.testing.models import Cadence, Tie
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import execute_schema, result_data
 from tests.messaging_campaign import grant
-from tests.messaging_models import Party, Person, ThreadFollower
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 from tests.t3_campaign import relationship_snapshot
-from tests.test_nexus import Cadence, Tie
 from tests.test_parties_follower_identity import identity_graphql as identity_graphql
 
 
@@ -51,7 +51,7 @@ def test_record_arm_exposes_accountless_follower_identity_and_no_private_fields(
             assert readable.display_name == "Accountless follower" and readable.notes is None
 
 
-def test_record_follower_sql_is_one_query_and_unfollow_revokes_parent_and_child(record_identity, monkeypatch):
+def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(record_identity, monkeypatch):
     record, person, _, reader, _ = record_identity
     local = backend()
     monkeypatch.setattr(type(local), "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
@@ -62,7 +62,11 @@ def test_record_follower_sql_is_one_query_and_unfollow_revokes_parent_and_child(
         str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
-        assert len(queries) == 1
+        # Three revision reads, actor-set expansion, 13 arrow sources, row SELECT.
+        assert len(queries) == 18, queries.captured_queries
+        assert sum(
+            query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
+        ) == 1
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):
         record.message_unsubscribe(party=person)

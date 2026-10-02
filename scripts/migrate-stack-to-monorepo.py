@@ -109,7 +109,7 @@ def main() -> int:
     if not args.apply:
         print("\n".join(diff[:80]))
         print("\nDRY RUN — rerun with --apply to write. Also required at apply time:")
-        print("  templates symlink -> sources/angee/templates; answers framework_path fix")
+        print("  templates symlink -> workspaces/src/angee/templates; answers framework_path fix")
         return 1
 
     (args.root / "angee.yaml.pre-p8").write_text(before)
@@ -118,8 +118,8 @@ def main() -> int:
     link = args.root / "templates"
     if link.is_symlink():
         link.unlink()
-        link.symlink_to("sources/angee/templates")
-        print("templates symlink -> sources/angee/templates")
+        link.symlink_to("workspaces/src/angee/templates")
+        print("templates symlink -> workspaces/src/angee/templates")
 
     answers = args.root / ".copier-answers.stack.yml"
     if answers.exists():

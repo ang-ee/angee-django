@@ -9,11 +9,14 @@ import {
   type WidgetFocusTarget,
 } from "../../widgets";
 import { textWidget } from "../../widgets/text";
+import { useUiT } from "../../i18n";
 import {
   fieldWidgetId,
   type FieldDescriptor,
 } from "../page";
 import type { FormSpecFieldDescriptor } from "./form-spec";
+import { useFieldValidationRegistration } from "./ActionFormProvider";
+import { isCompositeFieldDescriptor } from "./form-view-model";
 
 type DescriptorWidgetField = WidgetField & {
   rowTemplate?: readonly FormSpecFieldDescriptor[];
@@ -54,9 +57,12 @@ export interface FieldDescriptorControlProps {
   parentRow?: unknown;
   messages?: readonly string[];
   readOnly?: boolean;
+  /** Temporarily lock the mounted editor without replacing its draft with a read view. */
+  disabled?: boolean;
   onChange?: (value: unknown) => void;
   onRowChange?: (patch: Record<string, unknown>) => void;
   onCommit?: () => void;
+  onValidityChange?: (valid: boolean) => void;
   controlProps?: WidgetControlProps;
   controlRef?: (target: WidgetFocusTarget | null) => void;
 }
@@ -66,22 +72,40 @@ export interface FieldDescriptorControlProps {
  * dialog forms share this owner so field descriptors resolve widgets, labels,
  * and options the same way wherever an addon renders mutation inputs.
  */
-export function FieldDescriptorControl({
+export function FieldDescriptorControl(props: FieldDescriptorControlProps): React.ReactElement {
+  const widgetId = fieldWidgetId(props.field);
+  const widget = useResolvedWidget(widgetId) ?? FALLBACK_TEXT_WIDGET;
+  const Component = props.readOnly ? widget.read : (widget.edit ?? widget.read);
+  const mode = Component === widget.read ? "read" : "edit";
+  // Draft validity belongs to the mounted editor; temporary disabling keeps it.
+  return <FieldDescriptorControlInstance key={`${widgetId}:${mode}`} {...props} Component={Component} />;
+}
+
+function FieldDescriptorControlInstance({
+  Component,
   field,
   value,
   row,
   parentRow,
   messages,
   readOnly,
+  disabled,
   onChange,
   onRowChange,
   onCommit,
+  onValidityChange,
   controlProps,
   controlRef,
-}: FieldDescriptorControlProps): React.ReactElement {
-  const widget = useResolvedWidget(fieldWidgetId(field))
-    ?? FALLBACK_TEXT_WIDGET;
-  const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
+}: FieldDescriptorControlProps & { Component: WidgetDefinition["read"] }): React.ReactElement {
+  const t = useUiT();
+  const valid = React.useRef(true);
+  const registerFieldValidation = useFieldValidationRegistration();
+  React.useEffect(() => registerFieldValidation?.(field.name, () =>
+    readOnly || valid.current ? undefined : t("form.invalidValue")), [field.name, readOnly, registerFieldValidation, t]);
+  const reportValidity = React.useCallback((next: boolean) => {
+    valid.current = next;
+    onValidityChange?.(next);
+  }, [onValidityChange]);
   const widgetField: DescriptorWidgetField = {
     name: field.name,
     fill: field.fill,
@@ -108,15 +132,17 @@ export function FieldDescriptorControl({
   };
   return (
     <Component
-      value={value}
+      value={field.valueCodec ? field.valueCodec.toControl(value) : value}
       row={row}
       parentRow={parentRow}
       field={widgetField}
       messages={messages}
-      readOnly={readOnly}
-      onChange={onChange}
+      readOnly={readOnly || (disabled && !isCompositeFieldDescriptor(field))}
+      disabled={disabled}
+      onChange={onChange && ((next) => onChange(field.valueCodec ? field.valueCodec.fromControl(next) : next))}
       onRowChange={onRowChange}
       onCommit={onCommit}
+      onValidityChange={reportValidity}
       controlRef={controlRef}
     />
   );

@@ -29,12 +29,12 @@ from angee.integrate.streams import StreamPage, advance_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
 from angee.messaging.session import LiveChannelSession
+from angee.messaging.testing.models import Message, Part, Thread
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from angee.messaging_integrate_slack.backend import SlackChannelBackend, SlackRateLimitError
 from angee.messaging_integrate_slack.identity import parsed_message
 from tests.conftest import Credential, Vendor, make_integration
 from tests.stream_adapters import AdapterPages
-from tests.test_messaging import Message, Part, Thread
 from tests.test_messaging_graphql import Channel, _platform_admin
 
 
@@ -944,7 +944,7 @@ def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
 
     channel.refresh_from_db()
     assert channel.lifecycle == "connected"
-    assert channel.last_sync_status == "error"
+    assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_error == "Integration operation failed."
 
 

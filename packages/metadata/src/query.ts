@@ -191,6 +191,57 @@ export class ResourceQuery {
     return hasuraWhereRoot(combined);
   }
 
+  /** Decode persisted Hasura predicates through the same declared wire capabilities.
+   * Unknown fields/operators and ambiguous aliases fail instead of discarding rules.
+   * Boolean groups, including empty groups, retain their meaning. */
+  fromWhere(value: unknown): QueryFilter {
+    const decode = (current: unknown, path: string, prefix = "", depth = 0): QueryFilter => {
+      if (depth > 32) return fail(path, "filter nesting exceeds 32 levels");
+      if (!isRecord(current)) return fail(path, "expected a condition object");
+      if (prefix && (Object.keys(current).length !== 1 || Object.keys(current).some((key) => ["_and", "_or", "_not"].includes(key)))) {
+        return fail(path, "nested relation conditions cannot be represented by field filters");
+      }
+      const clauses: QueryFilter[] = [];
+      for (const [key, operand] of Object.entries(current)) {
+        const location = `${path}.${key}`;
+        if (key === "_and" || key === "_or") {
+          if (!Array.isArray(operand)) return fail(location, "expected an array of conditions");
+          clauses.push({ [key === "_and" ? "AND" : "OR"]: operand.map((branch, index) =>
+            decode(branch, `${location}[${index}]`, prefix, depth + 1)) });
+        } else if (key === "_not") {
+          clauses.push({ NOT: decode(operand, location, prefix, depth + 1) });
+        } else {
+          const wireField = prefix ? `${prefix}.${key}` : key;
+          const matches = Object.entries(this.fields).filter(([, field]) => field.filter?.field === wireField);
+          if (matches.length > 1) return fail(location, "ambiguous filter field");
+          const match = matches[0];
+          if (!match) {
+            if (!Object.values(this.fields).some((field) => field.filter?.field.startsWith(`${wireField}.`))) {
+              return fail(location, "unknown or non-filterable field");
+            }
+            clauses.push(decode(operand, location, wireField, depth + 1));
+            continue;
+          }
+          if (!isRecord(operand) || !Object.keys(operand).length) return fail(location, "expected comparisons");
+          const [name, field] = match;
+          const comparisons: Record<string, FilterValue> = {};
+          for (const [wireOperator, value] of Object.entries(operand)) {
+            const candidates = field.filter!.operators.filter((operator) => WIRE_OPERATORS[operator] === wireOperator);
+            // Native SQL patterns preserve arbitrary wildcards; convenience operators
+            // are recovered only when re-encoding proves an exact round trip.
+            const operator = candidates.find((candidate) => candidate === "like" || candidate === "iLike")
+              ?? candidates.find((candidate) => fromWireOperand(candidate, value) !== undefined);
+            if (!operator) return fail(`${location}.${wireOperator}`, "operator is not supported by this field");
+            comparisons[operator] = this.operand(field, operator, fromWireOperand(operator, value), location);
+          }
+          clauses.push({ [name]: comparisons });
+        }
+      }
+      return clauses.length === 0 ? {} : clauses.length === 1 ? clauses[0]! : { AND: clauses };
+    };
+    return this.filterFrom(decode(value, "condition"));
+  }
+
   /** Remove facet constraints while retaining the logic of every other branch. */
   withoutFields(value: unknown, fields: Iterable<string>): QueryFilter {
     return Filter.from(this.filterFrom(value)).withoutFields(fields);
@@ -549,6 +600,14 @@ function wireOperand(operator: FilterOperator, value: FilterValue): FilterValue 
     return `%${escaped}`;
   }
   return value;
+}
+function fromWireOperand(operator: FilterOperator, value: unknown): unknown {
+  if (!["contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith"].includes(operator)) return value;
+  if (typeof value !== "string") return undefined;
+  const start = operator === "contains" || operator === "iContains" || operator === "endsWith" || operator === "iEndsWith";
+  const end = operator === "contains" || operator === "iContains" || operator === "startsWith" || operator === "iStartsWith";
+  const text = value.slice(start ? 1 : 0, end ? -1 : undefined).replace(/\\([\\%_])/g, "$1");
+  return wireOperand(operator, text) === value ? text : undefined;
 }
 function dateBoundary(value: unknown, scalar: string | null | undefined): string {
   if (typeof value !== "string" && typeof value !== "number" && !(value instanceof Date)) return fail("bucket.range", "expected a date boundary");

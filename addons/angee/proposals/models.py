@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -46,7 +47,7 @@ from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import bind_actor, system_queryset
 from angee.base.transitions import StateTransitions, save_state, transition
-from angee.base.validation import validate_model
+from angee.base.validation import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
@@ -101,7 +102,7 @@ class RoundStatus(models.TextChoices):
     COLLECTING = "collecting", "Collecting"
     OPENED = "opened", "Opened"
     CLOSED = "closed", "Closed"
-    CANCELLED = "cancelled", "Cancelled"
+    CANCELED = "canceled", "Canceled"
 
 
 class RoundOutcome(models.TextChoices):
@@ -234,7 +235,7 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
     ) -> Any:
         """Resume a round with the same target, name and declared settings."""
 
-        template = validate_model(RoundTemplate, template, field="template")
+        template = validate_value(RoundTemplate, template, field="template")
         target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
         if target_field is None:
             raise ValidationError({"target": "Choose a project or task."})
@@ -414,8 +415,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     status_transitions = StateTransitions(
         status,
         {
-            RoundStatus.COLLECTING: (RoundStatus.OPENED, RoundStatus.CANCELLED),
-            RoundStatus.OPENED: (RoundStatus.CLOSED, RoundStatus.CANCELLED),
+            RoundStatus.COLLECTING: (RoundStatus.OPENED, RoundStatus.CANCELED),
+            RoundStatus.OPENED: (RoundStatus.CLOSED, RoundStatus.CANCELED),
         },
     )
     outcome = StateField(choices_enum=RoundOutcome, null=True, blank=True)
@@ -1035,7 +1036,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         return super().delete(*args, **kwargs)
 
     def open(self, expected_revision: int | None = None) -> Self:
-        """Lift disclosure once, preserving a cancelled round's terminal state."""
+        """Lift disclosure once, preserving a canceled round's terminal state."""
         if not self.has_access("manage"):
             raise PermissionDenied("Round management is required.")
         with transaction.atomic():
@@ -1045,7 +1046,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             if locked.opened_at is None:
                 if locked.status == RoundStatus.COLLECTING:
                     locked._mark_opened()
-                elif locked.status == RoundStatus.CANCELLED:
+                elif locked.status == RoundStatus.CANCELED:
                     locked._stamp_opening_receipt()
                     locked.save(update_fields=("opened_at", "opened_by", "updated_at"))
                 else:
@@ -1192,11 +1193,11 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             locked = type(self).objects.sudo(reason="proposals.round.cancel").lock_if_supported().get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
-            if locked.status == RoundStatus.CANCELLED:
+            if locked.status == RoundStatus.CANCELED:
                 if locked.outcome is not None or locked.closed_at is None or locked.closed_by_id is None:
-                    raise ValidationError("Cancelled round receipts do not match the requested postcondition.")
+                    raise ValidationError("Canceled round receipts do not match the requested postcondition.")
             else:
-                locked._mark_cancelled()
+                locked._mark_canceled()
         _adopt(
             self,
             locked,
@@ -1212,7 +1213,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             locked = type(self).objects.sudo(reason="proposals.round.transfer").lock_if_supported().get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
-            if locked.status in {RoundStatus.CLOSED, RoundStatus.CANCELLED}:
+            if locked.status in {RoundStatus.CLOSED, RoundStatus.CANCELED}:
                 raise ValidationError({"facilitator": "Terminal rounds cannot transfer facilitation."})
             if apps.get_model("proposals", "Proposal").system_queryset().filter(round=locked, responder=user).exists():
                 raise ValidationError({"facilitator": "A responder cannot become the facilitator."})
@@ -1250,10 +1251,10 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     @transition(
         status,
         source=(RoundStatus.COLLECTING, RoundStatus.OPENED),
-        target=RoundStatus.CANCELLED,
+        target=RoundStatus.CANCELED,
         on_success=save_state,
     )
-    def _mark_cancelled(self) -> None:
+    def _mark_canceled(self) -> None:
         """Record cancellation as terminal closure without an award outcome."""
 
         cast(Any, self).outcome = None
@@ -1284,7 +1285,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             self.opened_at is None or self.opened_by_id is None
         ):
             raise ValidationError("An opened round requires its opening receipt.")
-        if self.status in {RoundStatus.CLOSED, RoundStatus.CANCELLED} and (
+        if self.status in {RoundStatus.CLOSED, RoundStatus.CANCELED} and (
             self.closed_at is None or self.closed_by_id is None
         ):
             raise ValidationError("A terminal round requires its close receipt.")
@@ -1892,6 +1893,8 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def submit(self, expected_revision: int | None = None) -> Self:
         """Submit under the round-first lock, freezing draft writes by state."""
 
+        actor = instance_actor(self)
+        _, unscoped = self.effective_actor(strict=True)
         if not self.has_access("write"):
             raise PermissionDenied("Proposal write access is required.")
         if self.pk is None:
@@ -1911,6 +1914,8 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 .order_by("pk")
                 .get()
             )
+            if not unscoped and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Proposal write access is required.")
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.state == ProposalState.SUBMITTED:
@@ -1923,7 +1928,17 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             ):
                 raise ValidationError({"round": "Proposals cannot be submitted after opening."})
             else:
-                locked._submit_locked(fallback_user_id=locked.responder_id or locked_round.facilitator_id)
+                with actor_context(actor) if actor is not None else nullcontext():
+                    locked.sudo(reason="proposals.proposal.submit")
+                    try:
+                        locked._submit_locked(
+                            fallback_user_id=locked.responder_id or locked_round.facilitator_id,
+                        )
+                    finally:
+                        if actor is None:
+                            locked.unsudo()
+                        else:
+                            locked.with_actor(actor)
         _adopt(self, locked, ("state", "submitted_at", "submitted_by", "updated_at", "updated_by"))
         return self
 
@@ -1994,11 +2009,12 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def create_track(self) -> models.Model:
         """Create one ownerless, item-owning project with its own bound drive."""
 
+        actor = instance_actor(self)
+        _, unscoped = self.effective_actor(strict=True)
         if not self.has_access("write"):
             raise PermissionDenied("Proposal write access is required.")
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
-        actor = instance_actor(self)
         project_model = apps.get_model("projects", "Project")
         with transaction.atomic():
             round_model = apps.get_model("proposals", "Round")
@@ -2015,6 +2031,8 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 .order_by("pk")
                 .get()
             )
+            if not unscoped and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Proposal write access is required.")
             if locked.track_id is not None:
                 track: Any = locked.track
             else:
@@ -2028,7 +2046,15 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                     track.save(ownerless=True)
                 locked.track = track
                 locked.allow_immutable_save("track_id")
-                locked.save(update_fields=("track", "updated_at"))
+                with actor_context(actor) if actor is not None else nullcontext():
+                    locked.sudo(reason="proposals.proposal.create_track.link")
+                    try:
+                        locked.save(update_fields=("track", "updated_at"))
+                    finally:
+                        if actor is None:
+                            locked.unsudo()
+                        else:
+                            locked.with_actor(actor)
                 if (
                     locked_round.status == RoundStatus.OPENED
                     and locked_round.opening_policy
@@ -2176,7 +2202,6 @@ class ProjectProposalAccess(models.Model):
     """Grant proposal visibility from one Project without owning its policy."""
 
     extends = "projects.Project"
-    runtime = False
     rebac_grantable = {"proposal_viewer": "share"}
 
     def apply_setup(self, *, round: Mapping[str, Any] | None = None, **options: Any) -> None:
@@ -2260,7 +2285,6 @@ class TaskProposalAccess(ImmutableFieldsMixin):
     """Contribute question facts and track-item sharing to the task owner."""
 
     extends = "projects.Task"
-    runtime = False
     rebac_grantable = {"proposal_viewer": "share"}
 
     @classmethod

@@ -41,11 +41,12 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context, current_actor
 from rebac.mixins import RebacModelBase
 
-from angee.base.fields import SqidField, StateField
+from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
-from angee.integrate.models import Bridge
+from angee.base.mixins import AuditMixin, HierarchyMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.refs import concrete_child, concrete_child_models
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
@@ -58,7 +59,7 @@ from angee.parties.managers import (
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
 
 
-class Party(SqidMixin, AuditMixin, AngeeModel):
+class Party(AuditMixin, AngeeDataModel):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
@@ -70,7 +71,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
     rebac_grantable = {"reader": "write"}
 
-    sqid = SqidField(real_field_name="id", prefix="pty_", min_length=8)
+    sqid_prefix = "pty_"
     display_name = models.TextField()
     notes = models.TextField(blank=True, default="")
     avatar = models.ForeignKey(
@@ -133,6 +134,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
+        verbose_name_plural = "parties"
         rebac_resource_type = "parties/party"
         constraints = (
             # The directory-sync idempotency key: one party per source UID per
@@ -171,7 +173,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         return any(character.isalpha() for character in name)
 
     @property
-    def concrete_kind(self) -> str | None:
+    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
         """Return this party's concrete kind (``"person"`` / ``"organization"``), or ``None``.
 
         A structural fact read straight from the multi-table-inheritance child rows
@@ -180,13 +182,11 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         never actor-scoped user data.
         """
 
-        for kind in (
-            cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.ORGANIZATION),
-            cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.PERSON),
-        ):
-            child = kind.model()
-            if child is not None and child._base_manager.filter(pk=self.pk).exists():
-                return str(kind)
+        for child_model in concrete_child_models(apps.get_model("parties", "Party")):
+            if isinstance(self, child_model) or concrete_child(self, child_model) is not None:
+                for kind in (RelationshipKind.PartyKind.ORGANIZATION, RelationshipKind.PartyKind.PERSON):
+                    if kind.model() is child_model:
+                        return cast(RelationshipKind.PartyKind, kind)
         return None
 
     def canonical(self) -> Party:
@@ -363,7 +363,7 @@ class Person(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/person"
 
 
-class MergeVeto(SqidMixin, AuditMixin, AngeeModel):
+class MergeVeto(AuditMixin, AngeeDataModel):
     """A durable decision that two canonically ordered parties must stay separate."""
 
     runtime = True
@@ -441,7 +441,7 @@ class Organization(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/organization"
 
 
-class Handle(SqidMixin, AuditMixin, AngeeModel):
+class Handle(AuditMixin, AngeeDataModel):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
@@ -479,7 +479,7 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
             return cast(Handle.Platform, cls.EMAIL if "@" in (value or "") else cls.OTHER)
 
-    sqid = SqidField(real_field_name="id", prefix="hdl_", min_length=8)
+    sqid_prefix = "hdl_"
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
     normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
@@ -633,7 +633,7 @@ class PartyHandleEvidencePage:
     truncated: bool
 
 
-class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
+class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     """A confidence-bearing link between a party and one of its handles.
 
     A handle may carry several scored candidate parties (:class:`ScoredLinkMixin`),
@@ -645,7 +645,7 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="phl_", min_length=8)
+    sqid_prefix = "phl_"
     party = models.ForeignKey(
         "parties.Party",
         on_delete=models.CASCADE,
@@ -701,7 +701,6 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
             queryset = read_scoped_queryset(model, actor)
             if (
                 public_id
-                and queryset is not None
                 and instance_from_public_id(model, public_id, queryset=queryset) is not None
             ):
                 visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
@@ -817,7 +816,7 @@ class AddressManager(AngeeManager):
                 if conflict == "raise":
                     raise ValidationError({"address": "A different address already exists for this party."})
                 is_primary = False
-            verified_actor = self.check_create({"party": (party,)})
+            verified_actor = self.check_create()
             row = self.model(
                 party=party,
                 label=" ".join(label.split()).strip()[:64],
@@ -883,7 +882,7 @@ class AddressManager(AngeeManager):
             return "matched", current.with_actor(actor)
 
 
-class Address(SqidMixin, AuditMixin, AngeeModel):
+class Address(AuditMixin, AngeeDataModel):
     """A physical or postal address of a party (the vCard ``ADR`` property).
 
     There is intentionally no ``(party, label)`` uniqueness — a party may carry
@@ -893,7 +892,7 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="adr_", min_length=8)
+    sqid_prefix = "adr_"
     party = models.ForeignKey(
         "parties.Party",
         on_delete=models.CASCADE,
@@ -917,6 +916,7 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("party", "label", "sqid")
+        verbose_name_plural = "addresses"
         rebac_resource_type = "parties/address"
         constraints = (
             models.UniqueConstraint(
@@ -943,7 +943,7 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(SqidMixin, AuditMixin, AngeeModel):
+class Folder(AuditMixin, AngeeDataModel):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
@@ -957,7 +957,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="fol_", min_length=8)
+    sqid_prefix = "fol_"
     name = models.CharField(max_length=200)
     directory = models.ForeignKey(
         "parties.Directory",
@@ -990,7 +990,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class Circle(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
+class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
     """A private, overlapping grouping of parties — how the owner organises people.
 
     Circles are the curated counterpart of :class:`Folder` (which mirrors a synced
@@ -1035,7 +1035,7 @@ class Circle(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class CircleMember(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
+class CircleMember(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     """A party's membership of one circle, scored like a :class:`PartyHandle` link.
 
     Membership is a :class:`ScoredLinkMixin` so a suggester (community detection, an
@@ -1078,7 +1078,7 @@ class CircleMember(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         return f"{self.party_id}∈{self.circle_id}"
 
 
-class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
+class RelationshipKind(AuditMixin, AngeeDataModel):
     """The relationship vocabulary — types as catalogue data, never schema.
 
     One row expresses both directions of an asymmetric type through
@@ -1233,7 +1233,7 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
             errors[field] = f"{self.name} requires {required} on this end."
 
 
-class Relationship(SqidMixin, AuditMixin, AngeeModel):
+class Relationship(AuditMixin, AngeeDataModel):
     """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
 
     ``kind.name`` names what the counterparty is to the anchor ("Mother",
@@ -1361,12 +1361,9 @@ class Directory(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "CONNECT"
-    integration_kind_label = "Directory"
+    integration_create_mode = IntegrationCreateMode.CONNECT
 
-    backend_class = ImplClassField(
-        base_class=DirectoryBackend,
-        registry_setting="ANGEE_DIRECTORY_BACKEND_CLASSES",
+    backend_class = ImplClassField(DirectoryBackend,
         default="manual",
         create_only=True,
     )
@@ -1377,6 +1374,7 @@ class Directory(Bridge):
 
         abstract = True
         ordering = ("-updated_at",)
+        verbose_name_plural = "directories"
         rebac_resource_type = "parties/directory"
 
     @property

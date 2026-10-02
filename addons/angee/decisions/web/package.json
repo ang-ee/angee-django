@@ -5,18 +5,15 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "exports": {
-    ".": "./src/index.tsx"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
-  },
+  "exports": { ".": "./src/index.ts", "./testing": "./src/testing.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/metadata": "workspace:*",
-    "@angee/ui": "workspace:*"
+    "@angee/refine": "workspace:*",
+    "@angee/ui": "workspace:*",
+    "react-hook-form": "^7.81.0",
+    "valibot": "^1.4.2"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",
@@ -24,6 +21,8 @@
     "react-dom": "^19"
   },
   "devDependencies": {
+    "@angee/storybook": "workspace:*",
+    "@refinedev/core": "^5.0.12",
     "@tanstack/react-router": "^1.170.16",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",

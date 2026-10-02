@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from angee.base.validation import validate_model
+from angee.base.validation import validate_value
 
 
 class MilestoneTemplate(BaseModel):
@@ -23,4 +23,4 @@ class MilestoneTemplate(BaseModel):
     def values(cls, value: Any) -> dict[str, Any]:
         """Translate template errors into the standard model validation contract."""
 
-        return validate_model(cls, value, field="milestones").model_dump()
+        return validate_value(cls, value, field="milestones").model_dump()

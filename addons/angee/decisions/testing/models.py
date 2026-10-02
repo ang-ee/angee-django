@@ -1,13 +1,15 @@
-"""Concrete decision tables for source-addon tests."""
+"""One concrete test model per decision resource, registered from conftest."""
 
 from angee.decisions import models as sources
+from angee.intake.models import DecisionIntake
+from angee.workflows.models import DecisionWorkflow
 
 
 class DecisionGroup(sources.DecisionGroup):
-    """Concrete source-test group."""
+    """Concrete group retained by reviews and independent decision tests."""
 
     class Meta(sources.DecisionGroup.Meta):
-        """Preserve group contracts under an isolated test table name."""
+        """Keep native source options on the isolated group table."""
 
         abstract = False
         app_label = "decisions"
@@ -15,11 +17,11 @@ class DecisionGroup(sources.DecisionGroup):
         rebac_resource_type = "decisions/group"
 
 
-class Decision(sources.Decision):
-    """Concrete source-test seat."""
+class Decision(DecisionIntake, DecisionWorkflow, sources.Decision):
+    """Concrete seat with the installed intake and workflow contributions."""
 
     class Meta(sources.Decision.Meta):
-        """Preserve seat contracts under an isolated test table name."""
+        """Keep native source options on the isolated decision table."""
 
         abstract = False
         app_label = "decisions"
@@ -28,10 +30,10 @@ class Decision(sources.Decision):
 
 
 class DecisionEvidence(sources.DecisionEvidence):
-    """Concrete source-test evidence projection."""
+    """Concrete evidence projection for source tests."""
 
     class Meta(sources.DecisionEvidence.Meta):
-        """Preserve evidence contracts under an isolated test table name."""
+        """Keep native source options on the isolated evidence table."""
 
         abstract = False
         app_label = "decisions"

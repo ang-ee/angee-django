@@ -21,26 +21,24 @@ from angee.decisions.tasks import expire
 from angee.jobs import locks
 
 
-@pytest.mark.parametrize("with_workflows", [False, True])
-def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Path, with_workflows: bool) -> None:
-    """Compile independently and alongside this base's distinct workflow decisions."""
+def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Path) -> None:
+    """Compile only the decisions dependency closure in a fresh Django process."""
     root = Path(__file__).resolve().parents[1]
     environment = os.environ.copy()
     environment.pop("DJANGO_SETTINGS_MODULE", None)
     environment.pop("DATABASE_URL", None)
-    workflow_args = ["--app", "angee.workflows"] if with_workflows else []
     composed = {}
     for action in ("snapshot", "schemas"):
         report = tmp_path / f"{action}.json"
         result = subprocess.run(
             [sys.executable, str(root / "tests/composed_host.py"), "--source-root", str(root),
              "--runtime-dir", str(tmp_path / action / "runtime"), "--app", "angee.decisions",
-             *workflow_args, "--no-examples", "--action", action, "--output", str(report)],
+             "--no-examples", "--action", action, "--output", str(report)],
             cwd=root, env=environment, capture_output=True, text=True, timeout=120, check=False,
         )
         assert result.returncode == 0, f"Decision composition failed:\n{result.stdout}\n{result.stderr}"
         composed[action] = json.loads(report.read_text())
-    assert any(name.startswith("workflows.") for name in composed["snapshot"]) is with_workflows
+    assert not any(name.startswith("workflows.") for name in composed["snapshot"])
     assert {name for name in composed["snapshot"] if name.startswith("decisions.")} == {
         "decisions.decision", "decisions.decisiongroup", "decisions.decisionevidence",
     }
@@ -50,11 +48,8 @@ def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Pat
     assert {"decisions", "decisions_by_pk", "decision_groups", "decision_evidence"} <= schema.query_type.fields.keys()
     assert schema.mutation_type is not None
     mutations = schema.mutation_type.fields
-    assert "decide_human_decision" in mutations
-    assert set(mutations["decide_human_decision"].args) == {"id", "revision", "action", "values"}
-    if with_workflows:
-        assert "decide" in mutations
-        assert schema.get_type("DecisionType") is not schema.get_type("HumanDecisionType")
+    assert "decide" in mutations
+    assert set(mutations["decide"].args) == {"id", "revision", "action", "values"}
     assert not any(name.startswith(("insert_decision", "update_decision", "delete_decision")) for name in mutations)
     filters = schema.query_type.fields["decisions"].args["where"].type
     assert {"assignees", "requester"} <= filters.fields.keys()
@@ -104,7 +99,7 @@ def test_policy_registry_can_be_extended_through_settings(settings) -> None:
     group = apps.get_model("decisions", "DecisionGroup")
     field = group._meta.get_field("policy")
     assert field.resolve_class("explicit") is ExplicitPolicy
-    assert resolve_impl_class("ANGEE_DECISION_POLICY_CLASSES", "explicit", DecisionPolicy) is ExplicitPolicy
+    assert resolve_impl_class(DecisionPolicy, "explicit") is ExplicitPolicy
     assert ExplicitPolicy.settled([SimpleNamespace(is_open=False), SimpleNamespace(is_open=False)])
     assert not ExplicitPolicy.settled([SimpleNamespace(is_open=False)])
     with pytest.raises(ImproperlyConfigured):

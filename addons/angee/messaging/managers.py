@@ -53,9 +53,9 @@ from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_model, canonical_record_target
-from angee.base.serialization import canonical_json_sha256
+from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import mute_changes
-from angee.integrate.models import IntegrationLifecycle, IntegrationManager
+from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
@@ -72,24 +72,6 @@ logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
-
-
-def strip_null_bytes(value: Any) -> Any:
-    """Recursively remove ``\\x00`` from strings inside str/dict/list values.
-
-    Email bodies routinely contain null bytes, which Postgres rejects in text/JSON
-    columns; stripping them on the write path keeps a large sync from hard-failing.
-    """
-
-    if isinstance(value, str):
-        return value.replace("\x00", "")
-    if isinstance(value, dict):
-        return {key: strip_null_bytes(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [strip_null_bytes(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(strip_null_bytes(item) for item in value)
-    return value
 
 
 def normalize_subject(subject: str) -> str:
@@ -183,7 +165,42 @@ _SEARCH_MAX_BYTES = 512 * 1024
 _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
 
 
-class ChannelManager(IntegrationManager):
+class ChannelQuerySet(IntegrationQuerySet):
+    """Chainable scopes over messaging channels and their pairing attempts."""
+
+    def unfinished_pairing(self, user: Any, backend_class: str) -> ChannelQuerySet:
+        """Return the user's empty, never-claimed, non-paused channels, newest first.
+
+        "Claimed" is the durable identity under the live implementation's
+        ``state_identity_key``. A pairing report's ``own_id`` is diagnostic — a
+        duplicate rejection or logout keeps it after releasing the claim — so
+        it does not disqualify reuse. Message membership is the message owner's
+        ``for_channel`` predicate; callers run elevated so it sees every message.
+        """
+
+        impl_class = self.model.resolve_impl_class(self.model.live_impl_field, backend_class)
+        identity_key = impl_class.state_identity_key
+        identity = f"subscription_state__{identity_key}"
+        claimed = (
+            models.Q(subscription_state__has_key=identity_key)
+            & ~models.Q(**{identity: ""})
+            & ~models.Q(**{identity: None})
+        )
+        message_model = apps.get_model("messaging", "Message")
+        return cast(
+            ChannelQuerySet,
+            self.filter(
+                ~models.Exists(message_model.objects.for_channel(models.OuterRef("pk"))),
+                owner_id=user.pk,
+                backend_class=backend_class,
+            )
+            .exclude(lifecycle=IntegrationLifecycle.PAUSED)
+            .exclude(claimed)
+            .order_by("-created_at", "-pk"),
+        )
+
+
+class ChannelManager(IntegrationManager.from_queryset(ChannelQuerySet)):  # type: ignore[misc]
     """Channel factory + delete owner, bound as ``Channel.objects``.
 
     A Channel is a multi-table-inheritance child of the concrete ``Integration``, so
@@ -260,6 +277,8 @@ class ChannelManager(IntegrationManager):
         # `delete`; this preflight denies at resolve regardless. A divergent-zed preflight
         # test (delete narrower than write) is only meaningful once the deferred thread/
         # message `delete` arm (see teardown FOLLOW-UP) splits the scopes.
+        if channel.declared_concrete_model() is not self.model:
+            raise ValueError("A channel child must be deleted through its own capability.")
         if not channel.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {channel._meta.label}")
         thread_model = apps.get_model("messaging", "Thread")
@@ -909,7 +928,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return self.model._base_manager.none()
-        record._require_record_access("read")
+        record.require_access("read")
         content_type, object_id = canonical_record_target(record)
         visible_threads = apps.get_model("messaging", "Thread").objects.all().scoped().values("pk")
         return (
@@ -941,8 +960,8 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None or thread.pk is None:
             raise ValueError("Source thread attachment requires saved records.")
-        record._require_record_access("write")
-        thread._require_record_access("read")
+        record.require_access("write")
+        thread.require_access("read")
         content_type, object_id = canonical_record_target(record)
         values = {
             "label": strip_null_bytes(label or str(record)),
@@ -968,8 +987,8 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None or thread.pk is None:
             return 0
-        record._require_record_access("write")
-        thread._require_record_access("read")
+        record.require_access("write")
+        thread.require_access("read")
         content_type, object_id = canonical_record_target(record)
         target_model = content_type.model_class()
         if target_model is None:
@@ -2673,7 +2692,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 models.Prefetch("reactions__handle", queryset=apps.get_model("parties", "Handle")._base_manager.all()),
                 models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.all()),
             )
-            .annotate(_order_at=MessageQuerySet.chronological_time())
+            .annotate(
+                _order_at=MessageQuerySet.chronological_time(),
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            )
         )
         kinds = {
             strip_null_bytes(value or "").strip().lower()
@@ -2932,7 +2954,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if not body:
             raise ValueError("Message body is required.")
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().get(pk=message.pk)
+            message = type(message)._base_manager.select_for_update().annotate(
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            ).get(pk=message.pk)
             edit_error = message.content_edit_error()
             if edit_error is not None:
                 raise ValueError(edit_error)
@@ -2988,7 +3012,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         """Delete ``message`` from ``thread`` and repair thread denormalisations."""
 
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().get(pk=message.pk)
+            message = type(message)._base_manager.select_for_update().annotate(
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            ).get(pk=message.pk)
             if message.thread_id != thread.pk:
                 raise ValueError("Message does not belong to this thread.")
             delete_error = message.delete_error()

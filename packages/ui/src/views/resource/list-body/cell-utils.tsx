@@ -2,18 +2,18 @@ import * as React from "react";
 import { flexRender, type Cell as TableCellModel, type Column as TableColumn, type ColumnDef } from "@tanstack/react-table";
 import type { AggregateBucket, AggregateMeasureOperator } from "@angee/refine";
 import type {
-  ModelEnumValueMetadata,
   ModelMetadata,
   Row,
 } from "@angee/metadata";
 import { isDateField, rowValueAtPath, resourceFieldPathToSnake } from "@angee/metadata";
 import { type UiTranslate } from "../../../i18n";
-import { statusLabel } from "../../../lib/labels";
+import { enumValueLabel, groupFieldLabel, statusLabel } from "../../../lib/labels";
 import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
 import { Chip } from "../../../ui/chip";
 import { dateFromUnknown, formatDate, formatDateTime } from "../../../widgets/date-format";
 import { canonicalOptionValue } from "../../../widgets/types";
+import { RecordReference } from "../../relation/RecordReference";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
 import type { GroupMeasure } from "./types";
@@ -26,6 +26,28 @@ export function cellContent<TRow extends Row>(
   if (column.render) return column.render(row);
   const queryField = column.queryField;
   const projected = rowValueAtPath(row, queryField?.row?.path ?? column.field);
+  if (column.relationList) {
+    if (projected == null) return null;
+    if (!Array.isArray(projected)) {
+      throw new Error(`Relation list column "${column.field}" expected an array.`);
+    }
+    const { model, identityPath, labelPath } = column.relationList;
+    return (
+      <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+        {projected.map((item: unknown) => {
+          if (item == null || typeof item !== "object") {
+            throw new Error(`Relation list column "${column.field}" expected related records.`);
+          }
+          const id = rowValueAtPath(item as Row, identityPath);
+          const label = rowValueAtPath(item as Row, labelPath);
+          if (typeof id !== "string") {
+            throw new Error(`Relation list column "${column.field}" expected a related record identity.`);
+          }
+          return <Chip key={id} tone="info" size="sm"><RecordReference model={model} id={id} label={label == null ? undefined : String(label)} /></Chip>;
+        })}
+      </span>
+    );
+  }
   const labelPath = queryField?.relation?.labelPath;
   const value = labelPath ? rowValueAtPath(row, labelPath) ?? projected : projected;
   const field = queryField ?? metadata?.fields[column.field];
@@ -275,15 +297,4 @@ export function isInteractiveTarget(target: EventTarget): boolean {
     );
 }
 
-export function groupFieldLabel(field: string): string {
-  const label = titleCase(field);
-  return label.endsWith(" At") ? label.slice(0, -3) : label;
-}
-
-/**
- * The display label for an enum metadata value: its authored description where
- * the resource artifact provides one, otherwise the humanized value.
- */
-export function enumValueLabel(value: ModelEnumValueMetadata): string {
-  return value.description ?? statusLabel(value.value);
-}
+export { enumValueLabel, groupFieldLabel } from "../../../lib/labels";

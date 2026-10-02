@@ -99,7 +99,7 @@ def test_install_appends_the_root_and_reflects_pending(
     with system_context(reason="test.platform.install.verify"):
         row = Addon.objects.get(name=_AVAILABLE_ADDON)
     assert row.pending is True
-    assert str(row.state) == Addon.State.DISABLED  # not composed until the next boot
+    assert str(row.state) == Addon.AddonState.DISABLED  # not composed until the next boot
     assert to_object_ref(row).resource_id == str(row.pk)
 
 
@@ -290,7 +290,7 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
         with system_context(reason="test.platform.forced.seed"):
             Addon.objects.update_or_create(
                 name="angee.iam",
-                defaults={"forced": persisted_forced, "state": Addon.State.ENABLED},
+                defaults={"forced": persisted_forced, "state": Addon.AddonState.ENABLED},
             )
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -318,7 +318,7 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
             defaults={
                 "forced": True,
                 "depended_by": ["example.disabled"],
-                "state": Addon.State.ENABLED,
+                "state": Addon.AddonState.ENABLED,
             },
         )
 

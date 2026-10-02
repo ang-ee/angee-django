@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 from django.core.exceptions import ValidationError
-from rebac import SubjectRef
+from rebac import PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.resources import model_for_resource_type
 from rebac.schema.parser import parse_zed
 
@@ -18,8 +18,80 @@ from angee.graphql import sharing
 from angee.graphql.data import metadata
 from angee.graphql.sharing import RecordAccessType
 from angee.projects.models import Task
+from angee.projects.testing.models import Project
 from angee.storage.models import Drive
 from angee.workflows.models import Workflow
+from tests.conftest import create_user
+
+
+@pytest.fixture
+def record_access_target(composed_tables: None) -> tuple[Project, Any, Any]:
+    """Provide a real owner-backed resource with no actor pinned to its instance."""
+
+    owner, outsider = create_user("access-owner"), create_user("access-outsider")
+    with actor_context(owner):
+        project = Project.objects.create(title="Access contract")
+    return Project._base_manager.get(pk=project.pk), owner, outsider
+
+
+def test_require_access_binds_ambient_actor_until_explicitly_rebound(
+    record_access_target: tuple[Project, Any, Any],
+) -> None:
+    project, owner, outsider = record_access_target
+
+    with actor_context(owner):
+        assert project.require_access("write") == to_subject_ref(owner)
+    with actor_context(outsider):
+        assert project.require_access("write") == to_subject_ref(owner)
+        with pytest.raises(PermissionDenied, match="'write'"):
+            project.require_access("write", outsider)
+    assert project.actor() == to_subject_ref(outsider)
+
+
+def test_require_access_explicit_actor_clears_sudo_and_retains_binding(
+    record_access_target: tuple[Project, Any, Any],
+) -> None:
+    project, owner, outsider = record_access_target
+    project.with_actor(owner).sudo(reason="test.require_access.instance")
+
+    with actor_context(owner), system_context(reason="test.require_access.ambient"):
+        with pytest.raises(PermissionDenied, match="'write'"):
+            project.require_access("write", outsider)
+        assert project.actor() == to_subject_ref(outsider)
+        assert not project.is_sudo()
+        project.require_access("write", owner)
+    assert project.actor() == to_subject_ref(owner)
+
+
+def test_require_access_pinned_actor_precedes_ambient_actor(
+    record_access_target: tuple[Project, Any, Any],
+) -> None:
+    project, owner, outsider = record_access_target
+    project.with_actor(outsider)
+
+    with actor_context(owner), pytest.raises(PermissionDenied, match="'write'"):
+        project.require_access("write")
+    with system_context(reason="test.require_access.ambient"), pytest.raises(PermissionDenied, match="'write'"):
+        project.require_access("write")
+    project.with_actor(owner)
+    with actor_context(outsider):
+        assert project.require_access("write") == to_subject_ref(owner)
+
+
+@pytest.mark.parametrize("strict_mode", [False, True])
+def test_require_access_fails_closed_without_actor_and_retains_system_scope(
+    record_access_target: tuple[Project, Any, Any], settings: Any, strict_mode: bool,
+) -> None:
+    project, _owner, outsider = record_access_target
+
+    settings.REBAC_STRICT_MODE = strict_mode
+    with pytest.raises(PermissionDenied, match="requires an actor"):
+        project.require_access("write")
+    with system_context(reason="test.require_access.ambient"):
+        project.require_access("write")
+    project.sudo(reason="test.require_access.instance")
+    with actor_context(outsider), pytest.raises(PermissionDenied, match="'write'"):
+        project.require_access("write")
 
 
 def test_group_access_projects_canonical_subject_identity() -> None:
@@ -38,14 +110,15 @@ def test_group_access_projects_canonical_subject_identity() -> None:
     assert projected.label == "Reviewers"
 
 
-def test_share_declarations_and_lineage_head_guard() -> None:
+def test_share_declarations() -> None:
+    """Each model advertises only its declared, permission-gated sharing relations."""
+
     assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Drive.get_rebac_grantable() == {"editor": "share", "viewer": "share"}
-    assert Workflow.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
-    Workflow.validate_record_access_target(SimpleNamespace(published_from_id=None))
-    with pytest.raises(ValidationError, match="lineage head"):
-        Workflow.validate_record_access_target(SimpleNamespace(published_from_id=7))
+    assert Workflow.get_rebac_grantable() == {
+        "editor": "write", "viewer": "write", "starter": "write", "operator": "write",
+    }
 
 
 @pytest.mark.parametrize("relation,selectable", [("member", True), ("owner", False)])

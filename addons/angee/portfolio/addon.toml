@@ -16,8 +16,3 @@ demo = [
   { path = "resources/demo/040_portfolio.initiative_project.yaml", depends_on = ["resources/demo/020_portfolio.initiative.yaml", "resources/demo/030_projects.project.yaml"] },
   { path = "resources/demo/050_portfolio.release.yaml", depends_on = "resources/demo/010_portfolio.product.yaml" },
 ]
-
-[[migrations]]
-name = "shared_reader_cleanup"
-app_label = "portfolio"
-module = "runtime_migrations.shared_reader_cleanup"

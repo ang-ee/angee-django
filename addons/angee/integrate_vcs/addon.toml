@@ -6,3 +6,8 @@ description = "VCS bridges, repository inventory, sources, and templates"
 keywords = ["integrations", "vcs", "repositories"]
 category = "Integration"
 depends_on = ["angee.integrate"]
+
+[[migrations]]
+name = "vcs_bridge_sync_status"
+app_label = "integrate_vcs"
+module = "runtime_migrations.vcs_bridge_sync_status"

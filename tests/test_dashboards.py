@@ -22,7 +22,7 @@ from angee.dashboards.models import DashboardWidget as AbstractDashboardWidget
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.entries import ResourceEntry, ResourceGroup
 from angee.resources.models import Resource
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_user
 
 
@@ -63,7 +63,7 @@ def dashboard_tables(transactional_db: Any) -> Iterator[None]:
     active = backend()
     assert isinstance(active, LocalBackend)
     policy = Path(__file__).parents[1] / "addons/angee/dashboards/permissions.zed"
-    install_manual_schema(
+    install_permission_schema(
         parse_zed(
             "definition auth/user {}\n"
             "definition auth/group { relation member: auth/user }\n"

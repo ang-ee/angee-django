@@ -15,7 +15,7 @@ import type {
 } from "@angee/metadata";
 
 import type {
-  ResourceToolbarFilterField,
+  FilterClauseField,
   ResourceToolbarFilterOption,
 } from "../../toolbars";
 import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
@@ -30,7 +30,7 @@ import { useGroupOperation } from "../resource/resource-operations";
 
 const SCALAR_FACET_OPTION_LIMIT = 200;
 const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];
-const EMPTY_FILTER_FIELDS: readonly ResourceToolbarFilterField[] = [];
+const EMPTY_FILTER_FIELDS: readonly FilterClauseField[] = [];
 const EMPTY_SCALAR_FACETS: ScalarFacets = {
   filters: EMPTY_FILTER_OPTIONS,
   filterFields: EMPTY_FILTER_FIELDS,
@@ -38,7 +38,7 @@ const EMPTY_SCALAR_FACETS: ScalarFacets = {
 
 export interface ScalarFacets {
   filters: readonly ResourceToolbarFilterOption[];
-  filterFields: readonly ResourceToolbarFilterField[];
+  filterFields: readonly FilterClauseField[];
 }
 
 export interface ScalarFacetDeclaration {
@@ -84,7 +84,7 @@ export function useScalarFacets<TRow extends object>(
       }),
     [facetQuery.facets, facets, metadata, t],
   );
-  const filterFields = React.useMemo<readonly ResourceToolbarFilterField[]>(
+  const filterFields = React.useMemo<readonly FilterClauseField[]>(
     () =>
       facets.flatMap((facet) => {
         const result = facetQuery.facets[facet.id];

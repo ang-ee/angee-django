@@ -1,17 +1,25 @@
 """Translate typed declaration validation into Django's field error contract."""
 
+from functools import cache
 from typing import Any
 
 from django.core.exceptions import ValidationError
-from pydantic import BaseModel
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 
-def validate_model[T: BaseModel](model: type[T], value: Any, *, field: str) -> T:
-    """Validate a Pydantic value with error paths rooted at the owning field."""
+@cache
+def get_type_adapter(type_: Any) -> TypeAdapter[Any]:
+    """Reuse native parsing, schema and serialization for each declared type."""
+
+    return TypeAdapter(Any if type_ is None else type_)
+
+
+def validate_value(type_: Any, value: Any, *, field: str) -> Any:
+    """Validate a typed value with error paths rooted at the owning field."""
 
     try:
-        return model.model_validate(value)
+        return get_type_adapter(type_).validate_python(value)
     except PydanticValidationError as error:
         messages: dict[str, list[str]] = {}
         for issue in error.errors(include_url=False, include_context=False, include_input=False):

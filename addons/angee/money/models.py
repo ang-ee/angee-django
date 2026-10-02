@@ -95,6 +95,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
 
         abstract = True
         ordering = ("code",)
+        verbose_name_plural = "currencies"
         rebac_resource_type = "money/currency"
 
     def __str__(self) -> str:
@@ -330,7 +331,6 @@ class CurrencyRate(RecordRefMixin, ArchiveMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "crt_"
-    record_ref_field_prefix = "context"
 
     currency = models.ForeignKey(
         "money.Currency",

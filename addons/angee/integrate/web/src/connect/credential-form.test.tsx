@@ -12,11 +12,13 @@ const mocks = vi.hoisted(() => ({
   useRecordAction: vi.fn<(run: RecordActionRunner, options?: UseRecordActionOptions) => void>(),
 }));
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: mocks.useAuthoredMutation,
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   Action: () => null,
   Field: (props: Record<string, unknown>) => {
     mocks.fields.push(props);

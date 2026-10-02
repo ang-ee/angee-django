@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-from django.db import models
+from collections.abc import Iterator
 
+import pytest
+from django.db import connection, models
+from django.test.utils import isolate_apps
+
+from angee.base.fields import StateField
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with
@@ -38,16 +42,24 @@ def test_unknown_credential_kind_is_rejected() -> None:
         CredentialKind("unsupported")
 
 
-class ConcreteBridge(Bridge, Integration):
-    """Concrete bridge used only to inspect inherited field declarations."""
+@pytest.fixture
+def concrete_bridge() -> Iterator[type[Bridge]]:
+    """Inspect a concrete bridge without registering a nonexistent runtime table."""
 
-    class Meta(Bridge.Meta):
-        """Django model options for the concrete bridge test double."""
+    with isolate_apps():
 
-        abstract = False
-        app_label = "tests"
-        db_table = "test_integrate_bridge"
-        rebac_resource_type = "tests/bridge"
+        class ConcreteBridge(Bridge, Integration):
+            """Concrete bridge used only to inspect inherited field declarations."""
+
+            class Meta(Bridge.Meta):
+                """Django model options for the concrete bridge test double."""
+
+                abstract = False
+                app_label = "tests"
+                db_table = "test_integrate_bridge"
+                rebac_resource_type = "tests/bridge"
+
+        yield ConcreteBridge
 
 
 def test_integrate_bases_are_abstract() -> None:
@@ -64,18 +76,35 @@ def test_bridge_declares_runtime_contract_methods() -> None:
         assert callable(getattr(Bridge, method_name))
 
 
-def test_concrete_bridge_inherits_scheduler_field() -> None:
+def test_concrete_bridge_inherits_scheduler_field(concrete_bridge: type[Bridge]) -> None:
     """A domain concrete bridge receives the scheduler index field."""
 
-    field = ConcreteBridge._meta.get_field("next_sync_at")
+    field = concrete_bridge._meta.get_field("next_sync_at")
 
     assert isinstance(field, models.DateTimeField)
 
 
-def test_concrete_bridge_uses_django_mti_parent_link() -> None:
+def test_bridge_sync_stage_preserves_live_column_shape(concrete_bridge: type[Bridge]) -> None:
+    """The enum field keeps messaging channels' existing varchar(32) storage."""
+
+    field = concrete_bridge._meta.get_field("sync_stage")
+    assert isinstance(field, StateField)
+    assert field.max_length == 32
+    previous = models.CharField(
+        max_length=32,
+        choices=Bridge.SyncStage.choices,
+        default=Bridge.SyncStage.IDLE,
+        db_index=True,
+    )
+    assert field.deconstruct()[3] == previous.deconstruct()[3]
+    assert field.db_type(connection) == previous.db_type(connection)
+    assert [field.get_prep_value(stage) for stage in Bridge.SyncStage] == [stage.value for stage in Bridge.SyncStage]
+
+
+def test_concrete_bridge_uses_django_mti_parent_link(concrete_bridge: type[Bridge]) -> None:
     """A concrete bridge is a Django MTI child of Integration."""
 
-    parent_link = ConcreteBridge._meta.get_field("integration_ptr")
+    parent_link = concrete_bridge._meta.get_field("integration_ptr")
 
     assert parent_link.primary_key is True
     assert parent_link.remote_field.model is Integration

@@ -13,9 +13,9 @@ from rebac import system_context
 
 from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
-from angee.integrate.models import Bridge
+from angee.base.mixins import AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import VCSBackend
 from angee.integrate_vcs.templates import parse_template_meta
@@ -43,12 +43,9 @@ class VcsBridge(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "FORM"
-    integration_kind_label = "VCS bridge"
+    integration_create_mode = IntegrationCreateMode.FORM
 
-    backend_class = ImplClassField(
-        base_class=VCSBackend,
-        registry_setting="ANGEE_VCS_BACKEND_CLASSES",
+    backend_class = ImplClassField(VCSBackend,
         default="local",
         create_only=True,
     )
@@ -61,6 +58,7 @@ class VcsBridge(Bridge):
 
         abstract = True
         db_table = "integrate_vcsbridge"
+        verbose_name = "VCS bridge"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate_vcs/vcs_bridge"
 
@@ -228,7 +226,7 @@ class RepositoryManager(AngeeManager):
         )
 
 
-class Repository(SqidMixin, AuditMixin, AngeeModel):
+class Repository(AuditMixin, AngeeDataModel):
     """Inventory of one git remote, reached through its ``VcsBridge``.
 
     A plain noun: Django records the remote; the operator clones it. ``org`` groups
@@ -263,6 +261,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         db_table = "integrate_repository"
         ordering = ("org", "name")
+        verbose_name_plural = "repositories"
         rebac_resource_type = "integrate_vcs/repository"
         constraints = (
             models.UniqueConstraint(
@@ -277,7 +276,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class Source(SqidMixin, AuditMixin, AngeeModel):
+class Source(AuditMixin, AngeeDataModel):
     """A pointer into a ``Repository`` at a ``ref`` and ``path``, with a ``kind``.
 
     One noun for every source kind. ``kind`` binds the source to an output model
@@ -394,7 +393,7 @@ class TemplateManager(AngeeManager):
         )
 
 
-class Template(SqidMixin, AuditMixin, AngeeModel):
+class Template(AuditMixin, AngeeDataModel):
     """One Copier template discovered under a ``Source`` (``source_kind="template"``).
 
     The operator renders these; the kind here is the *template* kind from the

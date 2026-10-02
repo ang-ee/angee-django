@@ -170,14 +170,14 @@ export function FeedsPage(): React.ReactElement {
     <ResourceList resource={FEED_MODEL} form={feedForm} placement="inline" routed hideCreate recordTabs={tabs}>
       <List resource={FEED_MODEL}>
         <Column field="display_name" header={t("feed.name")} />
-        <Column field="backend_class" header={t("feed.backend")} />
+        <Column field="feed_backend_class" header={t("feed.backend")} />
         <Column field="handle.display_name" header={t("feed.handle")} />
         <Column field="lifecycle" header={t("feed.lifecycle")} widget="statusBadge" />
         <Column field="runtime_status" header={t("feed.runtime")} widget="statusBadge" />
         {IntegrationSyncColumns({
-          fields: ["last_sync_status", "last_sync_completed_at"],
+          fields: ["sync_stage", "last_sync_completed_at"],
           labels: {
-            last_sync_status: t("feed.sync"),
+            sync_stage: t("feed.sync"),
             last_sync_completed_at: t("feed.syncedAt"),
           },
         })}

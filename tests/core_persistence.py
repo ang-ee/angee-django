@@ -23,7 +23,7 @@ from angee.base.mixins import (
     OwnerQuerySet,
 )
 from angee.base.models import AngeeModel, AngeeQuerySet
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 
 
 class RevisionRow(OptimisticLockMixin):
@@ -100,7 +100,7 @@ definition scopedemo/owned_row {
 
 @pytest.fixture
 def ownership_tables(db):
-    install_manual_schema(parse_zed(OWNERSHIP_SCHEMA))
+    install_permission_schema(parse_zed(OWNERSHIP_SCHEMA))
     try:
         yield
     finally:

@@ -32,7 +32,7 @@ from angee.compose.permissions import (
     render_zed,
 )
 from angee.fs import write_atomic
-from tests.conftest import installed_field_owners
+from angee.testing.permissions import installed_field_owners
 
 User = get_user_model()
 

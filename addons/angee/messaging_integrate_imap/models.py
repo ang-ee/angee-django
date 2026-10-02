@@ -31,7 +31,7 @@ class ImapChannelSampling(models.Model):
     def _require_paused_imap(self, actor: Any) -> None:
         """Require explicit write access to one paused IMAP channel."""
 
-        self.with_actor(actor)._require_record_access("write")
+        self.require_access("write", actor)
         if self.lifecycle != self.Lifecycle.PAUSED:
             raise ValidationError("Pause this IMAP channel before changing its mailbox position.")
         if not isinstance(self.backend, ImapChannelBackend):
@@ -165,7 +165,7 @@ class ImapChannelSampling(models.Model):
 
         with actor_context(actor):
             current = type(self)._base_manager.get(pk=self.pk)
-            current._require_record_access("write")
+            current.require_access("write")
             part_model = apps.get_model("messaging", "Part")
             if not isinstance(part, part_model) or part.pk is None:
                 raise ValidationError("Embedded expansion requires a retained Message Part.")
@@ -176,7 +176,7 @@ class ImapChannelSampling(models.Model):
                 or retained.file_id is None
             ):
                 raise ValidationError("Select an RFC 822 Part retained by this IMAP Channel.")
-            retained.file._require_record_access("read")
+            retained.file.require_access("read")
             with retained.file.open_stream() as stream:
                 raw = stream.read(EMBEDDED_MESSAGE_MAX_BYTES + 1)
             child = expand_embedded_message(raw)

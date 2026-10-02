@@ -54,7 +54,6 @@ class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     runtime_status: auto
     config: JSON
     last_sync_completed_at: auto
-    last_sync_status: auto
     last_sync_summary: JSON
     sync_error: auto
     sync_progress: JSON
@@ -179,7 +178,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         "updated_at",
     ],
@@ -199,7 +197,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
     ],
     insert=False,

@@ -16,7 +16,7 @@ from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables
 
@@ -47,7 +47,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
     active = backend()
     assert isinstance(active, LocalBackend)
     with model_tables((ScopedAggregateRecord,)):
-        install_manual_schema(
+        install_permission_schema(
             parse_zed(
                 """
                 definition auth/user {}

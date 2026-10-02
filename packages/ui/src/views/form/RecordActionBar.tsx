@@ -51,7 +51,7 @@ export function RecordActionBar({
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
   applyPatch?: (patch: Record<string, unknown>) => Promise<Row | null>;
-  reload?: () => void;
+  reload?: () => void | Promise<Row | null>;
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
@@ -70,7 +70,7 @@ export function RecordActionBar({
   const actionsTriggerRef = React.useRef<HTMLElement>(null);
   // The open typed-args action form (F-a), or null. Set after any confirm passes;
   // the dialog owns collecting the args and firing the action's `submit`.
-  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor; record: Row | null } | null>(
+  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor } | null>(
     null,
   );
   const actionMutation = useMutation<
@@ -136,7 +136,7 @@ export function RecordActionBar({
       // A typed-args action collects its args (and merges the record/selection
       // context) in the dialog, which fires `submit` — not the string-only prompt.
       if (action.args && action.submit) {
-        setFormAction({ action, record: record ? { ...record } : null });
+        setFormAction({ action });
         return;
       }
       let values: Record<string, string> = {};
@@ -169,7 +169,8 @@ export function RecordActionBar({
   if (
     visibleActions.length === 0 &&
     visibleDeleteAction === undefined &&
-    contributedActions == null
+    contributedActions == null &&
+    formAction === null
   ) return null;
 
   return (
@@ -255,8 +256,9 @@ export function RecordActionBar({
           key={formAction.action.id}
           action={formAction.action}
           context={{
-            record: formAction.record,
+            record,
             selectedIds: recordId !== null ? [recordId] : [],
+            refresh: async () => await reload() ?? null,
           }}
           open
           onOpenChange={(open) => {

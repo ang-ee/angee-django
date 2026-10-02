@@ -2,14 +2,17 @@ import type { ReactNode } from "react";
 
 import type {
   ActionArg,
+  ActionArgs,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
 } from "./Action";
 import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FacetDescriptor, FacetProps } from "./Facet";
@@ -44,14 +47,17 @@ export {
 } from "./types";
 export type {
   ActionArg,
+  ActionArgs,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
   ColumnDescriptor,
   ColumnProps,
   FacetDescriptor,
@@ -182,6 +188,7 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
     ...(props.aggregate !== undefined ? { aggregate: props.aggregate } : {}),
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
+    ...(props.showWhen !== undefined ? { showWhen: props.showWhen } : {}),
     ...(props.interactive !== undefined
       ? { interactive: props.interactive }
       : {}),

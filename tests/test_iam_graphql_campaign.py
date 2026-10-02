@@ -1,7 +1,5 @@
 """IAM's GraphQL creation, credential, identity and extension-role contracts."""
 
-from types import SimpleNamespace
-
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
@@ -18,11 +16,12 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
+from angee.graphql.view_as import ViewAs
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, graphql_request, result_data
 from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.iam_campaign import legacy_person_emails as legacy_person_emails
-from tests.spaces_models import Group, Membership
 from tests.test_iam_graphql import _schema
 from tests.test_spaces import spaces_tables as spaces_tables
 
@@ -151,7 +150,7 @@ def test_graphql_current_and_real_user_and_preview_list_follow_request_identity(
     assert ordinary["real_user"] is None
     assert {r["username"] for r in ordinary["viewable_people"]} == {target.username, peer.username}
     request = graphql_request(target)
-    request.view_as = SimpleNamespace(real_user=iam_admin, target=target)
+    request.view_as = ViewAs(real_user=iam_admin, target=target)
     viewed = result_data(execute_schema(schema, query, request=request))
     assert viewed["current_user"] == {"username": target.username}
     assert viewed["real_user"] == {"username": iam_admin.username}

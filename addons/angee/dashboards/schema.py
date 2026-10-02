@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from enum import Enum
 from typing import Any, cast
 
 import strawberry
@@ -34,16 +33,9 @@ Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")
 
 
-@strawberry.enum
-class DashboardScope(Enum):
-    PERSONAL = "personal"
-    ADDON = "addon"
-    RESOURCE = "resource"
-
-
 @strawberry.input
 class DashboardTargetInput:
-    scope: DashboardScope
+    scope: Dashboard.DashboardScope
     key: str | None = None
     id: PublicID | None = None
 
@@ -123,7 +115,7 @@ class DashboardPayload:
 @strawberry.type
 class DashboardSummaryType:
     id: PublicID
-    scope: DashboardScope
+    scope: Dashboard.DashboardScope
     scope_key: str | None
     name: str
     description: str
@@ -165,7 +157,7 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
     }
     return DashboardSummaryType(
         id=cast(PublicID, require_public_id(Dashboard, row.pk)),
-        scope=DashboardScope(row.scope),
+        scope=Dashboard.DashboardScope(row.scope),
         scope_key=row.scope_key,
         name=row.name,
         description=row.description,
@@ -229,7 +221,7 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
 
 def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any | None:
     user = session_user(info)
-    if target.scope is DashboardScope.PERSONAL:
+    if target.scope is Dashboard.DashboardScope.PERSONAL:
         if target.id is None:
             raise ValidationError({"target": "A personal dashboard id is required."})
         row = instance_from_public_id(Dashboard, str(target.id))
@@ -240,7 +232,7 @@ def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any 
 
 
 def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[str, str | None]:
-    if target.scope is DashboardScope.PERSONAL:
+    if target.scope is Dashboard.DashboardScope.PERSONAL:
         if existing is None:
             raise ValidationError({"target": "The personal dashboard was not found."})
         return "personal", None
@@ -263,7 +255,7 @@ class DashboardQuery:
     def dashboard(self, info: strawberry.Info, target: DashboardTargetInput) -> DashboardPayload:
         row = _resolve_target(info, target)
         if row is None:
-            if target.scope is DashboardScope.PERSONAL:
+            if target.scope is Dashboard.DashboardScope.PERSONAL:
                 return DashboardPayload(status="unavailable")
             if current_actor() is None:
                 return DashboardPayload(status="absent")
@@ -353,7 +345,7 @@ class DashboardMutation:
         user = session_user(info)
         existing = (
             _resolve_target(info, target)
-            if persisted_id is not None or target.scope is DashboardScope.PERSONAL
+            if persisted_id is not None or target.scope is Dashboard.DashboardScope.PERSONAL
             else None
         )
         if persisted_id is not None:
@@ -518,7 +510,7 @@ _BUCKET = {
         DashboardSummaryType,
         DashboardSummaryPageType,
         DashboardTargetInput,
-        DashboardScope,
+        Dashboard.DashboardScope,
         *_DASHBOARD_RESOURCE.types,
         *_WIDGET_RESOURCE.types,
     ],

@@ -4,35 +4,31 @@ A decision asks people a question through a frozen form. Each decision is one
 seat with its own assignees, requester, actions, and evidence. Groups settle
 according to their registered policy; a closed answer remains an audit fact.
 
-Human admission requires existing read access to the subject and evidence. A
-named system context may admit a question without a human issuer or requester.
-With `assignees=None`, a consumer's declared REBAC relation owns live assignment;
-an empty explicit assignee list remains invalid. Delegated questions retain no
-evidence without explicit participants whose standing access can be checked.
-Admission creates no grants. The requester cannot act on their own request unless they hold the
+Human admission requires existing read access to the subject and evidence. It creates
+no grants. The requester cannot act on their own request unless they hold the
 administrative role, and every resolver must remain an active person.
+System admission may leave assignees delegated to a consumer's live `eligible`
+permission, but only when a current domain actor can answer; the administrative
+override does not establish eligibility. Such seats retain no extra
+evidence without explicit readers. A group can be re-asked after settlement;
+its earlier answer stays final and the successor group links through
+`reasked_from`. Every resolved answer retains its resolver and resolution time.
+The shared base evidence owner checks frozen references at admission. An action
+class owns its `key`, typed Pydantic form and verdict; the decisions addon
+registers it and its group policies through the base implementation registry.
+
+The inbox owns the form and its React Hook Form context. A consumer contributes
+one `decisionContent(kind, Component)` presentation per decision kind through
+the decisions content slot; its retained basis and context arrive as read-only
+payloads for the consumer to parse. A waiting addon contributes a separate
+origin link without making decisions depend on that waiter.
 
 Any waiting owner can retain a group reference and observe its settlement
 signal, with a sweep over settled groups as its durable recovery path. Decisions
 own admission, deciding, expiry, cancellation, supersession, and evidence
-protection independently of the waiter.
-
-`DecisionRequest.replaces` retains a successor link even for an answered seat;
-supersession never changes that answer. Historical data migrations may use the
-`imported` closure for answers with no known resolver or resolution time.
-
-The console inbox exposes `decisions`, `decision_groups`, and
-`decision_evidence`. `HumanDecisionType`, `HumanDecisionVerdict`, and
-`decide_human_decision` coexist with the workflow addon's distinct decision API.
-The mutation dispatches through `Decision.decide`; a model donor can compose a
-domain transaction there and delegate the final transition to the manager.
-Intake uses this seam so inbox answers obey the same account-linking checks as
-`Need.decide_access`. All answer writes remain conditional under the group lock.
-
-
-The `@angee/decisions` web addon renders each frozen action through the shared
-[FormSpec and record action owners](../../../packages/ui/src/views/form/), while
-`decisionRecordTab(model)` and `DecisionsList(baseFilter)` compose the decisions
-resource for a subject. The resource's own read scope and filter axes own those
-reads. Revisit dispatches through `Decision.revisit` with the expected revision;
-the subject donor owns eligibility and successor admission.
+protection independently of the waiter. Re-asked groups form a protected chain
+so a retained round remains available to the waiter and to authorized run
+operators through the workflow permission extension.
+The GraphQL decision exposes `permissions` for `act`; its `decide` mutation
+dispatches through the decision instance so a consumer can wrap the answer in
+its own transaction.

@@ -9,9 +9,11 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections, transaction
 from django.db.models.deletion import ProtectedError
+from django.db.models.functions import Now
 from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.exceptions import RetryableDecisionError
@@ -27,7 +29,7 @@ pytestmark = [
 ]
 
 
-class RecordNote(Action, value="record", label="Record", verdict=Verdict.COMPLETED):
+class RecordNote(Action, key="record", label="Record", verdict=Verdict.COMPLETED):
     """A minimal durable answer for competing requests."""
 
     note: str
@@ -111,9 +113,12 @@ def test_t9_decide_races_with_expiry_in_both_lock_orders(people, first_holder):
     """A retained answer stays final; expiry blocks and rejects a stale deciding request."""
 
     issuer, reviewer, _other, _subject = people
-    deadline = timezone.now() + timedelta(seconds=2 if first_holder == "decide" else -1)
+    deadline = timezone.now() + timedelta(seconds=2)
     group = Decision.objects.admit_group([request_for(people, expires_at=deadline)], actor=issuer)
     decision = seat(group)
+    if first_holder == "expiry":
+        with system_context(reason="test.elapsed_decision_deadline"):
+            Decision.objects.filter(pk=decision.pk).owner_update(expires_at=Now() - timedelta(seconds=1))
     with ThreadPoolExecutor(max_workers=1) as pool:
         with DecisionGroup.objects.hold(group.pk):
             if first_holder == "decide":
@@ -130,7 +135,7 @@ def test_t9_decide_races_with_expiry_in_both_lock_orders(people, first_holder):
                 contender, pid = submit(pool, lambda: answer(decision, reviewer))
                 wait_for_lock(pid, contender)
         if first_holder == "expiry":
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError):
                 contender.result(timeout=10)
     retained = seat(group)
     assert retained.revision == decision.revision + 1
@@ -152,7 +157,7 @@ def test_two_people_deciding_the_same_seat_keep_the_first_answer(people):
             contender, pid = submit(pool, lambda: answer(decision, other, "Later answer"))
             wait_for_lock(pid, contender)
             answer(decision, reviewer)
-        with pytest.raises(ValidationError, match="changed; reload"):
+        with pytest.raises(StaleRevisionError):
             contender.result(timeout=10)
     retained = seat(group)
     assert retained.resolved_by_id == reviewer.pk and retained.revision == decision.revision + 1
@@ -180,7 +185,7 @@ def test_decide_races_with_cancel_in_both_lock_orders(people, winner):
         if winner == "decide":
             assert contender.result(timeout=10) == 0
         else:
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError):
                 contender.result(timeout=10)
     assert seat(group).closed_reason == ("resolved" if winner == "decide" else "canceled")
 
@@ -205,7 +210,7 @@ def test_decide_races_with_superseding_admission(people, winner):
                 wait_for_lock(pid, contender)
                 new = Decision.objects.admit_group([request], actor=issuer)
         if winner == "supersede":
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError):
                 contender.result(timeout=10)
     if winner == "decide":
         new = Decision.objects.admit_group([request], actor=issuer)
@@ -248,8 +253,10 @@ def test_expiry_races_with_cancel(people, winner):
 
     issuer, _reviewer, _other, _subject = people
     group = Decision.objects.admit_group([
-        request_for(people, expires_at=timezone.now() - timedelta(seconds=1)),
+        request_for(people, expires_at=timezone.now() + timedelta(minutes=5)),
     ], actor=issuer)
+    with system_context(reason="test.elapse_decision_deadline"):
+        Decision.objects.filter(group=group).owner_update(expires_at=Now() - timedelta(seconds=1))
     with ThreadPoolExecutor(max_workers=1) as pool:
         with DecisionGroup.objects.hold(group.pk):
             if winner == "expiry":

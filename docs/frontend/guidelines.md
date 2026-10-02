@@ -268,10 +268,7 @@ shared UI copy through an addon bundle.
   appears only on record routes. See the [route policy](../../packages/app/src/route-policy.ts) and
   [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
-  paging, record selection, and URL state. The workflows Decision inbox keeps
-  `ApprovalTask` as the sole form and mutation owner and specializes only its
-  content slot by Decision action; resolving closes the stale row so the native
-  filtered collection refreshes before selecting the next current record.
+  paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
   routed page `component: lazyRouteComponent(() => import("./views/Page"),
   "Page")` (the stack-native helper from `@tanstack/react-router`, already a
@@ -563,27 +560,17 @@ shared UI copy through an addon bundle.
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
 - **Human decision subjects opt into the generic tab.** Compose
-  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/index.tsx);
+  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/RecordDecisions.tsx);
   [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
   subject identity, while each subject addon owns successor admission.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "integrate.OAuthClient" }` (one canonical claim per resource) — and the
-  relation widget resolves it through `useResourceRoute(resource)` to show a
-  "follow" arrow to the selected record's detail page. Refine owns the route
+  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  relation widget resolves its registered record route. Read-only fields render
+  `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
-  no arrow.
-- Explicit app roots, including the host's `confineTo`, may project an existing
-  resource through `resourcePageRoutes` with `resource` or `recordModel`.
-  The resource href hooks select an owner-declared same-model destination from
-  row facts, then the canonical record route. See the
-  [runtime lookup](../../packages/ui/src/runtime/runtime.ts) and
-  [app projection](../../packages/app/src/resource-projection.ts).
-  The same app projection owns confinement and navigation: descendant platform
-  menus appear in Settings and admit their named owner records through parent
-  routes, without admitting unrelated records. Only the most specific rail
-  destination is highlighted.
+  the retained label without a link.
 - Register a resource's create form once via `defineAddon`'s
   `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
   wherever that resource is created, including the relation-picker inline create. Use
@@ -596,21 +583,46 @@ shared UI copy through an addon bundle.
   *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
-  dialog renders the passed `fields`. A complete form registered through
-  [`registerForm`](../../packages/ui/src/views/form/registered-form.ts) instead
-  owns both create and edit, including the shared relation dialog.
-- Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
-  `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
-  submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling. Decode raw controls at
-  that boundary with `parseValues` and `mutationDialogValueCodecs`; ordinary text
-  trims and maps empty input to `null`, while explicit required/verbatim codecs
-  guard their authored field contracts. A **record action that
-  collects typed args** — relation pickers, a relation list prefilled from the
-  invoking selection/record, scalars — instead declares `args` + `submit` on its
-  `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
-  mutation and binds the in-band `ActionOutcome.validationErrors` to the args,
-  staying open until `ok`. Declare args, don't hand-roll the dialog.
+  dialog renders the passed `fields` (the registered form is not reused for edit).
+- Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
+  Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
+  owns controls and requires a native RHF `FormProvider`. Decode raw controls with
+  `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
+  authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
+  `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
+  schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
+  shared form owns branching, validation and draft retention across record refreshes.
+- Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
+  `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
+  preserves edits and offers reload. Adapt wire responses with
+  `actionFormSubmitResult(data, root)` and normalized outcomes with
+  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
+  returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
+  data is an invalid result, never an `ok` null sentinel.
+- Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
+  from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
+  discriminator selection; RHF owns original and transformed values. Keep this
+  opt-in adapter out of the UI main entry so other forms do not load Ajv.
+- A widget that consumes a fixed array of object fields declares
+  `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
+  passes the parsed `rowTemplate` only through that seam and rejects a selected
+  widget that cannot accept it; compose the shared `rows` widget for decision
+  forms with fixed-size tables. Decision-specific presentation contributes
+  `decisionContent(kind, Component)` through the decisions fragment's content
+  slot, with one component per kind; the inbox owns the form and its React Hook
+  Form context.
+- Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
+  consumers own connection policy, selection and persisted layout.
+- Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
+  custom pickers retain their own keyboard interaction.
+- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts);
+  group field interactions and reset history when accepting a saved or reloaded baseline.
+- Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
+  in authored order; client identities survive renaming and own duplicate-key issues.
+- Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)
+  with lazy branches, concrete indices and literal keys; schema owners resolve references.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
@@ -697,9 +709,9 @@ Hard-won traps — the wise learn from others' mistakes
   repository-local `.angee/runtime` fallback may be stale in a workspace slot.
 - **Optional operations travel with their owning addon.** Keep documents and their
   transport UI in the addon contributing the schema fields; a base fragment must
-  codegen without optional dependents. Runtime-specific agent chat composes the
-  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from the
-  [workflow session fragment](../../addons/angee/workflows_agents/web/src/index.tsx).
+  codegen without optional dependents. Runtime-specific chat surfaces fill the
+  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from their own
+  addon fragment.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:

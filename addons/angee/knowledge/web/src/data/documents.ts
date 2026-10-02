@@ -1,8 +1,8 @@
 // Authored GraphQL for the knowledge wiki. Vaults and pages are read through
 // Hasura-shaped resources (fetched once; the browser scopes to the active vault
 // client-side, see `page-rows.ts`); the open page's body and backlinks load on
-// demand through the public detail query. Standard CRUD mutations are emitted
-// by the SDK; only markdown/body-specific writes are authored here.
+// demand through the public detail query. Concrete page creation and body writes
+// are authored here; ordinary updates use the resource mutation.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
@@ -12,6 +12,12 @@ export const PAGE_MODEL = "knowledge.Page";
 export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
 export const RECORD_BINDING_MODEL = "knowledge.RecordBinding";
 export const PAGE_READ_MODELS = [PAGE_MODEL, MARKDOWN_PAGE_MODEL] as const;
+
+export const KnowledgeCreatePage = graphql(`
+  mutation KnowledgeCreatePage($vault: ID!, $title: String!, $kind: String!, $parent: ID) {
+    create_page(vault: $vault, title: $title, kind: $kind, parent: $parent) { id }
+  }
+`);
 
 export const KnowledgeCreateVaultFrom = graphql(`
   mutation KnowledgeCreateVaultFrom(

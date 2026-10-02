@@ -8,11 +8,11 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
+from angee.projects.testing.models import Link, Project, Queue, Stage, Task
+from angee.spaces.testing.models import Membership
 from tests.conftest import Need, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
-from tests.messaging_models import Message, Person, ThreadFollower, ThreadNotification
-from tests.projects_models import Link, Project, Queue, Stage, Task
-from tests.spaces_models import Membership
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
@@ -143,7 +143,8 @@ def test_member_comment_edit_and_delete_end_when_task_is_restricted(queue_case):
 def test_team_audience_reads_parent_roster_once_without_followers(queue_case, django_assert_num_queries):
     people, queue, _, _ = queue_case
     before = ThreadFollower._base_manager.count()
-    with django_assert_num_queries(1):
+    # One system-queryset audit INSERT and one parent roster SELECT.
+    with django_assert_num_queries(2):
         audience = list(queue.thread_audience())
     assert {member.party_id for member in audience} == set(
         Person._base_manager.filter(user__in=(people["member"], people["manager"])).values_list("pk", flat=True)
@@ -222,5 +223,7 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case, d
         .order_by("stage__position")
     )
     list(query.values_list("pk", flat=True))
-    with django_assert_num_queries(1):
+    # Three revision reads, actor-set expansion, nine arrow sources, ordered SELECT.
+    with django_assert_num_queries(14) as queries:
         assert list(query.values_list("pk", flat=True)) == [first.pk, task.pk]
+    assert sum(query["sql"].startswith(f'SELECT "{Task._meta.db_table}".') for query in queries.captured_queries) == 1

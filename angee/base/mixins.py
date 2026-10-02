@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import copy
 from enum import Enum
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
+from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import PermissionDenied, system_context
-from rebac.managers import RebacQuerySet
+from rebac.field_visibility import gated_read_fields
+from rebac.managers import RebacQuerySet, TrackedQuerySet
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
+from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.scoping import system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe
 
@@ -38,19 +42,23 @@ rows and lists expose an archived facet without per-model wiring.
 """
 
 
-def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
-    """Null audit attribution even when the referencing rows are append-only.
+def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
+    """Null a retained reference through Django's materialized collector path.
 
     Django's unevaluated SET_NULL path calls QuerySet.update(), which append-only
     querysets reject. Materializing here selects the collector's native
     UpdateQuery.update_batch path without opening a general update escape hatch.
-    This loads all matching audit rows into memory for each FK being nullified;
-    deleting a heavily referenced actor can therefore require substantial memory.
-    AuditMixin uses one policy so its fields also work on append-only consumers.
+    This loads all matching referencing rows into memory for each FK being
+    nullified; deleting a heavily referenced target can require substantial memory.
+    AuditMixin and retained domain references share this collector policy.
     """
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
+
+
+audit_set_null = retained_set_null
+"""Historical import for released migration bodies."""
 
 
 class TimestampMixin(models.Model):
@@ -124,7 +132,7 @@ class AuditMixin(models.Model):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=audit_set_null,
+        on_delete=retained_set_null,
         related_name="+",
     )
     """The user that created the row, when known."""
@@ -133,7 +141,7 @@ class AuditMixin(models.Model):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=audit_set_null,
+        on_delete=retained_set_null,
         related_name="+",
     )
     """The user that most recently updated the row, when known."""
@@ -303,18 +311,12 @@ class OwnerMixin(AuditMixin):
         return self
 
 
-class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
-    """Close generic collection edits and deletion around owner-controlled writes.
+class _AppendOnlyWritesMixin(models.QuerySet[_ModelT]):
+    """The closed collection-write policy shared by the scoped and base querysets.
 
-    Compose before the domain's base queryset to preserve authorization.
-    Retained evidence uses insert admission; retained state machines expose
-    exact conditional writes through their own methods and ``owner_update``.
     ``owner_update`` and ``owner_bulk_create`` are public, framework-protected
     APIs for domain owners that have already validated fields and predicates.
     They skip this class's guard only, preserving every downstream guard.
-    Instance invariants and collector retention remain model/FK concerns;
-    ``AuditMixin`` clears audit FKs through its collector policy without
-    calling this queryset.
     """
 
     def immutable_error(self, operation: str) -> ValidationError:
@@ -325,12 +327,6 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
 
     def validate_insert(self) -> None:
         """Let the domain owner narrow insert admission."""
-
-    def insert(self, obj: _ModelT) -> _ModelT:
-        """Validate one append before its ordinary authorized insertion."""
-
-        self.validate_insert()
-        return super().insert(obj)
 
     def bulk_create(
         self,
@@ -377,6 +373,95 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
         """Reject direct SQL deletion through the queryset."""
 
         raise self.immutable_error("_raw_delete")
+
+
+class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]):
+    """Close generic collection edits and deletion around owner-controlled writes.
+
+    Compose before the domain's base queryset to preserve authorization.
+    Retained evidence uses insert admission; retained state machines expose
+    exact conditional writes through their own methods and ``owner_update``.
+    Instance invariants and collector retention remain model/FK concerns;
+    ``AuditMixin`` clears audit FKs through its collector policy without
+    calling this queryset.
+    """
+
+    def insert(self, obj: _ModelT) -> _ModelT:
+        """Validate one append before its ordinary authorized insertion."""
+
+        self.validate_insert()
+        return super().insert(obj)
+
+
+class AppendOnlyBaseQuerySet(
+    _AngeeQuerySetMixin[_ModelT], _AppendOnlyWritesMixin[_ModelT], TrackedQuerySet[_ModelT],
+):
+    """Unscoped rows for Django's own relation reads, with the same writes closed."""
+
+    def validate_insert(self) -> None:
+        """Apply the domain's default-queryset admission to base-manager inserts."""
+
+        self.model._default_manager.get_queryset().validate_insert()
+
+
+class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyBaseQuerySet)):  # type: ignore[misc]
+    """The base manager an append-only model declares: unfiltered reads, closed writes."""
+
+
+class AppendOnlyModel(models.Model):
+    """Admit new rows while reserving retained-row changes for owner verbs.
+
+    The model's default manager must compose :class:`AppendOnlyQuerySet`. An owner may
+    use ``_owner_insert`` after its own admission or ``_owner_delete`` after its
+    own retention check; ordinary instance and collection writes stay closed.
+    """
+
+    _append_only_base = AppendOnlyBaseManager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "_append_only_base"
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require the default manager to retain the append-only write contract."""
+
+        errors = super().check(**kwargs)
+        if not cls._meta.abstract and not isinstance(cls._default_manager.get_queryset(), AppendOnlyQuerySet):
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label}'s default manager must compose AppendOnlyQuerySet.",
+                    hint="Declare a default manager whose queryset inherits AppendOnlyQuerySet.",
+                    obj=cls,
+                    id="angee.E034",
+                )
+            )
+        return errors
+
+    def validate_append(self) -> None:
+        """Let a domain owner narrow first insertion without replacing the guard."""
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ValidationError(f"{self._meta.label} rows cannot be edited.")
+        self.validate_append()
+        type(self)._default_manager.get_queryset().validate_insert()
+        kwargs["force_insert"] = True
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ValidationError(f"{self._meta.label} rows cannot be deleted.")
+
+    def _owner_insert(self) -> None:
+        """Insert one owner-admitted row, including domains with closed generic admission."""
+        if not self._state.adding:
+            raise ValidationError(f"{self._meta.label} rows cannot be edited.")
+        self.validate_append()
+        super().save(force_insert=True)
+
+    def _owner_delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Delete one row after its domain owner has checked retention and locks."""
+        return super().delete(*args, **kwargs)
 
 
 class ArchiveMixin(models.Model):
@@ -426,8 +511,8 @@ class ModelHistory(HistoricalRecords):
 
     Tracking belongs to an abstract source/donor that includes HistoryMixin.
     Inheriting only a concrete tracked parent does not create a second history
-    table for its MTI child. All copying, signals and history behavior stay with
-    django-simple-history.
+    table for its MTI child. Native history construction receives a detached
+    snapshot with stored gated values, never the caller's redacted projection.
     """
 
     def finalize(self, sender: type[models.Model], **kwargs: Any) -> None:
@@ -443,6 +528,31 @@ class ModelHistory(HistoricalRecords):
         if not tracked_abstract_parent:
             return
         super().finalize(sender, **kwargs)
+
+    def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
+        """Keep field redaction out of persisted history without changing the live instance."""
+
+        gated = gated_read_fields(type(instance))
+        attnames = [field.attname for field in self.fields_included(instance) if field.name in gated]
+        if attnames:
+            stored = system_queryset(type(instance)).values(*attnames).get(pk=instance.pk)
+            instance = copy(instance)
+            for attname, value in stored.items():
+                setattr(instance, attname, value)
+        super().create_historical_record(instance, history_type, using=using)
+
+    def pre_delete(self, instance: models.Model, **kwargs: Any) -> None:
+        """Snapshot while stored values exist, inside Django's delete transaction."""
+
+        super().pre_delete(instance, **kwargs)
+        if getattr(settings, "SIMPLE_HISTORY_ENABLED", True) and not self.cascade_delete_history:
+            self.create_historical_record(instance, "-", using=kwargs.get("using"))
+
+    def post_delete(self, instance: models.Model, using: str | None = None, **kwargs: Any) -> None:
+        """Retain native cascade cleanup; retained snapshots were written before deletion."""
+
+        if self.cascade_delete_history:
+            super().post_delete(instance, using=using, **kwargs)
 
     def get_meta_options(self, model: type[models.Model]) -> dict[str, Any]:
         options = super().get_meta_options(model)

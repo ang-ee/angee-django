@@ -1,31 +1,55 @@
-"""Django config for Angee's workflows addon."""
+"""Django app identity for the workflows addon."""
 
-from __future__ import annotations
+from typing import Any
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.core import checks
+from django.db.models.signals import post_delete, pre_delete
+
+from angee.decisions.signals import decision_group_settled
+from angee.iam.service_users import deactivate_service_user
+
+
+def wake_review(sender: Any, *, group: Any, **kwargs: Any) -> None:
+    """Let the workflow lock owner enqueue settled decision waiters after commit."""
+    from angee.workflows.runner import runner
+
+    runner.wake_decisions(group.pk)
+
+
+def deactivate_workflow_principal(sender: Any, *, instance: Any, **kwargs: Any) -> None:
+    """Deactivate the linked user after any workflow deletion path."""
+
+    deactivate_service_user(instance)
+
+
+def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) -> None:
+    """Release a trigger's tuples on instance and queryset deletion alike."""
+
+    sender.objects.lock_grants(instance.workflow_id)
+    sender.objects.reconcile_grants(instance, ())
 
 
 class WorkflowsConfig(AppConfig):
-    """Source app manifest for workflow definition models."""
+    """Register workflow source models without the retired engine hooks."""
 
     default = True
     name = "angee.workflows"
 
     def ready(self) -> None:
-        """Run workflows ready-time hooks after app population."""
+        """Subscribe the waiter owner to the decisions lifecycle."""
+        from angee.workflows.triggers import check_record_changed_models
 
-        super().ready()
-        from angee.workflows.models import (
-            check_database_command_replay_declarations,
-            check_event_trigger_publishers,
-            connect_retained_decision_protection,
+        checks.register(check_record_changed_models, checks.Tags.models)
+        decision_group_settled.connect(wake_review, dispatch_uid="workflows.review_settled")
+        post_delete.connect(
+            deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),
+            dispatch_uid="workflows.service_user.deactivate",
         )
-        from angee.workflows.settlement import rebuild_subject_settlers
-        from angee.workflows.triggers import connect_event_trigger_receiver
-
-        checks.register(check_event_trigger_publishers, checks.Tags.database)
-        checks.register(check_database_command_replay_declarations)
-        connect_event_trigger_receiver()
-        connect_retained_decision_protection()
-        rebuild_subject_settlers()
+        pre_delete.connect(
+            revoke_deleted_trigger_grants, sender=apps.get_model("workflows", "Trigger"),
+            dispatch_uid="workflows.trigger_grants.revoke",
+        )
+        field = apps.get_model("workflows", "Trigger")._meta.get_field("source")
+        for key in field.registered_keys():
+            field.resolve_class(key).connect()

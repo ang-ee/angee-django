@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   lineReadSelectionPaths,
+  modelFieldForPath,
   refineResourceName,
   useModelMetadata,
   useSchemaFieldMetadata,
@@ -121,7 +122,7 @@ export interface RecordTabDescriptor {
 export interface UseFormViewSurfaceProps {
   resource: string;
   id?: string | null;
-  /** Render the complete declared form as a non-mutating record surface. */
+  /** Lock fields and generated CRUD; explicitly declared custom actions remain available. */
   readOnly?: boolean;
   fields?: readonly FieldDescriptor[];
   groups?: readonly GroupDescriptor[];
@@ -377,21 +378,21 @@ export function useFormViewSurface({
   const resolvedFields = React.useMemo(
     () =>
       withModeLockedFields(
-        fieldsWithMetadataDefaults(declaredFields, modelMetadata),
+        fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
         isCreate,
       ),
-    [declaredFields, isCreate, modelMetadata],
+    [declaredFields, isCreate, modelMetadata, schemaMetadata],
   );
   const resolvedGroups = React.useMemo(
     () =>
       declaredGroups.map((group) => ({
         ...group,
         fields: withModeLockedFields(
-          fieldsWithMetadataDefaults(group.fields, modelMetadata),
+          fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
           isCreate,
         ),
       })),
-    [declaredGroups, isCreate, modelMetadata],
+    [declaredGroups, isCreate, modelMetadata, schemaMetadata],
   );
   const railGroups = React.useMemo(() => isCreate ? [] : recordRailGroups(railEntries).map((group) => ({
     ...group,
@@ -440,14 +441,15 @@ export function useFormViewSurface({
     for (const field of formFields) {
       // Write-only inputs (secrets such as OAuth client_secret) are projected
       // into the artifact with readable=false; render them, never select them.
-      const fieldMetadata = modelMetadata?.fields[field.name];
+      const resolved = modelMetadata ? modelFieldForPath(field.name, modelMetadata, schemaMetadata) : null;
+      const fieldMetadata = resolved?.field;
       if (modelMetadata && (!fieldMetadata || fieldMetadata.readable === false)) continue;
       addFieldSelection(
         paths,
         field,
         relationByField.get(field.name),
-        modelMetadata?.fields[field.name],
-        modelMetadata?.resource.query.fields[field.name],
+        fieldMetadata,
+        resolved?.model.resource.query.fields[fieldMetadata?.name ?? field.name],
       );
     }
     const lines = modelMetadata?.resource?.linesResource;

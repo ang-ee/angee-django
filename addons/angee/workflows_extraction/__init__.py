@@ -1,1 +1,1 @@
-"""Schema-validated document extraction evidence for workflows."""
+"""Immutable document evidence composed with typed workflow steps."""

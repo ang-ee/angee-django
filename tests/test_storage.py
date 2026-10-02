@@ -83,6 +83,80 @@ def test_storage_autoconfig_has_no_runtime_setting_shim() -> None:
     assert not hasattr(autoconfig, "setting")
 
 
+@pytest.mark.parametrize("content", [b"", b"verified bytes"])
+def test_file_verified_read_accepts_content_at_the_limit(monkeypatch: pytest.MonkeyPatch, content: bytes) -> None:
+    """Exact bounds, empty content and retained identities share one reader."""
+
+    digest = hashlib.sha256(content).hexdigest()
+    file = File(content_hash=digest, size_bytes=len(content), upload_state=UploadState.READY)
+    stream = BytesIO(content)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    assert file.read_verified(max_bytes=len(content), expected_digest=digest) == content
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "content,size_delta",
+    [(b"changed bytes!", 0), (b"short", 0), (b"unexpected longer bytes", 0), (b"verified bytes", -1)],
+)
+def test_file_verified_read_rejects_changed_content(
+    monkeypatch: pytest.MonkeyPatch, content: bytes, size_delta: int,
+) -> None:
+    """Neither a changed digest nor a changed size can pass the storage boundary."""
+
+    original = b"verified bytes"
+    file = File(
+        content_hash=hashlib.sha256(original).hexdigest(),
+        size_bytes=len(original) + size_delta,
+        upload_state=UploadState.READY,
+    )
+    stream = BytesIO(content)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    with pytest.raises(ValidationError, match="stored bytes"):
+        file.read_verified(max_bytes=100)
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "state,size,digest", [(UploadState.DRAFT, 1, ""), (UploadState.READY, 11, ""), (UploadState.READY, 1, "changed")],
+)
+def test_file_verified_read_checks_metadata_before_io(
+    monkeypatch: pytest.MonkeyPatch, state: UploadState, size: int, digest: str,
+) -> None:
+    """Unready, oversized and superseded references do not open backend bytes."""
+
+    file = File(content_hash="current", size_bytes=size, upload_state=state)
+    monkeypatch.setattr(File, "open_stream", lambda self: pytest.fail("Metadata failure must not open storage."))
+
+    with pytest.raises(ValidationError):
+        file.read_verified(max_bytes=10, expected_digest=digest)
+
+
+def test_file_verified_read_bounds_short_reads_even_when_metadata_lies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A short-reading backend is stopped after one overflow byte and closed."""
+
+    consumed = 0
+
+    class ShortReader(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            nonlocal consumed
+            assert size >= 0
+            chunk = super().read(min(size, 2))
+            consumed += len(chunk)
+            return chunk
+
+    stream = ShortReader(b"unbounded content")
+    file = File(content_hash=hashlib.sha256(b"small").hexdigest(), size_bytes=5, upload_state=UploadState.READY)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    with pytest.raises(ValidationError, match="byte limit"):
+        file.read_verified(max_bytes=5)
+    assert consumed == 6
+    assert stream.closed
+
+
 def test_backend_has_no_dormant_default_flag() -> None:
     """The configured default drive owns defaults; backend rows do not."""
 
@@ -495,6 +569,28 @@ def test_upload_rejects_folders_from_other_drives(tmp_path: Path, drive: Any) ->
             drive_id=str(drive.sqid),
             folder_id=str(folder.sqid),
         )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_upload_naming_only_a_folder_targets_its_drive(tmp_path: Path, drive: Any) -> None:
+    """draft resolves the drive from a named folder the actor can read."""
+
+    with system_context(reason="test storage setup"):
+        other = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="other",
+            name="Other",
+            prefix="other",
+            created_by=drive.alice,
+        )
+        folder = Folder._base_manager.create(drive=other, name="Inbox", created_by=drive.alice)
+    with actor_context(drive.alice):
+        row = File.objects.draft(filename="routed.bin", folder_id=str(folder.sqid))
+    assert (row.drive_id, row.folder_id) == (other.pk, folder.pk)
+
+    stranger = get_user_model().objects.create_user(username="storage-bob", email="bob@example.com")
+    with actor_context(stranger), pytest.raises(exceptions.UploadTargetNotFound):
+        File.objects.draft(filename="nope.bin", folder_id=str(folder.sqid))
 
 
 @pytest.mark.django_db(transaction=True)

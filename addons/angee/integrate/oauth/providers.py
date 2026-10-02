@@ -7,6 +7,7 @@ from angee.base.impl import ImplBase
 
 class OAuthProviderType(ImplBase):
     """Base class for OAuth provider presets."""
+    registry_setting = "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"
 
     category = "oauth"
     label = "OAuth provider"

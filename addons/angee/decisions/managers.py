@@ -1,31 +1,38 @@
 """Admission and final transitions, serialized group first, then decision."""
 
-import json
 import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import F, Q
+from django.db.models import BooleanField, ExpressionWrapper, F, Q
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Now
-from pydantic import ValidationError as PydanticValidationError
-from rebac import current_actor, system_context, to_subject_ref
+from rebac import current_actor, system_context, to_object_ref, to_subject_ref
 from rebac.actors import is_sudo
+from rebac.backends import backend
 
 from angee.base.actors import actor_user_id
+from angee.base.evidence import readable_records
 from angee.base.identity import public_id_of
+from angee.base.impl import ImplBase
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import lock_if_supported, system_queryset
-from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionRecordReference, DecisionRequest, readable_records
-from angee.decisions.exceptions import RetryableDecisionError
+from angee.decisions.contracts import (
+    DEFAULT_REQUESTER,
+    DecisionContext,
+    DecisionRecordReference,
+    DecisionRequest,
+)
+from angee.decisions.exceptions import ResolverAuthorityError, RetryableDecisionError
 from angee.decisions.forms import Action, compile_form, relation_candidates, validate_form
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import OPEN_DECISION, ClosedReason
@@ -34,10 +41,10 @@ from angee.graphql.publishing import publish_change
 logger = logging.getLogger(__name__)
 
 
-def _user(actor: Any) -> Any:
+def _user(actor: Any, *, active: bool = True) -> Any:
     identity = actor_user_id(to_subject_ref(actor if actor is not None else current_actor()))
-    user = system_queryset(get_user_model()).filter(pk=identity, is_active=True).first()
-    if user is None:
+    user = system_queryset(get_user_model()).filter(pk=identity).first()
+    if user is None or active and not user.is_active:
         raise PermissionDenied("An active user is required.")
     return user
 
@@ -82,14 +89,23 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
                 raise ValidationError("The decision no longer exists.")
             yield group, decision
 
-    def for_subject(self, subject: Any) -> Any:
-        """Scope readable seats to the canonical subject identity."""
-        content_type, object_id = canonical_record_target(subject)
-        return self.filter(subject_content_type=content_type, subject_object_id=object_id)
+    def pending(self) -> Any:
+        """Select stored unanswered seats, including deadlines awaiting expiry."""
+        return self.filter(OPEN_DECISION)
+
+    def with_open_state(self) -> Any:
+        """Project live answerability once, including deadlines not yet swept."""
+        return self.annotate(_is_open=self.open_expression())
+
+    def open_expression(self) -> ExpressionWrapper:
+        """Own the live predicate used by open rows, resource fields and filters."""
+        return ExpressionWrapper(
+            OPEN_DECISION & (Q(expires_at__isnull=True) | Q(expires_at__gt=Now())), output_field=BooleanField(),
+        )
 
     def open(self) -> Any:
-        """Select seats still accepting answers."""
-        return self.filter(OPEN_DECISION)
+        """Select seats still accepting answers at the database's current time."""
+        return self.with_open_state().filter(_is_open=True)
 
     def unanswered(self) -> Any:
         """Select closures that prevent a waiter from applying answers."""
@@ -97,21 +113,22 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
 
     def due(self) -> Any:
         """Select open seats whose deadline has passed according to the database."""
-        return self.open().filter(expires_at__lte=Now())
+        return self.pending().filter(expires_at__lte=Now())
 
     def resolve(self, *, revision: int, verdict: str, resolution: dict[str, Any], resolver_id: Any) -> int:
         """Record one answer only while its revision and database deadline remain valid."""
-        return self.open().filter(revision=revision).filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=Now()),
-        ).owner_update(verdict=verdict, resolution=resolution, resolved_by_id=resolver_id, resolved_at=Now(),
-                       closed_reason=ClosedReason.RESOLVED, revision=F("revision") + 1, updated_at=Now())
+        return self.open().filter(revision=revision).owner_update(
+            verdict=verdict, resolution=resolution, resolved_by_id=resolver_id, resolved_at=Now(),
+            closed_reason=ClosedReason.RESOLVED, revision=F("revision") + 1, updated_at=Now(),
+        )
 
     def close(self, reason: str, *, superseded_by: Any = None) -> int:
         """Close unanswered seats without rewriting any final answer."""
-        if reason not in ClosedReason.values or reason in (ClosedReason.RESOLVED, ClosedReason.IMPORTED):
+        if reason not in ClosedReason.values or reason == ClosedReason.RESOLVED:
             raise ValidationError("An unanswered decision needs a closure reason.")
-        return self.open().owner_update(closed_reason=reason, superseded_by=superseded_by,
-                                       revision=F("revision") + 1, updated_at=Now())
+        return self.pending().owner_update(
+            closed_reason=reason, superseded_by=superseded_by, revision=F("revision") + 1, updated_at=Now(),
+        )
 
     def reject_attempt(self) -> None:
         """Consume one invalid submission and close seats that exhausted their attempts."""
@@ -128,6 +145,7 @@ class ResolvedDecision:
     decision: Any
     action: Action | None
     resolver: Any
+    basis: Any
 
 
 @dataclass
@@ -137,67 +155,92 @@ class _Admission:
     schema: dict[str, Any]
     subject: tuple[Any, Any]
     targets: set[tuple[Any, Any]] = field(default_factory=set)
+    expires_after: timedelta | None = None
 
 
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
     """Admit immutable questions and orchestrate group-owned final transitions."""
 
-    def admit_group(self, requests: Sequence[DecisionRequest], *, actor: Any, policy: str = "first") -> Any:
-        """Admit seats without grants; actor=None requires an explicit system context.
-
-        A system-owned question may delegate assignment through a consumer's
-        declared REBAC relations. Human admission always names actual assignees
-        and verifies every participant's standing access.
-        """
+    def _admission_issuer(self, actor: Any) -> Any:
+        """Resolve admission authority before entering a transition's system context."""
         if actor is None and not is_sudo():
             raise PermissionDenied("System decision admission requires a named system context.")
-        issuer = _user(actor) if actor is not None else None
-        if issuer is not None and any(request.assignees is None for request in requests):
-            raise ValidationError("Delegated assignment requires system admission.")
+        return _user(actor) if actor is not None else None
+
+    def admit_group(self, requests: Sequence[DecisionRequest], *, actor: Any, policy: str = "first") -> Any:
+        """Admit seats; delegated assignment requires an explicit system context."""
+        issuer = self._admission_issuer(actor)
         group_model = self.model._meta.get_field("group").related_model
         group_model._meta.get_field("policy").resolve_class(policy)
         if not requests:
             raise ValidationError("A decision group needs at least one seat.")
-        prepared = [_Admission(request, tuple(_user(person) for person in request.assignees or ()),
+        prepared = [_Admission(request, tuple(_user(person, active=False) for person in request.assignees or ()),
                      compile_form(request.actions, initial=request.initial, refine=request.refine),
                      canonical_record_target(request.subject) if request.subject is not None else (None, None))
                     for request in requests]
+        return self._admit_group(prepared, issuer=issuer, policy=policy)
+
+    def reask(
+        self, group_id: Any, *, actor: Any, actions: Sequence[type[Action]], errors: dict[str, list[str]],
+    ) -> Any:
+        """Re-admit every frozen seat, retaining the old answers and new field errors.
+
+        Admission rechecks standing evidence permissions. Frozen forms, basis,
+        requester and assignees stay unchanged even when action code changes.
+        """
+        issuer = self._admission_issuer(actor)
+        group_model = self.model._meta.get_field("group").related_model
+        with group_model.objects.hold(group_id) as group:
+            group.require_access("read", issuer)
+            if group.settled_at is None:
+                raise ValidationError("Only a settled group can be asked again.")
+            prepared = []
+            for decision in lock_if_supported(group.decisions.order_by("index").prefetch_related("assignees"),
+                                              no_key=True):
+                decision.require_access("read", issuer)
+                offered = decision.form_schema["properties"]["action"]["enum"]
+                request = DecisionRequest(
+                    kind=decision.kind, subject=decision.subject,
+                    assignees=None if decision.is_delegated else tuple(decision.assignees.all()),
+                    requester=decision.requester,
+                    actions=tuple(action for action in actions if action.key in offered), basis=decision.basis,
+                    context=DecisionContext.model_validate(decision.context), supersede=decision.supersede,
+                    max_attempts=decision.max_attempts, errors=errors,
+                )
+                prepared.append(_Admission(
+                    request, tuple(_user(person, active=False) for person in request.assignees or ()),
+                    decision.form_schema,
+                    (decision.subject_content_type, decision.subject_object_id),
+                    expires_after=(decision.expires_at - decision.created_at if decision.expires_at else None),
+                ))
+            return self._admit_group(prepared, issuer=issuer, policy=group.policy, reasked_from=group)
+
+    def _admit_group(self, prepared: list[_Admission], *, issuer: Any, policy: str, reasked_from: Any = None) -> Any:
+        if issuer is not None and any(item.request.assignees is None for item in prepared):
+            raise ValidationError("Delegated assignment requires system admission.")
+        group_model = self.model._meta.get_field("group").related_model
         identities = {(item.request.kind, *item.subject) for item in prepared if item.request.supersede}
         for identity in identities:
             if sum((item.request.kind, *item.subject) == identity for item in prepared) != 1:
                 raise ValidationError("Supersession requires one seat per kind and subject in a group.")
         try:
             with transaction.atomic(), system_context(reason="decisions.admit"):
-                group = group_model.objects.create(policy=policy, issuer=issuer)
-                old = list(self.open().filter(Q(*[
+                group = group_model.objects.create(policy=policy, issuer=issuer, reasked_from=reasked_from)
+                old = list(self.pending().filter(Q(*[
                     Q(kind=kind, subject_content_type=ct, subject_object_id=pk) for kind, ct, pk in identities
                 ], _connector=Q.OR)).order_by("group_id", "pk")) if identities else []
-                replacement_ids = {item.request.replaces.pk for item in prepared if item.request.replaces is not None}
-                old = list(self.filter(pk__in={d.pk for d in old} | replacement_ids).order_by("group_id", "pk"))
                 retained = self._prepare_evidence(prepared, issuer)
                 old_groups = self._lock_admission(old, retained)
                 for index, item in enumerate(prepared):
-                    replacement = item.request.replaces
-                    if replacement is not None:
-                        replacement = self.get(pk=replacement.pk)
-                        if (
-                            replacement.kind != item.request.kind
-                            or (replacement.subject_content_type_id, replacement.subject_object_id)
-                            != (item.subject[0].pk, item.subject[1])
-                            or replacement.superseded_by_id is not None
-                        ):
-                            raise RetryableDecisionError("The replaced question changed; retry admission.")
                     previous_ids = [d.pk for d in old if (d.kind, d.subject_content_type_id, d.subject_object_id) == (
                         item.request.kind, item.subject[0].pk if item.subject[0] else None, item.subject[1],
-                    ) and d.is_open]
-                    closed = self.filter(pk__in=previous_ids).open()
+                    ) and d.is_pending]
+                    closed = self.filter(pk__in=previous_ids).pending()
                     # Free the partial unique key before inserting its replacement.
                     closed_ids = list(closed.values_list("pk", flat=True))
                     closed.close(ClosedReason.SUPERSEDED)
                     decision = self._admit_seat(group, index, item, issuer)
                     self.filter(pk__in=closed_ids).owner_update(superseded_by=decision)
-                    if replacement is not None and replacement.pk not in closed_ids:
-                        self.filter(pk=replacement.pk, superseded_by__isnull=True).owner_update(superseded_by=decision)
                     for previous in old:
                         if previous.pk in closed_ids:
                             self._publish(previous)
@@ -205,10 +248,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     self._settle(previous_group)
         except IntegrityError as error:
             constraint = getattr(getattr(error.__cause__, "diag", None), "constraint_name", None)
-            if constraint == "decisions_open_subject_unique" or (
-                "UNIQUE constraint failed:" in str(error) and "subject_content_type_id" in str(error)
-                and "subject_object_id" in str(error)
-            ):
+            if constraint == "decisions_open_subject_unique":
                 raise RetryableDecisionError(
                     "A superseding question was admitted concurrently; retry admission.",
                 ) from error
@@ -216,21 +256,25 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return group.with_actor(issuer) if issuer is not None else group
 
     def _prepare_evidence(self, prepared: list[_Admission], issuer: Any) -> list[tuple[Any, Any]]:
+        """Require standing evidence access for issuer, assignees, and requester."""
         retained = {}
         for item in prepared:
             request = item.request
             participants = (*((issuer,) if issuer is not None else ()), *item.assignees)
+            if request.requester is not None and request.requester is not DEFAULT_REQUESTER:
+                participants += (_user(request.requester),)
             refs = list(request.context.records())
             if request.subject is not None:
                 refs.append(DecisionRecordReference(
                     model=request.subject._meta.label, id=public_id_of(request.subject),
                 ))
-            # Delegated system questions retain only their subject. Evidence
-            # requires explicit participants whose standing access is provable.
             if not participants and request.context.records():
                 raise ValidationError("Retained evidence requires explicit participants.")
+            choices = relation_candidates(item.schema)
+            if not participants and choices:
+                raise ValidationError("Relation choices require explicit participants.")
             records = readable_records(tuple(refs), participants) if participants else []
-            for candidate in relation_candidates(item.schema):
+            for candidate in choices:
                 candidates = tuple(DecisionRecordReference(model=candidate.model, id=value) for value in candidate.ids)
                 readable_records(candidates, participants, permission=candidate.permission)
             context_refs = {(ref.model.lower(), ref.id) for ref in request.context.records()}
@@ -273,9 +317,20 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         decision = self.create(group=group, index=index, kind=request.kind,
             requester=None if requester is None else _user(requester), form_schema=item.schema,
             subject_content_type=item.subject[0], subject_object_id=item.subject[1], basis=request.basis,
-            context=request.context.model_dump(mode="json"), supersede=request.supersede,
-            max_attempts=request.attempt_limit, expires_at=request.expires_at)
+            context=request.context.model_dump(mode="json"), errors=request.errors, supersede=request.supersede,
+            max_attempts=request.attempt_limit,
+            expires_at=Now() + item.expires_after if item.expires_after is not None else request.expires_at)
         decision.assignees.set(item.assignees)
+        if self.filter(pk=decision.pk).due().exists():
+            raise ValidationError({"expires_at": "A decision deadline must be in the future."})
+        if request.assignees is None:
+            eligible = backend().lookup_subjects(
+                resource=to_object_ref(decision), action="eligible", subject_type="auth/user",
+            )
+            if not any(eligible):
+                raise ValidationError({"assignees": "Every delegated seat needs a current actor who can act."})
+        elif not any(decision.with_actor(person).has_access("act") for person in item.assignees):
+            raise ValidationError({"assignees": "Every seat needs an assignee who can act."})
         evidence_model = apps.get_model("decisions", "DecisionEvidence")
         evidence_model.objects.bulk_create([
             evidence_model(decision=decision, content_type=ct, object_id=pk)
@@ -305,9 +360,9 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         resolver = _user(actor)
         error = None
         with self.hold(decision_id) as (group, decision):
-            if not decision.with_actor(resolver).has_access("act"):
-                raise PermissionDenied("Act access is required.")
-            if not decision.is_open or decision.revision != revision or group.settled_at is not None:
+            decision.require_access("act", resolver)
+            decision.require_revision(revision)
+            if not decision.is_pending or group.settled_at is not None:
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             target = self.filter(pk=decision.pk)
             if target.due().close(ClosedReason.EXPIRED):
@@ -336,7 +391,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         with group_model.objects.hold(group_id) as group:
             if group.settled_at is not None:
                 return 0
-            decisions = list(lock_if_supported(group.decisions.open().order_by("pk"), no_key=True))
+            decisions = list(lock_if_supported(group.decisions.pending().order_by("pk"), no_key=True))
             count = group.decisions.close(ClosedReason.CANCELED)
             for decision in decisions:
                 self._publish(decision)
@@ -359,50 +414,53 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 logger.exception("Decision expiry failed for %s.", pk)
         return count
 
-    def resolutions(self, group_id: Any, *, actor: Any, actions: Sequence[type[Action]]) -> list[ResolvedDecision]:
+    def resolutions(
+        self, group_id: Any, *, actor: Any, actions: Sequence[type[Action]], basis_model: Any = None,
+    ) -> list[ResolvedDecision]:
         """Lock settled seats, recheck resolver authority and parse through supplied action models."""
+        actor = _user(actor)
         group_model = self.model._meta.get_field("group").related_model
         with group_model.objects.hold(group_id) as group:
-            if not group.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Group read access is required.")
+            actor = group.require_access("read", actor)
             if group.settled_at is None:
                 raise ValidationError("The decision group is still open.")
-            return [self._read_resolution(decision, actor, actions)
+            return [self._read_resolution(decision, actor, actions, basis_model)
                     for decision in lock_if_supported(group.decisions.order_by("index"), no_key=True)]
 
-    def _read_resolution(self, decision: Any, actor: Any, actions: Sequence[type[Action]]) -> ResolvedDecision:
-        if not decision.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to the decision is required.")
+    def _read_resolution(
+        self, decision: Any, actor: Any, actions: Sequence[type[Action]], basis_model: Any,
+    ) -> ResolvedDecision:
+        decision.require_access("read", actor)
         answer = None
         resolver = None
-        if decision.closed_reason in (ClosedReason.RESOLVED, ClosedReason.IMPORTED):
-            resolver = _user(decision.resolved_by) if decision.resolved_by_id is not None else None
-            if resolver is not None and not decision.with_actor(resolver).has_access("act"):
-                raise PermissionDenied("The resolver no longer has act access.")
+        if decision.closed_reason == ClosedReason.RESOLVED:
+            try:
+                resolver = _user(decision.resolved_by)
+                decision.require_access("act", resolver)
+            except PermissionDenied as error:
+                raise ResolverAuthorityError("The resolver no longer has authority to answer this decision.") from error
             value = decision.resolution["action"]
-            action_model = next((cls for cls in actions if cls.value == value), None)
+            action_model = next((cls for cls in actions if cls.key == value), None)
             if action_model is None:
                 raise ValidationError({"action": "The action model is unavailable."})
             _, payload = validate_form(decision.form_schema, value, {
                 k: v for k, v in decision.resolution.items() if k != "action"
             }, actor=resolver)
-            try:
-                answer = action_model.model_validate_json(
-                    json.dumps({k: v for k, v in payload.items() if k != "action"}),
-                )
-            except PydanticValidationError as error:
-                raise ValidationError({"resolution": [
-                    issue["msg"]
-                    for issue in error.errors(include_url=False, include_context=False, include_input=False)
-                ]}) from error
-        return ResolvedDecision(decision, answer, resolver)
+            answer = ImplBase.parse_value(
+                {k: v for k, v in payload.items() if k != "action"}, action_model, "resolution",
+            )
+        basis = ImplBase.parse_value(decision.basis, basis_model, "basis")
+        return ResolvedDecision(decision, answer, resolver, basis)
 
-    def resolution(self, decision_id: Any, *, actor: Any, actions: Sequence[type[Action]]) -> ResolvedDecision:
+    def resolution(
+        self, decision_id: Any, *, actor: Any, actions: Sequence[type[Action]], basis_model: Any = None,
+    ) -> ResolvedDecision:
         """Revalidate one retained answer without requiring access to sibling seats."""
+        actor = _user(actor)
         with self.hold(decision_id) as (group, decision):
             if group.settled_at is None:
                 raise ValidationError("The decision group is still open.")
-            return self._read_resolution(decision, actor, actions)
+            return self._read_resolution(decision, actor, actions, basis_model)
 
 
 class DecisionEvidenceQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):

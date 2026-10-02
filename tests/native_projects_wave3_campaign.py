@@ -14,7 +14,7 @@ from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 
 from angee.graphql.schema import GraphQLSchemas
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.native_intake_capture import IntakeAccessCase
 from tests.native_work import WorkCase
 from tests.test_work_task_access import withhold_assignees
@@ -30,7 +30,7 @@ class ProjectSurfaceCampaign(WorkCase):
         task = self.task()
         self.share(task, self.reader)
         with system_context(reason="tests.t3.phase_requester"):
-            apps.get_model("intake", "Need").objects.create(
+            need = apps.get_model("intake", "Need").objects.create(
                 task=task,
                 party=self.Person._base_manager.get(user=self.reader),
                 body="Request",
@@ -38,6 +38,7 @@ class ProjectSurfaceCampaign(WorkCase):
             project = self.Project.objects.create(title="Private project", owner=self.owner, converted_from=task)
             phase = self.Milestone.objects.create(project=project, name="Selected phase")
             project.set_current_milestone(phase)
+        need.with_actor(self.owner).decide_access("intake.approve")
         query = "{ project_tasks { id promoted_phase project { id } milestone { id } } projects { id } }"
         before = self.graphql(query, {}, user=self.reader)
         self.assertIsNone(before["project_tasks"][0]["promoted_phase"])
@@ -51,8 +52,8 @@ class ProjectSurfaceCampaign(WorkCase):
             else definition
             for definition in schema.definitions
         ]
-        install_manual_schema(schema, active=active)
-        self.addCleanup(install_manual_schema, original, active=active)
+        install_permission_schema(schema, active=active)
+        self.addCleanup(install_permission_schema, original, active=active)
         data = self.graphql(query, {}, user=self.reader)
         self.assertEqual(
             data,

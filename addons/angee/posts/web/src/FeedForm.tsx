@@ -12,7 +12,7 @@ function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React
     <Form {...props} resource={FEED_MODEL}>
       <Field name="display_name" label={t("feed.name")} title readOnly />
       <Group label={t("feed.details")} columns={2}>
-        <Field name="backend_class" label={t("feed.backend")} readOnly />
+        <Field name="feed_backend_class" label={t("feed.backend")} readOnly />
         <Field name="external_id" label={t("feed.externalId")} readOnly />
         <Field name="handle" label={t("feed.handle")} readOnly />
         <Field name="lifecycle" label={t("feed.lifecycle")} readOnly />
@@ -21,9 +21,9 @@ function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React
       <Field name="config" label={t("feed.config")} readOnly />
       {IntegrationSyncFields({
         label: t("feed.sync"),
-        fields: ["last_sync_status", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error"],
+        fields: ["sync_stage", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error"],
         labels: {
-          last_sync_status: t("feed.sync"),
+          sync_stage: t("feed.sync"),
           last_sync_completed_at: t("feed.syncedAt"),
           last_sync_items: t("feed.items"),
           sync_progress: t("feed.progress"),

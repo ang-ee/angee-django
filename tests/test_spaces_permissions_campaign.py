@@ -8,12 +8,12 @@ from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 from rebac.models import SchemaPermission
 
+from angee.spaces.testing.models import Group, Membership
 from tests.conftest import execute_schema, result_data
 from tests.spaces_campaign_helpers import MANAGERS, READERS, ROLES, SEATS, target_party
 from tests.spaces_campaign_helpers import roster as roster
 from tests.spaces_campaign_helpers import spaces_console as spaces_console
 from tests.spaces_campaign_helpers import spaces_storage as spaces_storage
-from tests.spaces_models import Group, Membership
 from tests.test_spaces import spaces_tables as spaces_tables
 
 

@@ -53,4 +53,6 @@ def rebuild_backlinks(
 def teardown_record_bindings(sender: type[Any], instance: Any, **kwargs: Any) -> None:
     """Delete bindings to the canonical target before a bindable record row is deleted."""
 
+    if sender._meta.apps is not apps:
+        return
     apps.get_model("knowledge", "RecordBinding").objects.teardown_for_record(instance)

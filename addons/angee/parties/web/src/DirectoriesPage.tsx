@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Button, Column, ResourceList, Glyph, List, MutationDialog, mutationDialogValueCodecs, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
+import { Button, Column, ResourceList, Glyph, List, MutationDialog, mutationDialogValueCodecs, type DescriptorField, type MutationDialogValues } from "@angee/ui";
 import { IntegrationSyncColumns } from "@angee/integrate";
 
 import { ConnectCardDavDirectory } from "./documents";
@@ -59,7 +59,7 @@ function ConnectDialog({
     invalidateModels: [MODEL],
   });
   const t = usePartiesT();
-  const fields = React.useMemo<readonly MutationDialogField[]>(
+  const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "name",
@@ -99,7 +99,7 @@ function ConnectDialog({
       submittingLabel={t("directory.connect.submitting")}
       errorFallback={t("directory.connect.error")}
       parseValues={parseDirectoryValues}
-      onSubmit={connect}
+      onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
     />
   );
 }

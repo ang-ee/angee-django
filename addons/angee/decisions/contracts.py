@@ -1,41 +1,28 @@
 """Typed requests and the single retained evidence context."""
 
-from collections.abc import Sequence
-from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
-from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, InstanceOf, field_validator, model_validator
 
-from angee.base.identity import instances_from_public_ids
-from angee.base.scoping import read_scoped_queryset
+from angee.base.evidence import EvidenceFact, EvidenceReference
 from angee.decisions.forms import Action
 
 
-class DecisionRecordReference(BaseModel):
+class DecisionRecordReference(EvidenceReference):
     """One public record identity and optional navigation hints in retained context."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    model: str
-    id: str
     label: str = ""
     tab: str | None = None
     page: int | None = None
     search: dict[str, str | None] = {}
 
 
-class DecisionFact(BaseModel):
+class DecisionFact(EvidenceFact):
     """An attributed value with its subject and retained supporting record references."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    pointer: str
-    label: str
-    value: JsonValue
     subject: DecisionRecordReference | None = None
-    authority: Literal["source", "correction", "unverified"]
     evidence: tuple[DecisionRecordReference, ...] = ()
 
 
@@ -61,77 +48,40 @@ class _DefaultRequester:
 DEFAULT_REQUESTER = _DefaultRequester()
 
 
-@dataclass(frozen=True)
-class DecisionRequest:
-    """One seat; initial and refine map action values to field values/annotations.
+class DecisionRequest(BaseModel):
+    """One seat; initial and refine map action values to field values/annotations."""
 
-    ``assignees=None`` delegates assignment to a consumer's declared REBAC
-    relations and requires system admission. An empty explicit assignment is
-    invalid. ``replaces`` retains the successor link even for a final answer;
-    supersession never rewrites that answer.
-    """
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
-    kind: str
+    kind: str = Field(min_length=1, pattern=r"\S")
     subject: Any
-    assignees: tuple[Any, ...] | None
-    actions: tuple[type[Action], ...]
+    assignees: tuple[Any, ...] | None = Field(min_length=1)
+    actions: tuple[type[Action], ...] = Field(min_length=1)
     requester: Any = DEFAULT_REQUESTER
-    basis: dict[str, Any] = field(default_factory=dict)
-    context: DecisionContext = field(default_factory=DecisionContext)
-    initial: dict[str, dict[str, Any]] = field(default_factory=dict)
-    refine: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
+    basis: Any = Field(default_factory=dict)
+    context: InstanceOf[DecisionContext] = Field(default_factory=DecisionContext)
+    initial: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    refine: dict[str, dict[str, dict[str, Any]]] = Field(default_factory=dict)
     supersede: bool = False
-    replaces: Any = None
     expires_at: datetime | None = None
-    max_attempts: int | None = None
+    max_attempts: int = Field(default_factory=lambda: settings.ANGEE_DECISION_MAX_ATTEMPTS,
+                              strict=True, gt=0, validate_default=True)
+    errors: dict[str, list[str]] = Field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        """Reject incomplete seats before admission can create any rows."""
-        if (not isinstance(self.kind, str) or not self.kind.strip()
-            or (self.assignees is not None and (
-                not isinstance(self.assignees, Sequence) or isinstance(self.assignees, str) or not self.assignees
-            ))):
-            raise ValidationError("Every seat needs a kind and assignees.")
-        if not self.actions or not all(
-            isinstance(action, type) and issubclass(action, Action) and action is not Action for action in self.actions
-        ):
-            raise ValidationError("Every seat needs declared action classes.")
-        if not isinstance(self.context, DecisionContext):
-            raise ValidationError("A seat requires a DecisionContext.")
+    @field_validator("actions")
+    @classmethod
+    def declared_actions(cls, actions: tuple[type[Action], ...]) -> tuple[type[Action], ...]:
+        if Action in actions:
+            raise ValueError("Every seat needs declared action classes.")
+        return actions
+
+    @model_validator(mode="after")
+    def subject_for_supersession(self) -> "DecisionRequest":
         if self.supersede and self.subject is None:
-            raise ValidationError("Supersession requires a subject.")
-        if self.replaces is not None and not self.supersede:
-            raise ValidationError("A replacement requires supersession.")
-        self.attempt_limit
+            raise ValueError("Supersession requires a subject.")
+        return self
 
     @property
     def attempt_limit(self) -> int:
         """Return the explicit or configured positive number of submission attempts."""
-        attempts = self.max_attempts if self.max_attempts is not None else settings.ANGEE_DECISION_MAX_ATTEMPTS
-        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
-            raise ValidationError("max_attempts must be a positive integer.")
-        return attempts
-
-
-def readable_records(
-    refs: tuple[DecisionRecordReference, ...], actors: tuple[Any, ...], *, permission: str = "read",
-) -> list[Any]:
-    """Check a standing permission in one scoped query per actor and model."""
-    grouped: dict[str, set[str]] = {}
-    for ref in refs:
-        grouped.setdefault(ref.model.lower(), set()).add(ref.id)
-    records: list[Any] = []
-    for label, ids in sorted(grouped.items()):
-        try:
-            model = apps.get_model(label)
-        except (LookupError, ValueError) as error:
-            raise ValidationError({"context": "Unknown referenced model."}) from error
-        for actor in actors:
-            scoped = read_scoped_queryset(model, actor, action=permission)
-            if scoped is None:
-                raise PermissionDenied("Referenced records require a standing permission.")
-            found = instances_from_public_ids(model, ids, queryset=scoped)
-            if set(found) != ids:
-                raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
-        records.extend(found.values())
-    return records
+        return self.max_attempts

@@ -20,16 +20,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.nexus.models import Cadence as AbstractCadence
-from angee.nexus.models import Tie as AbstractTie
-from tests import test_messaging_graphql
-from tests.conftest import (
-    SchemaAddon,
-    assert_private_hasura_insert_access,
-    execute_schema,
-)
-from tests.conftest import result_data as _data
-from tests.test_messaging import (
+from angee.messaging.testing.models import (
     Handle,
     Message,
     MessageEdge,
@@ -37,35 +28,20 @@ from tests.test_messaging import (
     Party,
     Person,
     Thread,
-    ThreadedTicket,
     ThreadFollower,
 )
+from angee.nexus.models import Cadence as AbstractCadence
+from angee.nexus.models import Tie as AbstractTie
+from angee.nexus.testing.models import Cadence, Tie
+from tests import test_messaging_graphql
+from tests.conftest import (
+    SchemaAddon,
+    assert_private_hasura_insert_access,
+    execute_schema,
+)
+from tests.conftest import result_data as _data
+from tests.test_messaging import ThreadedTicket
 from tests.test_project_access import project_access_schema as project_access_schema
-
-
-class Tie(AbstractTie):
-    """Concrete tie model used by nexus tests."""
-
-    class Meta(AbstractTie.Meta):
-        """Django model options for the canonical test tie."""
-
-        abstract = False
-        app_label = "nexus"
-        db_table = "test_nexus_tie"
-        rebac_resource_type = "nexus/tie"
-
-
-class Cadence(AbstractCadence):
-    """Concrete cadence model used by nexus tests."""
-
-    class Meta(AbstractCadence.Meta):
-        """Django model options for the canonical test cadence."""
-
-        abstract = False
-        app_label = "nexus"
-        db_table = "test_nexus_cadence"
-        rebac_resource_type = "nexus/cadence"
-
 
 nexus_schema = __import__("angee.nexus.schema", fromlist=["schemas"])
 User = get_user_model()

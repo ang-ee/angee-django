@@ -7,13 +7,14 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 import reversion
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
+from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,
@@ -32,6 +33,7 @@ from angee.resources.loader import (
     build_resource,
 )
 from angee.resources.mixins import ResourceLoadMixin
+from angee.resources.widgets import resolve_xref, split_xref
 
 
 class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
@@ -92,8 +94,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         """Load selected addon resource tiers idempotently."""
 
         active_tiers = self._normalize_tiers(tiers)
-        if self.model.Tier.DEMO in active_tiers and not (settings.DEBUG or allow_non_dev):
-            raise ImproperlyConfigured("resources load demo requires DEBUG or --allow-non-dev")
+        self._check_load_tiers(active_tiers, allow_non_dev=allow_non_dev)
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=active_tiers)
@@ -106,6 +107,64 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             addon_aliases=self._addon_aliases(selected_addons),
         )
 
+    def load_xref[M: AngeeModel](
+        self, handle: str, *, model: type[M], actor: Any = None, allow_non_dev: bool = False,
+    ) -> M:
+        """Import one declared ``addon.name.xref`` through its model's resource.
+
+        Other rows, grants and prerequisite entries are not imported; their
+        targets must already exist. Native widgets, hooks and the ledger still
+        apply. The caller needs write access before updating an existing target
+        and after import, including on unchanged replays. Newly imported targets
+        also require create permission before the import transaction can commit.
+        """
+        installed = tuple(apps.get_app_configs())
+        aliases = self._addon_aliases(installed)
+        addon_name, xref = split_xref(handle, aliases)
+        addon = next(addon for addon in installed if addon.name == addon_name)
+        groups = tuple(
+            group
+            for entry in self._declared_entries_for((addon,), tiers=None)
+            if entry.kind != GRANT_KIND
+            for group in entry.read_groups()
+        )
+        self._check_xref_collisions(groups)
+        for group in groups:
+            for index, candidate in enumerate(group.dataset["_xref"]):
+                if candidate != xref:
+                    continue
+                if group.model is not model:
+                    raise ResourceLoadError(
+                        f"Resource {handle!r} names {group.model._meta.label}, expected {model._meta.label}."
+                    )
+                self._check_load_tiers((group.entry.tier,), allow_non_dev=allow_non_dev)
+                selected = ResourceGroup(
+                    group.entry, group.model_label, group.dataset.subset(rows=[index]), [group.source_rows[index]],
+                )
+                with transaction.atomic():
+                    resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
+                    with system_context(reason="resources.load_xref resolve existing target"):
+                        resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
+                    resolution = resolved.get((resource, xref))
+                    if resolution is not None and resolution.instance is not None:
+                        actor = resolution.instance.require_access("write", actor)
+                    self._import_groups(
+                        (group.entry,), (selected,), (), dry_run=False, addon_aliases=aliases, actor=actor,
+                    )
+                    with system_context(reason="resources.load_xref resolve imported target"):
+                        instance = resolve_xref(handle, self.model, aliases)
+                    if not isinstance(instance, model):
+                        raise ResourceLoadError(f"Resource {handle!r} did not produce {model._meta.label}.")
+                    if resolution is None or resolution.instance is None:
+                        actor = instance.require_access("create", actor)
+                    instance.require_access("write", actor)
+                    return instance
+        raise LookupError(f"Resource {handle!r} was not found.")
+
+    def _check_load_tiers(self, tiers: Iterable[object], *, allow_non_dev: bool) -> None:
+        if self.model.Tier.DEMO in tiers and not (settings.DEBUG or allow_non_dev):
+            raise ImproperlyConfigured("resources load demo requires DEBUG or --allow-non-dev")
+
     def _import_groups(
         self,
         entries: tuple[ResourceEntry, ...],
@@ -114,6 +173,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         *,
         dry_run: bool,
         addon_aliases: Mapping[str, str],
+        actor: Any = None,
     ) -> LoadResult:
         """Import model rows and materialize grants; optionally roll back.
 
@@ -168,6 +228,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                                 raise_errors=True,
                                 rollback_on_validation_errors=True,
                                 use_transactions=False,
+                                actor=actor,
                             )
                         except ResourceImportError as error:
                             if error.number is not None:
@@ -204,7 +265,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     tuple(instances_by_pk.values()),
                     tier=group.entry.tier,
                     source=group.entry.source,
-                    publish=group.entry.publish,
                 )
 
     def _addon_aliases(self, addons: Iterable[Any]) -> dict[str, str]:
@@ -262,6 +322,17 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
     ) -> tuple[ResourceEntry, ...]:
         """Return selected resource entries in dependency order."""
 
+        entries = self._declared_entries_for(addons, tiers=tiers)
+        return EntryGraph.from_entries(sorted(entries, key=lambda entry: entry.kind == GRANT_KIND)).ordered()
+
+    def _declared_entries_for(
+        self,
+        addons: Iterable[Any],
+        *,
+        tiers: Iterable[object] | None,
+    ) -> tuple[ResourceEntry, ...]:
+        """Enumerate selected declarations without requiring a complete dependency graph."""
+
         active_tiers = self._normalize_tiers(tiers)
         excluded = self._excluded_entry_keys()
         entries: list[ResourceEntry] = []
@@ -276,7 +347,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     )
                     if entry.key not in excluded:
                         entries.append(entry)
-        return EntryGraph.from_entries(sorted(entries, key=lambda entry: entry.kind == GRANT_KIND)).ordered()
+        return tuple(entries)
 
     def _excluded_entry_keys(self) -> frozenset[EntryKey]:
         """Return project-excluded resource entry keys from settings."""

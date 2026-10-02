@@ -48,6 +48,7 @@ from angee.integrate.streams import (
     sync_bridge,
 )
 from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from angee.messaging.testing.models import Directory, Folder, Party, Person, RelationshipKind
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -59,8 +60,6 @@ from angee.parties.backends import (
 from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend, CardDavError, _parse_vcard, _xml
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, make_integration
-from tests.messaging_models import Directory, Folder
-from tests.test_messaging import Party, Person, RelationshipKind
 
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
@@ -291,7 +290,7 @@ def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica) -> None:
     person, link = replica.baseline()
     assert person.folder_id == Folder.objects.get(directory=replica.directory, source_href=_BOOK).pk
-    assert link.target_id == str(person.pk)
+    assert link.target_object_id == str(person.pk)
     assert link.remote_version == replica.server.cards[_HREF][1]
     assert link.remote_base_hash and link.local_base_hash
     assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
@@ -335,7 +334,7 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
         projection = contact_projection(Party.objects.project_contact(person))
         assert projection == contact_projection(remote)
         link = RecordLink.objects.get(stream=replica.stream, external_key=uid)
-        assert link.target_id == str(person.pk)
+        assert link.target_object_id == str(person.pk)
         assert link.status == LinkStatus.CURRENT
         assert link.origin == "remote"
         assert link.local_base_hash == canonical_json_sha256(projection)
@@ -380,7 +379,7 @@ def test_local_only_contact_waits_until_first_baseline_completes(
     replica.stream.refresh_from_db()
     assert replica.stream.phase == StreamPhase.DELTA
     assert Person.objects.filter(pk=person.pk).exists()
-    link = RecordLink.objects.get(stream=replica.stream, target_id=str(person.pk))
+    link = RecordLink.objects.get(stream=replica.stream, target_object_id=str(person.pk))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     assert len(puts) == 1
     assert puts[0][2]["if-none-match"] == "*"
@@ -404,7 +403,7 @@ def test_remote_edit_updates_same_party_through_adapter(replica: Replica) -> Non
     link.refresh_from_db()
     assert result.count == 1
     assert person.notes == "Remote edit"
-    assert link.target_id == str(person.pk)
+    assert link.target_object_id == str(person.pk)
     assert link.remote_version == replica.server.cards[_HREF][1]
     assert not SyncDiscrepancy.objects.exists()
 
@@ -638,7 +637,7 @@ def test_invalid_sync_token_bumps_generation_and_repeats_baseline(replica: Repli
     link.refresh_from_db()
     assert not result.reset
     assert link.pk == RecordLink.objects.get(stream=replica.stream, external_key="ada").pk
-    assert link.target_id == str(person.pk)
+    assert link.target_object_id == str(person.pk)
     assert link.last_verified_generation == replica.stream.generation
     assert any(
         method == "PROPFIND" and headers.get("depth") == "1" for method, _, headers, _ in replica.server.requests
@@ -657,7 +656,7 @@ def test_new_local_person_is_created_conditionally_then_recognized(replica: Repl
         created_by_id=replica.directory.owner_id,
     )
     result = push_stream(replica.stream, replica.backend)
-    link = RecordLink.objects.get(stream=replica.stream, target_id=str(person.pk))
+    link = RecordLink.objects.get(stream=replica.stream, target_object_id=str(person.pk))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     assert result.count == 1
     assert link.external_key == f"angee-{person.pk}"
@@ -684,7 +683,7 @@ def test_new_local_person_is_created_conditionally_then_recognized(replica: Repl
     assert replica.pull().count == 1
     person.refresh_from_db()
     assert person.display_name == "Grace M. Hopper"
-    assert RecordLink.objects.get(pk=link.pk).target_id == str(person.pk)
+    assert RecordLink.objects.get(pk=link.pk).target_object_id == str(person.pk)
     assert Person.objects.count() == 2
 
 
@@ -1047,11 +1046,11 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
     assert refused.status == LinkStatus.DISCREPANT
     assert refused.metadata["href"] == collision_href
     assert refused.external_key != owner.external_key
-    assert refused.target_id is None
+    assert refused.target_object_id is None
     owner.refresh_from_db()
     original.refresh_from_db()
     assert owner.metadata["href"] == _HREF
-    assert owner.target_id == str(original.pk)
+    assert owner.target_object_id == str(original.pk)
     assert (owner.remote_base_hash, owner.local_base_hash, owner.remote_version) == bases
     assert original.display_name == "Ada Lovelace"
     assert set(Person.objects.values_list("display_name", flat=True)) == {"Ada Lovelace", "Grace Hopper"}
@@ -1145,7 +1144,7 @@ def test_enumeration_sweep_imports_unlinked_contact_once_across_later_delta(repl
     assert replica.reconcile(page_bound=1) == 0
 
     link = RecordLink.objects.get(stream=replica.stream, metadata__href=href)
-    person = Person.objects.get(pk=link.target_id)
+    person = Person.objects.get(pk=link.target_object_id)
     assert person.display_name == "Grace Hopper"
     assert link.metadata["uid"] == "grace"
     assert link.status == LinkStatus.CURRENT
@@ -1154,7 +1153,7 @@ def test_enumeration_sweep_imports_unlinked_contact_once_across_later_delta(repl
     assert RecordRevision.objects.filter(link=link).count() == 1
     assert replica.pull().count == 0
     link.refresh_from_db()
-    assert link.target_id == str(person.pk)
+    assert link.target_object_id == str(person.pk)
     assert Person.objects.count() == RecordLink.objects.count() == RecordRevision.objects.count() == 2
     assert not SyncDiscrepancy.objects.exists()
 
@@ -1163,7 +1162,7 @@ def test_enumeration_sweep_imports_unlinked_contact_once_across_later_delta(repl
 def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replica, filename: str) -> None:
     assert replica.reconcile() == 0
     link = RecordLink.objects.get(stream=replica.stream, metadata__href=_HREF)
-    person = Person.objects.get(pk=link.target_id)
+    person = Person.objects.get(pk=link.target_object_id)
     assert link.external_key == _HREF
     assert replica.pull().count == 0
     moved_href = f"{_BOOK}{filename}"
@@ -1176,7 +1175,7 @@ def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replic
     assert not result.discrepancy_ids
     link.refresh_from_db()
     assert link.external_key == _HREF
-    assert link.target_id == str(person.pk)
+    assert link.target_object_id == str(person.pk)
     assert link.metadata["href"] == moved_href
     assert link.metadata["uid"] == "ada"
     assert link.status == LinkStatus.CURRENT

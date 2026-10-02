@@ -28,7 +28,7 @@ from rebac.schema import parse_zed
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.projects.models import Task as AbstractTask
-from angee.testing.rebac import install_manual_schema
+from angee.testing.permissions import install_permission_schema
 from tests.conftest import (
     create_platform_admin,
     create_user,
@@ -127,9 +127,8 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
         }
         """
     )
-    install_manual_schema(
+    install_permission_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
-        active=active,
     )
     try:
         reader = create_user("task-project-reader")

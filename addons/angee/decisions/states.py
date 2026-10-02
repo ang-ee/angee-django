@@ -16,7 +16,6 @@ class ClosedReason(models.TextChoices):
     """Why a decision stopped accepting answers."""
 
     RESOLVED = "resolved", "Resolved"
-    IMPORTED = "imported", "Imported answer"
     EXPIRED = "expired", "Expired"
     CANCELED = "canceled", "Canceled"
     SUPERSEDED = "superseded", "Superseded"

@@ -39,12 +39,10 @@ from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    SqidMixin,
 )
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
-    AngeeModel,
     AngeeQuerySet,
     role_anchor,
 )
@@ -174,7 +172,7 @@ class TagAssignmentManager(AngeeManager):
         return tag_row
 
 
-class TagAssignment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`Tag` to any model row.
 
     The exact ``storage.FileAttachment`` canon: a ``content_type``/``object_id``

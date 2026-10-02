@@ -25,6 +25,7 @@ from rebac import system_context
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, StreamDefinition, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import (
     MAX_SAMPLE_MESSAGES,
@@ -41,15 +42,7 @@ from angee.messaging_integrate_imap.parser import (
 )
 from tests.conftest import make_integration
 from tests.stream_adapters import AdapterPages
-from tests.test_messaging import (
-    Handle,
-    Message,
-    MessageEdge,
-    Part,
-    Participant,
-    Thread,
-    _storage_drive,
-)
+from tests.test_messaging import _storage_drive
 from tests.test_messaging_graphql import Channel
 
 _INTERNAL_DATE = datetime(2026, 7, 2, 9, 30, tzinfo=UTC)
@@ -2027,7 +2020,7 @@ def test_channel_sync_lands_threads_parts_and_attachments(
 
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
-    assert channel.last_sync_status == "ok"
+    assert channel.sync_stage == channel.SyncStage.COMPLETED
     assert channel.last_sync_items == 3
     assert channel.sync_stage == Channel.SyncStage.COMPLETED
     assert channel.sync_progress["stage"] == Channel.SyncStage.COMPLETED
@@ -2203,7 +2196,7 @@ def test_failed_run_never_persists_the_cursor(
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
     assert Message._base_manager.count() == 0
-    assert channel.last_sync_status == "error"
+    assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_stage == Channel.SyncStage.FAILED
     assert channel.sync_error == "Integration operation failed."
     assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
@@ -2248,7 +2241,7 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
     assert Message._base_manager.count() == 2
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
-    assert channel.last_sync_status == "error"
+    assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_error == "Integration operation failed."
 
 

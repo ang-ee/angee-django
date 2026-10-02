@@ -2,11 +2,14 @@ import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
 import type { ActionOutcome } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
+import type { Resolver } from "react-hook-form";
 
 import type { PromptOptions } from "../../feedback";
+import type { DialogSize } from "../../ui/dialog";
+import type { DescriptorField } from "../form/DescriptorFieldList";
+import type { FormSubmitResult } from "../form/validation-errors";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import type { FieldDescriptor } from "./Field";
-import type { FormSpecFieldDescriptor } from "../form/form-spec";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface ActionConfirm {
@@ -18,10 +21,7 @@ export interface ActionConfirm {
 /**
  * Context handed to an action's imperative `run` callback.
  *
- * `record` and `values` are a snapshot for the duration of `run`. `refresh` is
- * fire-and-forget — it re-pulls the record into the form but does not update the
- * `record` already captured here; read fresh state from your mutation's own
- * result (or `update`'s) rather than awaiting `refresh`.
+ * `values` are a snapshot for the duration of `run`; `record` remains live.
  */
 export interface ActionContext {
   /** The open record the action targets (`null` while creating). */
@@ -49,7 +49,25 @@ export interface ActionFormContext {
   record: Row | null;
   /** Public ids selected on the invoking surface — a `relationList` arg's default. */
   selectedIds: readonly string[];
+  /** Refetch the invoking record without replacing this action's collected draft. */
+  refresh?: () => Promise<Row | null>;
 }
+
+/** A descriptor form, including record-specific JSON Schema argument forms. */
+export interface ActionFormDefinition {
+  fields: readonly DescriptorField[] | ((values: Record<string, unknown>) => readonly DescriptorField[]);
+  /** Use the shared dialog size tokens for forms with retained context. */
+  size?: DialogSize;
+  defaultValues?: Record<string, unknown>;
+  resolver?: Resolver<Record<string, unknown>>;
+  /** All possible fields, including inactive branches, for server issue binding. */
+  fieldNames?: readonly string[];
+  /** Consumer editors rendered inside the same React Hook Form provider. */
+  content?: ReactNode;
+}
+
+export type ActionArgs = readonly ActionArg[] | ActionFormDefinition;
+export type ActionSubmitResult = ActionOutcome | FormSubmitResult<ActionOutcome> | null | undefined;
 
 /**
  * Base shape of one typed action argument: the slice of the `FieldDescriptor`
@@ -120,15 +138,9 @@ export interface ActionRelationListArg extends ActionArgBase {
   fromContext?: (context: ActionFormContext) => readonly string[];
 }
 
-/** Frozen form fields submitted as one object argument by a branched action. */
-export interface ActionFormSpecArg extends ActionArgBase {
-  argKind: "formSpec";
-  fields: readonly FormSpecFieldDescriptor[];
-}
-
 /** One typed argument collected by an action form — scalar, relation, or relation list. */
 export type ActionArg =
-  ActionScalarArg | ActionRelationArg | ActionRelationListArg | ActionFormSpecArg;
+  ActionScalarArg | ActionRelationArg | ActionRelationListArg;
 
 interface ActionBinding {
   /**
@@ -146,20 +158,22 @@ interface ActionBinding {
    * the invoking record/selection context (explicit edit wins), then fire
    * `submit`. Ignored without `submit`.
    */
-  args?: readonly ActionArg[];
+  args?: ActionArgs | ((context: ActionFormContext) => ActionArgs);
   /**
    * Fire the authored mutation for an `args` form and return its in-band
    * `ActionOutcome` (compose `@angee/refine`'s `useAuthoredMutation` +
    * `extractActionOutcome`). The dialog binds `validationErrors` to the args and
    * stays open until `ok`; on `ok` it toasts `message` and closes. The collected
-   * values are keyed by arg `name`. A `null`/`undefined` outcome — the shape the
+   * values are keyed by arg `name`. A `FormSubmitResult` can additionally report
+   * a stale-record conflict, locking the draft until the dialog is reopened.
+   * A `null`/`undefined` outcome — the shape the
    * outcome extractors return when the response carries no envelope — is a
    * form-level failure, so a caller passes it through rather than inventing one.
    */
   submit?: (
     values: Record<string, unknown>,
     context: ActionFormContext,
-  ) => ActionOutcome | null | undefined | Promise<ActionOutcome | null | undefined>;
+  ) => ActionSubmitResult | Promise<ActionSubmitResult>;
 }
 
 export interface ActionProps extends ActionBinding {

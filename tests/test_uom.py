@@ -17,44 +17,8 @@ from django.db import IntegrityError, transaction
 from rebac import actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
-from angee.uom.models import Uom as AbstractUom
-from angee.uom.models import UomCategory as AbstractUomCategory
-from angee.uom.models import UomRole as AbstractUomRole
+from angee.uom.testing.models import Uom, UomCategory
 from tests.conftest import create_user
-
-
-class UomCategory(AbstractUomCategory):
-    """Concrete unit-of-measure category used by uom tests."""
-
-    class Meta(AbstractUomCategory.Meta):
-        """Django model options for the canonical test uom category."""
-
-        abstract = False
-        app_label = "uom"
-        db_table = "test_uom_category"
-        rebac_resource_type = "uom/category"
-
-
-class Uom(AbstractUom):
-    """Concrete unit of measure used by uom tests."""
-
-    class Meta(AbstractUom.Meta):
-        """Django model options for the canonical test uom."""
-
-        abstract = False
-        app_label = "uom"
-        db_table = "test_uom_uom"
-        rebac_resource_type = "uom/uom"
-
-
-class UomRole(AbstractUomRole):
-    """Native role anchor needed by actor-scoped catalogue reads."""
-
-    class Meta(AbstractUomRole.Meta):
-        abstract = False
-        managed = False
-        app_label = "uom"
-        rebac_resource_type = "uom/role"
 
 
 def _make_category(**fields: Any) -> Any:

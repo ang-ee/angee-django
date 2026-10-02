@@ -70,7 +70,7 @@ export function TaskAccessDecisions({
       </CardContent>
       <CardFooter className="flex-wrap">
         {canManage ? <TaskAccessActions need={need} /> : null}
-        {need.access_decision ? <TextLink className="text-xs" href={routeHref("decisions.decisions.record", {
+        {need.access_decision ? <TextLink className="text-xs" href={routeHref("decisions.inbox.record", {
           id: need.access_decision.id,
         })}>{t("access.audit")}</TextLink> : null}
       </CardFooter>

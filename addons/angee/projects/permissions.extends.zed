@@ -26,8 +26,8 @@ definition storage/folder {
     permission write = project->write + home_project->write
 }
 
-// Messaging Thread.channel and Message.channel are field-backed references to
-// the Integration MTI parent, so a concrete Channel binding must meet them here.
+// A Channel inherits Integration access. Thread and Message then inherit that
+// access from Channel through their own field-backed channel relations.
 definition integrate/integration {
     relation project: projects/project // rebac:field=project_bindings__project
 

@@ -13,56 +13,12 @@ from django.db.models.signals import pre_save
 from django.utils import timezone
 from rebac import system_context
 
+import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.scopedemo.models  # noqa: F401 -- register related models before native database setup
-import tests.spaces_models  # noqa: F401 -- register related models before native database setup
-import tests.test_sequence  # noqa: F401 -- register related models before native database setup
-from angee.portfolio.models import Initiative as AbstractInitiative
-from angee.portfolio.models import InitiativeProject as AbstractInitiativeProject
-from angee.portfolio.models import Update as AbstractUpdate
-from angee.projects.models import TaskRelation as AbstractTaskRelation
-from angee.work.models import Cycle as AbstractCycle
+from angee.portfolio.testing.models import Initiative, InitiativeProject, Update
+from angee.projects.testing.models import Cycle, Project, ProjectBinding, Queue, Stage, Task, TaskRelation
 from tests.conftest import Backend, Drive
-from tests.projects_models import Project, ProjectBinding, Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
-from tests.test_task_relation_freshness import FreshnessTask
-
-
-class Cycle(AbstractCycle):
-    class Meta(AbstractCycle.Meta):
-        abstract = False
-        app_label = "work"
-        rebac_resource_type = "work/cycle"
-
-
-class Initiative(AbstractInitiative):
-    class Meta(AbstractInitiative.Meta):
-        abstract = False
-        app_label = "portfolio"
-        rebac_resource_type = "portfolio/initiative"
-
-
-class InitiativeProject(AbstractInitiativeProject):
-    class Meta(AbstractInitiativeProject.Meta):
-        abstract = False
-        app_label = "portfolio"
-        rebac_resource_type = "portfolio/initiative_project"
-
-
-class Update(AbstractUpdate):
-    class Meta(AbstractUpdate.Meta):
-        abstract = False
-        app_label = "portfolio"
-        rebac_resource_type = "portfolio/update"
-
-
-class TaskRelation(AbstractTaskRelation):
-    task = models.ForeignKey(FreshnessTask, on_delete=models.CASCADE, related_name="+")
-    related_task = models.ForeignKey(FreshnessTask, on_delete=models.CASCADE, related_name="+")
-
-    class Meta(AbstractTaskRelation.Meta):
-        abstract = False
-        app_label = "projects"
-        rebac_resource_type = "projects/task_relation"
 
 
 @pytest.fixture
@@ -71,8 +27,8 @@ def deferred_save_rows(project_access_schema: Any) -> Iterator[dict[str, models.
     with system_context(reason="tests.productivity.deferred_save.setup"):
         queue = Queue.objects.create(key="DEFERRED", name="Deferred", slug="deferred")
         cycle = Cycle.objects.create(queue=queue, number=1, starts_on=date(2026, 1, 1), ends_on=date(2026, 1, 7))
-        task = FreshnessTask.objects.create(title="Original")
-        related = FreshnessTask.objects.create(title="Related")
+        task = Task.objects.create(title="Original", queue=queue)
+        related = Task.objects.create(title="Related", queue=queue)
         relation = TaskRelation.objects.create(task=task, related_task=related, kind="blocks")
         project = Project.objects.create(title="Original")
         backend = Backend.objects.create(slug="deferred", label="Deferred", backend_class="local")

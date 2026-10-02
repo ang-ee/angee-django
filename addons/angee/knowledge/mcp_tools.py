@@ -21,7 +21,7 @@ from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 # Backlinks resolve to the linking page's sqid, title, and the link's display text.
 _BACKLINKS = ("backlinks", ("page", "title", "display_text"))
 
-# Outline-aware body read: the markdown sidecar (nullable) with its heading outline.
+# Outline-aware body read: the markdown child (nullable) with its heading outline.
 _MARKDOWN = ("markdown", ("body", "body_hash", "word_count", ("outline", ("level", "text", "slug"))))
 
 # Every body write returns the shared payload; project the fresh hash for the next edit.

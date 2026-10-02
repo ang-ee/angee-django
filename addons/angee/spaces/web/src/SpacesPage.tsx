@@ -20,7 +20,7 @@ import {
   defineRowAction,
   rowIdVariables,
   type ListColumn,
-  type MutationDialogField,
+  type DescriptorField,
   type MutationDialogValues,
   type RecordPanelContext,
   type RowActionDeclaration,
@@ -120,7 +120,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
     [availableRoles, roleOptions],
   );
   const policyOptions = useEnumOptions("spaces.Membership", "notification_policy", { casing: "upper" });
-  const notificationFields = React.useMemo<readonly MutationDialogField[]>(
+  const notificationFields = React.useMemo<readonly DescriptorField[]>(
     () => [{
       name: "policy",
       label: t("group.roster.notifications"),
@@ -130,7 +130,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
     }],
     [policyOptions, t],
   );
-  const addFields = React.useMemo<readonly MutationDialogField[]>(
+  const addFields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "party",
@@ -148,7 +148,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
     ],
     [addRoleOptions, t],
   );
-  const roleFields = React.useMemo<readonly MutationDialogField[]>(
+  const roleFields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "role",
@@ -253,13 +253,14 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.adding")}
         errorFallback={t("group.roster.addError")}
         parseValues={parseAddMembershipValues}
-        onSubmit={(values) =>
-          add({
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await add({
             group: recordId,
             party: values.party,
             role: values.role,
-          })
-        }
+          }),
+        })}
       />
       <MutationDialog
         open={roleRow !== null}
@@ -273,12 +274,13 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.roleError")}
         parseValues={parseMembershipRoleValues}
-        onSubmit={(values) =>
-          updateRole({
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await updateRole({
             id: roleRow?.id ?? "",
             role: values.role,
-          })
-        }
+          }),
+        })}
         onSubmitted={() => setRoleRow(null)}
       />
       <MutationDialog
@@ -293,10 +295,13 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.notificationsError")}
         parseValues={parseNotificationValues}
-        onSubmit={(values) => setNotifications({
-          id: notificationRow?.id ?? "",
-          policy: values.policy,
-          subtype_keys: notificationRow?.subtype_keys ?? [],
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await setNotifications({
+            id: notificationRow?.id ?? "",
+            policy: values.policy,
+            subtype_keys: notificationRow?.subtype_keys ?? [],
+          }),
         })}
         onSubmitted={() => setNotificationRow(null)}
       />

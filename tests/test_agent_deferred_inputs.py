@@ -6,10 +6,9 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
-import tests.test_agents_graphql  # noqa: F401 -- register the fixture model graph before database setup
+from angee.agents.testing.models import Agent
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from tests.test_agents import InferenceModel, _provider
-from tests.test_agents_graphql import Agent
 
 
 def test_deployment_identity_refreshes_deferred_handle(composed_tables: None, monkeypatch):
@@ -40,6 +39,18 @@ def test_agent_error_classifier_loads_nullable_deferred_model(composed_tables: N
     monkeypatch.setattr(AnthropicInferenceBackend, "is_transient_error", classify)
     assert agent.is_transient_inference_error(TimeoutError()) is has_model
     assert seen == (["default"] if has_model else [])
+
+
+@pytest.mark.parametrize("error,transient", [(TimeoutError(), True), (ValueError("timeout"), False)])
+def test_inference_model_classifies_through_a_deferred_provider(composed_tables: None, error, transient):
+    """Consumers can classify failures without reading provider infrastructure."""
+
+    provider = _provider("model-error", backend_class="anthropic")
+    with system_context(reason="test.agents.model_error.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="model")
+        model = InferenceModel.objects.only("pk").get(pk=model.pk)
+
+    assert model.is_transient_error(error) is transient
 
 
 @pytest.mark.parametrize("has_credential", [False, True])

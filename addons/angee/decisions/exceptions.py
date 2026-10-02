@@ -1,5 +1,7 @@
 """Retryable decision transition conflicts."""
 
+from django.core.exceptions import PermissionDenied
+
 from angee.base.errors import DomainError
 
 
@@ -10,3 +12,7 @@ class RetryableDecisionError(DomainError):
 
     def __init__(self, detail: str) -> None:
         Exception.__init__(self, detail)
+
+
+class ResolverAuthorityError(PermissionDenied):
+    """A retained answer's resolver no longer has permission to give that answer."""

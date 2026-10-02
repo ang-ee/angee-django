@@ -78,9 +78,9 @@ function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
     category: "Example",
     description: "Product logic for the example.",
     keywords: ["console", "demo"],
-    kind: "consumer",
-    source: "local",
-    state: "enabled",
+    kind: "CONSUMER",
+    source: "LOCAL",
+    state: "ENABLED",
     forced: false,
     pending: false,
     model_count: 2,
@@ -132,14 +132,14 @@ describe("AddonCard", () => {
       id: "example.remote",
       name: "example.remote",
       label: "example.remote",
-      source: "remote",
-      state: "disabled",
+      source: "REMOTE",
+      state: "DISABLED",
     })} />);
     expect(screen.getAllByText("example.remote")).toHaveLength(2);
   });
 
   test("shows the pending-restart badge", () => {
-    render(<AddonCard row={row({ state: "disabled", pending: true })} />);
+    render(<AddonCard row={row({ state: "DISABLED", pending: true })} />);
     expect(screen.getByText("Pending restart")).toBeTruthy();
   });
 });
@@ -148,7 +148,7 @@ describe("AddonCardActions", () => {
   test("uses the server's labels in the confirmation title and unresolved impacts", () => {
     mocks.preview.enableLabel = "angee.tags";
     mocks.preview.disableLabel = "angee.legacy";
-    render(<AddonCardActions row={row({ label: "angee.notes", state: "disabled" })} context={CONTEXT} />);
+    render(<AddonCardActions row={row({ label: "angee.notes", state: "DISABLED" })} context={CONTEXT} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
@@ -206,8 +206,8 @@ describe("AddonCardActions", () => {
   });
 
   test.each([
-    ["disabled", "Install"],
-    ["removed", "Reinstall"],
+    ["DISABLED", "Install"],
+    ["REMOVED", "Reinstall"],
   ])("previews before revision-bound install from %s", async (state, label) => {
     render(<AddonCardActions row={row({ state })} context={CONTEXT} />);
     fireEvent.click(screen.getByRole("button", { name: label }));
@@ -220,7 +220,7 @@ describe("AddonCardActions", () => {
 
   test("leaves queued state to the card badge", () => {
     const { container } = render(
-      <AddonCardActions row={row({ state: "disabled", pending: true })} context={CONTEXT} />,
+      <AddonCardActions row={row({ state: "DISABLED", pending: true })} context={CONTEXT} />,
     );
     expect(container.textContent).toBe("");
   });
@@ -228,12 +228,12 @@ describe("AddonCardActions", () => {
   test("shows pending restart for a queued disable", () => {
     // An enabled addon dropped from settings.yaml is still composed but pending disable:
     // the footer must show the restart state, never a live Disable it could re-fire.
-    render(<AddonCardActions row={row({ state: "enabled", pending: true })} context={CONTEXT} />);
+    render(<AddonCardActions row={row({ state: "ENABLED", pending: true })} context={CONTEXT} />);
     expect(screen.queryByRole("button", { name: "Disable" })).toBeNull();
   });
 
   test("locks Install for a non-materialised marketplace addon", () => {
-    render(<AddonCardActions row={row({ state: "disabled", source: "remote" })} context={CONTEXT} />);
+    render(<AddonCardActions row={row({ state: "DISABLED", source: "REMOTE" })} context={CONTEXT} />);
     const button = screen.getByRole("button", { name: "Install" });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(button);
@@ -243,7 +243,7 @@ describe("AddonCardActions", () => {
   test("keeps reinstall blocked when the server cannot find the addon source", () => {
     mocks.preview.can_apply = false;
     mocks.preview.refusal = "angee.notes is not available to install.";
-    render(<AddonCardActions row={row({ state: "removed" })} context={CONTEXT} />);
+    render(<AddonCardActions row={row({ state: "REMOVED" })} context={CONTEXT} />);
     fireEvent.click(screen.getByRole("button", { name: "Reinstall" }));
     expect(screen.getByText(mocks.preview.refusal)).toBeTruthy();
     const confirmation = screen.getByRole("button", { name: "Install" });

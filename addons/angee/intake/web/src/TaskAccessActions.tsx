@@ -22,10 +22,10 @@ export function TaskAccessActions({ need }: { need: CurrentAccessRow }): ReactEl
   const settle = useActionResultRun();
   if (!holdsPermission(need, "write")) return null;
   const current = need.access_decision;
-  const actions: ActionDescriptor[] = current?.is_open ? (["APPROVE", "DENY"] as const).map((action) => ({
+  const actions: ActionDescriptor[] = current?.is_open ? (["INTAKE_APPROVE", "INTAKE_DENY"] as const).map((action) => ({
     id: `access-${action}-${need.id}`,
-    label: t(action === "APPROVE" ? "access.approve" : "access.deny"),
-    permission: "write", placement: "toolbar", primary: action === "APPROVE", danger: action === "DENY",
+    label: t(action === "INTAKE_APPROVE" ? "access.approve" : "access.deny"),
+    permission: "write", placement: "toolbar", primary: action === "INTAKE_APPROVE", danger: action === "INTAKE_DENY",
     run: async () => {
       await settle(() => decide(need.id, { action, expected_revision: need.revision }));
     },

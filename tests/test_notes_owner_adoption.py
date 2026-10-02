@@ -21,4 +21,4 @@ def test_composed_notes_preserve_attribution_across_ownership_transfer(tmp_path)
         cwd=root, env=env, capture_output=True, text=True, timeout=180, check=False,
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

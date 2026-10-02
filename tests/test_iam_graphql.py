@@ -21,8 +21,10 @@ from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.management import call_command
 from django.db import connection
+from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
@@ -2006,11 +2008,11 @@ def _sdl_block(sdl: str, header: str) -> str:
 
 
 def _request(user: Any) -> Any:
-    """Return a request object with a minimal mutable session."""
+    """Return a request with the configured native Django session backend."""
 
     request = RequestFactory().post("/graphql/public/")
     request.user = user
-    request.session = _Session()
+    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     return request
 
 
@@ -2078,20 +2080,3 @@ def _oauth_client(
     defaults.update(overrides)
     with system_context(reason="test iam graphql setup"):
         return OAuthClient.objects.create(slug=slug, **defaults)
-
-
-class _Session(dict[str, Any]):
-    """Minimal session object for direct GraphQL execution."""
-
-    modified = False
-
-    def cycle_key(self) -> None:
-        """Mark the fake session as cycled."""
-
-        self.modified = True
-
-    def flush(self) -> None:
-        """Clear the fake session."""
-
-        self.clear()
-        self.modified = True

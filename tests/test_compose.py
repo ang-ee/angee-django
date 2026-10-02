@@ -16,6 +16,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, SystemCheckError
 from django.db import OperationalError, models
+from rebac import schema_changes
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
@@ -221,6 +222,26 @@ def test_runtime_rejects_conflicting_donor_grant_authority() -> None:
     )
     with pytest.raises(ImproperlyConfigured, match="conflicting rebac_grantable"):
         ModelComposition({"tests": (source,)}, {"tests.grantsource": (donor,)}, model_owners={donor: module.__name__})
+
+
+def test_runtime_rejects_conflicting_donor_managers() -> None:
+    """Two same-row donors cannot silently shadow one another's manager."""
+
+    module = ModuleType("tests.manager_conflict")
+    source = _source_model(module, "ManagerSource", "tests", runtime=True)
+    first = _source_model(
+        module, "FirstManagerDonor", "tests", extends="tests.ManagerSource", objects=models.Manager(),
+    )
+    second = _source_model(
+        module, "SecondManagerDonor", "tests", extends="tests.ManagerSource", objects=models.Manager(),
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="composes manager 'objects'"):
+        ModelComposition(
+            {"tests": (source,)},
+            {"tests.managersource": (first, second)},
+            model_owners={first: module.__name__, second: module.__name__},
+        )
 
 
 @pytest.mark.parametrize("invalid", [None, [], {"": "write"}, {"reviewer": 42}])
@@ -1218,10 +1239,9 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
         definition__resource_type="agents/skill",
         name="source",
     )
-    source.allowed_subjects = [{"type": "integrate/source", "relation": "", "wildcard": False}]
-    source.save(update_fields=["allowed_subjects"])
-
-    with pytest.raises(SystemCheckError, match=r"rebac\.E009"):
+    with pytest.raises(SystemCheckError, match=r"rebac\.E009"), schema_changes():
+        source.allowed_subjects = [{"type": "integrate/source", "relation": "", "wildcard": False}]
+        source.save(update_fields=["allowed_subjects"])
         call_command("check", "--tag", "rebac", verbosity=0)
 
     plan = Command._provision_plan(_provision_options())

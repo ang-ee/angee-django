@@ -14,9 +14,9 @@ from angee.messaging.inbox_navigator import InboxNavigator, InboxNavigatorOption
 from angee.messaging.inbox_related import InboxRelated
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
+from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import execute_schema, make_integration, result_data
-from tests.test_messaging import Fragment, Handle, Message, Part, Participant, Party, Thread
 from tests.test_nexus import _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -28,7 +28,7 @@ def test_circle_groups_deduplicate_confirmed_subtrees_and_keep_empty_circles():
     owner = User.objects.create_user(username="explorer-circles")
     Circle = apps.get_model("parties", "Circle")
     CircleMember = apps.get_model("parties", "CircleMember")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed circle explorer"):
         root = Circle.objects.create(created_by=owner, name="Friends")
         child = Circle.objects.create(created_by=owner, name="Close friends", parent=root)
@@ -90,7 +90,7 @@ def test_invalid_coverage_cannot_broaden_results(values):
 
 def test_missing_attachment_bytes_still_match_attachment_filter():
     owner = User.objects.create_user(username="explorer-unavailable-attachment")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed unavailable attachment"):
         message = Message._base_manager.create(channel=channel, created_by=owner, status="synced", sent_at=T0)
         Part._base_manager.create(created_by=owner, message=message, disposition="attachment", name="missing.pdf")
@@ -103,8 +103,8 @@ def test_missing_attachment_bytes_still_match_attachment_filter():
 def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
     owner = User.objects.create_user(username="explorer-search-owner")
     other = User.objects.create_user(username="explorer-search-other")
-    other_channel = make_integration(other.username, owner=other)
-    channel = make_integration(owner.username, owner=owner)
+    other_channel = make_integration(other.username, model=Channel, owner=other)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed indexed search candidates"):
         document = Fragment.objects.upsert(text="document", created_by_id=owner.pk)
         alpha = Fragment.objects.upsert(text="alpha", created_by_id=owner.pk)
@@ -149,7 +149,7 @@ def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
 
 def test_sections_page_threads_before_bounded_previews():
     owner = User.objects.create_user(username="explorer-sections")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed explorer"):
         threads = [Thread._base_manager.create(created_by=owner, platform="email") for _ in range(4)]
         for index, thread in enumerate(threads):
@@ -174,7 +174,7 @@ def test_sections_page_threads_before_bounded_previews():
 
 def test_confirmed_senders_consolidate_but_suggestions_do_not():
     owner = User.objects.create_user(username="explorer-senders")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed explorer"):
         party = Party._base_manager.create(created_by=owner, display_name="Ada")
         handles = [
@@ -252,7 +252,7 @@ def test_navigator_headers_and_members_page_independently_with_distinct_root_cou
 
 def test_group_windows_keep_exact_totals_on_empty_and_out_of_range_pages():
     owner = User.objects.create_user(username="explorer-window-counts")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed paged activity"):
         handle = Handle._base_manager.create(created_by=owner, platform="email", value="window@example.com")
         message = Message._base_manager.create(
@@ -277,7 +277,7 @@ def test_group_windows_keep_exact_totals_on_empty_and_out_of_range_pages():
 
 def test_message_group_totals_span_pages_and_conversation_titles_remain_exact():
     owner = User.objects.create_user(username="explorer-partition-totals")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed disjoint message groups"):
         title = Fragment.objects.upsert(text="A document conversation", created_by_id=owner.pk)
         thread = Thread._base_manager.create(created_by=owner, title=title)
@@ -308,7 +308,7 @@ def test_message_group_totals_span_pages_and_conversation_titles_remain_exact():
 def test_navigator_name_fallbacks_and_recipient_overlap_keep_exact_totals():
     owner = User.objects.create_user(username="explorer-name-totals")
     other = User.objects.create_user(username="explorer-private-name")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed readable names and overlapping recipients"):
         blank = Party._base_manager.create(created_by=owner, display_name="")
         private = Party._base_manager.create(created_by=other, display_name="Hidden party name")
@@ -350,10 +350,10 @@ def test_accounts_require_readable_account_and_include_channel_readable_messages
     other = User.objects.create_user(username="explorer-account-other")
     with system_context(reason="seed source account eligibility"):
         accounts = {
-            name: make_integration(f"explorer-{name}", owner=owner, created_by=owner)
+            name: make_integration(f"explorer-{name}", model=Channel, owner=owner, created_by=owner)
             for name in ("eligible", "draft", "public", "owned-channel-other-author", "empty")
         }
-        hidden = make_integration("explorer-hidden", owner=other, created_by=other)
+        hidden = make_integration("explorer-hidden", model=Channel, owner=other, created_by=other)
         public = Thread._base_manager.create(created_by=owner, modality="public_thread")
         for name, account in accounts.items():
             if name != "empty":
@@ -375,7 +375,7 @@ def test_recency_classifies_latest_identity_activity_and_keeps_older_messages(mo
     owner = User.objects.create_user(username="explorer-recency")
     today = datetime(2026, 9, 11, 12, tzinfo=UTC)
     monkeypatch.setattr("angee.messaging.inbox_navigator.timezone.now", lambda: today)
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed recent and old activity"):
         handle = Handle._base_manager.create(created_by=owner, platform="email", value="recent@example.com")
         for instant in (T0, today):
@@ -415,8 +415,8 @@ def test_groups_lens_contains_only_readable_group_chats():
 def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
     owner = User.objects.create_user(username="explorer-related")
     other = User.objects.create_user(username="explorer-private")
-    other_channel = make_integration(other.username, owner=other)
-    channel = make_integration(owner.username, owner=owner)
+    other_channel = make_integration(other.username, model=Channel, owner=other)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     channels = {owner.pk: channel, other.pk: other_channel}
     with system_context(reason="seed explorer"):
         fragment = Fragment.objects.upsert(text="shared document text", created_by_id=owner.pk)
@@ -469,8 +469,8 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
     owner = User.objects.create_user(username="explorer-relations")
     other = User.objects.create_user(username="explorer-unreadable-endpoint")
     Edge = apps.get_model("messaging", "MessageEdge")
-    other_channel = make_integration(other.username, owner=other)
-    channel = make_integration(owner.username, owner=owner)
+    other_channel = make_integration(other.username, model=Channel, owner=other)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed message relations"):
         source = Message._base_manager.create(channel=channel, created_by=owner, status="synced", sent_at=T0)
         reply = Message._base_manager.create(
@@ -494,7 +494,7 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
 def test_unreadable_thread_is_not_exposed_as_a_group():
     owner = User.objects.create_user(username="explorer-readable")
     other = User.objects.create_user(username="explorer-hidden-thread")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed explorer"):
         thread = Thread._base_manager.create(created_by=other)
         message = Message._base_manager.create(
@@ -511,7 +511,7 @@ def test_unreadable_thread_is_not_exposed_as_a_group():
 
 def test_live_schema_projects_sections_and_independent_message():
     owner = User.objects.create_user(username="explorer-schema")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed explorer"):
         handle = Handle._base_manager.create(created_by=owner, value="sender@example.com", platform="email")
         message = Message._base_manager.create(
@@ -582,7 +582,7 @@ def test_transcript_anchor_is_bounded_and_can_continue_both_directions():
 def test_transcript_matches_navigate_without_filtering_full_context():
     owner = User.objects.create_user(username="explorer-transcript")
     outsider = User.objects.create_user(username="explorer-transcript-hidden")
-    outsider_channel = make_integration(outsider.username, owner=outsider)
+    outsider_channel = make_integration(outsider.username, model=Channel, owner=outsider)
     with system_context(reason="seed transcript matches"):
         thread = Thread._base_manager.create(created_by=owner, modality="direct")
         messages = [
@@ -638,7 +638,7 @@ def test_fading_is_a_persisted_viewer_relative_fact_not_message_age():
     owner = User.objects.create_user(username="explorer-fading")
     Person = apps.get_model("parties", "Person")
     Tie = apps.get_model("nexus", "Tie")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed persisted viewer fading"):
         viewer = Person._base_manager.create(created_by=owner, user=owner, display_name="Viewer")
         targets = [
@@ -675,7 +675,7 @@ def test_organization_groups_use_current_readable_edges_and_distinct_root_totals
     Organization = apps.get_model("parties", "Organization")
     Relationship = apps.get_model("parties", "Relationship")
     Kind = apps.get_model("parties", "RelationshipKind")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed organization memberships"):
         kind = Kind._base_manager.create(slug="explorer-member", name="Member")
         party = Party._base_manager.create(created_by=owner, display_name="Member")
@@ -710,7 +710,7 @@ def test_organization_groups_use_current_readable_edges_and_distinct_root_totals
 
 def test_group_chat_buckets_keep_coverage_totals_without_misclassifying_direct_activity():
     owner = User.objects.create_user(username="explorer-group-direct")
-    channel = make_integration(owner.username, owner=owner)
+    channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed covered group and direct activity"):
         handle = Handle._base_manager.create(created_by=owner, platform="email", value="group@example.com")
         group = Thread._base_manager.create(created_by=owner, modality="group")

@@ -37,4 +37,4 @@ def test_example_note_owner_gate(tmp_path, case):
         check=False,
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

@@ -32,6 +32,10 @@ _P = ParamSpec("_P")
 
 logger = logging.getLogger(__name__)
 
+class ActionTargetUnavailable(ValidationError):
+    """A target preflight whose details stay in form errors under a generic banner."""
+
+
 @strawberry.type
 class ActionResult:
     """Outcome of a console domain action: a success flag and a human message.
@@ -88,17 +92,21 @@ class ActionResult:
         names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
         no argument) surfaces at form level. Other exceptions and validation errors
         with only non-field messages leave the map empty. ``DomainError`` and
-        ``ValidationError`` codes are preserved when defined. ``summary`` is the
-        human banner either way; the raw exception text is never leaked into it.
+        ``ValidationError`` codes are preserved when defined. Explicit form-level
+        validation messages supply the banner; target preflights and errors without
+        a field map keep the generic summary without leaking diagnostics.
         """
 
         validation_errors = (
             cls.validation_error_map(error, camel_case_keys=camel_case_keys)
             if isinstance(error, ValidationError) else None
         )
+        message = summary
+        if validation_errors is not None and not isinstance(error, ActionTargetUnavailable):
+            message = "; ".join(validation_errors.get(NON_FIELD_ERRORS, ())) or summary
         return cls(
             ok=False,
-            message=summary,
+            message=message,
             code=getattr(error, "code", None) if isinstance(error, (DomainError, ValidationError)) else None,
             validation_errors=validation_errors,
         )
@@ -166,7 +174,7 @@ def action_guard(
 
     Runs the resolver body; a raised baseline domain error
     (:data:`BASELINE_ACTION_ERRORS`) — plus any addon-local ``errors`` — is mapped
-    through :meth:`ActionResult.from_error` with ``summary`` as the human banner, so
+    through :meth:`ActionResult.from_error` with ``summary`` as the fallback banner, so
     the body raises naturally and one owner projects the failure (a Django
     ``ValidationError`` carrying ``error_dict`` becomes the field-keyed in-band
     ``validation_errors`` map a typed-args form binds). Any other exception
@@ -221,7 +229,7 @@ def authorized_action_target(
     3. The resolved row must grant the per-row REBAC ``permission`` (e.g.
        ``"write"``, ``"write__status"``).
 
-    Not-found and denied raise the non-field ``ValidationError`` shape
+    Not-found and denied raise the non-field ``ActionTargetUnavailable`` shape
     :func:`action_guard` maps to an in-band :class:`ActionResult`: the verb's
     guard ``summary`` banners the toast while the specific reason rides
     ``validation_errors[NON_FIELD_ERRORS]``. The returned row stays bound to the
@@ -249,7 +257,7 @@ def authorized_permission_target(
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     scoped = read_scoped_queryset(model, user, action=permission)
-    instance = instance_for_id(model, id, queryset=scoped) if scoped is not None else None
+    instance = instance_for_id(model, id, queryset=scoped)
     return _require_action_permission(instance, model, id, permission)
 
 
@@ -262,9 +270,13 @@ def _require_action_permission(
     """Preserve the shared not-found and row-permission result contract."""
 
     if instance is None:
-        raise ValidationError({NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]})
+        raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
+            f"{model._meta.object_name} {public_id_value(id)!r} was not found.",
+        ]})
     if not instance.has_access(permission):
-        raise ValidationError({NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]})
+        raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
+            f"You are not allowed to modify this {model._meta.verbose_name}.",
+        ]})
     return cast(_RebacActionTarget, instance)
 
 

@@ -2,7 +2,7 @@ import * as React from "react";
 import { holdsPermission, type Row } from "@angee/metadata";
 import {
   ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow, RecordActionBar,
-  SectionHeading, Tag, avatarInitials, useActionForm, useRuntimeViewAs,
+  SectionHeading, Tag, actionOutcomeSubmitResult, avatarInitials, useActionForm, useRuntimeViewAs,
   type RecordActionDescriptor, type ResourceListProps,
 } from "@angee/ui";
 
@@ -72,9 +72,10 @@ export function RecordThreadStream({ heading, source, submitKey }: RecordThreadS
   const create = source.kind === "children" ? source.createAction : undefined;
   const canCreate = Boolean(create && (!create.permission || holdsPermission(create.record, create.permission)));
   const composer = source.kind === "children" ? source.createComposer : undefined;
-  const inlineCreate = Boolean(create && composer && create.args?.length === 1 &&
-    create.args[0]?.name === composer.bodyArg &&
-    (create.args[0].argKind === undefined || create.args[0].argKind === "scalar"));
+  const createArgs = Array.isArray(create?.args) ? create.args : undefined;
+  const inlineCreate = Boolean(create && composer && createArgs?.length === 1 &&
+    createArgs[0]?.name === composer.bodyArg &&
+    (createArgs[0].argKind === undefined || createArgs[0].argKind === "scalar"));
 
   return <section className="space-y-4">
     <SectionHeading label={heading.label} count={heading.counts} summary={heading.summary}
@@ -158,11 +159,19 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
   const [body, setBody] = React.useState("");
   const form = useActionForm<Record<string, string>>({
     fieldNames: [composer.bodyArg],
-    submit: async (values) => (await action.submit(values, { record: action.record ?? null, selectedIds: [] })) ?? null,
+    submit: async (values) => {
+      const result = await action.submit(values, { record: action.record ?? null, selectedIds: [] });
+      return result && "status" in result ? result : actionOutcomeSubmitResult(result);
+    },
     onSuccess: () => { setBody(""); onCreated?.(); },
   });
   const disabled = Boolean(action.disabled || form.submitting || preview.viewAs || preview.pending);
-  const submit = () => { if (body.trim() && !disabled) void form.run({ [composer.bodyArg]: body.trim() }); };
+  const submit = () => {
+    if (body.trim() && !disabled) {
+      form.form.setValue(composer.bodyArg, body.trim());
+      void form.run();
+    }
+  };
   return <StreamComposer value={body}
     onChange={(next) => { setBody(next); form.clearFieldError(composer.bodyArg); }}
     onSubmit={submit} disabled={disabled} ready={Boolean(body.trim())}

@@ -4,7 +4,7 @@ import { queryForColumns } from "./resource-query";
 
 import type {
   ResourceToolbarCustomFilterChip,
-  ResourceToolbarFilterField,
+  FilterClauseField,
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
 } from "../../toolbars";
@@ -55,8 +55,8 @@ export interface UseResourceViewToolbarInputsProps<TRow extends Row> {
   contributedGroupOptions?: readonly ResourceToolbarGroupOption[];
   filterOptions?: readonly ResourceToolbarFilterOption[];
   contributedFilterOptions?: readonly ResourceToolbarFilterOption[];
-  customFilterFields?: readonly ResourceToolbarFilterField[];
-  contributedCustomFilterFields?: readonly ResourceToolbarFilterField[];
+  customFilterFields?: readonly FilterClauseField[];
+  contributedCustomFilterFields?: readonly FilterClauseField[];
   textFilterField?: string | null;
   groupStack?: readonly ResourceViewGroup[];
 }
@@ -67,7 +67,7 @@ export interface ResourceViewToolbarInputState {
   customGroupOptions: readonly ResourceToolbarGroupOption[];
   groupingEnabled: boolean;
   filterOptions: readonly ResourceToolbarFilterOption[];
-  customFilterFields: readonly ResourceToolbarFilterField[];
+  customFilterFields: readonly FilterClauseField[];
   customFilterChips: readonly ResourceToolbarCustomFilterChip[];
   activeFilterIds: readonly string[];
   filterText: string;

@@ -26,7 +26,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from itertools import batched
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -39,29 +38,31 @@ from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
 from rebac import (
+    CheckItem,
     PermissionDenied,
     SubjectRef,
     current_actor,
     system_context,
+    to_object_ref,
     to_subject_ref,
 )
 from rebac.backends import backend
-from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
-from angee.base.fields import SqidField, StateField
+from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin
+from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin, canonical_record_model
 from angee.base.scoping import system_queryset
-from angee.integrate.models import Bridge
+from angee.base.serialization import strip_null_bytes
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -76,7 +77,6 @@ from angee.messaging.managers import (
     ThreadFollowerManager,
     ThreadManager,
     ThreadNotificationManager,
-    strip_null_bytes,
 )
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.messaging.webforms import WebformSpec, default_webform_schema
@@ -951,13 +951,11 @@ class ThreadedModelMixin(models.Model):
         return actor_user_id(to_subject_ref(user)) in self.thread_reader_ids((user,))
 
     def thread_reader_ids(self, accounts: Iterable[models.Model | SubjectRef]) -> set[Any]:
-        """Evaluate the audience against this record's native read scopes once.
+        """Return the accounts that hold this record's read permission.
 
-        Each EXISTS arm pins its account even under system-context fan-out. Only
-        recipient IDs selected by the record's complete permission are returned;
-        no relationship or visibility rule is reconstructed here. The native
-        evaluator scope shares schema reads across all arms. Fifty accounts per
-        statement bound SQL expression depth and size independently of the audience.
+        The permission backend decides the whole audience in one bulk check:
+        each item pins its account even under system-context fan-out, and no
+        relationship or visibility rule is reconstructed here.
         """
 
         subjects = (to_subject_ref(account) for account in accounts)
@@ -967,30 +965,15 @@ class ThreadedModelMixin(models.Model):
             return set()
         if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
             return set(account_subjects)
-        using = self._state.db or router.db_for_read(type(self), instance=self)
-        allowed: set[Any] = set()
-        with evaluator_scope():
-            for chunk in batched(account_subjects.items(), 50):
-                readers = models.Q(pk__in=[])
-                for account_id, account in chunk:
-                    predicate = backend().queryset_filter(
-                        model=type(self), subject=account,
-                        action=self.thread_read_access, using=using,
-                    )
-                    # The native predicate avoids a grants-all probe per account;
-                    # unsupported scopes retain the evaluator fallback.
-                    scope = (
-                        type(self)._base_manager.using(using).filter(predicate, pk=self.pk).order_by()
-                        if predicate is not None else
-                        type(self)._default_manager.using(using).with_actor(account)
-                        .with_action(self.thread_read_access).filter(pk=self.pk).order_by().scoped()
-                    )
-                    readers |= models.Q(pk=account_id) & models.Q(models.Exists(scope))
-                allowed.update(
-                    get_user_model()._base_manager.using(using)
-                    .filter(readers).values_list("pk", flat=True)
-                )
-        return allowed
+        resource = to_object_ref(self)
+        results = backend().check_bulk_permissions(
+            CheckItem(subject, self.thread_read_access, resource) for subject in account_subjects.values()
+        )
+        return {
+            account_id
+            for account_id, result in zip(account_subjects, results, strict=True)
+            if result.allowed
+        }
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
@@ -1052,19 +1035,17 @@ class Channel(Bridge):
     the ``messaging_integrate_*`` addons (``imap``, the chat bridges), and ``config``
     carries source settings. ``sync()`` fetches + parses, then maps each message onto
     the messaging managers; outbound tasks resolve the same backend and call its
-    ``deliver`` hook. Public feeds are not channel backends — ``posts.Feed`` owns the
-    public-content overlay.
+    ``deliver`` hook. Content sources may extend Channel while retaining their
+    own backend and overlay.
     """
 
     runtime = True
+    rebac_grantable = {"reader": "write"}
     extends = "integrate.Integration"
-    integration_create_mode = "CONNECT"
-    integration_kind_label = "Channel"
+    integration_create_mode = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
 
-    backend_class = ImplClassField(
-        base_class=ChannelBackend,
-        registry_setting="ANGEE_CHANNEL_BACKEND_CLASSES",
+    backend_class = ImplClassField(ChannelBackend,
         default="manual",
         create_only=True,
     )
@@ -1099,6 +1080,15 @@ class Channel(Bridge):
         """Exercise the selected backend's connection (the Integration test contract)."""
 
         return self.backend.test_connection()
+
+    def purge_blockers(self) -> list[models.Model]:
+        """Let model extensions contribute rows protecting this channel from purge.
+
+        The purge owner counts its large ingested subtree separately; extensions
+        return only retaining rows, whose names the preview scopes to its viewer.
+        Native FK protection remains the authoritative delete check.
+        """
+        return []
 
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
@@ -1267,7 +1257,7 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(SqidMixin, OwnerMixin, AngeeModel):
+class Thread(OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1312,9 +1302,9 @@ class Thread(SqidMixin, OwnerMixin, AngeeModel):
         PRIVATE = "private", "Private"
         RESTRICTED = "restricted", "Restricted"
 
-    sqid = SqidField(real_field_name="id", prefix="thr_", min_length=8)
+    sqid_prefix = "thr_"
     channel = models.ForeignKey(
-        "integrate.Integration",
+        "messaging.Channel",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -1432,7 +1422,7 @@ class Thread(SqidMixin, OwnerMixin, AngeeModel):
         )
 
 
-class ThreadAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
+class ThreadAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
     runtime = True
@@ -1488,7 +1478,6 @@ class FileSourceThreads(models.Model):
     """Messaging-owned reverse edges from a Storage File to source conversations."""
 
     extends = "storage.File"
-    runtime = False
     source_thread_attachments = GenericRelation(
         "messaging.ThreadAttachment",
         content_type_field="content_type",
@@ -1499,7 +1488,7 @@ class FileSourceThreads(models.Model):
         abstract = True
 
 
-class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
+class ThreadFollower(AuditMixin, AngeeDataModel):
     """A party's per-thread subscription row — subscription policy plus read receipt.
 
     The one row per ``(thread, party)``: it carries how the follower wants updates
@@ -1582,7 +1571,7 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
-class ActivityType(SqidMixin, AuditMixin, AngeeModel):
+class ActivityType(AuditMixin, AngeeDataModel):
     """Resource-declared exchange types; activity rows retain the stable key."""
 
     runtime = True
@@ -1600,7 +1589,7 @@ class ActivityType(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
+class ThreadActivity(AuditMixin, AngeeDataModel):
     """A scheduled activity attached to a model chatter thread."""
 
     runtime = True
@@ -1647,6 +1636,7 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         ordering = ("status", "due_date", "sqid")
+        verbose_name_plural = "thread activities"
         rebac_resource_type = "messaging/thread_activity"
         indexes = (
             models.Index(fields=("thread", "status", "due_date")),
@@ -1690,7 +1680,7 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
         return self.summary
 
 
-class MessageSubtype(SqidMixin, AuditMixin, AngeeModel):
+class MessageSubtype(AuditMixin, AngeeDataModel):
     """A typed chatter event category, mirroring Odoo's message subtypes.
 
     Subtypes classify system notifications and comments so followers can later
@@ -1797,7 +1787,7 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
+class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1858,7 +1848,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
         NOTIFICATION = "notification", "Notification"
         AUTO_COMMENT = "auto_comment", "Auto comment"
 
-    sqid = SqidField(real_field_name="id", prefix="msg_", min_length=8)
+    sqid_prefix = "msg_"
     thread = models.ForeignKey(
         "messaging.Thread",
         null=True,
@@ -1870,7 +1860,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
         db_index=False,
     )
     channel = models.ForeignKey(
-        "integrate.Integration",
+        "messaging.Channel",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -1962,6 +1952,23 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
             unverified_submitter_email=email if isinstance(email, str) and email else None,
         )
 
+    @classmethod
+    def has_tracking_values_expression(cls) -> models.Exists:
+        """Project immutable tracking existence independently of the reader's scope."""
+
+        tracking_model = cls._meta.get_field("tracking_values").related_model
+        return models.Exists(tracking_model.system_queryset().filter(message_id=models.OuterRef("pk")))
+
+    def has_tracking_values(self) -> bool:
+        """Use the row's SQL projection, or check authoritative tracking rows."""
+
+        projected = getattr(self, "_has_tracking_values", None)
+        if projected is not None:
+            return bool(projected)
+        return type(self)._base_manager.using(self._state.db).filter(
+            self.has_tracking_values_expression(), pk=self.pk,
+        ).exists()
+
     def content_edit_error(self) -> str | None:
         """Return why this message's body cannot be edited, or ``None`` if it can.
 
@@ -1978,7 +1985,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
             return "Only comment messages can be edited."
         if self.direction != self.Direction.INTERNAL:
             return "Only internally authored comments can be edited."
-        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
+        if self.has_tracking_values():
             return "Messages with tracking values cannot be edited."
         return None
 
@@ -1987,7 +1994,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
 
         if self.message_type != self.MessageKind.COMMENT:
             return "Only comment messages can be deleted."
-        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
+        if self.has_tracking_values():
             return "Messages with tracking values cannot be deleted."
         return None
 
@@ -2226,7 +2233,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
         return not self.thread.is_record_attached()
 
 
-class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
+class ThreadNotification(AuditMixin, AngeeDataModel):
     """A recipient's delivery ledger and acknowledgement of one inbox item.
 
     ``read_at`` records acknowledgement of this notification independently of
@@ -2335,7 +2342,7 @@ class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.user_id} notified for {self.message_id}"
 
 
-class TrackingValue(SqidMixin, AuditMixin, AngeeModel):
+class TrackingValue(AuditMixin, AngeeDataModel):
     """One tracked old/new field value attached to a chatter message."""
 
     runtime = True
@@ -2373,7 +2380,7 @@ class TrackingValue(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.field_label}: {self.old_display} -> {self.new_display}"
 
 
-class Fragment(SqidMixin, AuditMixin, AngeeModel):
+class Fragment(AuditMixin, AngeeDataModel):
     """A content-addressed text node shared across messages.
 
     Email threads re-quote the same paragraphs in every reply; a hashed shared row
@@ -2401,7 +2408,7 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
         CODE = "code", "Code"
         HEADER = "header", "Header"
 
-    sqid = SqidField(real_field_name="id", prefix="frg_", min_length=8)
+    sqid_prefix = "frg_"
     text = models.TextField()
     hash = models.CharField(max_length=64, unique=True)
     kind = StateField(choices_enum=FragmentKind, default=FragmentKind.PARAGRAPH)
@@ -2448,7 +2455,7 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
         return (self.text[:60] + "…") if len(self.text) > 60 else self.text
 
 
-class Part(SqidMixin, AuditMixin, AngeeModel):
+class Part(AuditMixin, AngeeDataModel):
     """One recursive body node of a message (the MIME/JMAP part shape, one model).
 
     ``type``/``role`` is a genuine discriminator, not MTI: a ``multipart/*`` is a
@@ -2481,7 +2488,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         SIGNATURE = "signature", "Signature"
         HEADER = "header", "Header"
 
-    sqid = SqidField(real_field_name="id", prefix="prt_", min_length=8)
+    sqid_prefix = "prt_"
     message = models.ForeignKey(
         "messaging.Message",
         on_delete=models.CASCADE,
@@ -2512,7 +2519,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="+",
+        related_name="message_parts",
     )
 
     objects = PartManager()
@@ -2537,7 +2544,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.type} ({self.role})"
 
 
-class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
+class MessageEdge(AuditMixin, AngeeDataModel):
     """One typed cross-message relation — the unified quote/reference graph.
 
     ``Message.parent`` stays the single-parent reply pointer and ``Thread`` is
@@ -2564,7 +2571,7 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
         CROSSPOST = "crosspost", "Crosspost"
         FORWARD = "forward", "Forward"
 
-    sqid = SqidField(real_field_name="id", prefix="mge_", min_length=8)
+    sqid_prefix = "mge_"
     src = models.ForeignKey(
         "messaging.Message",
         on_delete=models.CASCADE,
@@ -2609,7 +2616,7 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.src_id} -{self.kind}-> {self.dst_id}"
 
 
-class Participant(SqidMixin, AuditMixin, AngeeModel):
+class Participant(AuditMixin, AngeeDataModel):
     """A Handle-keyed membership of a thread/message — the queryable recipient row.
 
     The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
@@ -2626,7 +2633,7 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
         CC = "cc", "Cc"
         BCC = "bcc", "Bcc"
 
-    sqid = SqidField(real_field_name="id", prefix="ptp_", min_length=8)
+    sqid_prefix = "ptp_"
     thread = models.ForeignKey(
         "messaging.Thread",
         null=True,
@@ -2672,7 +2679,7 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.handle_id} ({self.role})"
 
 
-class Reaction(SqidMixin, AuditMixin, AngeeModel):
+class Reaction(AuditMixin, AngeeDataModel):
     """One attributed reaction to a message, keyed by the reactor's parties ``Handle``.
 
     This is the single per-actor reaction store: ``MessageManager.set_reaction``
@@ -2692,7 +2699,7 @@ class Reaction(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="rxn_", min_length=8)
+    sqid_prefix = "rxn_"
     message = models.ForeignKey(
         "messaging.Message",
         on_delete=models.CASCADE,
@@ -2748,12 +2755,12 @@ class Reaction(SqidMixin, AuditMixin, AngeeModel):
         return cleaned
 
 
-class MessageStar(SqidMixin, AuditMixin, AngeeModel):
+class MessageStar(AuditMixin, AngeeDataModel):
     """A user's Odoo-style star/favorite marker on a message."""
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="msr_", min_length=8)
+    sqid_prefix = "msr_"
     message = models.ForeignKey(
         "messaging.Message",
         on_delete=models.CASCADE,

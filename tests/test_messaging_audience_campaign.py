@@ -8,12 +8,11 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.messaging.models import NotificationPolicy, NotificationPreference
+from angee.messaging.testing.models import Message, MessageSubtype, Party, Person, ThreadFollower, ThreadNotification
+from angee.projects.testing.models import Project
+from angee.spaces.testing.models import Membership
 from tests.messaging_campaign import add_member, fanout, grant, make_user
 from tests.messaging_campaign import audience_record as audience_record
-from tests.messaging_models import Message, MessageSubtype, Party, ThreadFollower, ThreadNotification
-from tests.projects_models import Project
-from tests.spaces_models import Membership
-from tests.test_messaging import Person
 from tests.test_spaces import spaces_tables as spaces_tables
 
 
@@ -152,7 +151,10 @@ def test_project_manager_role_grants_read_and_follow_then_removes_both(audience_
     """The work owner composes the spaces roster and messaging follow atomically."""
 
     case = audience_record
-    with system_context(reason="test.audience.project_manager"):
+    with system_context(reason="test.audience.project_manager_team"):
+        case.team.owner = case.author
+        case.team.save(update_fields=("owner",))
+    with actor_context(case.author):
         seat = case.record.admit_manager(case.recipient)
         assert case.record.thread_reader_allowed(case.recipient)
         assert case.record.message_is_follower(user=case.recipient)
@@ -253,13 +255,14 @@ def test_system_creation_logs_a_note_without_an_author_follow(audience_record):
 
 
 @pytest.mark.parametrize("size", [1, 10])
-def test_roster_expansion_uses_one_query_at_team_size(audience_record, django_assert_num_queries, size):
+def test_roster_expansion_uses_one_audited_read_at_team_size(audience_record, django_assert_num_queries, size):
     case = audience_record
     with system_context(reason="test.audience.query-budget"):
         for index in range(size):
             party = Party.objects.create(display_name=f"Member {index}")
             Membership.objects.create(group=case.team, party=party, is_confirmed=True)
-    with django_assert_num_queries(1):
+    # One system-queryset audit INSERT and one roster SELECT at either size.
+    with django_assert_num_queries(2):
         members = list(case.team.thread_audience())
         assert len(members) == size
         assert all(member.notification_policy == NotificationPolicy.INBOX for member in members)

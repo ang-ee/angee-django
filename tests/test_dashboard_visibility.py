@@ -5,7 +5,9 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 
 from angee.dashboards.models import canonical_dashboard_snapshot, widget_visibility_answers
-from tests import projects_models  # noqa: F401 -- registers the concrete work.Queue and projects.Task
+from angee.projects.testing import (
+    models as projects_models,  # noqa: F401 -- registers the concrete work.Queue and projects.Task
+)
 
 
 @pytest.mark.parametrize("key", ["slug", "queue.slug"])
@@ -43,7 +45,9 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
 
 
 def test_declared_task_queue_scope_validates_in_a_widget_snapshot(monkeypatch):
-    monkeypatch.setattr("angee.dashboards.models.read_scoped_queryset", lambda _model, _actor: None)
+    monkeypatch.setattr(
+        "angee.dashboards.models.read_scoped_queryset", lambda model, _actor: model._base_manager.none(),
+    )
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,
         "columns": 12,

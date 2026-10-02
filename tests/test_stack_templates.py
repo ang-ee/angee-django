@@ -1393,9 +1393,11 @@ def test_dev_stack_chains_the_project_host_with_the_framework_slot() -> None:
     assert "ensure" not in manifest["_angee"]
 
     # The stack root's `templates` symlink resolves name-based template refs from
-    # the consolidated angee source cache.
+    # the framework source slot (the `framework_path` default). Copier emits the
+    # link verbatim, so it names that default rather than the source cache, whose
+    # location moves with `sources_home`.
     assert DEV_TEMPLATES_SYMLINK.is_symlink()
-    assert str(DEV_TEMPLATES_SYMLINK.readlink()) == "sources/angee/templates"
+    assert str(DEV_TEMPLATES_SYMLINK.readlink()) == manifest["framework_path"]["default"] + "/templates"
 
 
 def test_uv_caches_are_stack_owned() -> None:

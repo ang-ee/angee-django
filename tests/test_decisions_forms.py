@@ -2,23 +2,26 @@
 
 import json
 from datetime import date
+from enum import Enum
 from typing import Annotated, Literal
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field, WithJsonSchema
+from pydantic import ValidationError as PydanticValidationError
 
-from angee.decisions.contracts import DecisionRequest
+from angee.base.jsonschema import validation_issues
+from angee.decisions.contracts import DecisionFact, DecisionRequest
 from angee.decisions.forms import Action, Relation, RelationCandidate, compile_form, relation_candidates, validate_form
 from angee.decisions.states import Verdict
 
 
-class Complete(Action, value="complete", label="Complete", verdict=Verdict.COMPLETED):
+class Complete(Action, key="complete", label="Complete", verdict=Verdict.COMPLETED):
     note: str = Field(min_length=3)
 
 
-class Reject(Action, value="reject", label="Reject", verdict=Verdict.REJECTED):
+class Reject(Action, key="reject", label="Reject", verdict=Verdict.REJECTED):
     reason: str
 
 
@@ -75,7 +78,7 @@ def test_nested_local_references_and_readonly_row_values():
         key: str = Field(json_schema_extra={"readOnly": True})
         note: str
 
-    class Edit(Action, value="edit", label="Edit", verdict=Verdict.COMPLETED):
+    class Edit(Action, key="edit", label="Edit", verdict=Verdict.COMPLETED):
         lines: list[Line] = Field(min_length=2, max_length=2, json_schema_extra={"widget": "rows"})
 
     lines = [{"key": "a", "note": "first"}, {"key": "b", "note": "second"}]
@@ -89,8 +92,41 @@ def test_nested_local_references_and_readonly_row_values():
     assert "lines.1.key" in error.value.message_dict
 
 
+def test_model_names_and_docstrings_do_not_become_form_field_metadata():
+    class Line(BaseModel):
+        """Developer guidance for a line model."""
+
+        value: str
+
+    class Choice(str, Enum):
+        """Developer guidance for a choice type."""
+
+        READY = "ready"
+        PENDING = "pending"
+
+    class Edit(Action, key="edit", label="Edit", verdict=Verdict.COMPLETED):
+        """Developer guidance for an action."""
+
+        line: Line
+        source_id: str
+        choice: Choice
+        titled_choice: Choice = Field(title="Declared choice")
+        titled: Line = Field(title="Declared field title", description="Declared field help")
+
+    branch = compile_form([Edit])["oneOf"][0]
+    assert "title" not in branch and "description" not in branch
+    assert "title" not in branch["properties"]["line"]
+    assert "description" not in branch["properties"]["line"]
+    assert "title" not in branch["properties"]["source_id"]
+    assert "title" not in branch["properties"]["choice"]
+    assert "description" not in branch["properties"]["choice"]
+    assert branch["properties"]["titled_choice"]["title"] == "Declared choice"
+    assert branch["properties"]["titled"]["title"] == "Declared field title"
+    assert branch["properties"]["titled"]["description"] == "Declared field help"
+
+
 def test_declared_readonly_default_is_filled_when_omitted():
-    class Document(Action, value="document", label="Document", verdict=Verdict.COMPLETED):
+    class Document(Action, key="document", label="Document", verdict=Verdict.COMPLETED):
         revision: int = Field(default=3, json_schema_extra={"readOnly": True})
 
     schema = compile_form([Document])
@@ -99,24 +135,26 @@ def test_declared_readonly_default_is_filled_when_omitted():
 
 
 def test_relation_candidates_are_frozen_and_constrain_submissions():
-    class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
-        document: Annotated[str, Relation("notes.Document")]
+    class Select(Action, key="select", label="Select", verdict=Verdict.COMPLETED):
+        document: Annotated[str, Relation("auth.Permission")]
 
     schema = compile_form([Select], refine={"select": {"document": {"options": [
         {"value": "document-a", "label": "Document A"},
         {"value": "document-b", "label": "Document B"},
     ]}}})
     field = schema["oneOf"][0]["properties"]["document"]
-    assert field["relation"] == {"resource": "notes.Document", "permission": "read"}
+    assert field["relation"] == {"resource": "auth.Permission", "permission": "read"}
     assert field["enum"] == ["document-a", "document-b"]
-    validate_form(schema, "select", {"document": "document-a"})
+    branch = schema["oneOf"][0]
+    assert not validation_issues(branch, {"action": "select", "document": "document-a"})
+    assert "document" in validation_issues(branch, {"action": "select", "document": "document-c"})
     with pytest.raises(ValidationError) as error:
-        validate_form(schema, "select", {"document": "document-c"})
-    assert "document" in error.value.message_dict
+        validate_form(schema, "select", {"document": "document-a"})
+    assert error.value.message_dict == {"document": ["A relation value requires an actor."]}
 
 
 def test_date_formats_are_asserted_by_the_frozen_schema():
-    class Date(Action, value="date", label="Date", verdict=Verdict.COMPLETED):
+    class Date(Action, key="date", label="Date", verdict=Verdict.COMPLETED):
         written_on: date
 
     schema = compile_form([Date])
@@ -144,7 +182,7 @@ def test_invalid_runtime_refinements_fail_at_admission(initial, refine):
 
 
 def test_initial_cannot_replace_a_declared_constant():
-    class Fixed(Action, value="fixed", label="Fixed", verdict=Verdict.COMPLETED):
+    class Fixed(Action, key="fixed", label="Fixed", verdict=Verdict.COMPLETED):
         note: Literal["fixed"] = Field(json_schema_extra={"readOnly": True})
 
     with pytest.raises(ValidationError):
@@ -153,7 +191,7 @@ def test_initial_cannot_replace_a_declared_constant():
 
 @pytest.mark.parametrize("extra", [{"unknown": True}, {"format": "unknown-format"}])
 def test_unsupported_schema_declarations_fail_at_admission(extra):
-    class Unsupported(Action, value="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
+    class Unsupported(Action, key="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
         note: str = Field(json_schema_extra=extra)
 
     with pytest.raises(ImproperlyConfigured):
@@ -162,7 +200,7 @@ def test_unsupported_schema_declarations_fail_at_admission(extra):
 
 @pytest.mark.parametrize("reference", ["https://example.invalid/schema", "#/$defs/missing"])
 def test_unresolvable_references_fail_at_admission(reference):
-    class Unsupported(Action, value="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
+    class Unsupported(Action, key="unsupported", label="Unsupported", verdict=Verdict.COMPLETED):
         note: Annotated[str, WithJsonSchema({"$ref": reference})]
 
     with pytest.raises(ImproperlyConfigured):
@@ -173,7 +211,7 @@ def test_recursive_forms_fail_at_admission():
     class Tree(BaseModel):
         children: list["Tree"] = Field(default_factory=list)
 
-    class Recursive(Action, value="recursive", label="Recursive", verdict=Verdict.COMPLETED):
+    class Recursive(Action, key="recursive", label="Recursive", verdict=Verdict.COMPLETED):
         tree: Tree
 
     with pytest.raises(ImproperlyConfigured):
@@ -187,7 +225,7 @@ def test_duplicate_and_empty_actions_are_rejected():
 
 
 def test_nonfinite_values_are_not_json_form_values():
-    class Number(Action, value="number", label="Number", verdict=Verdict.COMPLETED):
+    class Number(Action, key="number", label="Number", verdict=Verdict.COMPLETED):
         number: float
 
     with pytest.raises(ValidationError):
@@ -198,7 +236,7 @@ def test_nested_declared_fields_are_closed():
     class Note(BaseModel):
         text: str
 
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         note: Note
 
     with pytest.raises(ValidationError) as error:
@@ -208,10 +246,10 @@ def test_nested_declared_fields_are_closed():
 
 def test_pending_verdict_and_reserved_action_field_are_rejected():
     with pytest.raises(ImproperlyConfigured):
-        class Pending(Action, value="pending", label="Pending", verdict=Verdict.PENDING):
+        class Pending(Action, key="pending", label="Pending", verdict=Verdict.PENDING):
             pass
 
-    class Reserved(Action, value="reserved", label="Reserved", verdict=Verdict.COMPLETED):
+    class Reserved(Action, key="reserved", label="Reserved", verdict=Verdict.COMPLETED):
         action: str
 
     with pytest.raises(ImproperlyConfigured):
@@ -227,7 +265,7 @@ def test_nested_discriminated_unions_are_not_a_supported_form_shape():
         kind: Literal["count"]
         count: int
 
-    class Nested(Action, value="nested", label="Nested", verdict=Verdict.COMPLETED):
+    class Nested(Action, key="nested", label="Nested", verdict=Verdict.COMPLETED):
         content: Annotated[Text | Count, Field(discriminator="kind")]
 
     with pytest.raises(ImproperlyConfigured):
@@ -235,7 +273,7 @@ def test_nested_discriminated_unions_are_not_a_supported_form_shape():
 
 
 def test_omitted_values_use_stored_initial_instead_of_current_class_default():
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         note: str = "class default"
 
     schema = compile_form([Write], initial={"write": {"note": "shown in the form"}})
@@ -252,7 +290,7 @@ def test_frozen_defaults_fill_nested_submitted_objects():
     class Note(BaseModel):
         text: str = "declared"
 
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         notes: list[Note]
 
     schema = compile_form([Write], initial={"write": {"notes": [{"text": "first"}, {"text": "second"}]}})
@@ -265,7 +303,7 @@ def test_stored_defaults_precede_required_checks_after_jsonb_key_reordering():
     class Note(BaseModel):
         text: str
 
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         note: str
         notes: list[Note]
 
@@ -291,7 +329,7 @@ def test_malformed_runtime_mapping_shapes_have_defined_errors(initial, refine):
 
 
 def test_invalid_declared_default_is_a_configuration_fault_even_with_runtime_values():
-    class Write(Action, value="write", label="Write", verdict=Verdict.COMPLETED):
+    class Write(Action, key="write", label="Write", verdict=Verdict.COMPLETED):
         count: int = Field(default="invalid")
         note: str
 
@@ -305,7 +343,7 @@ def test_invalid_declared_default_is_a_configuration_fault_even_with_runtime_val
     {"resource": "notes.Document", "unexpected": True},
 ])
 def test_relation_metadata_uses_the_base_contract_for_classes_and_runtime_refinements(relation):
-    class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
+    class Select(Action, key="select", label="Select", verdict=Verdict.COMPLETED):
         document: str = Field(json_schema_extra={"relation": relation})
 
     with pytest.raises(ImproperlyConfigured):
@@ -315,8 +353,8 @@ def test_relation_metadata_uses_the_base_contract_for_classes_and_runtime_refine
 
 
 def test_relation_candidate_projection_preserves_permissions_and_ignores_value_metadata():
-    class Select(Action, value="select", label="Select", verdict=Verdict.COMPLETED):
-        document: Annotated[str, Relation("notes.Document", permission="write")]
+    class Select(Action, key="select", label="Select", verdict=Verdict.COMPLETED):
+        document: Annotated[str, Relation("auth.Permission", permission="write")]
         metadata: dict
 
     schema = compile_form([Select], initial={"select": {
@@ -324,13 +362,14 @@ def test_relation_candidate_projection_preserves_permissions_and_ignores_value_m
         "metadata": {"relation": {"resource": "not.a_model"}, "enum": ["not-a-record"]},
     }}, refine={"select": {"document": {
         "options": [{"value": "document-a", "label": "A"}, {"value": "document-b", "label": "B"}],
-        "relation": {"resource": "notes.Document", "permission": "write", "filters": [
+        "relation": {"resource": "auth.Group", "permission": "write", "filters": [
             {"operator": "eq", "field": "state", "value": "ready"},
         ]},
     }}})
     assert relation_candidates(schema) == (
-        RelationCandidate("notes.Document", "write", ("document-a", "document-b")),
+        RelationCandidate("auth.Group", "write", ("document-a", "document-b")),
     )
+    assert schema["oneOf"][0]["properties"]["document"]["title"] == "Group"
     assert schema["oneOf"][0]["properties"]["document"]["relation"]["filters"] == [
         {"operator": "eq", "field": "state", "value": "ready"},
     ]
@@ -343,7 +382,7 @@ def test_relation_candidate_projection_preserves_permissions_and_ignores_value_m
     {"assignees": "person"}, {"assignees": 3}, {"actions": ()}, {"actions": (Action,)},
 ])
 def test_request_owns_seat_invariants(change):
-    with pytest.raises(ValidationError):
+    with pytest.raises(PydanticValidationError):
         DecisionRequest(**{"kind": "note", "subject": None, "assignees": (object(),), "actions": (Complete,), **change})
 
 
@@ -353,3 +392,16 @@ def test_request_owns_configured_attempt_limit(settings):
     assert request.attempt_limit == 5
     explicit = DecisionRequest(kind="note", subject=None, assignees=(object(),), actions=(Complete,), max_attempts=2)
     assert explicit.attempt_limit == 2
+
+
+def test_request_is_frozen():
+    request = DecisionRequest(kind="note", subject=None, assignees=(object(),), actions=(Complete,))
+    with pytest.raises(PydanticValidationError):
+        request.kind = "changed"
+
+
+def test_fact_uses_the_base_authority_vocabulary():
+    fact = DecisionFact(pointer="/note", label="Note", value="Reviewed", authority="source")
+    assert fact.model_dump(mode="json")["authority"] == "source"
+    with pytest.raises(PydanticValidationError):
+        DecisionFact(pointer="/note", label="Note", value="Reviewed", authority="invented")

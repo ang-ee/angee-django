@@ -12,16 +12,6 @@ depends_on = [
   "angee.work",
 ]
 
-[[migrations]]
-name = "need_single_target"
-app_label = "intake"
-module = "runtime_migrations.need_single_target"
-
-[[migrations]]
-name = "need_access_decision"
-app_label = "intake"
-module = "runtime_migrations.need_access_decision"
-
 [resources]
 master = []
 demo = [

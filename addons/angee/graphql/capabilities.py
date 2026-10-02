@@ -92,11 +92,7 @@ class _PermissionsExtension(FieldExtension):
 def _permission_annotation(model: type[models.Model], name: str, info: Any = None) -> Any:
     del info
     queryset = read_scoped_queryset(model, current_actor(), action=name)
-    return (
-        models.Value(False)
-        if queryset is None
-        else models.Exists(aggregate_scoped_queryset(queryset).filter(pk=models.OuterRef("pk")))
-    )
+    return models.Exists(aggregate_scoped_queryset(queryset).filter(pk=models.OuterRef("pk")))
 
 
 def permissions_field(names: Iterable[str]) -> Any:
