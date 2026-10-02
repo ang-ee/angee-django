@@ -209,6 +209,20 @@ class PageResult:
     reset: bool = False
     progress: str = ""
 
+    def check_continuation(self, *, previous: str | None = None, resets: int = 0) -> tuple[str, int]:
+        """Reject stalled pages and repeated baseline resets in one partition drain.
+
+        The digest includes replica hashes and generation as well as the cursor:
+        a changed observation can make progress without moving its cursor.
+        Callers retain only the returned digest and reset count between pages.
+        """
+        resets += int(self.reset)
+        if not self.reset and not self.exhausted and self.progress == previous:
+            raise AdapterContractError("The stream repeated a page without advancing its cursor.")
+        if resets > 1:
+            raise RuntimeError("The remote rejected a fresh baseline cursor.")
+        return self.progress, resets
+
 
 def _manager(name: str) -> Any:
     return apps.get_model("integrate", name).objects
@@ -360,7 +374,7 @@ def _extract_page(adapter: BridgeImpl, stream: Any, page_bound: int, *, deadline
 def advance_stream(
     stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None
 ) -> PageResult:
-    """Extract and commit one page; compose from a STANDARD workflow stage.
+    """Extract and commit one page; compose from an IO workflow step.
 
     Pass the returned stream to the next invocation: expired cursors create a
     BASELINE row. Caller owns adapter.close(). Never call inside an enclosing
@@ -925,12 +939,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
         result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
         stream, exhausted = result.stream, result.exhausted
         landed += result.count
-        resets += int(result.reset)
-        if not result.reset and not exhausted and result.progress == previous:
-            raise AdapterContractError("The stream repeated a page without advancing its cursor.")
-        previous = result.progress
-        if resets > 1:
-            raise RuntimeError("The remote rejected a fresh baseline cursor.")
+        previous, resets = result.check_continuation(previous=previous, resets=resets)
         _report(
             bridge,
             "Applied stream page",
