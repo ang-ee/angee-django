@@ -16,7 +16,7 @@ from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
-from angee.base.impl import ImplBase, resolve_impl_class
+from angee.base.impl import ImplBase, model_config_form_spec, resolve_impl_class
 from angee.base.jsonschema import check_schema, validate, validator
 from angee.base.serialization import strip_null_bytes
 from angee.base.validation import get_type_adapter
@@ -248,7 +248,6 @@ class Step[I, O, C](ImplBase):
     """
 
     registry_setting = "ANGEE_WORKFLOW_STEP_CLASSES"
-    check_config_form_spec = False  # Authored step config is validated by the workflow contract.
 
     input_model: ClassVar[Any] = None
     output_model: ClassVar[Any] = None
@@ -314,6 +313,22 @@ class Step[I, O, C](ImplBase):
     def outcomes_for(cls, config: Any) -> dict[Outcome, str]:
         """Return this step's outcomes for its parsed config."""
         return cls.outcomes
+
+    @classmethod
+    def config_form_spec(cls) -> dict[str, Any] | None:
+        """Render typed step config with JSON controls for its unstructured leaves."""
+        return None if cls.config_model is None else model_config_form_spec(
+            cls.config_model, owner=cls.__name__, json_fields=True,
+        )
+
+    @classmethod
+    def authoring_outcomes(cls, config: Any) -> dict[Outcome, str]:
+        """Project ports for a draft, retaining static ports while config is incomplete."""
+        try:
+            parsed = cls.parse_config(config)
+        except ValidationError:
+            return {**cls.outcomes, ERROR_OUTCOME: "Error"}
+        return cls.available_outcomes(parsed, validate=True)
 
     @classmethod
     def required_outcomes(cls, config: Any) -> set[Outcome]:

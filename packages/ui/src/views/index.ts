@@ -111,6 +111,7 @@ export { useWatch, type ResolverResult } from "react-hook-form";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   useActionForm,
+  useActionFormValues,
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
@@ -118,6 +119,7 @@ export { ActionFormProvider } from "./form/ActionFormProvider";
 export {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
+  wireFormSubmitResult,
   invalidFormSubmit,
   formSubmitError,
   savedFormSubmitResult,

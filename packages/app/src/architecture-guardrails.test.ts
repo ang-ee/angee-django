@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -123,6 +123,8 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("DescriptorFieldList", "@angee/ui", "src/views/form/DescriptorFieldList.tsx"),
   frameworkCriticalExport("ActionFormProvider", "@angee/ui", "src/views/form/ActionFormProvider.tsx"),
   frameworkCriticalExport("applyFormErrors", "@angee/ui", "src/views/form/validation-errors.ts"),
+  frameworkCriticalExport("wireFormSubmitResult", "@angee/ui", "src/views/form/validation-errors.ts"),
+  frameworkCriticalExport("useActionFormValues", "@angee/ui", "src/views/form/use-action-form.ts"),
   frameworkCriticalExport("jsonSchemaActionArgs", "@angee/ui", "src/views/form/json-schema.ts"),
   frameworkCriticalExport("parseFormSpec", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("isCompositeFieldDescriptor", "@angee/ui", "src/views/form/form-view-model.ts"),
@@ -248,6 +250,20 @@ describe("React architecture guardrails", () => {
       type Shape = UsedType;
     `, ts.ScriptTarget.Latest, true);
     expect([...consumedIdentifiers(source)].sort()).toEqual(["Renamed", "UsedType"]);
+  });
+
+  test("source scans prune generated directories before following dependency symlinks", () => {
+    const scratch = join(PACKAGES_ROOT, "app", "test-results");
+    mkdirSync(scratch, { recursive: true });
+    const root = mkdtempSync(join(scratch, "guardrail-"));
+    try {
+      writeFileSync(join(root, "source.ts"), "export const value = 1;");
+      for (const name of ["node_modules", "runtime", "dist", "coverage"]) {
+        mkdirSync(join(root, name));
+        symlinkSync(join(root, "absent"), join(root, name, "dependency"));
+      }
+      expect(sourceFiles(root)).toEqual([join(root, "source.ts")]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("JSON Schema validation is published only through its opt-in subpath", () => {
@@ -760,14 +776,9 @@ function sourceFiles(root: string): string[] {
   if (!existsSync(root)) return [];
   const files: string[] = [];
   const visit = (entry: string): void => {
+    if (["node_modules", "runtime", "dist", "coverage"].includes(basename(entry))) return;
     const stat = statSync(entry);
     if (stat.isDirectory()) {
-      if (
-        entry.includes("/node_modules/")
-        || entry.includes("/runtime/")
-        || entry.includes("/dist/")
-        || entry.includes("/coverage/")
-      ) return;
       for (const child of readdirSync(entry)) visit(join(entry, child));
       return;
     }

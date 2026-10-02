@@ -30,3 +30,35 @@ export const DecisionWaitingRunsDocument = graphql(`
     }
   }
 `);
+
+
+export const WorkflowStudioDocument = graphql(`
+  query WorkflowStudio($id: String!, $target: ID!) {
+    workflow_by_pk(id: $id) {
+      id permissions draft draft_revision layout draft_outcomes published { number }
+    }
+    workflow_step_choices(id: $target) {
+      key label icon category defaults config_schema internal outcomes
+    }
+  }
+`);
+
+export const WorkflowStepPortsDocument = graphql(`
+  query WorkflowStepPorts($id: ID!, $configurations: [WorkflowStepConfiguration!]!) {
+    workflow_step_ports(id: $id, configurations: $configurations) { node outcomes }
+  }
+`);
+
+export const SaveWorkflowDraftDocument = graphql(`
+  mutation SaveWorkflowDraft($id: ID!, $draft: JSON!, $layout: JSON!, $revision: Int!) {
+    save_workflow_draft(id: $id, draft: $draft, layout: $layout, expected_revision: $revision) {
+      status issues message data { revision diagnostics }
+    }
+  }
+`);
+
+export const PublishWorkflowDocument = graphql(`
+  mutation PublishWorkflow($id: ID!) {
+    publish_workflow(id: $id) { status issues message data { number dependents } }
+  }
+`);

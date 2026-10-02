@@ -13,6 +13,7 @@ import { triggerFixture, triggerResourceFixture } from "./trigger-testing";
 export default { title: "Workflows/Catalogue", parameters: { layout: "fullscreen" }, excludeStories: ["CatalogueStory"] };
 export const Catalogue = { render: () => <CatalogueStory list /> };
 export const Workflow = { render: () => <CatalogueStory /> };
+export const Author = { render: () => <CatalogueStory writer /> };
 export const Unavailable = { render: () => <CatalogueStory unavailable /> };
 export const QueryError = { render: () => <CatalogueStory queryError /> };
 export const RecordActivity = { render: () => <CatalogueStory record /> };
@@ -36,8 +37,8 @@ const runtime = {
   },
 };
 
-export function CatalogueStory({ list = false, unavailable = false, queryError = false, record = false, onRequest }: {
-  list?: boolean; unavailable?: boolean; queryError?: boolean; record?: boolean;
+export function CatalogueStory({ list = false, unavailable = false, queryError = false, record = false, writer = false, onRequest }: {
+  list?: boolean; unavailable?: boolean; queryError?: boolean; record?: boolean; writer?: boolean;
   onRequest?: (request: v.InferOutput<typeof RequestSchema>) => void;
 }) {
   const schemas = useMemo(() => {
@@ -45,9 +46,15 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
       const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);
       const { query } = request;
+      if (query.includes("workflow_step_ports")) return jsonResponse({ data: { workflow_step_ports: [{ node: "entry", outcomes: { done: "Done", error: "Error" } }] } });
+      if (query.includes("workflow_step_choices")) return jsonResponse({ data: {
+        workflow_by_pk: { ...workflowFixture, permissions: ["write"], draft_revision: 1, layout: { entry: [80, 60] },
+          draft: { nodes: { entry: { step: "echo", label: "Entry" } } }, draft_outcomes: { entry: { done: "Done" } } },
+        workflow_step_choices: [{ key: "echo", label: "Echo", icon: "", category: "", defaults: {}, config_schema: null, internal: false, outcomes: { done: "Done", error: "Error" } }],
+      } });
       if (query.includes("workflow_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "Could not read this workflow." }] })
-        : jsonResponse({ data: { workflow_by_pk: unavailable ? null : workflowFixture } });
+        : jsonResponse({ data: { workflow_by_pk: unavailable ? null : { ...workflowFixture, permissions: writer ? ["write"] : [] } } });
       if (query.includes("workflowversion")) return jsonResponse({ data: {
         workflowversion: [{ id: "wfv_review", number: 2, created_at: "2026-09-29T09:00:00Z", published_by: "usr_operator", content_hash: "retained_hash" }],
         workflowversion_aggregate: { aggregate: { count: 1 } },
@@ -65,7 +72,7 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
       stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
       triggerResourceFixture,
     ] } } } };
-  }, [unavailable, queryError, onRequest]);
+  }, [unavailable, queryError, onRequest, writer]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows"
     initialEntry={list ? "/workflows" : "/workflows/wfl_review"} runtime={runtime} resourceName="workflows.Workflow" resourceLabel="Workflows" operationDocuments={documents}>
     {record ? workflowsChatter.render?.({ pathname: "/notes/nte_7", params: { id: "nte_7" },

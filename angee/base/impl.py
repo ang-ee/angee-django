@@ -221,8 +221,9 @@ def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
 class _ConfigFormSpecProjector:
     """Project bounded FormSpec shapes, resolving root-local refs through referencing."""
 
-    def __init__(self, model: type[BaseModel], *, owner: str) -> None:
+    def __init__(self, model: type[BaseModel], *, owner: str, json_fields: bool = False) -> None:
         self.owner = owner
+        self.json_fields = json_fields
         _validate_config_aliases(model, owner=owner)
         schema = model.model_json_schema(by_alias=True)
         if not isinstance(schema.get("$defs", {}), dict):
@@ -241,7 +242,17 @@ class _ConfigFormSpecProjector:
     def _project(self, schema: Any, *, path: str, refs: tuple[str, ...]) -> dict[str, Any]:
         if not isinstance(schema, dict):
             self._unsupported(path, "non-object schema")
-        if schema.get("widget") == "json":
+        schema_type = schema.get("type")
+        unstructured = (
+            schema_type == "object" and "properties" not in schema
+            or not schema and path != "config"
+            or schema_type == "number" and ("exclusiveMinimum" in schema or "exclusiveMaximum" in schema)
+            or schema.get("format") not in (None, "date", "date-time")
+            or "anyOf" in schema and (len(schema["anyOf"]) != 2 or {"type": "null"} not in schema["anyOf"])
+            or "oneOf" in schema
+            or "$ref" in schema and schema["$ref"] in refs
+        )
+        if schema.get("widget") == "json" or self.json_fields and unstructured:
             schema_type = schema.get("type")
             return self._metadata(
                 {"type": schema_type if schema_type in {"object", "array"} else "any", "widget": "json"},
@@ -443,14 +454,17 @@ def _validate_config_aliases(
             _validate_config_aliases(nested, owner=owner, path=field_path, seen=seen | {model})
 
 
-def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, Any]:
+def model_config_form_spec(model: type[BaseModel], *, owner: str, json_fields: bool = False) -> dict[str, Any]:
     """Project a Pydantic model through the shared bounded FormSpec owner.
 
     Declared properties become structured fields. Extra root properties are not
     projected; callers that allow them must retain their existing raw JSON owner.
+    ``json_fields`` renders unstructured mappings, unions, recursive values and
+    unsupported scalar formats through the existing JSON widget. Typed parsing
+    remains the validation owner; bounded objects still expose structured fields.
     """
 
-    return _ConfigFormSpecProjector(model, owner=owner).form_spec()
+    return _ConfigFormSpecProjector(model, owner=owner, json_fields=json_fields).form_spec()
 
 
 class ImplBase:

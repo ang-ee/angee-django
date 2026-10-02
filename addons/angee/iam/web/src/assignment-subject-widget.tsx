@@ -1,4 +1,4 @@
-import { Chip, RemovableChip, Select, textRoleVariants, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
+import { Chip, RemovableChip, Select, textRoleVariants, type FormSpecFieldDescriptor, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import { useAssignmentSubjects } from "./assignment-subjects";
@@ -12,7 +12,8 @@ function AssignmentSubjectsEdit({
   onCommit,
   controlRef,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
-  const subjects = useAssignmentSubjects();
+  const item = (field as { itemTemplate?: FormSpecFieldDescriptor } | undefined)?.itemTemplate;
+  const subjects = useAssignmentSubjects({ resource: item?.relation?.resource });
   const t = useIamT();
   const selected = normaliseSubjects(value);
   const labels = new Map(subjects.options.map((option) => [option.value, option.label]));

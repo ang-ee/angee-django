@@ -2679,7 +2679,9 @@ describe("FormView", () => {
         overviewTab={{ label: "Settings", position: "last" }}
         recordExtras={() => <p>Related records</p>}
         recordTabs={[
-          { id: "editor", label: "Editor", keepMounted: true, render: () => <button type="button">Editor action</button> },
+          { id: "editor", label: "Editor", keepMounted: true, render: ({ active }) => <>
+            <button type="button">Editor action</button><output data-testid="retained-panel-active">{String(active)}</output>
+          </> },
           { id: "runs", label: "Runs", render: () => <p>Runs panel</p> },
         ]}
       />,
@@ -2688,6 +2690,7 @@ describe("FormView", () => {
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Editor", "Runs", "Settings"]);
     expect(screen.getByRole("button", { name: "Editor action" })).toBeTruthy();
+    expect(screen.getByTestId("retained-panel-active").textContent).toBe("true");
     expect(await screen.findByText("Active")).toBeTruthy();
     expect(screen.queryByText("ACTIVE")).toBeNull();
     expect(screen.queryByLabelText("Reminder")).toBeNull();
@@ -2698,6 +2701,7 @@ describe("FormView", () => {
     expect(await screen.findByLabelText("Reminder")).toBeTruthy();
     expect(screen.getByText("Related records")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Editor action" })).toBeNull();
+    expect(screen.getByTestId("retained-panel-active").textContent).toBe("false");
   });
 
   test("workspace record panels keep full-height content beside one rail", async () => {

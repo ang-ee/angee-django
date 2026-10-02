@@ -51,5 +51,10 @@ describe("assignment subjects", () => {
         id: "igr_finance",
       },
     ]);
+    expect(assignmentSubjectOptions(data, { users: "Users", groups: "Groups" }, "iam.User").map((option) => option.value))
+      .toEqual(["auth/user:42"]);
+    expect(assignmentSubjectOptions(data, { users: "Users", groups: "Groups" }, "iam.Group").map((option) => option.value))
+      .toEqual(["auth/group:7#member"]);
+    expect(assignmentSubjectOptions(data, { users: "Users", groups: "Groups" }, "unknown.Model")).toEqual([]);
   });
 });

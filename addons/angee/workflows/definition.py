@@ -362,7 +362,13 @@ class Definition(BaseModel):
             try:
                 config = node.parsed_config
             except ValidationError as error:
-                issues.append(Issue(node=key, path=[*path, "config"], code="config", message=str(error)))
+                if hasattr(error, "message_dict"):
+                    for field, messages in error.message_dict.items():
+                        issues.extend(Issue(
+                            node=key, path=[*path, *field.split(".")], code="config", message=message,
+                        ) for message in messages)
+                else:
+                    issues.append(Issue(node=key, path=[*path, "config"], code="config", message=str(error)))
                 continue
             try:
                 outcomes = step.available_outcomes(config, validate=True)

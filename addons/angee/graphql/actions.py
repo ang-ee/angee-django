@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from enum import Enum
 from functools import wraps
-from typing import ParamSpec, TypeVar, cast
+from typing import Generic, ParamSpec, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
@@ -103,7 +104,7 @@ class ActionResult:
         )
         message = summary
         if validation_errors is not None and not isinstance(error, ActionTargetUnavailable):
-            message = "; ".join(validation_errors.get(NON_FIELD_ERRORS, ())) or summary
+            message = "; ".join(cast(dict[str, list[str]], validation_errors).get(NON_FIELD_ERRORS, ())) or summary
         return cls(
             ok=False,
             message=message,
@@ -336,3 +337,29 @@ def action_target(
     )
     with system_context(reason=reason):
         yield target
+
+
+@strawberry.enum
+class FormSubmitStatus(Enum):
+    """Transport vocabulary for the shared explicit form submission contract."""
+
+    OK = "ok"
+    INVALID = "invalid"
+    CONFLICT = "conflict"
+
+
+_SubmitData = TypeVar("_SubmitData")
+
+
+@strawberry.type
+class FormSubmitResult(Generic[_SubmitData]):
+    """A typed acknowledgement, located validation issues, or a stale revision.
+
+    ``issues`` uses the shared fieldErrors/formErrors shape. Successful drafts
+    may carry nonblocking diagnostics in their typed data acknowledgement.
+    """
+
+    status: FormSubmitStatus
+    data: _SubmitData | None = None
+    issues: JSON | None = None
+    message: str = ""

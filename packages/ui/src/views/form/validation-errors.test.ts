@@ -9,6 +9,7 @@ import { fieldErrorMessages } from "./form-view-model";
 
 import {
   actionFormSubmitResult,
+  wireFormSubmitResult,
   actionOutcomeSubmitResult,
   invalidFormSubmit,
   formSubmitError,
@@ -321,4 +322,14 @@ test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" 
     }
   }).toThrow(/FormSubmitResult contract/);
   expect(result.current.getFieldState("root.server").error).toBeUndefined();
+});
+
+
+test("adapts typed wire acknowledgements, issues and conflicts without dropping field paths", () => {
+  expect(wireFormSubmitResult({ status: "OK", data: { revision: 2 } })).toEqual({ status: "ok", data: { revision: 2 } });
+  expect(wireFormSubmitResult({ status: "CONFLICT", data: { revision: 3 }, message: "Changed" })).toEqual({ status: "conflict", message: "Changed" });
+  expect(wireFormSubmitResult({ status: "INVALID", issues: { fieldErrors: { "entries.0.config.name": ["Required"] }, formErrors: [] } }))
+    .toEqual({ status: "invalid", issues: { fieldErrors: { "entries.0.config.name": ["Required"] }, formErrors: [] } });
+  expect(() => wireFormSubmitResult({ status: "OK", data: null })).toThrow(/FormSubmitResult/);
+  expect(() => wireFormSubmitResult({ status: "INVALID", issues: { fieldErrors: { name: [2] }, formErrors: [] } })).toThrow(/FormSubmitResult/);
 });

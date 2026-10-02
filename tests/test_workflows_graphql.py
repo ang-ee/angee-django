@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
+from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.scoping import system_queryset
@@ -18,7 +19,7 @@ from angee.workflows.runner import runner
 from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
+from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data, vault_for
 from tests.workflow_steps import Value, document
 
@@ -68,12 +69,13 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         "cancel_workflow_run", "reprocess_workflow_run", "retry_step", "retry_step_accepting_duplicate",
         "enable_workflow_trigger", "disable_workflow_trigger", "revoke_workflow_trigger_grant",
         "insert_trigger_one", "update_trigger_by_pk", "delete_trigger_by_pk",
+        "save_workflow_draft", "publish_workflow",
     }
     for name in ("workflow", "workflowversion", "workflowrun", "workflowrunevidence",
                  "steprun", "stepattempt", "stepartifact"):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
-    assert "draft" not in schema._schema.get_type("WorkflowType").fields
-    assert "layout" not in schema._schema.get_type("WorkflowType").fields
+    assert "draft" in schema._schema.get_type("WorkflowType").fields
+    assert "layout" in schema._schema.get_type("WorkflowType").fields
     for type_name, pair, obsolete in (
         ("WorkflowRunType", {"subject_model", "subject_id"}, set()),
         ("StepArtifactType", {"record_model", "record_id"}, {"model_label"}),
@@ -519,3 +521,107 @@ def test_step_rows_follow_graph_order_even_when_database_order_differs(schema, c
         }""", user=actor))["workflowrun"][0]
         assert [row["node_key"] for row in data["step_runs"]] == expected
         assert (data["version"] is None) is (actor == operator)
+
+
+def test_studio_redacts_authoring_from_readers_and_batches_writer_capabilities(schema, callers):
+    """A reader sees workflow identity but neither drafts nor their revision/layout."""
+    admin, editor, reader = callers
+    workflow = load_workflow(document("entry"), actor=admin)
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    workflow.with_actor(admin).grant_record_access("viewer", reader)
+    query = "{ workflow { id permissions draft draft_revision layout draft_outcomes } }"
+    hidden = result_data(execute_schema(schema, query, user=reader))["workflow"][0]
+    assert hidden == {"id": workflow.sqid, "permissions": [], "draft": None,
+                      "draft_revision": None, "layout": None, "draft_outcomes": None}
+    with CaptureQueriesContext(connection) as one:
+        visible = result_data(execute_schema(schema, query, user=editor))["workflow"][0]
+    assert visible["permissions"] == ["write"]
+    assert visible["draft"] == document("entry")
+    assert visible["draft_outcomes"] == {"entry": {"done": "Done", "error": "Error"}}
+    second = load_workflow(document("entry"), key="second_studio", actor=admin)
+    second.with_actor(admin).grant_record_access("editor", editor)
+    with CaptureQueriesContext(connection) as many:
+        assert len(result_data(execute_schema(schema, query, user=editor))["workflow"]) == 2
+    assert len(many) == len(one)
+
+
+def test_studio_save_conflict_preserves_draft_and_publish_numbers(schema, callers):
+    """Explicit writes retain draft edits, layout and monotonically numbered versions."""
+    admin, editor, reader = callers
+    workflow = load_workflow(document("entry"), actor=admin)
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    workflow.with_actor(admin).grant_record_access("viewer", reader)
+    revision = system_queryset(Workflow).get(pk=workflow.pk).draft_revision
+    draft = document("renamed")
+    draft["nodes"]["renamed"]["label"] = "Changed entry"
+    query = """mutation($id: ID!, $draft: JSON!, $layout: JSON!, $revision: Int!) {
+      save_workflow_draft(id: $id, draft: $draft, layout: $layout, expected_revision: $revision) {
+        status issues message data { revision diagnostics }
+      }
+    }"""
+    variables = {"id": workflow.sqid, "draft": draft, "layout": {"renamed": [120, 80]}, "revision": revision}
+    denied = execute_schema(schema, query, variables, user=reader)
+    assert denied.errors
+    assert system_queryset(Workflow).get(pk=workflow.pk).draft_revision == revision
+    saved = result_data(execute_schema(schema, query, variables, user=editor))["save_workflow_draft"]
+    assert saved["status"] == "OK"
+    assert saved["data"] == {"revision": revision + 1, "diagnostics": []}
+    variables["draft"] = document("other")
+    conflict = result_data(execute_schema(schema, query, variables, user=editor))["save_workflow_draft"]
+    assert conflict["status"] == "CONFLICT"
+    assert conflict["data"]["revision"] == revision + 1
+    persisted = system_queryset(Workflow).get(pk=workflow.pk)
+    assert persisted.draft == draft
+    assert persisted.layout == {"renamed": [120, 80]}
+    publish = "mutation($id: ID!) { publish_workflow(id: $id) { status issues data { number dependents } } }"
+    published = result_data(execute_schema(schema, publish, {"id": workflow.sqid}, user=editor))["publish_workflow"]
+    assert published == {"status": "OK", "issues": None, "data": {"number": 2, "dependents": []}}
+    unchanged = result_data(execute_schema(schema, publish, {"id": workflow.sqid}, user=editor))
+    assert unchanged["publish_workflow"]["data"]["number"] == 2
+
+
+def test_studio_projects_registered_schema_and_dynamic_ports_with_located_issues(schema, callers, register_step):
+    """One step declaration owns config fields, configured ports and internal metadata."""
+    class ChoiceConfig(BaseModel):
+        minimum: int = Field(default=1, ge=1)
+        outcome: str = "approved"
+
+    class ConfiguredStep(Step[Value, Value, ChoiceConfig]):
+        key = "configured_studio"
+        internal = True
+
+        @classmethod
+        def outcomes_for(cls, config):
+            return {config.outcome: "Selected outcome"}
+
+    register_step(ConfiguredStep)
+    admin, editor, reader = callers
+    workflow = load_workflow(document("entry"), actor=admin)
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    workflow.with_actor(admin).grant_record_access("viewer", reader)
+    query = """query($id: ID!, $configuration: [WorkflowStepConfiguration!]!) {
+      workflow_step_choices(id: $id) { key internal config_schema }
+      workflow_step_ports(id: $id, configurations: $configuration) { node outcomes }
+    }"""
+    variables = {"id": workflow.sqid, "configuration": [{"node": "client-entry", "step": ConfiguredStep.key,
+                                                         "config": {"outcome": "accepted"}}]}
+    assert execute_schema(schema, query, variables, user=reader).errors
+    projected = result_data(execute_schema(schema, query, variables, user=editor))
+    choice = next(item for item in projected["workflow_step_choices"] if item["key"] == ConfiguredStep.key)
+    assert choice["internal"] is True
+    assert choice["config_schema"]["properties"]["minimum"]["minimum"] == 1
+    assert projected["workflow_step_ports"] == [{"node": "client-entry", "outcomes": {
+        "accepted": "Selected outcome", "error": "Error",
+    }}]
+    revision = system_queryset(Workflow).get(pk=workflow.pk).draft_revision
+    draft = document("entry", step=ConfiguredStep.key)
+    draft["nodes"]["entry"]["config"] = {"minimum": 0}
+    saved = Workflow.objects.save_draft(workflow, draft=draft, expected_revision=revision, actor=editor)
+    assert saved.status == "saved"
+    assert any(issue.path == ["nodes", "entry", "config", "minimum"] for issue in saved.issues)
+    published = result_data(execute_schema(schema,
+        "mutation($id: ID!) { publish_workflow(id: $id) { status issues } }",
+        {"id": workflow.sqid}, user=editor,
+    ))["publish_workflow"]
+    assert published["status"] == "INVALID"
+    assert "nodes.entry.config.minimum" in published["issues"]["fieldErrors"]

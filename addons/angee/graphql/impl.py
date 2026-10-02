@@ -11,6 +11,7 @@ from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
 from angee.base.impl import ImplChoice as BaseImplChoice
+from angee.base.impl import impl_choices as registry_choices
 from angee.base.models import AngeeModel
 
 
@@ -26,14 +27,19 @@ class ImplChoice:
     config_schema: JSON | None
 
 
-def impl_choices(model: str, field: str) -> list[ImplChoice]:
-    """Return choice metadata for ``model.field`` when it is an ``ImplClassField``.
+def impl_choices(model: str | type[object], field: str | None = None) -> list[ImplChoice]:
+    """Return choices for an ImplBase registry or ``model.field`` ImplClassField.
 
     The reusable resolver behind the impl-picker query. The framework stays
     auth-agnostic; the query owner authorizes administrators or the model's
-    explicit ``can_read_impl_choices`` policy before calling it.
+    explicit ``can_read_impl_choices`` policy before calling it. Rowless callers
+    authorize through their own record before requesting registry metadata.
     """
 
+    if isinstance(model, type):
+        return [_project_choice(choice) for choice in registry_choices(model)]
+    if field is None:
+        raise ImproperlyConfigured("A model implementation choice requires a field.")
     django_model = _model_for_label(model)
     field_name = _field_name(field)
     try:

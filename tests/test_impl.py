@@ -1164,3 +1164,23 @@ def test_materialize_fk_default_requires_declared_slug() -> None:
 
     with pytest.raises(FieldDoesNotExist):
         _BrokenFkImpl.materialize(NeedsNoSlug(), provided=frozenset())
+
+
+def test_form_spec_json_fields_preserve_structured_siblings_and_typed_validation():
+    """Unstructured config leaves compose the JSON widget without weakening parsing."""
+    class OpenConfig(BaseModel):
+        label: str = "Example"
+        payload: dict[str, int] = Field(default_factory=dict)
+        timeout: float = Field(default=10, gt=0)
+
+    spec = model_config_form_spec(OpenConfig, owner="OpenConfig", json_fields=True)
+    assert spec["properties"]["label"]["type"] == "string"
+    assert spec["properties"]["payload"]["widget"] == "json"
+    assert spec["properties"]["timeout"]["widget"] == "json"
+    with pytest.raises(ImproperlyConfigured, match="mapping/additionalProperties"):
+        model_config_form_spec(OpenConfig, owner="OpenConfig")
+    class Configured(ImplBase):
+        config_model = OpenConfig
+    with pytest.raises(ValidationError) as refused:
+        Configured.parse_config({"payload": {"value": "wrong"}, "timeout": 0})
+    assert {"config.payload.value", "config.timeout"} <= set(refused.value.message_dict)

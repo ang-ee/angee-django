@@ -1,4 +1,4 @@
-"""Read-only execution resources and manager-backed operator actions."""
+"""Execution resources, writer-gated authoring and manager-backed actions."""
 
 from __future__ import annotations
 
@@ -17,12 +17,16 @@ from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionGroupType
 from angee.graphql.actions import (
     ActionResult,
+    FormSubmitResult,
+    FormSubmitStatus,
     action_guard,
     authorized_action_target,
     authorized_permission_target,
 )
+from angee.graphql.capabilities import permissions_field, read_permission_field
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.impl import ImplChoice, impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
     RecordReferenceNode,
@@ -34,7 +38,9 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
+from angee.workflows.definition import Definition, DefinitionInvalid, Issue
 from angee.workflows.states import RunOrigin
+from angee.workflows.steps import Step, resolve_step
 from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
@@ -61,13 +67,26 @@ _STEP_POLICY_VERSION = Prefetch(
 
 @strawberry_django.type(Workflow)
 class WorkflowType(AngeeNode):
-    """The identity of a run's workflow, without unpublished authoring fields."""
+    """Workflow identity with authoring fields redacted from nonwriters."""
 
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["name"])
     key: auto
     name: auto
     description: auto
     subject_model: auto
+    permissions = permissions_field(("write",))
+    draft: JSON | None = read_permission_field("write")
+    draft_revision: int | None = read_permission_field("write")
+    layout: JSON | None = read_permission_field("write")
+
+    @read_permission_field("write", only=["draft"])
+    def draft_outcomes(self) -> JSON | None:
+        """Read config-dependent node ports from the step owner."""
+        definition = Definition.model_validate(self.draft)
+        return cast(JSON, {
+            key: node.implementation.authoring_outcomes(node.config) for key, node in definition.nodes.items()
+        })
+
     published: WorkflowVersionType | None = actor_scoped_to_one("published")
 
 
@@ -506,6 +525,126 @@ class WorkflowActionMutation:
         StepRun.objects.retry_step(step_run, actor=request_from_info(info).user, accept_duplicate=True)
         return ActionResult(ok=True, message="Step retried with duplicate risk acknowledged.")
 
+@strawberry.type
+class WorkflowStepChoice(ImplChoice):
+    """Shared implementation metadata plus step-owned palette and port facts."""
+
+    internal: bool
+    outcomes: JSON
+
+
+@strawberry.input
+class WorkflowStepConfiguration:
+    """One client node identity and the step configuration whose ports it needs."""
+
+    node: str
+    step: str
+    config: JSON
+
+
+@strawberry.type
+class WorkflowConfiguredPorts:
+    """Configured ports associated with their stable client node identity."""
+
+    node: str
+    outcomes: JSON
+
+
+@strawberry.type
+class WorkflowAuthoringQuery:
+    """Writer-only adapters over the rowless implementation and step owners."""
+
+    @strawberry.field
+    def workflow_step_choices(self, info: strawberry.Info, id: PublicID) -> list[WorkflowStepChoice]:
+        """Offer registered steps, including internal metadata for retained nodes."""
+        authorized_permission_target(info, Workflow, id, "write")
+        return [WorkflowStepChoice(
+            key=choice.key, label=choice.label, icon=choice.icon, category=choice.category,
+            defaults=choice.defaults, config_schema=choice.config_schema,
+            internal=resolve_step(choice.key).internal,
+            outcomes=cast(JSON, resolve_step(choice.key).authoring_outcomes(
+                cast(dict, choice.defaults).get("config", {}),
+            )),
+        ) for choice in impl_choices(Step)]
+
+    @strawberry.field
+    def workflow_step_ports(
+        self, info: strawberry.Info, id: PublicID, configurations: list[WorkflowStepConfiguration],
+    ) -> list[WorkflowConfiguredPorts]:
+        """Resolve config-dependent ports without validating unfinished graph structure."""
+        authorized_permission_target(info, Workflow, id, "write")
+        return [WorkflowConfiguredPorts(
+            node=entry.node, outcomes=cast(JSON, resolve_step(entry.step).authoring_outcomes(entry.config)),
+        ) for entry in configurations]
+
+
+@strawberry.type
+class WorkflowDraftAcknowledgement:
+    """Revision accepted or observed by the optimistic draft owner."""
+
+    revision: int
+    diagnostics: JSON
+
+
+@strawberry.type
+class WorkflowPublication:
+    """Publication number and readable dependents returned by its owner."""
+
+    number: int
+    dependents: list[str]
+
+
+def _issue_errors(issues: list[Issue]) -> JSON:
+    """Locate definition diagnostics in the shared form submit error contract."""
+    fields: dict[str, list[str]] = {}
+    messages: list[str] = []
+    for issue in issues:
+        if issue.path:
+            fields.setdefault(".".join(str(part) for part in issue.path), []).append(issue.message)
+        else:
+            messages.append(issue.message)
+    return cast(JSON, {"fieldErrors": fields, "formErrors": messages})
+
+
+@strawberry.type
+class WorkflowStudioMutation:
+    """Thin explicit authoring submissions; managers retain all write policy."""
+
+    @strawberry.mutation
+    def save_workflow_draft(
+        self, info: strawberry.Info, id: PublicID, draft: JSON, layout: JSON, expected_revision: int,
+    ) -> FormSubmitResult[WorkflowDraftAcknowledgement]:
+        """Save the authored document and layout against the observed revision."""
+        workflow = authorized_permission_target(info, Workflow, id, "write")
+        saved = Workflow.objects.save_draft(
+            workflow, draft=draft, layout=layout, expected_revision=expected_revision,
+            actor=request_from_info(info).user,
+        )
+        status = {"saved": FormSubmitStatus.OK, "invalid": FormSubmitStatus.INVALID,
+                  "conflict": FormSubmitStatus.CONFLICT}[saved.status]
+        return FormSubmitResult(
+            status=status,
+            data=WorkflowDraftAcknowledgement(
+                revision=saved.revision,
+                diagnostics=cast(JSON, [issue.model_dump(mode="json") for issue in saved.issues]),
+            ),
+            issues=_issue_errors(saved.issues) if saved.status == "invalid" else None,
+            message="Draft changed since it was loaded." if saved.status == "conflict" else "",
+        )
+
+    @strawberry.mutation
+    def publish_workflow(self, info: strawberry.Info, id: PublicID) -> FormSubmitResult[WorkflowPublication]:
+        """Validate and publish the saved draft through its publication owner."""
+        workflow = authorized_permission_target(info, Workflow, id, "write")
+        try:
+            published = Workflow.objects.publish(workflow, actor=request_from_info(info).user)
+        except DefinitionInvalid as error:
+            return FormSubmitResult(status=FormSubmitStatus.INVALID, issues=_issue_errors(error.issues))
+        return FormSubmitResult(
+            status=FormSubmitStatus.OK,
+            data=WorkflowPublication(number=published.version.number, dependents=list(published.dependents)),
+        )
+
 
 _RESOURCES = (
     _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _RUN_EVIDENCE_RESOURCE,
@@ -514,8 +653,8 @@ _RESOURCES = (
 )
 schemas = {
     "console": {
-        "query": [resource.query for resource in _RESOURCES],
-        "mutation": [WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
+        "query": [WorkflowAuthoringQuery, *(resource.query for resource in _RESOURCES)],
+        "mutation": [WorkflowStudioMutation, WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
         "subscription": [changes(WorkflowRun, field="workflowRunChanged")],
         "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
         "types": [

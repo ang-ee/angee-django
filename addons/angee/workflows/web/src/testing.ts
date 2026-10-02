@@ -165,13 +165,13 @@ export const runSubjectFixture = testDataResource("notes.Note", {
 });
 
 export const workflowResourceFixture = testDataResource("workflows.Workflow", {
-  fields: [...["id", "key", "name", "description", "subject_model"].map((name) => retainedField(name)),
+  fields: [...["id", "key", "name", "description", "subject_model", "permissions"].map((name) => retainedField(name)),
     { ...retainedField("published"), kind: "relation", relationObject: true, relationModelLabel: "workflows.WorkflowVersion" }],
   capabilities: ["list", "detail"], recordRepresentation: "name",
   roots: { list: "workflow", detail: "workflow_by_pk", aggregate: "workflow_aggregate" },
   typeNames: { filter: "workflow_bool_exp", order: "workflow_order_by" },
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "key", "name", "description", "subject_model", "published.number"]
+    ...Object.fromEntries(["id", "key", "name", "description", "subject_model", "published.number", "permissions"]
       .map((name) => [name, testQueryField(name)])),
     name: testQueryField("name", { sort: { field: "name" } }),
   } }),

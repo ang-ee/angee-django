@@ -29,6 +29,33 @@ export type FormSubmitResult<TData> =
   | { status: "invalid"; issues: ValidationErrors }
   | { status: "conflict"; message: string; field?: string };
 
+/** Adapt the GraphQL form submit owner to the native form result contract. */
+export function wireFormSubmitResult<TData>(value: {
+  status: "OK" | "INVALID" | "CONFLICT";
+  data?: TData | null;
+  issues?: unknown;
+  message?: string | null;
+}): FormSubmitResult<TData> {
+  switch (value.status) {
+    case "OK":
+      if (value.data == null) throw new FormSubmitContractError();
+      return { status: "ok", data: value.data, ...(value.message ? { message: value.message } : {}) };
+    case "CONFLICT": return { status: "conflict", message: value.message ?? "" };
+    case "INVALID": {
+      const issues = value.issues;
+      if (!issues || typeof issues !== "object" || !("fieldErrors" in issues) || !("formErrors" in issues)) {
+        throw new FormSubmitContractError();
+      }
+      const fields = validationErrorMap(issues.fieldErrors);
+      if (!fields || !Array.isArray(issues.formErrors) || !issues.formErrors.every((message) => typeof message === "string")) {
+        throw new FormSubmitContractError();
+      }
+      return invalidFormSubmit({ fieldErrors: fields, formErrors: issues.formErrors });
+    }
+    default: throw new FormSubmitContractError();
+  }
+}
+
 /** Decode a wire action response through the transport owner. */
 export function actionFormSubmitResult(data: unknown, root: string): FormSubmitResult<ActionOutcome> {
   return actionOutcomeSubmitResult(extractActionOutcome(data, root));

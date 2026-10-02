@@ -108,7 +108,8 @@ export interface RecordTabDescriptor {
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
-  render: (context: RecordPanelContext) => React.ReactNode;
+  /** Active lets a retained panel suspend queries and shell publications. */
+  render: (context: RecordPanelContext & { active: boolean }) => React.ReactNode;
   /** Shown only while the loaded record satisfies it; absent until the record loads. */
   visibleWhen?: (record: Row) => boolean;
   /**

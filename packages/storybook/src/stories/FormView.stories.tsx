@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FormView, type FormField, type GroupDescriptor } from "@angee/ui";
+import { useMemo } from "react";
+import { FormView, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
 
@@ -213,6 +214,25 @@ export const TabbedLayout: Story = {
       layout="tabs"
     />
   ),
+};
+
+function RetainedEditor({ active }: { active: boolean }) {
+  const node = useMemo(() => active ? <p>The editor is active.</p> : null, [active]);
+  return <><PrimaryPanePublisher node={node} /><Input aria-label="Local editor draft" defaultValue="Retained across tabs" /></>;
+}
+function PublishedActivity() {
+  const { node } = usePrimaryPaneContent();
+  return <aside className="rounded-6 border p-3">{node ?? "No editor publication."}</aside>;
+}
+export const RetainedPanelActivity: Story = {
+  render: () => <PrimaryPaneProvider><RuntimeFixture schemas={storySchemas}>
+    <div className="grid grid-cols-[1fr_16rem] gap-4">
+      <FormView resource="notes.Note" id={storyRecord.id} fields={readOnlyFields}
+        defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true,
+          render: ({ active }) => <RetainedEditor active={active} /> }]} />
+      <PublishedActivity />
+    </div>
+  </RuntimeFixture></PrimaryPaneProvider>,
 };
 
 const railFields = ["title", "owner", "priority"].map((name) => ({

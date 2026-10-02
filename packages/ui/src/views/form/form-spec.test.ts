@@ -16,6 +16,15 @@ test("FormSpec registers only its presentation annotations with JSON Schema vali
 });
 
 describe("deserializeFormSpec", () => {
+  test("custom scalar-list widgets receive the declared item relation", () => {
+    const fields = deserializeFormSpec({ properties: { recipients: {
+      type: "array", widget: "recipients", items: { type: "string", relation: { resource: "contacts.Person" } },
+    } } }, { ...defaultWidgets, recipients: defaultWidgets.text! });
+    expect(fields[0]).toMatchObject({ widget: "recipients", itemTemplate: {
+      relation: { resource: "contacts.Person" },
+    } });
+  });
+
   test("projects declared objects through nested fields while keeping explicit JSON opaque", () => {
     const schema = { type: "object", properties: {
       identity: { type: "string", title: "Identity", readOnly: true, default: "retained" },

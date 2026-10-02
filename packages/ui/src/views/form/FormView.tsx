@@ -274,7 +274,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     : overviewContent;
   const renderRecordPanel = (tab: RecordTabDescriptor) => {
     if (!recordPanelContext || awaitingRecord) return null;
-    const content = withRail(tab.render(recordPanelContext), activeRecordTab === tab.id, recordPresentation === "workspace");
+    const active = activeRecordTab === tab.id;
+    const content = withRail(tab.render({ ...recordPanelContext, active }), active, recordPresentation === "workspace");
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
       : content;

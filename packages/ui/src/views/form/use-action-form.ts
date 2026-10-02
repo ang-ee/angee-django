@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useForm, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
+import { useForm, useWatch, type UseFormReturn, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
 
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -44,6 +44,11 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
   const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<TValues, unknown, TSubmitValues>({ defaultValues: options.defaultValues, resolver: options.resolver });
   const { handleSubmit, clearErrors } = form;
+  // Publishers may retain this adapter. RHF updates formState on its stable
+  // return object, so expose it live instead of capturing a render's proxy.
+  const enhancedForm = React.useMemo(() => ({ ...form,
+    get formState() { return form.formState; }, registerFieldValidation,
+  }), [form, registerFieldValidation]);
   const optionsRef = useLatestRef(options);
   const preview = useLatestRef(useRuntimeViewAs());
   const submittingRef = React.useRef(false);
@@ -74,7 +79,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
   }, [clearErrors, form, handleSubmit, preview, t, toast, validateFields]);
   const clearFieldError = React.useCallback((name: string) => clearErrors(name as Path<TValues>), [clearErrors]);
   return {
-    form: { ...form, registerFieldValidation }, run,
+    form: enhancedForm, run,
     submitting: form.formState.isSubmitting,
     fieldErrors: serverErrorsFromForm(form.formState.errors),
     formError: form.formState.errors.root?.server?.message ?? null,
@@ -82,4 +87,11 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
     clearFieldError,
     resetErrors: clearErrors,
   };
+}
+/** Subscribe an authored surface to a computed projection of its native form values. */
+export function useActionFormValues<TValues extends FieldValues, TOutput>(
+  form: Pick<UseFormReturn<TValues>, "control">,
+  compute: (values: TValues) => TOutput,
+): TOutput {
+  return useWatch({ control: form.control, compute });
 }

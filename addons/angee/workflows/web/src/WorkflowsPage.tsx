@@ -1,14 +1,18 @@
 import { Column, Field, Form, Group, List, ResourceList } from "@angee/ui";
+import { holdsPermission } from "@angee/metadata";
 
 import { WORKFLOW_MODEL, WORKFLOW_VERSION_MODEL } from "./catalogue/resources";
 import { useWorkflowsT } from "./i18n";
+import { WorkflowStudio } from "./WorkflowStudio";
 import { RunsList } from "./RunsPage";
 import { TriggersList } from "./TriggersPage";
 
 /** Readable workflow identities; publication and authoring remain backend-owned. */
 export function WorkflowsPage() {
   const t = useWorkflowsT();
-  return <ResourceList resource={WORKFLOW_MODEL} hideCreate placement="inline" routed recordTabs={[
+  return <ResourceList resource={WORKFLOW_MODEL} hideCreate placement="inline" routed defaultRecordTab="studio" recordTabs={[
+    { id: "studio", label: t("studio.title"), visibleWhen: (record) => holdsPermission(record, "write"),
+      keepMounted: true, render: ({ recordId, active }) => <WorkflowStudio recordId={recordId} active={active} /> },
     { id: "versions", label: t("catalogue.versions"), render: ({ recordId }) =>
       <List resource={WORKFLOW_VERSION_MODEL} scope="local" presentation="embedded"
         baseFilter={{ workflow: { exact: recordId } }} order={{ number: "DESC" }} emptyContent={t("catalogue.noVersions")}>

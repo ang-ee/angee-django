@@ -279,7 +279,7 @@ function deserializeField(
     ? deserializeObjectFields(field, widgets, path, root, references)
     : undefined;
   if (variableList && items) assertFiniteTemplate(references, path);
-  const itemTemplate = variableList && items
+  const itemTemplate = items && field.widget !== "json" && (variableList || items.field.relation)
     ? deserializeField("item", items.field, true, widgets, `${path}[]`, root, items.references)
     : undefined;
   const {
