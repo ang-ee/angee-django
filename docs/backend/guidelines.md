@@ -1631,6 +1631,15 @@ Their docstrings own the exact behavior.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
 
+### Addon WebSocket endpoints
+
+Mount addon sockets through `asgi.websocket_urlpatterns` and compose
+`RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
+The [shared router](../../angee/asgi.py) owns Origin trust and Django session
+authentication; never repeat those handshake checks per consumer. Long-lived
+protocols that accept writes must revalidate the session at each request and
+open fresh evaluator scopes for authorization and change-feed reads.
+
 ### GraphQL actor and write contracts
 
 - **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
@@ -1639,7 +1648,7 @@ Their docstrings own the exact behavior.
   [ViewAs](../../addons/angee/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
-  [WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
+  [GraphQL WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../addons/angee/mcp/graphql.py)
   has no request and continues under its own actor.
 - **Concurrency and replay tokens are GraphQL root arguments.** On models

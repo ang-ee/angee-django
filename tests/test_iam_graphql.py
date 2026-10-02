@@ -1503,7 +1503,7 @@ def test_public_user_change_subscription_only_yields_the_actor(
         yield other_change
         yield actor_change
 
-    monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
+    monkeypatch.setattr(subscriptions, "subscribe", subscribe)
     surface = iam_schema.schemas["public"]["subscription"][0]
     field = surface.__strawberry_definition__.fields[0]
     resolver = field.base_resolver.wrapped_func
@@ -1867,7 +1867,8 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
 
 
 def test_view_as_target_has_no_pinned_admitting_actor(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real endpoint through ActorMiddleware binds only the target authority."""
 
@@ -1889,8 +1890,10 @@ def test_view_as_target_has_no_pinned_admitting_actor(
     view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     request = RequestFactory().post(
-        "/graphql/public/", data={"query": "{ targetAuthority }"},
-        content_type="application/json", HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
+        "/graphql/public/",
+        data={"query": "{ targetAuthority }"},
+        content_type="application/json",
+        HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
     )
     request.user = admin
     response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
@@ -1900,7 +1903,8 @@ def test_view_as_target_has_no_pinned_admitting_actor(
 
 
 def test_view_as_unknown_operation_uses_strawberry_bad_request(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin = _platform_admin("preview-operation-admin")
     target = User.objects.create_user("preview-operation-target")
@@ -1915,7 +1919,9 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
     view = GraphQLView.as_view(schema=schema)
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     request = RequestFactory().post(
-        "/graphql/public/", content_type="application/json", HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
+        "/graphql/public/",
+        content_type="application/json",
+        HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
         data={"query": "query Existing { hello }", "operationName": "Missing"},
     )
     request.user = admin
@@ -1927,7 +1933,9 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_viewable_people_admission_is_batched_before_limit(
-    composed_tables: None, settings: Any, storage: str,
+    composed_tables: None,
+    settings: Any,
+    storage: str,
 ) -> None:
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     admin = _platform_admin("picker-query-admin")
@@ -1962,14 +1970,18 @@ def test_viewable_people_admission_is_batched_before_limit(
 
 
 def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
     monkeypatch.setattr(User._default_manager, "admit_view_as", None)
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
     request = RequestFactory().post(
-        "/graphql/public/", data={"query": "query Preview { __typename }", "operationName": "Preview"},
-        content_type="application/json", HTTP_X_ANGEE_VIEW_AS="unknown-public-id",
+        "/graphql/public/",
+        data={"query": "query Preview { __typename }", "operationName": "Preview"},
+        content_type="application/json",
+        HTTP_X_ANGEE_VIEW_AS="unknown-public-id",
     )
     request.user = admin
     response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)

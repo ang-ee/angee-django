@@ -18,7 +18,7 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -51,8 +51,9 @@ from angee.base.actors import instance_actor
 from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import deactivate_service_user, sync_service_user
 from angee.integrate.models import IntegrationCreateMode
 from angee.jobs.enqueue import enqueue_task
@@ -303,7 +304,8 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.FORM
 
-    backend_class = ImplClassField(InferenceBackend,
+    backend_class = ImplClassField(
+        InferenceBackend,
         default="manual",
         create_only=True,
     )
@@ -876,7 +878,8 @@ class Agent(AuditMixin, AngeeDataModel):
     skills = models.ManyToManyField("agents.Skill", blank=True, related_name="agents")
     mcp_servers = models.ManyToManyField("agents.MCPServer", blank=True, related_name="agents")
     mcp_tools = models.ManyToManyField("agents.MCPTool", blank=True, related_name="agents")
-    runtime_class = ImplClassField(AgentRuntime,
+    runtime_class = ImplClassField(
+        AgentRuntime,
         default="none",
     )
     """Registry key for the agent runtime — the program this agent renders into. The
@@ -1049,9 +1052,16 @@ class Agent(AuditMixin, AngeeDataModel):
     def can_chat(self) -> bool:
         """Whether the running agent has an in-process runtime or a rendered service."""
 
-        return self.runtime_status == RuntimeStatus.RUNNING and (
-            self.runs_in_process or bool(self.service)
-        )
+        return self.runtime_status == RuntimeStatus.RUNNING and (self.runs_in_process or bool(self.service))
+
+    def chat_blocker(self) -> str | None:
+        """Return the single refusal for in-process chat availability."""
+
+        if not self.runs_in_process:
+            return "This agent runtime uses container ACP sessions."
+        if not self.can_chat:
+            return "Agent is not running — provision it first."
+        return None
 
     # --- Lifecycle verb eligibility -------------------------------------------
     # Each lifecycle verb owns one ``<verb>_blocker``. ``can_<verb>`` is its visibility
@@ -1764,19 +1774,23 @@ class AgentSessionManager(AngeeManager):
         actor = actor or instance_actor(agent)
         with transaction.atomic():
             locked = type(agent).system_queryset(lock=("self",)).get(pk=agent.pk)
-            if not locked.runs_in_process:
-                raise ValidationError({"agent": "This agent runtime uses container ACP sessions."})
-            if not locked.can_chat:
-                raise ValidationError({"agent": "Provision this agent before starting a session."})
+            blocker = locked.chat_blocker()
+            if blocker:
+                raise ValidationError({"agent": blocker})
             return self.with_actor(actor).create(agent=locked, owner=owner, context=dict(context))
 
     def close_for_agent_as_system(self, agent: Any) -> None:
         """Close an agent's sessions as part of its authorized in-process teardown."""
 
         with system_context(reason="agents.session.deprovision"), transaction.atomic():
-            for session in self.model.system_queryset(lock=("self",)).filter(agent=agent).exclude(
-                status=SessionStatus.CLOSED,
-            ).order_by("pk"):
+            for session in (
+                self.model.system_queryset(lock=("self",))
+                .filter(agent=agent)
+                .exclude(
+                    status=SessionStatus.CLOSED,
+                )
+                .order_by("pk")
+            ):
                 session._close_locked()
 
 
@@ -1852,6 +1866,9 @@ class AgentSession(AuditMixin, AngeeDataModel):
             actor = locked.require_access("post", actor)
             if locked.status == SessionStatus.CLOSED:
                 raise ValidationError({"session": "This agent session is closed."})
+            blocker = locked.agent.chat_blocker()
+            if blocker:
+                raise ValidationError({"agent": blocker})
             if locked.status == SessionStatus.AWAITING_APPROVAL:
                 raise ValidationError({"session": "Stop the pending tool approval before sending another message."})
             turns = locked.turns.with_actor(actor)
@@ -1895,8 +1912,11 @@ class AgentSession(AuditMixin, AngeeDataModel):
         with transaction.atomic():
             locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             actor = locked.require_access("write", actor)
-            with actor_context(actor) if actor is not None else nullcontext(), system_context(
-                reason="agents.session.cancel_turn",
+            with (
+                actor_context(actor) if actor is not None else nullcontext(),
+                system_context(
+                    reason="agents.session.cancel_turn",
+                ),
             ):
                 current = locked.turns.lock_if_supported().get(pk=turn.pk)
                 if current.status in OPEN_TURN_STATUSES:
@@ -1908,10 +1928,37 @@ class AgentSession(AuditMixin, AngeeDataModel):
                 turn.refresh_from_db()
             self.refresh_from_db()
 
+    def cancel_active_turn(self, *, actor: Any = None) -> None:
+        """Select and stop the active turn while holding the session lock."""
+
+        actor = actor or instance_actor(self)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            actor = locked.require_access("write", actor)
+            turn = locked.turns.with_actor(actor).active().order_by("index").first()
+            if turn is not None:
+                locked.cancel_turn(turn, actor=actor)
+            self.refresh_from_db()
+
+    def latest_chat_turn(self, *turns: Any) -> Any:
+        """Select the newest retained turn from a snapshot or changed-row candidates."""
+
+        return max((turn for turn in reversed(turns) if turn is not None), key=lambda turn: turn.index, default=None)
+
+    def chat_state(self, latest_turn: Any) -> tuple[str, Any]:
+        """Project accepted work and the latest settlement, independently of transport."""
+
+        if latest_turn is not None:
+            if latest_turn.status in (TurnStatus.PENDING, TurnStatus.RUNNING):
+                return "running", None
+            if latest_turn.status in (TurnStatus.COMPLETED, TurnStatus.CANCELED, TurnStatus.FAILED):
+                return "idle", latest_turn
+        return "idle", None
+
     def delete_blocker(self) -> str | None:
         """Require active execution to be stopped before deleting its transcript."""
 
-        if self.turns.filter(status__in=ACTIVE_TURN_STATUSES).exists():
+        if self.turns.active().exists():
             return "Stop the active turn or close this session before deleting it."
         return None
 
@@ -1926,7 +1973,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
             locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
             if locked is None or locked.status == SessionStatus.CLOSED:
                 return None
-            if locked.turns.filter(status__in=ACTIVE_TURN_STATUSES).exists():
+            if locked.turns.active().exists():
                 return None
             turn = locked.turns.lock_if_supported().filter(status=TurnStatus.PENDING).order_by("index").first()
             if turn is None:
@@ -1935,10 +1982,15 @@ class AgentSession(AuditMixin, AngeeDataModel):
             else:
                 turn.mark_running()
                 locked.mark_running()
-                if not locked.agent.runs_in_process or not locked.agent.can_chat:
-                    locked.settle_turn(turn, TurnOutcome(
-                        kind="failed", error="This agent is not available for in-process chat.",
-                    ))
+                blocker = locked.agent.chat_blocker()
+                if blocker:
+                    locked.settle_turn(
+                        turn,
+                        TurnOutcome(
+                            kind="failed",
+                            error=blocker,
+                        ),
+                    )
                     turn = None
             self.refresh_from_db()
             return turn
@@ -2037,6 +2089,15 @@ class AgentSession(AuditMixin, AngeeDataModel):
         self._transition_fields = {"last_error"}
 
 
+class AgentTurnQuerySet(AngeeQuerySet[Any]):
+    """Turn scopes shared by session execution and transport callers."""
+
+    def active(self) -> Self:
+        """Select claimed work, including a turn parked on approval."""
+
+        return self.filter(status__in=ACTIVE_TURN_STATUSES)
+
+
 class AgentTurn(AuditMixin, AngeeDataModel):
     """One prompt-to-response cycle with append-only ACP updates."""
 
@@ -2070,7 +2131,7 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = AngeeManager.from_queryset(AgentTurnQuerySet)()
 
     class Meta:
         """Django model options for agent turns."""
@@ -2081,7 +2142,8 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         constraints = (
             models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),
             models.UniqueConstraint(
-                fields=("session",), condition=models.Q(status__in=ACTIVE_TURN_STATUSES),
+                fields=("session",),
+                condition=models.Q(status__in=ACTIVE_TURN_STATUSES),
                 name="uniq_agents_turn_active_session",
             ),
         )
@@ -2096,8 +2158,12 @@ class AgentTurn(AuditMixin, AngeeDataModel):
 
         with transaction.atomic():
             locked = (
-                type(self).objects.only("pk", "status", "updated_at").lock_if_supported()
-                .filter(pk=self.pk).order_by("pk").first()
+                type(self)
+                .objects.only("pk", "status", "updated_at")
+                .lock_if_supported()
+                .filter(pk=self.pk)
+                .order_by("pk")
+                .first()
             )
             if locked is None:
                 return False
@@ -2106,6 +2172,12 @@ class AgentTurn(AuditMixin, AngeeDataModel):
                 locked.save(update_fields=["updates", "updated_at"])
                 self.updates = locked.updates
             return locked.status == TurnStatus.RUNNING
+
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """Name the session without loading its guarded relation, including on delete."""
+
+        model = self._meta.get_field("session").remote_field.model
+        return (ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(self.session_id)),)
 
     @transition(
         status,

@@ -13,7 +13,7 @@ from typing import Any, ClassVar, cast
 
 import strawberry
 from django.apps import AppConfig, apps
-from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
 from rebac import MissingActorError, PermissionDenied, RebacMixin
@@ -32,9 +32,8 @@ from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
-from angee.base.errors import DomainError
+from angee.base.errors import DomainError, classify_error, validation_error
 from angee.base.mixins import StaleRevisionError
-from angee.base.transitions import TransitionNotAllowed
 from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -54,7 +53,6 @@ DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
 
 logger = logging.getLogger(__name__)
-_INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
 _EXPECTED_ERROR_CODES = frozenset(
     {
         "VALIDATION",
@@ -80,18 +78,6 @@ _NON_ROOT_KEYS = {"types", "extensions", "type_extensions", "input_extensions"}
 _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _NON_ROOT_KEYS}
 
 
-def _unwrap_validation_error(exc: BaseException | None) -> ValidationError | None:
-    """Return the ``ValidationError`` in a resolver's exception chain, or ``None``."""
-
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        if isinstance(exc, ValidationError):
-            return exc
-        seen.add(id(exc))
-        exc = exc.__cause__ or exc.__context__
-    return None
-
-
 class AngeeSchema(strawberry.Schema):
     """Strawberry schema that exposes stable REBAC denial codes."""
 
@@ -100,7 +86,8 @@ class AngeeSchema(strawberry.Schema):
 
     @lru_cache
     def get_type_by_name(
-        self, name: str,
+        self,
+        name: str,
     ) -> StrawberryObjectDefinition | ScalarDefinition | StrawberryEnumDefinition | StrawberryUnion | None:
         """Expose final extension fields to native schema/optimizer consumers.
 
@@ -117,10 +104,12 @@ class AngeeSchema(strawberry.Schema):
             and isinstance(graphql_type, GraphQLObjectType)
             and graphql_type.extensions.get(GraphQLCoreConverter.OBJECT_EXTENSIONS_BACKREF)
         ):
-            return replace(definition, fields=[
-                field.extensions[GraphQLCoreConverter.DEFINITION_BACKREF]
-                for field in graphql_type.fields.values()
-            ])
+            return replace(
+                definition,
+                fields=[
+                    field.extensions[GraphQLCoreConverter.DEFINITION_BACKREF] for field in graphql_type.fields.values()
+                ],
+            )
         return definition
 
     def process_errors(
@@ -133,10 +122,7 @@ class AngeeSchema(strawberry.Schema):
         errors_to_log: list[GraphQLError] = []
         for error in errors:
             refusal = (
-                isinstance(error.original_error, (
-                    DomainError, MissingActorError, PermissionDenied, TransitionNotAllowed, ObjectDoesNotExist,
-                ))
-                or _unwrap_validation_error(error.original_error) is not None
+                classify_error(error.original_error).expected
                 or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
             )
             if error.path is None and isinstance(error.original_error, GraphQLError):
@@ -165,11 +151,12 @@ class AngeeSchema(strawberry.Schema):
                 error.extensions["current_revision"] = original.current
             error.original_error = None
             return
-        if _unwrap_validation_error(original) is not None:
+        if validation_error(original) is not None:
             return
-        if isinstance(original, TransitionNotAllowed | ObjectDoesNotExist):
-            error.message = "The requested operation was refused."
-            error.extensions = {"code": "BAD_USER_INPUT"}
+        classification = classify_error(original)
+        if classification.expected:
+            error.message = classification.message
+            error.extensions = {"code": classification.code}
             return
         if isinstance(original, GraphQLError) and (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES:
             extensions = error.extensions or {}
@@ -186,7 +173,7 @@ class AngeeSchema(strawberry.Schema):
             error.path,
             "".join(traceback.format_tb(original.__traceback__)),
         )
-        error.message = _INTERNAL_ERROR_MESSAGE
+        error.message = classification.message
         error.extensions = {"code": "INTERNAL"}
         # Strawberry logs ``original_error`` with its traceback. Detach it after
         # recording its class, path and frames so secrets in exception values do
@@ -196,14 +183,10 @@ class AngeeSchema(strawberry.Schema):
     def _apply_rebac_code(self, error: GraphQLError) -> None:
         """Attach the code owned by a REBAC denial exception."""
 
-        original = error.original_error
-        if isinstance(original, MissingActorError):
-            code = "UNAUTHENTICATED"
-        elif isinstance(original, PermissionDenied):
-            code = "PERMISSION_DENIED"
-        else:
+        classification = classify_error(error.original_error)
+        if classification.code not in ("UNAUTHENTICATED", "PERMISSION_DENIED"):
             return
-        error.extensions = {**(error.extensions or {}), "code": code}
+        error.extensions = {**(error.extensions or {}), "code": classification.code}
 
     def _apply_validation_error(self, error: GraphQLError) -> None:
         """Expose a Django ``ValidationError`` as a per-field error extension.
@@ -216,7 +199,7 @@ class AngeeSchema(strawberry.Schema):
         opaque banner.
         """
 
-        validation = _unwrap_validation_error(error.original_error)
+        validation = validation_error(error.original_error)
         if validation is None:
             return
         field_errors: dict[str, list[str]] = {}
@@ -407,7 +390,10 @@ class GraphQLSchemas:
                     try:
                         coerced = coerce_input_value(value, graphql_type)
                         where = convert_argument(
-                            coerced, definition.origin, schema.schema_converter.scalar_registry, schema.config,
+                            coerced,
+                            definition.origin,
+                            schema.schema_converter.scalar_registry,
+                            schema.config,
                         )
                         return contribution.compile_filter(where)
                     except (GraphQLError, TypeError, ValueError) as error:

@@ -15,17 +15,15 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from graphql import GraphQLError
 from rebac import current_actor, system_context
 from strawberry import auto
+from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
 from angee.agents import provisioning
-from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.base.actors import actor_user_id
@@ -37,7 +35,7 @@ from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import session_user
+from angee.iam.permissions import PlatformAdminPermission, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
@@ -52,7 +50,6 @@ from angee.integrate.schema import (
     save_provided_fields,
 )
 from angee.integrate_vcs.schema import SourceType, TemplateType
-from angee.operator.daemon import OperatorDaemon
 
 InferenceProvider = apps.get_model("agents", "InferenceProvider")
 InferenceModel = apps.get_model("agents", "InferenceModel")
@@ -255,10 +252,9 @@ class AgentTurnType(AngeeNode):
 class AgentChatEndpoint:
     """Browser-reachable chat endpoint for a running agent.
 
-    ``url`` is the agent's routed WebSocket URL (no token); the browser appends
-    ``token`` as a query parameter, which the central Caddy forward-auths against
-    the operator. ``mcp_servers`` is the agent's rendered ``.mcp.json`` server map,
-    so the chat session can advertise the same MCP servers the agent runs with.
+    In-process chat uses a same-origin WebSocket and the Django session cookie.
+    Container chat uses an operator-routed URL with ``token`` in the query string.
+    ``mcp_servers`` is the container agent's rendered ``.mcp.json`` server map.
     ``model_handle`` is the selected agent model in the service runtime's convention,
     used to select the ACP session model explicitly after session creation.
     """
@@ -268,6 +264,9 @@ class AgentChatEndpoint:
     expires_at: str
     mcp_servers: JSON
     model_handle: str
+    protocol_version: int = strawberry.field(
+        description="the ACP protocol version the endpoint speaks; the client must know it before it connects",
+    )
 
 
 @strawberry.type
@@ -621,42 +620,6 @@ class InferenceProviderUpdateMutation:
         return cast(InferenceProviderType, provider)
 
 
-def _mint_session(agent: Any) -> dict[str, Any]:
-    """Mint the chat WebSocket endpoint + per-actor route token for a running ``agent``.
-
-    The one owner of "open a chat session against this agent": ``agentChatEndpoint``
-    (caller knows the agent) and ``resolveSessionForView`` (caller knows the view) both
-    call it, so the token/endpoint logic lives once. Raises when there is no actor, the
-    agent isn't running (no rendered ``service``), or its service isn't routed.
-    """
-
-    actor = current_actor()
-    if actor is None:
-        raise ValueError("No actor in context.")
-    with system_context(reason="agents.graphql.mint_session"):
-        service = agent.service
-        mcp_servers = agent.mcp_config().get("mcpServers", {})
-    if not service:
-        raise GraphQLError(
-            "Agent is not running — provision it first.",
-            extensions={"code": "BAD_USER_INPUT"},
-        )
-    daemon = OperatorDaemon.from_settings()
-    endpoint = daemon.service_endpoint(service)
-    if not endpoint.get("routed"):
-        raise ValueError("Agent service is not reachable over a routed endpoint.")
-    # The agents autoconfig owns the TTL default; source the fallback from it (not a
-    # restated literal) so a bare settings module without the composed value still resolves.
-    ttl = str(getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", _AGENTS_SETTINGS["ANGEE_AGENT_CHAT_TOKEN_TTL"]))
-    token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
-    return {
-        "url": str(endpoint.get("url", "")),
-        "token": str(token.get("token", "")),
-        "expires_at": str(token.get("expires_at", "")),
-        "mcp_servers": mcp_servers,
-    }
-
-
 def _agent_for_view(view: dict[str, Any]) -> Any:
     """Return the running agent that serves ``view`` for the current actor, or ``None``.
 
@@ -720,58 +683,6 @@ class AgentSessionQuery:
 
 
 @strawberry.type
-class AgentSessionMutation:
-    """Authenticated, row-authorized persisted chat mutations."""
-
-    @strawberry.mutation
-    def start_agent_session(
-        self,
-        info: strawberry.Info,
-        agent: PublicID,
-        context: JSON | None = strawberry.UNSET,
-    ) -> AgentSessionType:
-        """Start an in-process session for an agent the caller may call."""
-
-        if context is strawberry.UNSET:
-            context_data: dict[str, Any] = {}
-        elif isinstance(context, dict):
-            context_data = context
-        else:
-            raise GraphQLError("Session context must be an object.", extensions={"code": "BAD_USER_INPUT"})
-        owner = session_user(info)
-        target = authorized_permission_target(info, Agent, agent, "call")
-        session = AgentSessionModel.objects.start(
-            target,
-            owner=owner,
-            context=context_data,
-        )
-        return cast(AgentSessionType, session)
-
-    @strawberry.mutation
-    def post_agent_message(self, info: strawberry.Info, session: PublicID, text: str) -> AgentTurnType:
-        """Append a user turn to a session the caller may post to."""
-
-        target = authorized_permission_target(info, AgentSessionModel, session, "post")
-        return cast(AgentTurnType, target.post(text))
-
-    @strawberry.mutation
-    def close_agent_session(self, info: strawberry.Info, session: PublicID) -> AgentSessionType:
-        """Cancel open turns and close an authorized session."""
-
-        target = authorized_permission_target(info, AgentSessionModel, session, "write")
-        target.close()
-        return cast(AgentSessionType, target)
-
-    @strawberry.mutation
-    def cancel_agent_turn(self, info: strawberry.Info, turn: PublicID) -> AgentTurnType:
-        """Stop one authorized turn, allowing pending turns to continue."""
-
-        target = authorized_permission_target(info, AgentTurn, turn, "write")
-        target.session.cancel_turn(target)
-        return cast(AgentTurnType, target)
-
-
-@strawberry.type
 class InferenceActionMutation:
     """Operational actions on an inference provider."""
 
@@ -790,6 +701,17 @@ class InferenceActionMutation:
             except Exception as error:  # noqa: BLE001 — backend failure is the result, not a 500
                 return ActionResult(ok=False, message=f"Refresh failed: {error}")
         return ActionResult(ok=True, message=f"Synced {count} model(s).")
+
+
+class AgentChatEndpointPermission(BasePermission):
+    """Declare the callable-agent gate and the runtime's additional admin policy."""
+
+    message = PlatformAdminPermission.message
+    error_extensions = {"code": "PERMISSION_DENIED"}
+
+    def has_permission(self, source: Any, info: strawberry.Info, **kwargs: Any) -> bool:
+        agent = authorized_permission_target(info, Agent, kwargs["id"], "call")
+        return not agent.runtime_backend.chat_requires_admin or PlatformAdminPermission().has_permission(source, info)
 
 
 @strawberry.type
@@ -820,32 +742,12 @@ class AgentActionMutation:
 
         return provisioning.replace_agent(id)
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def agent_chat_endpoint(self, id: PublicID) -> AgentChatEndpoint:
-        """Mint the chat WebSocket endpoint + route token for a running agent.
+    @strawberry.mutation(permission_classes=[AgentChatEndpointPermission])
+    def agent_chat_endpoint(self, info: strawberry.Info, id: PublicID) -> AgentChatEndpoint:
+        """Format the endpoint selected by the agent's runtime."""
 
-        A mutation, not a query: each call mints a fresh, short-lived per-actor route
-        token (the operator admin bearer never reaches the browser). The browser speaks
-        ACP to the agent's routed WebSocket through the central Caddy, forward-authed
-        with that token. Errors when the agent is not running (no rendered ``service``)
-        or its service is not routed. The actor is the same identity
-        ``operatorConnection`` mints with — the session user.
-        """
-
-        agent = resolve_action_target(
-            Agent,
-            id,
-            reason="agents.graphql.agent_chat_endpoint",
-            select_related=("model",),
-        )
-        session = _mint_session(agent)
-        return AgentChatEndpoint(
-            url=session["url"],
-            token=session["token"],
-            expires_at=session["expires_at"],
-            mcp_servers=session["mcp_servers"],
-            model_handle=str(agent.service_model_handle()),
-        )
+        agent = authorized_permission_target(info, Agent, id, "call")
+        return AgentChatEndpoint(**agent.runtime_backend.chat_endpoint(agent, request_from_info(info)))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def render_agent_prompt(self, id: PublicID, view: JSON) -> str:
@@ -917,7 +819,6 @@ schemas = {
             _INFERENCE_MODEL_RESOURCE.mutation,
             InferenceActionMutation,
             AgentActionMutation,
-            AgentSessionMutation,
         ],
         "subscription": [
             changes(Agent, field="agentChanged"),

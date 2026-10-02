@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -18,62 +18,17 @@ from rebac.models import PermissionAuditEvent
 
 from angee.agents import provisioning
 from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
-from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome
+from angee.agents.runners import SessionUpdateSink, TurnOutcome
 from angee.agents.tasks import run_session
+from angee.agents.testing.drivers import FakeRunner
+from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
+from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
-from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.workflows.testing.drivers import capture_tasks as capture_task_sends
 from angee.workflows.testing.drivers import observe
 from tests.conftest import create_platform_admin
-
-
-def _chunk(text: str) -> dict[str, Any]:
-    return {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}
-
-
-class FakeRunner(SessionRunner):
-    """Replace only the provider boundary while retaining persistence and dispatch."""
-
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-        self.history: list[Any] = []
-        self.during_turn: Callable[[Any, Any, SessionUpdateSink], None] | None = None
-        self.error: BaseException | None = None
-        self.outcome = TurnOutcome(
-            kind="completed", text="Reply", replay_state=[{"reply": "retained"}], usage={"requests": 1, "tokens": 3},
-        )
-
-    def run_turn(
-        self,
-        session: Any,
-        turn: Any,
-        *,
-        deferred_results: list[Mapping[str, Any]],
-        emit: SessionUpdateSink,
-        deadline: float,
-    ) -> TurnOutcome:
-        assert current_actor() == session.agent.principal_subject()
-        assert not connection.in_atomic_block
-        assert deadline > time.monotonic()
-        assert deferred_results == []
-        self.prompts.append(turn.prompt)
-        self.history.append(session.replay_state)
-        if self.during_turn is not None:
-            self.during_turn(session, turn, emit)
-        else:
-            emit(_chunk("Reply"))
-        if self.error is not None:
-            raise self.error
-        return self.outcome
-
-
-@pytest.fixture
-def runner(monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
-    fake = FakeRunner()
-    monkeypatch.setattr(PydanticAIRuntime, "session_runner", lambda self: fake)
-    return fake
 
 
 @pytest.fixture
@@ -82,15 +37,20 @@ def session(composed_tables: None, capture_tasks: list[Any]) -> Iterator[AgentSe
     owner = get_user_model().objects.create_user(username="session-owner")
     with system_context(reason="test agent session seed"):
         agent = Agent.objects.create(
-            name="Session agent", owner=owner, runtime_class="pydantic",
-            lifecycle=AgentLifecycle.READY, runtime_status=RuntimeStatus.RUNNING,
+            name="Session agent",
+            owner=owner,
+            runtime_class="pydantic",
+            lifecycle=AgentLifecycle.READY,
+            runtime_status=RuntimeStatus.RUNNING,
         )
     with actor_context(owner):
         yield AgentSession.objects.start(agent, owner=owner, context={"label": "Session context"})
 
 
 def test_turns_drain_in_order_one_per_task(
-    session: AgentSession, runner: FakeRunner, capture_tasks: list[Any],
+    session: AgentSession,
+    runner: FakeRunner,
+    capture_tasks: list[Any],
 ) -> None:
     first = session.post("First question")
     second = session.post("Second question")
@@ -170,7 +130,9 @@ def test_running_turn_is_never_reclaimed(session: AgentSession, runner: FakeRunn
 
 
 def test_stop_idles_active_turn_and_dispatches_pending(
-    session: AgentSession, runner: FakeRunner, capture_tasks: list[Any],
+    session: AgentSession,
+    runner: FakeRunner,
+    capture_tasks: list[Any],
 ) -> None:
     first = session.post("Stop me")
     pending = session.post("Next")
@@ -185,7 +147,8 @@ def test_stop_idles_active_turn_and_dispatches_pending(
     assert session.status == SessionStatus.IDLE
     assert len(capture_tasks) == 1 and capture_tasks[0][0] == "agents.run_session"
     session.settle_turn(
-        first, TurnOutcome(kind="completed", text="Too late", replay_state=["discard"], usage={"tokens": 9}),
+        first,
+        TurnOutcome(kind="completed", text="Too late", replay_state=["discard"], usage={"tokens": 9}),
     )
     first.refresh_from_db()
     session.refresh_from_db()
@@ -229,7 +192,10 @@ def test_stale_outcome_cannot_settle_a_later_running_turn(session: AgentSession)
 
 @pytest.mark.parametrize("close", [False, True])
 def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flush(
-    session: AgentSession, runner: FakeRunner, close: bool, monkeypatch: pytest.MonkeyPatch,
+    session: AgentSession,
+    runner: FakeRunner,
+    close: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = [time.monotonic()]
     monkeypatch.setattr("angee.agents.sessions.monotonic", lambda: clock[0])
@@ -260,7 +226,9 @@ def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flu
 
 
 def test_close_cancels_open_turns_and_refuses_future_posts(
-    session: AgentSession, runner: FakeRunner, capture_tasks: list[Any],
+    session: AgentSession,
+    runner: FakeRunner,
+    capture_tasks: list[Any],
 ) -> None:
     first = session.post("Active")
     pending = session.post("Pending")
@@ -282,10 +250,13 @@ def test_close_cancels_open_turns_and_refuses_future_posts(
 
 
 @pytest.mark.parametrize(
-    "error", [TimeoutError(), SoftTimeLimitExceeded(), RuntimeError("Provider unavailable"), asyncio.CancelledError()],
+    "error",
+    [TimeoutError(), SoftTimeLimitExceeded(), RuntimeError("Provider unavailable"), asyncio.CancelledError()],
 )
 def test_runtime_failure_is_retained_and_session_remains_usable(
-    session: AgentSession, runner: FakeRunner, error: BaseException,
+    session: AgentSession,
+    runner: FakeRunner,
+    error: BaseException,
 ) -> None:
     first = session.post("Fail once")
     runner.error = error
@@ -343,8 +314,10 @@ def test_tool_approval_outcome_fails_readably(session: AgentSession, runner: Fak
     completed = runner.outcome
     turn = session.post("Needs approval")
     runner.outcome = TurnOutcome(
-        kind="needs_approval", approval_requests=[{"tool_call_id": "call-1", "name": "read_document", "args": {}}],
-        replay_state=[{"deferred": "call-1"}], usage={"requests": 1},
+        kind="needs_approval",
+        approval_requests=[{"tool_call_id": "call-1", "name": "read_document", "args": {}}],
+        replay_state=[{"deferred": "call-1"}],
+        usage={"requests": 1},
     )
     run_session.run(session.pk)
     turn.refresh_from_db()
@@ -459,10 +432,13 @@ def test_stop_and_close_check_the_explicit_actor_for_bound_instances(session: Ag
 
 
 @pytest.mark.parametrize(
-    ("runtime_class", "runtime_status"), [("none", RuntimeStatus.RUNNING), ("pydantic", RuntimeStatus.STOPPED)],
+    ("runtime_class", "runtime_status"),
+    [("none", RuntimeStatus.RUNNING), ("pydantic", RuntimeStatus.STOPPED)],
 )
 def test_start_requires_an_available_in_process_runtime(
-    session: AgentSession, runtime_class: str, runtime_status: str,
+    session: AgentSession,
+    runtime_class: str,
+    runtime_status: str,
 ) -> None:
     with system_context(reason="test unavailable agent"):
         agent = session.agent
@@ -493,7 +469,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     assert result.ok
     assert stale_agent.can_chat
 
-    with pytest.raises(ValidationError, match="Provision this agent"):
+    with pytest.raises(ValidationError, match="Agent is not running"):
         AgentSession.objects.start(stale_agent, owner=session.owner, context={})
 
     session.refresh_from_db()
@@ -502,7 +478,9 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
 
 
 def test_stream_updates_do_no_database_work_before_the_flush_interval(
-    session: AgentSession, runner: FakeRunner, monkeypatch: pytest.MonkeyPatch,
+    session: AgentSession,
+    runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = time.monotonic()
     monkeypatch.setattr("angee.agents.sessions.monotonic", lambda: clock)
@@ -525,7 +503,9 @@ def test_stream_updates_do_no_database_work_before_the_flush_interval(
 
 
 def test_final_flush_uses_the_agent_principal(
-    session: AgentSession, runner: FakeRunner, monkeypatch: pytest.MonkeyPatch,
+    session: AgentSession,
+    runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session.post("A final partial chunk")
     append = AgentTurn.append_updates
@@ -583,7 +563,9 @@ def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSess
 
 @pytest.mark.parametrize("kind", ["failed", "needs_approval"])
 def test_failed_settlement_does_not_rewrite_replay_state(
-    session: AgentSession, runner: FakeRunner, kind: Any,
+    session: AgentSession,
+    runner: FakeRunner,
+    kind: Any,
 ) -> None:
     session.post("Retain a completed answer")
     run_session.run(session.pk)
@@ -636,7 +618,9 @@ def test_claim_transition_only_accepts_pending_turns(session: AgentSession, awai
 
 @pytest.mark.parametrize("stop", [False, True])
 def test_stop_and_settle_keep_their_result_when_the_next_wakeup_fails(
-    session: AgentSession, runner: FakeRunner, stop: bool,
+    session: AgentSession,
+    runner: FakeRunner,
+    stop: bool,
 ) -> None:
     first = session.post("Current turn")
     pending = session.post("Pending turn")
@@ -659,7 +643,8 @@ def test_stop_and_settle_keep_their_result_when_the_next_wakeup_fails(
 
 
 def test_dropped_connection_before_final_flush_still_settles_the_turn(
-    session: AgentSession, runner: FakeRunner,
+    session: AgentSession,
+    runner: FakeRunner,
 ) -> None:
     turn = session.post("Keep the completed answer")
 
@@ -680,10 +665,14 @@ def test_dropped_connection_before_final_flush_still_settles_the_turn(
 
 
 @pytest.mark.parametrize(
-    ("runtime_class", "runtime_status"), [("none", RuntimeStatus.RUNNING), ("pydantic", RuntimeStatus.STOPPED)],
+    ("runtime_class", "runtime_status"),
+    [("none", RuntimeStatus.RUNNING), ("pydantic", RuntimeStatus.STOPPED)],
 )
 def test_claim_rechecks_the_agent_runtime_before_running(
-    session: AgentSession, runner: FakeRunner, runtime_class: str, runtime_status: str,
+    session: AgentSession,
+    runner: FakeRunner,
+    runtime_class: str,
+    runtime_status: str,
 ) -> None:
     turn = session.post("Queued while available")
     with system_context(reason="test changed runtime availability"):
@@ -694,7 +683,7 @@ def test_claim_rechecks_the_agent_runtime_before_running(
     turn.refresh_from_db()
     session.refresh_from_db()
     assert turn.status == TurnStatus.FAILED
-    assert turn.error == "This agent is not available for in-process chat."
+    assert turn.error == session.agent.chat_blocker()
     assert session.status == SessionStatus.ERROR
     assert runner.prompts == []
 
@@ -720,7 +709,9 @@ def test_deprovision_closes_sessions_owned_by_another_person(session: AgentSessi
 
 
 def test_provider_exception_detail_is_logged_without_being_shown_to_readers(
-    session: AgentSession, runner: FakeRunner, caplog: pytest.LogCaptureFixture,
+    session: AgentSession,
+    runner: FakeRunner,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     turn = session.post("Fail safely")
     runner.error = RuntimeError("Vendor response includes private transport detail")
@@ -741,7 +732,9 @@ def _delete_session_as(user: Any, session_id: int) -> None:
 
 
 def test_delivery_after_session_deletion_is_a_quiet_noop(
-    session: AgentSession, runner: FakeRunner, caplog: pytest.LogCaptureFixture,
+    session: AgentSession,
+    runner: FakeRunner,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     session.post("Deleted before the worker starts")
     session_id = session.pk
@@ -759,8 +752,11 @@ def test_delivery_after_session_deletion_is_a_quiet_noop(
 
 @pytest.mark.parametrize("delete_session", [False, True])
 def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
-    session: AgentSession, runner: FakeRunner, delete_session: bool,
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    session: AgentSession,
+    runner: FakeRunner,
+    delete_session: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     clock = [time.monotonic()]
     monkeypatch.setattr("angee.agents.sessions.monotonic", lambda: clock[0])
@@ -796,7 +792,9 @@ def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
 
 @pytest.mark.parametrize("delete_session", [False, True])
 def test_settlement_after_deletion_is_a_quiet_noop(
-    session: AgentSession, delete_session: bool, capture_tasks: list[Any],
+    session: AgentSession,
+    delete_session: bool,
+    capture_tasks: list[Any],
 ) -> None:
     session.post("Finish after deletion")
     turn = session.claim_turn()
@@ -819,7 +817,8 @@ def test_settlement_after_deletion_is_a_quiet_noop(
 
 
 def test_executor_refuses_a_transaction_without_touching_caller_work(
-    session: AgentSession, runner: FakeRunner,
+    session: AgentSession,
+    runner: FakeRunner,
 ) -> None:
     with transaction.atomic():
         turn = session.post("Still pending after refusal")
@@ -849,8 +848,11 @@ def test_executor_refuses_a_transaction_without_touching_caller_work(
     ],
 )
 def test_timeout_and_cancellation_log_diagnostics_with_stable_public_errors(
-    session: AgentSession, runner: FakeRunner, caplog: pytest.LogCaptureFixture,
-    error: BaseException, message: str,
+    session: AgentSession,
+    runner: FakeRunner,
+    caplog: pytest.LogCaptureFixture,
+    error: BaseException,
+    message: str,
 ) -> None:
     turn = session.post("Retain a safe failure")
     runner.error = error
@@ -865,3 +867,51 @@ def test_timeout_and_cancellation_log_diagnostics_with_stable_public_errors(
     assert records and all(record.levelname == "WARNING" for record in records)
     assert str(turn.pk) in caplog.text
     assert error.args[0] not in caplog.text
+
+
+@pytest.mark.parametrize("runtime,status", [("pydantic", "stopped"), ("claude_code", "running")])
+def test_chat_blocker_is_shared_by_start_post_and_claim(
+    session: AgentSession,
+    runtime: str,
+    status: str,
+) -> None:
+    pending = session.post("Accepted while available")
+    with system_context(reason="test shared chat availability"):
+        Agent.objects.filter(pk=session.agent_id).update(runtime_class=runtime, runtime_status=status)
+    agent = Agent.objects.get(pk=session.agent_id)
+    blocker = agent.chat_blocker()
+    assert blocker
+    with pytest.raises(ValidationError) as refused:
+        AgentSession.objects.start(agent, owner=session.owner, context={})
+    assert refused.value.message_dict["agent"] == [blocker]
+    with pytest.raises(ValidationError) as refused:
+        session.post("Refused before insertion")
+    assert refused.value.message_dict["agent"] == [blocker]
+    assert session.claim_turn() is None
+    pending.refresh_from_db()
+    assert pending.status == TurnStatus.FAILED and pending.error == blocker
+
+
+def test_session_owns_active_selection_and_chat_state(session: AgentSession) -> None:
+    assert session.chat_state(None) == ("idle", None)
+    first = session.post("Active")
+    assert session.chat_state(first) == ("running", None)
+    claimed = session.claim_turn()
+    assert session.chat_state(claimed) == ("running", None)
+    second = session.post("Queued")
+    latest = session.latest_chat_turn(claimed, second)
+    assert latest.pk == second.pk and session.chat_state(latest) == ("running", None)
+    session.cancel_active_turn()
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.status == TurnStatus.CANCELED and second.status == TurnStatus.PENDING
+    refreshed = session.latest_chat_turn(claimed, first)
+    assert refreshed is first
+    assert session.chat_state(refreshed) == ("idle", first)
+    claimed = session.claim_turn()
+    with system_context(reason="test suspended state projection"):
+        claimed.mark_awaiting_approval()
+    assert session.chat_state(claimed) == ("idle", None)
+    session.cancel_active_turn()
+    claimed.refresh_from_db()
+    assert session.chat_state(claimed) == ("idle", claimed)

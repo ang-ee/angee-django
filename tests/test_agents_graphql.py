@@ -305,7 +305,9 @@ def test_agent_delete_names_retaining_sessions_and_allows_deletion_after_theirs(
 
 @pytest.mark.parametrize("relation", ["reader", "editor"])
 def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, relation: str,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    relation: str,
 ) -> None:
     """Read/write reach alone cannot lock a delete target or inspect its blockers."""
 
@@ -314,9 +316,11 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
     with system_context(reason="test.agents.delete_permission.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
         AgentSession.objects.create(agent=agent, owner=owner)
-        write_relationships([
-            RelationshipTuple(resource=to_object_ref(agent), relation=relation, subject=to_subject_ref(reader)),
-        ])
+        write_relationships(
+            [
+                RelationshipTuple(resource=to_object_ref(agent), relation=relation, subject=to_subject_ref(reader)),
+            ]
+        )
     with actor_context(reader):
         readable = Agent.objects.get(pk=agent.pk)
         assert readable.has_access("read")
@@ -928,9 +932,7 @@ def test_provision_agent_refuses_while_a_provision_is_under_way(composed_tables:
     assert _agent_state(agent, admin)["lifecycle"] == "PROVISIONING"
 
 
-def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(composed_tables: None, monkeypatch: Any) -> None:
     """A teardown retry for a stuck PROVISIONING row with no daemon names clears locally."""
 
     admin = _platform_admin("agt-empty-deprov-admin")
@@ -1111,9 +1113,7 @@ def test_deprovision_agent_keeps_the_names_when_the_daemon_answers_a_plain_404(
     )
 
 
-def test_provision_agent_records_error_when_plan_resolution_fails(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_provision_agent_records_error_when_plan_resolution_fails(composed_tables: None, monkeypatch: Any) -> None:
     """A plan-resolution failure records ERROR — the agent never strands in PROVISIONING.
 
     `_render_plan` reads the credential chain and agent inputs before the daemon render; a
@@ -1150,9 +1150,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
         assert "credential is unreadable" in agent.last_error
 
 
-def test_reprovision_agent_recreates_service_over_existing_workspace(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_reprovision_agent_recreates_service_over_existing_workspace(composed_tables: None, monkeypatch: Any) -> None:
     """`reprovisionAgent` destroys the old service and recreates it over the kept workspace."""
 
     admin = _platform_admin("agt-reprov-admin")
@@ -1403,9 +1401,7 @@ def _agent_holding(owner: Any, *, workspace: str = "", service: str = "") -> Any
     """Seed another, provisioned agent that records ``workspace``/``service`` as its own."""
 
     with system_context(reason="test.agents.holding.seed"):
-        return Agent.objects.create(
-            name="Owner", owner=owner, workspace=workspace, service=service, lifecycle="ready"
-        )
+        return Agent.objects.create(name="Owner", owner=owner, workspace=workspace, service=service, lifecycle="ready")
 
 
 def _operator_holding(
@@ -1935,9 +1931,7 @@ def test_reprovision_agent_never_forgets_the_new_service_on_a_later_conflict(
     )
 
 
-def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_a_409_over_an_instance_this_agent_records_is_a_plain_failure(composed_tables: None, monkeypatch: Any) -> None:
     """It is never recorded as a conflict the agent "does not record"; the verb's own creation is undone."""
 
     admin = _platform_admin("agt-own-409-admin")
@@ -2040,9 +2034,7 @@ def test_a_service_conflict_without_a_recorded_workspace_cannot_be_verified(
         assert state["conflict_name"] == "agent-ws-orphan"
 
 
-def test_deprovision_agent_destroys_the_verified_conflicting_instance(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_deprovision_agent_destroys_the_verified_conflicting_instance(composed_tables: None, monkeypatch: Any) -> None:
     """Deprovision records the conflicting instance as the agent's own, then destroys it."""
 
     admin = _platform_admin("agt-deprov-conflict-admin")
@@ -2232,9 +2224,7 @@ def test_agent_inference_credential_override_wins_over_model_chain(composed_tabl
         assert service_inputs["model"] == "claude-opus-4-8"
 
 
-def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
-    composed_tables: None, monkeypatch: Any
-) -> None:
+def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(composed_tables: None, monkeypatch: Any) -> None:
     """`agentChatEndpoint` returns the routed url + per-actor route token + mcpServers.
 
     The daemon is mocked. Asserts the resolver looks the agent's `service` up, mints a
@@ -2279,11 +2269,11 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
             minted.append((actor, service, ttl))
             return {"token": "jwt-route", "expires_at": "2026-06-15T00:00:00Z"}
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+    monkeypatch.setattr("angee.agents.runtimes.OperatorDaemon", _FakeDaemon)
 
     query = """
         mutation Chat($id: ID!) {
-          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle }
+          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle protocol_version }
         }
     """
     assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
@@ -2293,6 +2283,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert endpoint["token"] == "jwt-route"
     assert endpoint["expires_at"] == "2026-06-15T00:00:00Z"
     assert endpoint["model_handle"] == "claude-opus-4-8"
+    assert endpoint["protocol_version"] == 1
     assert endpoint["mcp_servers"] == {
         "notes": {"type": "http", "url": "http://host.docker.internal:8101/mcp/notes/"},
     }
@@ -2301,6 +2292,54 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert len(minted) == 1
     actor, service, ttl = minted[0]
     assert actor.startswith("auth/user:") and service == "svc-chat" and ttl == "2h"
+
+
+@pytest.mark.parametrize("secure", [False, True])
+def test_in_process_chat_endpoint_uses_cookie_origin_and_call_permission(
+    composed_tables: None,
+    secure: bool,
+    settings: Any,
+) -> None:
+    settings.ALLOWED_HOSTS = ["localhost"]
+    owner = User.objects.create_user(username="agt-endpoint-owner")
+    stranger = User.objects.create_user(username="agt-endpoint-stranger")
+    with system_context(reason="test.agents.in_process_endpoint"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
+    query = """
+        mutation Chat($id: ID!) {
+          agent_chat_endpoint(id: $id) { url token expires_at protocol_version mcp_servers model_handle }
+        }
+    """
+    request = RequestFactory().post("/graphql/console/", secure=secure, HTTP_HOST="localhost:5173")
+    request.user = owner
+    console = _schema()
+    endpoint = _data(execute_schema(console, query, {"id": str(agent.sqid)}, request=request))["agent_chat_endpoint"]
+    assert endpoint == {
+        "url": f"{'wss' if secure else 'ws'}://localhost:5173/acp/agents/{agent.sqid}/",
+        "token": "",
+        "expires_at": "",
+        "protocol_version": 2,
+        "mcp_servers": {},
+        "model_handle": "",
+    }
+    assert _execute(console, query, {"id": str(agent.sqid)}, user=stranger).errors
+    with system_context(reason="test.agents.unavailable_endpoint"):
+        Agent.objects.filter(pk=agent.pk).update(runtime_status="stopped")
+    assert _execute(console, query, {"id": str(agent.sqid)}, user=owner).errors
+
+
+def test_container_chat_endpoint_still_requires_platform_admin_for_its_owner(composed_tables: None) -> None:
+    owner = User.objects.create_user(username="agt-container-owner")
+    with system_context(reason="test.agents.container_endpoint"):
+        agent = Agent.objects.create(name="Container", owner=owner, runtime_class="claude_code", service="svc")
+    result = _execute(
+        _schema(),
+        "mutation($id: ID!) { agent_chat_endpoint(id: $id) { url } }",
+        {"id": str(agent.sqid)},
+        user=owner,
+    )
+    assert result.errors
+    assert "Platform admin" in result.errors[0].message
 
 
 def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None) -> None:
@@ -2376,30 +2415,22 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert viewer_session is None
 
 
-def test_agent_session_mutations_dispatch_owner_verbs(composed_tables: None, capture_tasks: list[Any]) -> None:
-    """An ordinary owner can start, post, stop and close through the session surface."""
+def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_tasks: list[Any]) -> None:
+    """The GraphQL read side retains caller-scoped sessions, turns and view resolution."""
 
-    owner = User.objects.create_user(username="agt-chat-owner", email="chat-owner@example.com")
+    owner = User.objects.create_user(username="agt-chat-owner")
+    reader = User.objects.create_user(username="agt-chat-reader")
     with system_context(reason="test.agents.chat.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
-    console = _schema()
-    started = _data(
-        _execute(
-            console,
-            """
-            mutation Start($agent: ID!, $context: JSON!) {
-              start_agent_session(agent: $agent, context: $context) {
-                id status context agent { runs_in_process permissions }
-              }
-            }
-            """,
-            {"agent": str(agent.sqid), "context": {"kind": "list", "type": "agents/agent"}},
-            user=owner,
+        write_relationships(
+            [
+                RelationshipTuple(resource=to_object_ref(agent), relation="reader", subject=to_subject_ref(reader)),
+            ]
         )
-    )["start_agent_session"]
-    assert started["status"] == "IDLE"
-    assert started["context"] == {"kind": "list", "type": "agents/agent"}
-    assert started["agent"] == {"runs_in_process": True, "permissions": ["call"]}
+    with actor_context(owner):
+        session = AgentSession.objects.start(agent, owner=owner, context={"kind": "list"})
+        turn = session.post("Private question")
+    console = _schema()
     target = _data(
         _execute(
             console,
@@ -2407,146 +2438,22 @@ def test_agent_session_mutations_dispatch_owner_verbs(composed_tables: None, cap
             user=owner,
         )
     )["resolve_session_for_view"]
-    assert target == {"runs_in_process": True, "session_id": started["id"]}
-
-    post = """
-        mutation Post($session: ID!, $text: String!) {
-          post_agent_message(session: $session, text: $text) { id prompt status }
+    assert target == {"runs_in_process": True, "session_id": str(session.sqid)}
+    query = """
+        query Chat($id: String!) {
+          agent_sessions { id context agent { permissions } }
+          agent_turns { id prompt }
+          agent_turns_by_pk(id: $id) { id prompt }
         }
     """
-    posted = _data(
-        _execute(console, post, {"session": started["id"], "text": "First message"}, user=owner)
-    )["post_agent_message"]
-    assert posted["prompt"] == "First message"
-    assert posted["status"] == "PENDING"
-    stopped = _data(
-        _execute(
-            console,
-            "mutation Stop($turn: ID!) { cancel_agent_turn(turn: $turn) { status } }",
-            {"turn": posted["id"]},
-            user=owner,
-        )
-    )["cancel_agent_turn"]
-    assert stopped == {"status": "CANCELED"}
-    _data(_execute(console, post, {"session": started["id"], "text": "Second message"}, user=owner))
-    closed = _data(
-        _execute(
-            console,
-            "mutation Close($session: ID!) { close_agent_session(session: $session) { status } }",
-            {"session": started["id"]},
-            user=owner,
-        )
-    )["close_agent_session"]
-    assert closed == {"status": "CLOSED"}
-    with system_context(reason="test.agents.chat.verify"):
-        turns = AgentTurn.objects.filter(session__sqid=started["id"])
-        assert set(turns.values_list("status", flat=True)) == {"canceled"}
-        assert AgentSession.objects.get(sqid=started["id"]).owner_id == owner.pk
-    assert [name for name, _ in capture_tasks] == ["agents.run_session", "agents.run_session"]
-
-
-def test_agent_session_mutations_require_call_not_agent_write(composed_tables: None) -> None:
-    """An editor without call cannot start or post, even when owning an old session."""
-
-    owner = User.objects.create_user(username="agt-call-owner", email="call-owner@example.com")
-    editor = User.objects.create_user(username="agt-call-editor", email="call-editor@example.com")
-    with system_context(reason="test.agents.call.seed"):
-        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
-        session = AgentSession.objects.create(agent=agent, owner=editor)
-        write_relationships([
-            RelationshipTuple(resource=to_object_ref(agent), relation="editor", subject=to_subject_ref(editor)),
-        ])
-    with actor_context(editor):
-        agent = Agent.objects.get(pk=agent.pk)
-        session = AgentSession.objects.get(pk=session.pk)
-        assert agent.has_access("write")
-        assert not agent.has_access("call")
-        assert session.has_access("write")
-        assert not session.has_access("post")
-    console = _schema()
-    projected = _data(
-        _execute(
-            console,
-            "query Agent($id: String!) { agents_by_pk(id: $id) { permissions } }",
-            {"id": str(agent.sqid)},
-            user=editor,
-        )
-    )["agents_by_pk"]
-    assert projected == {"permissions": []}
-    started = _execute(
-        console,
-        "mutation Start($agent: ID!) { start_agent_session(agent: $agent) { id } }",
-        {"agent": str(agent.sqid)},
-        user=editor,
-    )
-    assert started.errors is not None
-    assert "was not found" in str(started.errors[0])
-    posted = _execute(
-        console,
-        'mutation Post($session: ID!) { post_agent_message(session: $session, text: "Denied") { id } }',
-        {"session": str(session.sqid)},
-        user=editor,
-    )
-    assert posted.errors is not None
-    assert "was not found" in str(posted.errors[0])
-    with system_context(reason="test.agents.call.verify"):
-        assert AgentSession.objects.filter(agent=agent).count() == 1
-        assert not AgentTurn.objects.filter(session=session).exists()
-
-
-def test_agent_session_stop_close_and_turn_reads_refuse_another_user(composed_tables: None) -> None:
-    """Reading an agent does not permit changing or reading another owner's chat."""
-
-    owner = User.objects.create_user(username="agt-private-session-owner")
-    reader = User.objects.create_user(username="agt-private-session-reader")
-    with system_context(reason="test.agents.private_session.seed"):
-        agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner, status="running")
-        turn = AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
-        write_relationships([
-            RelationshipTuple(resource=to_object_ref(agent), relation="reader", subject=to_subject_ref(reader)),
-        ])
-    console = _schema()
-    for query, variables in (
-        ("mutation Stop($turn: ID!) { cancel_agent_turn(turn: $turn) { status } }", {"turn": str(turn.sqid)}),
-        (
-            "mutation Close($session: ID!) { close_agent_session(session: $session) { status } }",
-            {"session": str(session.sqid)},
-        ),
-    ):
-        result = _execute(console, query, variables, user=reader)
-        assert result.errors is not None
-        assert "was not found" in result.errors[0].message
-    visible = _data(_execute(
-        console,
-        "query Turns($id: String!) { agent_turns { id prompt } agent_turns_by_pk(id: $id) { id prompt } }",
-        {"id": str(turn.sqid)},
-        user=reader,
-    ))
-    assert visible == {"agent_turns": [], "agent_turns_by_pk": None}
-    with system_context(reason="test.agents.private_session.verify"):
-        assert AgentSession.objects.get(pk=session.pk).status == "running"
-        assert AgentTurn.objects.get(pk=turn.pk).status == "running"
-
-
-@pytest.mark.parametrize("context", [None, [], "text", 42, False])
-def test_agent_session_start_rejects_non_object_context(composed_tables: None, context: Any) -> None:
-    """Malformed view context is rejected instead of silently discarded."""
-
-    owner = User.objects.create_user(username="agt-context-owner")
-    with system_context(reason="test.agents.session_context.seed"):
-        agent = Agent.objects.create(name="Assistant", owner=owner, runtime_class="pydantic", runtime_status="running")
-    result = _execute(
-        _schema(),
-        "mutation Start($agent: ID!, $context: JSON) { start_agent_session(agent: $agent, context: $context) { id } }",
-        {"agent": str(agent.sqid), "context": context},
-        user=owner,
-    )
-    assert result.errors is not None
-    assert result.errors[0].message == "Session context must be an object."
-    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-    with system_context(reason="test.agents.session_context.verify"):
-        assert not AgentSession.objects.filter(agent=agent).exists()
+    mine = _data(_execute(console, query, {"id": str(turn.sqid)}, user=owner))
+    assert mine == {
+        "agent_sessions": [{"id": str(session.sqid), "context": {"kind": "list"}, "agent": {"permissions": ["call"]}}],
+        "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question"}],
+        "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question"},
+    }
+    hidden = _data(_execute(console, query, {"id": str(turn.sqid)}, user=reader))
+    assert hidden == {"agent_sessions": [], "agent_turns": [], "agent_turns_by_pk": None}
 
 
 def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None) -> None:
@@ -2555,7 +2462,11 @@ def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None
     admin = _platform_admin("agt-chat-deprovision")
     with system_context(reason="test.agents.deprovision_sessions.seed"):
         agent = Agent.objects.create(
-            name="Assistant", owner=admin, runtime_class="pydantic", runtime_status="running", lifecycle="ready",
+            name="Assistant",
+            owner=admin,
+            runtime_class="pydantic",
+            runtime_status="running",
+            lifecycle="ready",
         )
         for status in ("running", "awaiting_approval"):
             session = AgentSession.objects.create(agent=agent, owner=admin, status=status)

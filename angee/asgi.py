@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import AsyncExitStack
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -91,6 +92,10 @@ def _application() -> Any:
     which runs each mount's own ASGI lifespan (the FastMCP session manager's task
     group) at server startup. The serving ASGI server must send the lifespan
     protocol — Angee serves with uvicorn (see ``docs/stack.md``).
+
+    Every WebSocket uses Django session authentication and Origin validation:
+    the request's own scheme/host, CSRF_TRUSTED_ORIGINS, and loopback origins in
+    DEBUG are trusted. Missing Origins are refused, even with ALLOWED_HOSTS=['*'].
     """
 
     # Deferred: importing ``django.core.asgi`` at module collection time pulls on
@@ -111,11 +116,42 @@ def _application() -> Any:
         "lifespan": _Lifespan([app for _prefix, app in http_mounts]),
     }
     if websocket_patterns:
-        from channels.auth import AuthMiddlewareStack
-        from channels.routing import URLRouter
-
-        mapping["websocket"] = AuthMiddlewareStack(URLRouter(websocket_patterns))
+        mapping["websocket"] = websocket_application(websocket_patterns)
     return ProtocolTypeRouter(mapping)
+
+
+def websocket_application(patterns: list[object]) -> ASGIApp:
+    """Compose the shared cookie/Origin boundary for addon WebSocket routes."""
+
+    from channels.auth import AuthMiddlewareStack
+    from channels.routing import URLRouter
+
+    return _WebsocketOriginValidator(AuthMiddlewareStack(URLRouter(patterns)))
+
+
+class _WebsocketOriginValidator:
+    def __init__(self, application: ASGIApp) -> None:
+        self.application = application
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        from channels.security.websocket import OriginValidator
+        from django.conf import settings
+        from django.core.exceptions import DisallowedHost
+        from django.core.handlers.asgi import ASGIRequest
+
+        request = ASGIRequest(
+            {**scope, "method": "GET", "scheme": "https" if scope.get("scheme") in ("https", "wss") else "http"},
+            BytesIO(),
+        )
+        trusted = [origin.replace("://*.", "://.") for origin in settings.CSRF_TRUSTED_ORIGINS if origin != "*"]
+        try:
+            trusted.append(f"{request.scheme}://{request.get_host()}")
+        except DisallowedHost:
+            await OriginValidator(self.application, [])(scope, receive, send)
+            return
+        if settings.DEBUG:
+            trusted.extend(("localhost", "127.0.0.1", "[::1]"))
+        await OriginValidator(self.application, trusted)(scope, receive, send)
 
 
 class _LazyApplication:
