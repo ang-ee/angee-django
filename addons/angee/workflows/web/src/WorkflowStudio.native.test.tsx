@@ -2,12 +2,20 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { StudioStory } from "./WorkflowStudio.stories";
+const guards = vi.hoisted(() => ({ callbacks: [] as unknown[] }));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
+  return { ...actual, useUnsavedChangesNavigationGuard: (options: Parameters<typeof actual.useUnsavedChangesNavigationGuard>[0]) => {
+    guards.callbacks.push(options.isDirtyNow);
+    return actual.useUnsavedChangesNavigationGuard(options);
+  } };
+});
 
 beforeAll(() => {
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); guards.callbacks = []; });
 
 async function selectEntry() {
   const node = await screen.findByTestId("rf__node-entry");
@@ -44,6 +52,7 @@ test("conflicts keep edits and overwrite submits the observed revision", async (
   const key = await selectEntry();
   fireEvent.change(key, { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(await screen.findAllByText("Draft changed since it was loaded.")).toHaveLength(1);
   fireEvent.click(await screen.findByRole("button", { name: "Overwrite with mine" }));
   await waitFor(() => expect(requests.mock.calls.map(([request]) => request).filter((request) => request.query.includes("save_workflow_draft"))).toHaveLength(2));
   const saves = requests.mock.calls.map(([request]) => request).filter((request) => request.query.includes("save_workflow_draft"));
@@ -71,6 +80,8 @@ test("a failed latest read preserves edits and keeps conflict recovery available
   expect(await screen.findByText("Request failed.", {}, { timeout: 10000 })).toBeTruthy();
   expect((screen.getByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("mine");
   expect(screen.getByRole("button", { name: "Overwrite with mine" }).hasAttribute("disabled")).toBe(false);
+  fireEvent.change(key, { target: { value: "still_mine" } });
+  expect(screen.getByText("Request failed.")).toBeTruthy();
 }, 15000);
 
 test("publication issues locate the generated config field and flag its node", async () => {
@@ -79,6 +90,73 @@ test("publication issues locate the generated config field and flag its node", a
   fireEvent.click(screen.getByRole("button", { name: "Publish" }));
   expect(await screen.findByText("Threshold is too small.")).toBeTruthy();
   expect(await screen.findByText("Issues")).toBeTruthy();
+  expect(screen.getByText("Draft could not be published. Resolve the highlighted issues.")).toBeTruthy();
+  const threshold = screen.getByRole("textbox", { name: "Threshold" });
+  fireEvent.change(threshold, { target: { value: "2" } });
+  await waitFor(() => expect(screen.queryByText("Threshold is too small.")).toBeNull());
+  fireEvent.change(screen.getByRole("textbox", { name: "Label" }), { target: { value: "Changed label" } });
+  expect(screen.queryByText("Threshold is too small.")).toBeNull();
+});
+
+test.each([[true, false, "Draft could not be saved. Resolve the highlighted issues."],
+  [false, true, "Draft saved. Resolve the highlighted issues before publishing."]] as const)(
+  "save issues distinguish refusal from acknowledgement (%s, %s)", async (saveInvalid, savedDiagnostics, message) => {
+    render(<StudioStory saveInvalid={saveInvalid} savedDiagnostics={savedDiagnostics} />);
+    const key = await selectEntry();
+    fireEvent.change(key, { target: { value: "entry" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Label" }), { target: { value: "Edited" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.getByText("Threshold is too small.")).toBeTruthy();
+    if (saveInvalid) expect(screen.queryByText(/Draft saved\./)).toBeNull();
+  });
+
+test("an unused invalid FormSpec cannot break the Studio or its working inspector", async () => {
+  render(<StudioStory badUnusedSchema />);
+  await selectEntry();
+  expect(screen.getByRole("textbox", { name: "Threshold" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeTruthy();
+});
+
+test("editing keeps the navigation blocker's live dirtiness callback stable", async () => {
+  render(<StudioStory />);
+  const key = await selectEntry();
+  fireEvent.change(key, { target: { value: "first_edit" } });
+  fireEvent.change(key, { target: { value: "second_edit" } });
+  expect(guards.callbacks.length).toBeGreaterThan(1);
+  expect(new Set(guards.callbacks).size).toBe(1);
+});
+
+test("local duplicate-key refusal uses its own message and never acknowledges a save", async () => {
+  const requests = vi.fn();
+  render(<StudioStory linked onRequest={requests} />);
+  await screen.findByTestId("rf__node-entry");
+  fireEvent.click(screen.getByTestId("rf__node-second"));
+  fireEvent.change(await screen.findByRole("textbox", { name: "Key" }), { target: { value: "entry" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(await screen.findByText("Draft could not be saved. Node keys must be unique.")).toBeTruthy();
+  expect(screen.queryByText(/Draft saved\./)).toBeNull();
+  expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(false);
+});
+
+test("configured outcome issues are visible and flag their node", async () => {
+  render(<StudioStory outcomeIssue />);
+  expect(await screen.findByText("entry: This step's configured outcome is invalid.")).toBeTruthy();
+  expect(await screen.findByText("Issues")).toBeTruthy();
+});
+
+test("an empty persisted layout displays automatic positions without a dirty draft, and saves them on explicit save", async () => {
+  const requests = vi.fn();
+  render(<StudioStory linked emptyLayout onRequest={requests} />);
+  await selectEntry();
+  expect(screen.getByRole("button", { name: "Save draft" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByTestId("rf__node-entry").style.transform).not.toBe(screen.getByTestId("rf__node-second").style.transform);
+  fireEvent.change(screen.getByRole("textbox", { name: "Label" }), { target: { value: "Edited" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  expect(Object.keys(save.variables.layout).sort()).toEqual(["entry", "second"]);
+  expect(save.variables.layout.entry).not.toEqual(save.variables.layout.second);
 });
 
 test("palette excludes internal steps and structural edits persist layout", async () => {
@@ -223,7 +301,7 @@ test("links wait for their declared source handles on the first outcomes load", 
   expect(await screen.findByRole("button", { name: "Delete link from Entry (entry), Done, to Second (second)" })).toBeTruthy();
 });
 
-test("changing the set of client identities clears existing field issues", async () => {
+test("adding a client identity retains issues on existing nodes", async () => {
   render(<StudioStory invalid />);
   await selectEntry();
   fireEvent.click(screen.getByRole("button", { name: "Publish" }));
@@ -233,15 +311,15 @@ test("changing the set of client identities clears existing field issues", async
   await screen.findByRole("button", { name: "Select Echo (echo)" });
   fireEvent.click(screen.getByTestId("rf__node-entry"));
   await screen.findByRole("textbox", { name: "Key" });
-  expect(screen.queryByText("Threshold is too small.")).toBeNull();
-  expect(screen.queryByText("Issues")).toBeNull();
+  expect(screen.getByText("Threshold is too small.")).toBeTruthy();
+  expect(screen.getByText("Issues")).toBeTruthy();
 });
 
 test("unrendered document and config issues appear once in the node-prefixed summary", async () => {
   render(<StudioStory unrenderedIssues />);
   await selectEntry();
   fireEvent.click(screen.getByRole("button", { name: "Publish" }));
-  const summary = await screen.findByText("entry: Missing binding. entry: Unknown config field.");
+  const summary = await screen.findByText(/entry: Missing binding\. entry: Unknown config field\./);
   expect(summary).toBeTruthy();
   expect(screen.getAllByText(/Missing binding\./)).toHaveLength(1);
 });

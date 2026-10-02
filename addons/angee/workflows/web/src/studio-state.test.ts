@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { createKeyedEntry, defaultWidgets, deserializeFormSpec } from "@angee/ui";
-import { captureStudioIssues, projectStudioIssues, studioSnapshot, studioValues } from "./studio-state";
+import { captureStudioIssues, dropStudioIssue, projectStudioIssues, studioSnapshot, studioValues } from "./studio-state";
 
 const configFields = new Map([["echo", deserializeFormSpec({ type: "object", properties: {
   target: { type: "string" }, hidden: { type: "string", hidden: true },
@@ -28,7 +28,7 @@ test("duplicate keys identify every client id while server errors follow reorder
   } } });
   values.entries.reverse();
   const captured = captureStudioIssues({ fieldErrors: { "nodes.renamed.config.target": ["Missing"] }, formErrors: [] }, new Map([["renamed", "first"]]));
-  expect(projectStudioIssues(captured, values.entries, configFields)).toEqual({ fieldErrors: { "entries.1.value.config.target": ["Missing"] }, formErrors: [] });
+  expect(projectStudioIssues(captured, values.entries, (step) => configFields.get(step) ?? [])).toEqual({ fieldErrors: { "entries.1.value.config.target": ["Missing"] }, formErrors: [] });
 });
 
 test("captured issues stay on the same node after earlier deletion and unrendered declarations reach the summary", () => {
@@ -38,7 +38,7 @@ test("captured issues stay on the same node after earlier deletion and unrendere
     "nodes.second.config.unknown": ["Unknown config"] }, formErrors: [] }, new Map([["second", "second"]]));
   values.entries.shift();
   values.entries[0]!.key = "renamed";
-  expect(projectStudioIssues(issues, values.entries, configFields)).toEqual({ fieldErrors: { "entries.0.value.config.target": ["Missing"] },
+  expect(projectStudioIssues(issues, values.entries, (step) => configFields.get(step) ?? [])).toEqual({ fieldErrors: { "entries.0.value.config.target": ["Missing"] },
     formErrors: ["renamed: Bad binding", "renamed: Retired implementation", "renamed: Hidden value", "renamed: Unknown config"] });
 });
 
@@ -57,5 +57,16 @@ test("invalid dotted authored keys still locate their client key control", () =>
   const values = studioValues({ nodes: { entry: { step: "echo" } } }, {});
   values.entries[0]!.key = "invalid.key";
   const captured = captureStudioIssues({ fieldErrors: { "nodes.invalid.key.[key]": ["Invalid key"] }, formErrors: [] }, new Map([["invalid.key", "entry"]]));
-  expect(projectStudioIssues(captured, values.entries, configFields)).toEqual({ fieldErrors: { "entries.0.key": ["Invalid key"] }, formErrors: [] });
+  expect(projectStudioIssues(captured, values.entries, (step) => configFields.get(step) ?? [])).toEqual({ fieldErrors: { "entries.0.key": ["Invalid key"] }, formErrors: [] });
+});
+
+test("editing drops only that node's path and retains the issue origin and form failures", () => {
+  const captured = captureStudioIssues({ fieldErrors: {
+    "nodes.first.config.target": ["Target"], "nodes.first.label": ["Label"], "nodes.second.config.target": ["Other"],
+  }, formErrors: ["Load failed"] }, new Map([["first", "first"], ["second", "second"]]), "publish");
+  const edited = dropStudioIssue(captured, "first", "config.target");
+  expect(edited.nodes.first).toEqual({ label: ["Label"] });
+  expect(edited.nodes.second).toEqual({ "config.target": ["Other"] });
+  expect(edited.origin).toBe("publish");
+  expect(edited.formErrors).toEqual(["Load failed"]);
 });

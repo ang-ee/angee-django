@@ -5,16 +5,16 @@ import type { DocumentType } from "@angee/gql/console";
 import {
   ActionFormProvider, Alert, Button, DescriptorFieldList, Dialog, ErrorBanner, GraphEditor,
   JsonValueSchema, LoadingPanel, PageAside, PrimaryPanePublisher, RailPanel, applyFormErrors, createKeyedEntry,
-  deserializeFormSpec, errorMessage, formSubmitError, useActionForm, useAppRuntime, useWatch, useFormState, useChatter, useChatterContent, useFormHistory,
-  useFormSpecFields, useRuntimeViewAs, useUnsavedChangesNavigationGuard,
-  type FormSpecFieldDescriptor, type GraphEditorLink, type GraphEditorSelection, type GraphViewPosition,
+  deserializeFormSpec, errorMessage, formSubmitError, savedFormSubmitResult, useActionForm, useAppRuntime, useWatch, useFormState, useChatter, useChatterContent, useFormHistory,
+  useRuntimeViewAs, useUnsavedChangesNavigationGuard,
+  type FormSpecFieldDescriptor, type GraphEditorLayout, type GraphEditorLink, type GraphEditorSelection, type GraphViewPosition,
   type UseActionFormResult, type ValidationErrors,
 } from "@angee/ui";
 
 import { PublishWorkflowDocument, SaveWorkflowDraftDocument, WorkflowStepOutcomesDocument, WorkflowStudioDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
-import { EMPTY_ISSUES, OutcomesProjection, captureStudioIssues, diagnosticErrors, projectStudioIssues, studioSnapshot, studioValues,
-  type StudioIssues, type StudioValues, type StudioNode } from "./studio-state";
+import { EMPTY_ISSUES, OutcomesProjection, captureStudioIssues, diagnosticErrors, dropStudioIssue, projectStudioIssues, studioSnapshot, studioValues,
+  type IssueOrigin, type StudioIssues, type StudioValues, type StudioNode } from "./studio-state";
 
 const MODEL = "workflows.Workflow";
 const INSPECTOR_TAB = "workflow-inspector";
@@ -58,8 +58,21 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   const preview = useRuntimeViewAs();
   const chatter = useChatter();
   const { widgets } = useAppRuntime();
-  const configFields = React.useMemo(() => new Map(initial.workflow_step_choices.map((choice) =>
-    [choice.key, deserializeFormSpec(choice.config_schema ?? emptyConfigSchema, widgets)])), [initial.workflow_step_choices, widgets]);
+  const configForm = React.useMemo(() => {
+    const cache = new Map<string, { fields: readonly FormSpecFieldDescriptor[]; error?: string }>();
+    return (step: string) => {
+      let result = cache.get(step);
+      if (!result) {
+        try { result = { fields: deserializeFormSpec(initial.workflow_step_choices.find((choice) => choice.key === step)?.config_schema ?? emptyConfigSchema, widgets) }; }
+        catch (cause) { result = { fields: [], error: errorMessage(cause, t("studio.configFailed")) }; }
+        cache.set(step, result);
+      }
+      return result;
+    };
+  }, [initial.workflow_step_choices, widgets, t]);
+  const configFields = React.useCallback((step: string) => configForm(step).fields, [configForm]);
+  const displayLayout = React.useRef<GraphEditorLayout | null>(null);
+  const layoutResolved = React.useCallback((layout: GraphEditorLayout) => { displayLayout.current = layout; }, []);
   const [selection, setSelection] = React.useState(EMPTY_SELECTION);
   const [intent, setIntent] = React.useState<AddIntent | null>(null);
   const [version, setVersion] = React.useState(initial.workflow_by_pk?.published?.number);
@@ -74,13 +87,13 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   const usedIds = React.useRef(new Set(initialValues.entries.map((entry) => entry.clientId)));
   const [save] = useAuthoredMutation(SaveWorkflowDraftDocument, { invalidateModels: [MODEL] });
   const [publish, publication] = useAuthoredMutation(PublishWorkflowDocument, { invalidateModels: [MODEL, "workflows.WorkflowVersion"] });
-  const capture = (errors: ValidationErrors, keys: ReadonlyMap<string, string>) => setIssues(captureStudioIssues(errors, keys));
-  function refusal(cause: unknown, keys: ReadonlyMap<string, string>, fallback: string) {
+  const capture = (errors: ValidationErrors, keys: ReadonlyMap<string, string>, origin: IssueOrigin) => setIssues(captureStudioIssues(errors, keys, origin));
+  function refusal(cause: unknown, keys: ReadonlyMap<string, string>, fallback: string, origin: IssueOrigin) {
     const result = formSubmitError(cause, fallback);
     if (result.status === "conflict") {
       const current = publicGraphQLErrorsFromUnknown(cause).find((error) => error.extensions.code === "STALE_REVISION")?.extensions.current_revision;
       setConflict({ message: result.message, revision: typeof current === "number" ? current : null });
-    } else capture(result.issues, keys);
+    } else capture(result.issues, keys, origin);
     return result;
   }
   const action = useActionForm<StudioValues, Acknowledgement>({
@@ -88,19 +101,20 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
     fieldNames: [], genericErrorMessage: t("studio.saveFailed"),
     submit: async (values) => {
       setIssues(EMPTY_ISSUES);
-      const snapshot = studioSnapshot(values);
+      const snapshot = studioSnapshot({ ...values, layout: displayLayout.current ?? values.layout });
       if (snapshot.status !== "ok") {
-        if (snapshot.status === "invalid") capture(snapshot.issues, new Map(values.entries.map((entry) => [entry.clientId, entry.clientId])));
-        return snapshot;
+        if (snapshot.status === "invalid") capture(snapshot.issues, new Map(values.entries.map((entry) => [entry.clientId, entry.clientId])), "local");
+        return snapshot.status === "invalid" ? { ...snapshot, issues: { fieldErrors: {}, formErrors: [] } } : snapshot;
       }
       try {
         const response = await save({ id: recordId, draft: snapshot.data.draft, layout: snapshot.data.layout,
           nodeKeys: snapshot.data.nodeKeys, revision: revision.current });
-        if (!response) throw new Error(t("studio.saveFailed"));
         savedKeys.current = new Map(snapshot.data.clientIdByKey);
-        return { status: "ok", data: response.save_workflow_draft };
+        const result = savedFormSubmitResult(response?.save_workflow_draft, t("studio.saveFailed"));
+        if (result.status === "invalid") capture(result.issues, snapshot.data.clientIdByKey, "save");
+        return result.status === "invalid" ? { ...result, issues: { fieldErrors: {}, formErrors: [] } } : result;
       } catch (cause) {
-        const result = refusal(cause, snapshot.data.clientIdByKey, t("studio.saveFailed"));
+        const result = refusal(cause, snapshot.data.clientIdByKey, t("studio.saveFailed"), "save");
         // Stable issues are applied below at current paths, once, by applyFormErrors.
         return result.status === "invalid" ? { ...result, issues: { fieldErrors: {}, formErrors: [] } } : result;
       }
@@ -108,32 +122,40 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
     onSuccess: (values, acknowledgement) => {
       revision.current = acknowledgement.revision;
       setConflict(null);
-      action.form.reset(values);
+      action.form.reset({ ...values, layout: displayLayout.current ?? values.layout });
       history.reset();
-      capture(diagnosticErrors(acknowledgement.diagnostics), savedKeys.current);
+      capture(diagnosticErrors(acknowledgement.diagnostics), savedKeys.current, "saved");
     },
   });
   const form = action.form;
   const readOnly = !writable || Boolean(preview.viewAs || preview.pending);
   const disabled = readOnly || !active || action.submitting || publication.fetching || loadingLatest;
-  useUnsavedChangesNavigationGuard({ isDirty: form.formState.isDirty, isDirtyNow: () => form.formState.isDirty, readOnly, allowSearchChanges: true });
+  const isDirtyNow = React.useCallback(() => form.formState.isDirty, [form]);
+  useUnsavedChangesNavigationGuard({ isDirty: form.formState.isDirty, isDirtyNow, readOnly, allowSearchChanges: true });
   const history = useFormHistory(form, { readOnly: disabled });
   const topology = useWatch({ control: form.control, compute: (values: StudioValues) => JSON.stringify(values.entries.map(({ clientId, key, value }) => ({
     clientId, key, step: value.step, label: value.label, next: value.next,
   }))) });
   const entryIds = useWatch({ control: form.control, compute: (values: StudioValues) => values.entries.map((entry) => entry.clientId) });
-  const idSet = stableSerialize([...entryIds].sort());
-  React.useEffect(() => { setIssues(EMPTY_ISSUES); }, [idSet]);
+  const projectedPaths = React.useRef<string[]>([]);
   const applyIssues = React.useCallback(() => {
-    form.clearErrors();
+    if (projectedPaths.current.length) form.clearErrors(projectedPaths.current as Parameters<typeof form.clearErrors>[0]);
     const entries = form.getValues().entries;
     const projected = projectStudioIssues(issues, entries, configFields);
-    if (Object.keys(projected.fieldErrors).length || projected.formErrors.length) applyFormErrors(form, { status: "invalid", issues: projected }, {
-      fieldNames: entries.flatMap((_, index) => [`entries.${index}.key`, `entries.${index}.value.label`, `entries.${index}.value.config`]),
-      fieldSummary: () => t("studio.savedWithIssues"),
+    projectedPaths.current = Object.keys(projected.fieldErrors);
+    applyFormErrors(form, { status: "invalid", issues: { fieldErrors: projected.fieldErrors, formErrors: [] } });
+  }, [issues, configFields, form]);
+  React.useEffect(() => { applyIssues(); }, [applyIssues, entryIds]);
+  React.useEffect(() => {
+    const subscription = form.watch((_values, { name, type }) => {
+      if (type !== "change" || !name) return;
+      const match = /^entries\.(\d+)\.(key|value\.(.+))$/.exec(name);
+      if (!match) return;
+      const entry = form.getValues().entries[Number(match[1])];
+      if (entry) setIssues((current) => dropStudioIssue(current, entry.clientId, match[2] === "key" ? "[key]" : match[3]!));
     });
-  }, [issues, configFields, form, t]);
-  React.useEffect(() => { applyIssues(); }, [applyIssues, topology]);
+    return () => subscription.unsubscribe();
+  }, [form]);
   const commitConfigurations = React.useCallback(() => {
     const values = form.getValues();
     for (const entry of values.entries) usedKeys.current.add(entry.key);
@@ -190,9 +212,9 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   </RailPanel>, [initial.workflow_step_choices, disabled, add, t]);
   const commit = React.useCallback((group: string) => { history.commit(group); commitConfigurations(); }, [history.commit, commitConfigurations]);
   const inspector = React.useMemo(() => ({ tabs: [{ id: INSPECTOR_TAB, label: t("studio.inspector"), icon: "settings",
-    children: <StudioInspector index={index} form={form} choices={initial.workflow_step_choices}
+    children: <StudioInspector index={index} form={form} configForm={configForm}
       disabled={disabled} start={history.start} commit={commit} />,
-  }] }), [form, index, initial.workflow_step_choices, disabled, history.start, commit, t]);
+  }] }), [form, index, configForm, disabled, history.start, commit, t]);
   useChatterContent(active ? inspector : null);
 
   async function discard(): Promise<void> {
@@ -212,15 +234,18 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   }
   async function publishSaved(): Promise<void> {
     if (disabled || form.formState.isDirty || conflict) return;
-    setIssues(EMPTY_ISSUES); action.resetErrors();
+    setIssues(EMPTY_ISSUES); form.clearErrors("root.server");
     try {
       const response = await publish({ id: recordId, revision: revision.current });
       if (!response) throw new Error(t("studio.publishFailed"));
       setVersion(response.publish_workflow.number); setDependents(response.publish_workflow.dependents);
-    } catch (cause) { refusal(cause, savedKeys.current, t("studio.publishFailed")); }
+    } catch (cause) { refusal(cause, savedKeys.current, t("studio.publishFailed"), "publish"); }
   }
   const projected = projectStudioIssues(issues, form.getValues().entries, configFields);
   const issueIds = Object.keys(issues.nodes);
+  const hasIssues = Object.keys(projected.fieldErrors).length || projected.formErrors.length;
+  const issueMessage = issues.origin === "saved" ? t("studio.savedWithIssues") : issues.origin === "publish"
+    ? t("studio.publishRefused") : issues.origin === "local" ? t("studio.duplicateKeys") : t("studio.saveRefused");
   return <ActionFormProvider {...form}>
     <PrimaryPanePublisher node={active ? palette : null} />
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -232,8 +257,8 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
         <Button type="button" disabled={disabled || form.formState.isDirty || conflict !== null} onClick={() => void publishSaved()}>{t("studio.publish")}</Button>
         <span className="text-sm text-fg-muted">{version == null ? t("studio.unpublished") : t("studio.version", { number: version })}</span>
       </div>
-      {action.formError ? <ErrorBanner description={action.formError} /> : null}
-      {projected.formErrors.length && !action.formError ? <ErrorBanner description={projected.formErrors.join("\n")} /> : null}
+      {action.formError && (!conflict || !action.saveConflict) ? <ErrorBanner description={action.formError} /> : null}
+      {hasIssues ? <ErrorBanner description={[issueMessage, ...projected.formErrors].join("\n")} /> : null}
       {conflict ? <Alert tone="warning"><span>{conflict.message}</span><div className="flex flex-wrap gap-2">
         <Button type="button" disabled={disabled || conflict.revision == null} onClick={() => {
           if (conflict.revision == null) return;
@@ -244,7 +269,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
       </div></Alert> : null}
       {dependents.length ? <Alert tone="info">{t("studio.dependents", { names: dependents.join(", ") })}</Alert> : null}
       <StudioGraph form={form} recordId={recordId} topology={topology} selection={selection} configurations={configurations}
-        select={select} active={active} disabled={disabled} update={update} add={setIntent} issueIds={issueIds} />
+        select={select} active={active} disabled={disabled} update={update} add={setIntent} issueIds={issueIds} layoutResolved={layoutResolved} />
     </div>
     <Dialog.Root open={intent !== null} onOpenChange={(open) => { if (!open) setIntent(null); }}>
       <Dialog.Portal><Dialog.Backdrop /><Dialog.Content>
@@ -256,36 +281,37 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   </ActionFormProvider>;
 }
 
-function StudioInspector({ index, form, choices, disabled, start, commit }: {
-  index: number; form: Form; choices: readonly Choice[]; disabled: boolean;
+type ConfigForm = (step: string) => { fields: readonly FormSpecFieldDescriptor[]; error?: string };
+function StudioInspector({ index, form, configForm, disabled, start, commit }: {
+  index: number; form: Form; configForm: ConfigForm; disabled: boolean;
   start: (group: string) => void; commit: (group: string) => void;
 }): React.ReactElement {
   const state = useFormState({ control: form.control });
   const t = useWorkflowsT();
   return <ActionFormProvider {...form} formState={state}><PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0">
     <RailPanel title={t("studio.inspector")} empty={t("studio.selectNode")}>
-      {index < 0 ? null : <NodeInspector index={index} form={form} choices={choices} disabled={disabled} start={start} commit={commit} />}
+      {index < 0 ? null : <NodeInspector index={index} form={form} configForm={configForm} disabled={disabled} start={start} commit={commit} />}
     </RailPanel>
   </PageAside></ActionFormProvider>;
 }
 
-function NodeInspector({ index, form, choices, disabled, start, commit }: {
-  index: number; form: Form; choices: readonly Choice[]; disabled: boolean;
+function NodeInspector({ index, form, configForm, disabled, start, commit }: {
+  index: number; form: Form; configForm: ConfigForm; disabled: boolean;
   start: (group: string) => void; commit: (group: string) => void;
 }): React.ReactElement {
   const t = useWorkflowsT();
   const entry = useWatch({ control: form.control, compute: (values: StudioValues) => values.entries[index] });
-  const choice = choices.find((item) => item.key === entry?.value.step);
-  const config = useFormSpecFields(choice?.config_schema ?? emptyConfigSchema);
+  const config = configForm(entry?.value.step ?? "");
   const prefix = `entries.${index}`;
   const fields: readonly FormSpecFieldDescriptor[] = [
     { name: `${prefix}.key`, label: t("studio.key"), widget: "text" },
     { name: `${prefix}.value.label`, label: t("studio.label"), widget: "text" },
-    { name: `${prefix}.value.config`, label: t("studio.config"), widget: "object", objectTemplate: config },
+    { name: `${prefix}.value.config`, label: t("studio.config"), widget: "object", objectTemplate: config.fields },
   ];
   return <div className="grid gap-4 p-3" onFocusCapture={() => start(prefix)}
     onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) commit(prefix); }}>
     <DescriptorFieldList fields={fields} readOnly={disabled} />
+    {config.error ? <ErrorBanner description={config.error} /> : null}
   </div>;
 }
 
@@ -293,10 +319,11 @@ const StructureProjection = v.array(v.object({
   clientId: v.string(), key: v.string(), step: v.string(), label: v.string(),
   next: v.record(v.string(), v.union([v.string(), v.array(v.string())])),
 }));
-function StudioGraph({ form, recordId, topology, selection, select, configurations, active, disabled, update, add, issueIds }: {
+function StudioGraph({ form, recordId, topology, selection, select, configurations, active, disabled, update, add, issueIds, layoutResolved }: {
   form: Form; recordId: string; topology: string; selection: GraphEditorSelection;
   select: (value: GraphEditorSelection) => void; disabled: boolean; active: boolean;
   configurations: ReturnType<typeof configurationsFor>; issueIds: readonly string[];
+  layoutResolved: (layout: GraphEditorLayout) => void;
   update: (change: (values: StudioValues) => void) => void; add: (intent: AddIntent) => void;
 }): React.ReactElement {
   const t = useWorkflowsT();
@@ -316,7 +343,8 @@ function StudioGraph({ form, recordId, topology, selection, select, configuratio
           .filter((to) => ids.has(to)).map((to) => ({ from: entry.clientId, port, to })) : [])),
     };
   }, [topology, outcomes.data]);
-  const status = Object.fromEntries(issueIds.map((id) => [id, { label: t("studio.issues"), tone: "danger" as const }]));
+  const outcomeIssues = (outcomes.data?.workflow_step_outcomes ?? []).flatMap((node) => node.issues.map((issue) => ({ node: node.node, message: issue.message })));
+  const status = Object.fromEntries([...issueIds, ...outcomeIssues.map((issue) => issue.node)].map((id) => [id, { label: t("studio.issues"), tone: "danger" as const }]));
   const canLink = React.useCallback((from: string, _port: string, to: string) => {
     const visited = new Set<string>();
     const reaches = (id: string): boolean => id === from || (!visited.has(id) && (visited.add(id), graph.links.some((edge) => edge.from === id && reaches(edge.to))));
@@ -335,8 +363,10 @@ function StudioGraph({ form, recordId, topology, selection, select, configuratio
   }
   return <div className="flex h-[65vh] min-h-[32rem] shrink-0 flex-col" data-testid="workflow-studio-canvas">
     {outcomes.error ? <ErrorBanner description={errorMessage(outcomes.error, t("studio.outcomesFailed"))} /> : null}
+    {outcomeIssues.length ? <ErrorBanner description={outcomeIssues.map((issue) => `${form.getValues().entries.find((entry) => entry.clientId === issue.node)?.key ?? issue.node}: ${issue.message}`).join("\n")} /> : null}
     <GraphEditor {...graph} layout={layout} selected={selection} onSelectionChange={select} readOnly={disabled || !outcomes.data}
       className="min-h-0 flex-1" status={status} canLink={canLink} onLink={(value) => link(value)} onUnlink={(value) => link(value, true)}
+      onLayoutResolved={layoutResolved}
       onLayoutChange={(value) => update((values) => { values.layout = value; })}
       onDelete={(ids) => update((values) => {
         values.entries = values.entries.filter((entry) => !ids.includes(entry.clientId));

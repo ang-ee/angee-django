@@ -23,7 +23,8 @@ export type StudioValues = {
   layout: GraphEditorLayout;
   document: Record<string, unknown>;
 };
-export type StudioIssues = { nodes: Record<string, Record<string, readonly string[]>>; formErrors: readonly string[] };
+export type IssueOrigin = "saved" | "save" | "publish" | "local";
+export type StudioIssues = { nodes: Record<string, Record<string, readonly string[]>>; formErrors: readonly string[]; origin?: IssueOrigin };
 export const EMPTY_ISSUES: StudioIssues = { nodes: {}, formErrors: [] };
 
 /** Loaded authored keys also serve as the session's initial client identities. */
@@ -49,7 +50,7 @@ export function studioSnapshot(values: StudioValues): FormSubmitResult<{
 }
 
 /** Capture server paths against the submission's keys, independently of array order. */
-export function captureStudioIssues(issues: ValidationErrors, ids: ReadonlyMap<string, string>): StudioIssues {
+export function captureStudioIssues(issues: ValidationErrors, ids: ReadonlyMap<string, string>, origin: IssueOrigin = "save"): StudioIssues {
   const nodes: StudioIssues["nodes"] = {};
   const formErrors = [...issues.formErrors];
   for (const [path, messages] of Object.entries(issues.fieldErrors)) {
@@ -62,11 +63,24 @@ export function captureStudioIssues(issues: ValidationErrors, ids: ReadonlyMap<s
     const fields = nodes[id] ??= {};
     fields[suffix] = [...(fields[suffix] ?? []), ...messages];
   }
-  return { nodes, formErrors };
+  return { nodes, formErrors, origin };
+}
+
+/** Forget refusals only for the edited control, retaining other nodes and form failures. */
+export function dropStudioIssue(issues: StudioIssues, id: string, path: string): StudioIssues {
+  const fields = issues.nodes[id];
+  if (!fields) return issues;
+  const retained = Object.fromEntries(Object.entries(fields).filter(([issuePath]) =>
+    !(issuePath === path || issuePath.startsWith(`${path}.`) || path.startsWith(`${issuePath}.`))));
+  if (Object.keys(retained).length === Object.keys(fields).length) return issues;
+  const nodes = { ...issues.nodes };
+  if (Object.keys(retained).length) nodes[id] = retained;
+  else delete nodes[id];
+  return { ...issues, nodes };
 }
 
 /** Re-project stable issues to today's form paths; unrendered declarations stay visible. */
-export function projectStudioIssues(issues: StudioIssues, entries: StudioValues["entries"], configFields: ReadonlyMap<string, readonly FormSpecFieldDescriptor[]>): ValidationErrors {
+export function projectStudioIssues(issues: StudioIssues, entries: StudioValues["entries"], configFields: (step: string) => readonly FormSpecFieldDescriptor[]): ValidationErrors {
   const fieldErrors: ValidationErrors["fieldErrors"] = {};
   const formErrors = [...issues.formErrors];
   for (const [id, fields] of Object.entries(issues.nodes)) {
@@ -76,7 +90,7 @@ export function projectStudioIssues(issues: StudioIssues, entries: StudioValues[
     for (const [path, messages] of Object.entries(fields)) {
       const suffix = path === "[key]" ? "key" : `value.${path}`;
       if (path === "[key]" || path === "label" || path === "config"
-          || (path.startsWith("config.") && formSpecHasControlForPath(configFields.get(entry.value.step) ?? [], path.slice("config.".length)))) {
+          || (path.startsWith("config.") && formSpecHasControlForPath(configFields(entry.value.step), path.slice("config.".length), entry.value.config))) {
         fieldErrors[`entries.${index}.${suffix}`] = messages;
       } else formErrors.push(...messages.map((message) => `${entry.key}: ${message}`));
     }
