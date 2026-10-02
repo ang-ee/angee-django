@@ -192,7 +192,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     saveConflict,
     declaredActions,
     actionsBlocked,
-    recordChromeContext,
+    recordChromeContext: surfaceChromeContext,
     recordActions,
     recordPanelContext,
     recordToolbarContext,
@@ -213,6 +213,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const menuRecordActions = React.useMemo(
     () => recordActions.filter((entry) => entry.recordActionPlacement === "menu"),
     [recordActions],
+  );
+  const [toolbarHost, setToolbarHost] = React.useState<HTMLElement | null>(null);
+  const recordChromeContext = React.useMemo(
+    () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
+    [surfaceChromeContext, toolbarHost],
   );
   const availableDeclaredActions = readOnly
     ? declaredActions.filter((action) => action.run || action.submit)
@@ -343,6 +348,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             </Button>
           </div>
         ) : null}
+        <span ref={setToolbarHost} className="contents" />
         {!awaitingRecord && (
           availableDeclaredActions.length > 0 ||
           visibleDeleteAction !== undefined ||

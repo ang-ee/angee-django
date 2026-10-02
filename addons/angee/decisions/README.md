@@ -17,7 +17,9 @@ The shared base evidence owner checks frozen references at admission. An action
 class owns its `key`, typed Pydantic form and verdict; the decisions addon
 registers it and its group policies through the base implementation registry.
 
-The inbox owns the form and its React Hook Form context. A consumer contributes
+The inbox owns the form and its React Hook Form context. Actors answer on the
+decision page: the answer fields render inline beside the subject's peek, and
+Decide sits in the record toolbar. A consumer contributes
 one `decisionContent(kind, Component)` presentation per decision kind through
 the decisions content slot; its retained basis and context arrive as read-only
 payloads for the consumer to parse. A waiting addon contributes a separate

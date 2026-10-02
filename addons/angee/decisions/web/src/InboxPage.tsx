@@ -34,7 +34,8 @@ export function InboxPage(): ReactElement {
   }, [userId]);
   if (!user) return <LoadingPanel />;
   // Actors answer on the decision page itself: the kind's registered content
-  // and the answer form render inline, beside the subject in the side peek.
+  // and the answer fields render inline beside the subject in the side peek,
+  // and Decide joins the record toolbar.
   const decideAction = (record: Row): ActionDescriptor => ({
     id: "decide", label: t("decision.submit"), primary: true, icon: "check",
     args: () => {
@@ -82,7 +83,7 @@ export function InboxPage(): ReactElement {
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
       <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "permissions", "form_schema", "resolution", "subject_model", "subject_id", "errors"]}
-        formExtras={({ record, reload }) => {
+        formExtras={({ record, form }) => {
           const assignees = Array.isArray(record?.assignees)
             ? record.assignees.map((value: unknown) => value && typeof value === "object" && "display_name" in value
               ? String(value.display_name) : "").filter(Boolean) : [];
@@ -108,8 +109,8 @@ export function InboxPage(): ReactElement {
               : null}
             {record?.is_open === true && typeof record.id === "string" && holdsPermission(record, "act")
               ? <ActionFormDialog key={record.id} inline open onOpenChange={() => undefined}
-                  action={decideAction(record)} context={{ record, selectedIds: [], refresh: async () => { reload(); return record; } }}
-                  onSucceeded={() => reload()} />
+                  action={decideAction(record)} context={{ record, selectedIds: [], refresh: form.reload }}
+                  onSucceeded={() => void form.reload()} />
               : typeof record?.id === "string" ? <DecisionDetails recordId={record.id} /> : null}
           </div>;
         }}

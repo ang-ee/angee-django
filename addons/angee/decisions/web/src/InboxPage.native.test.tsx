@@ -18,7 +18,10 @@ async function chooseAction(label: string) {
 describe("decision stories with native router, queries, and generated mutations", () => {
   test("pending records link the subject, promote Decide, and hide settlement facts", async () => {
     render(Open.render());
-    expect(await screen.findByRole("button", { name: "Decide" })).toBeTruthy();
+    const action = await screen.findByRole("combobox", { name: "Action" });
+    // One Decide (getByRole rejects duplicates) in the record toolbar, ahead of the inline answer fields.
+    expect(screen.getByRole("button", { name: "Decide" }).compareDocumentPosition(action)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
     expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
     for (const label of ["Subject model", "notes.Note", "nte_7", "Expires", "Resolved by", "Resolved at", "Closed reason"]) {

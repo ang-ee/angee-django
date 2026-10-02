@@ -1,4 +1,5 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { Controller, useWatch, type Control } from "react-hook-form";
 import { rowPublicId, useModelMetadata } from "@angee/metadata";
 import type { ActionOutcome } from "@angee/refine";
@@ -19,6 +20,7 @@ import {
   mutationDialogValueCodecs,
 } from "./MutationDialog";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
+import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";
@@ -37,7 +39,10 @@ export interface ActionFormDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Called once with the successful (`ok`) outcome — e.g. to reload or follow its record. */
   onSucceeded?: (outcome: ActionOutcome) => void;
-  /** Render the same form in the page flow instead of a dialog; success does not close it. */
+  /**
+   * Render the fields in a saved record's page flow and the submit in its
+   * record toolbar instead of a dialog; success does not close it.
+   */
   inline?: boolean;
 }
 
@@ -90,6 +95,7 @@ function ActionArgsDialog({
   args: declaredArgs,
 }: ActionFormDialogProps & { args: ActionArgs }): React.ReactElement {
   const t = useUiT();
+  const toolbarHost = useRecordChromeContextMaybe()?.toolbarHost;
   const definition = isActionFormDefinition(declaredArgs) ? declaredArgs : undefined;
   const args = isActionFormDefinition(declaredArgs) ? EMPTY_ARGS : declaredArgs;
   const argNames = React.useMemo(
@@ -118,8 +124,7 @@ function ActionArgsDialog({
   } = actionForm;
 
   const form = actionForm.form;
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const run = () => {
     if (action.submit && !saveConflict) void actionForm.run();
   };
 
@@ -131,6 +136,7 @@ function ActionArgsDialog({
       disabled={saveConflict}
       danger={action.danger}
       label={action.label}
+      onSubmit={inline ? run : undefined}
     />
   );
   const body = (
@@ -159,24 +165,12 @@ function ActionArgsDialog({
     </>
   );
 
-  // Inline forms usually sit inside a record form, and forms cannot nest, so
-  // the inline body is a section whose button runs the submit directly.
+  // An inline form sits in a saved record's page, and forms cannot nest: its
+  // fields stay in the page flow while its submit joins the record toolbar.
   if (inline) return (
     <ActionFormProvider {...form}>
-      <section aria-label={typeof action.label === "string" ? action.label : undefined} className="grid gap-4">
-        {body}
-        <div className="flex justify-end">
-          <ActionSubmitButton
-            control={form.control}
-            args={args}
-            submitting={submitting}
-            disabled={saveConflict}
-            danger={action.danger}
-            label={action.label}
-            onSubmit={() => { if (action.submit && !saveConflict) void actionForm.run(); }}
-          />
-        </div>
-      </section>
+      <div className="grid gap-4">{body}</div>
+      {toolbarHost ? createPortal(submitButton, toolbarHost) : null}
     </ActionFormProvider>
   );
   return (
@@ -192,7 +186,7 @@ function ActionArgsDialog({
         </Button>
         {submitButton}
       </>}
-      onSubmit={(event) => void submit(event)}
+      onSubmit={(event) => { event.preventDefault(); run(); }}
     >
       {body}
     </DialogForm>
