@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import Annotated
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import F
@@ -22,6 +23,7 @@ from rebac import (
 )
 from rebac.errors import NoActorResolvedError
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.decisions import managers as decision_managers
 from angee.decisions import schema as decision_schema
@@ -30,8 +32,8 @@ from angee.decisions.forms import Action, Relation
 from angee.decisions.policies import DecisionPolicy
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
+from angee.decisions.testing.models import Decision, DecisionEvidence, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
-from tests.decisions_models import Decision, DecisionEvidence, DecisionGroup
 
 
 class Complete(Action, key="complete", label="Complete", verdict=Verdict.COMPLETED):
@@ -89,6 +91,16 @@ def request_for(people, **changes):
     )
 
 
+@pytest.fixture
+def delegated_request(people, composed_permissions):
+    """Exercise intake's domain authority without assigning an explicit seat."""
+    issuer, _reviewer, _outsider, _subject = people
+    with system_context(reason="test.delegated_domain"):
+        project = apps.get_model("projects", "Project").objects.create(title="Delegated review", owner=issuer)
+        need = apps.get_model("intake", "Need").objects.create(project=project)
+    return request_for(people, kind="intake.access", subject=need, assignees=None, requester=None)
+
+
 def seat(group, index=0):
     """Read committed state without carrying a principal into another call."""
 
@@ -131,6 +143,77 @@ def test_complete_lifecycle_without_any_run(people):
     assert group.settled_at is not None and group.is_deletable
     resolved = Decision.objects.resolutions(group.pk, actor=issuer, actions=[Complete, Decline])
     assert len(resolved) == 1
+
+
+def test_delegated_system_admission_requires_a_current_domain_actor(people, delegated_request):
+    issuer, _reviewer, _outsider, _subject = people
+    request = request_for(people, assignees=None, requester=None)
+    with pytest.raises(PermissionDenied):
+        Decision.objects.admit_group([request], actor=None)
+    with pytest.raises(ValidationError, match="Delegated assignment"):
+        Decision.objects.admit_group([request], actor=issuer)
+    with system_context(reason="test.delegated_question"):
+        with pytest.raises(ValidationError, match="current actor"):
+            Decision.objects.admit_group([request], actor=None)
+    admin = create_platform_admin("delegated-decision-admin")
+    with system_context(reason="test.delegated_question"):
+        with pytest.raises(ValidationError, match="current actor"):
+            Decision.objects.admit_group([request], actor=None)
+        group = Decision.objects.admit_group([delegated_request], actor=None)
+        decision = seat(group)
+        assert not decision.assignees.exists()
+    assert group.issuer_id is None and decision.requester_id is None
+    assert decision.revision == 1
+    document = "query { decisions(where: {can_act: {_eq: true}}) { id } }"
+    visible = result_data(execute_schema(addon_schema(decision_schema.schemas, "console"), document, user=issuer))
+    assert str(decision.sqid) in {row["id"] for row in visible["decisions"]}
+    assert answer(decision, admin).resolved_by_id == admin.pk
+
+
+def test_reask_preserves_a_system_delegated_seat(people, delegated_request):
+    issuer, _reviewer, _outsider, _subject = people
+    with system_context(reason="test.delegated_reask"):
+        first = Decision.objects.admit_group([delegated_request], actor=None)
+    answer(seat(first), issuer, action="decline", values={"reason": "Try again"})
+    with system_context(reason="test.delegated_reask"):
+        second = Decision.objects.reask(first.pk, actor=None, actions=(Complete, Decline), errors={})
+        assert not seat(second).assignees.exists()
+    assert second.issuer_id is None and second.reasked_from_id == first.pk
+    assert seat(first).superseded_by_id is None
+
+
+@pytest.mark.parametrize("system_actor", [False, True])
+def test_reask_requires_system_admission_for_a_delegated_seat(people, delegated_request, system_actor):
+    admin = create_platform_admin("delegated-reask-admission-admin")
+    with system_context(reason="test.delegated_reask_admission"):
+        group = Decision.objects.admit_group([delegated_request], actor=None)
+    answer(seat(group), admin, action="decline", values={"reason": "Try again"})
+    error = PermissionDenied if system_actor else ValidationError
+    with pytest.raises(error, match="system context" if system_actor else "system admission"):
+        Decision.objects.reask(group.pk, actor=None if system_actor else admin,
+                               actions=(Complete, Decline), errors={})
+    assert system_queryset(DecisionGroup).count() == 2
+
+
+def test_delegated_predicate_reuses_prefetched_assignment(delegated_request, django_assert_num_queries):
+    with system_context(reason="test.delegated_predicate"):
+        group = Decision.objects.admit_group([delegated_request], actor=None)
+        decision = Decision.objects.select_related("group").prefetch_related("assignees").get(group=group)
+        with django_assert_num_queries(0):
+            assert decision.is_delegated
+            assert tuple(decision.assignees.all()) == ()
+
+
+def test_delegated_relation_choices_require_explicit_participants(people):
+    _issuer, _reviewer, _outsider, subject = people
+    request = request_for(people, assignees=None, requester=None, actions=(ChooseDocument,),
+                          refine={"choose": {"document_id": {"options": [
+                              {"value": str(subject.sqid), "label": "Document"},
+                          ]}}})
+    with system_context(reason="test.delegated_relation_choices"):
+        with pytest.raises(ValidationError, match="Relation choices require explicit participants"):
+            Decision.objects.admit_group([request], actor=None)
+    assert not system_queryset(DecisionGroup).exists()
 
 
 def test_non_admin_person_without_seat_cannot_read_or_decide(people):
@@ -338,11 +421,11 @@ def test_stale_revision_and_final_answer_are_immutable(people):
     issuer, reviewer, _outsider, _subject = people
     group = Decision.objects.admit_group([request_for(people)], actor=issuer)
     decision = seat(group)
-    with pytest.raises(ValidationError):
+    with pytest.raises(StaleRevisionError):
         answer(decision, reviewer, revision=decision.revision + 1)
     assert seat(group).is_open
     answered = answer(decision, reviewer)
-    with pytest.raises(ValidationError):
+    with pytest.raises(StaleRevisionError):
         answer(decision, reviewer, action="decline", values={"reason": "Changed mind"})
     Decision.objects.cancel_group(group.pk)
     retained = seat(group)
@@ -850,6 +933,43 @@ def test_graphql_inbox_hides_foreign_seats_and_dispatches_the_deciding_action(pe
     assert not any(name.startswith(("insert_", "update_", "delete_")) for name in mutation_fields)
 
 
+def test_graphql_decide_uses_the_decision_instance_dispatch(people, monkeypatch):
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    decision = seat(group)
+    called = []
+    original = Decision.decide
+
+    def dispatch(self, **kwargs):
+        called.append(self.pk)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(Decision, "decide", dispatch)
+    schema = addon_schema(decision_schema.schemas, "console")
+    mutation = """mutation($id: ID!, $revision: Int!, $values: JSON!) {
+      decide(id: $id, revision: $revision, action: "complete", values: $values) { ok }
+    }"""
+    result = result_data(execute_schema(schema, mutation, {"id": decision.sqid,
+                                                          "revision": decision.revision,
+                                                          "values": {"note": "Read"}}, user=reviewer))
+    assert result == {"decide": {"ok": True}}
+    assert called == [decision.pk]
+
+
+def test_graphql_stale_decision_preserves_the_native_conflict_code(people):
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    decision = seat(group)
+    answer(decision, reviewer)
+    schema = addon_schema(decision_schema.schemas, "console")
+    result = execute_schema(schema, """mutation($id: ID!, $revision: Int!) {
+      decide(id: $id, revision: $revision, action: "complete", values: {note: "Again"}) { ok code }
+    }""", {"id": str(decision.sqid), "revision": decision.revision}, user=reviewer)
+    assert result.errors and len(result.errors) == 1
+    assert result.errors[0].extensions == {"code": "STALE_REVISION", "current_revision": decision.revision + 1}
+    assert result.errors[0].message == "STALE_REVISION"
+
+
 def test_graphql_form_errors_preserve_authored_snake_case_field_names(people):
     issuer, reviewer, _outsider, _subject = people
     group = Decision.objects.admit_group([request_for(people, actions=(ChooseDocument,))], actor=issuer)
@@ -869,6 +989,12 @@ def test_graphql_form_errors_preserve_authored_snake_case_field_names(people):
 
 def test_inbox_filters_assignees_separately_from_requesters(people):
     issuer, reviewer, _outsider, _subject = people
+    write_relationships([
+        RelationshipTuple(
+            resource=to_object_ref(reviewer), relation="directory_reader", subject=to_subject_ref(issuer),
+        ),
+    ])
+    assert reviewer.with_actor(issuer).has_access("read")
     assigned = Decision.objects.admit_group([request_for(people)], actor=issuer)
     requested = Decision.objects.admit_group([
         request_for(people, assignees=(issuer,), requester=reviewer),

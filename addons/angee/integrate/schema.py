@@ -30,7 +30,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.exceptions import exception_text
+from angee.base.errors import exception_text
 from angee.base.identity import public_id_of
 from angee.graphql.actions import (
     ActionResult,

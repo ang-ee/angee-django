@@ -14,6 +14,8 @@ import {
 import { describe, expect, test, vi } from "vitest";
 
 import { authBeforeLoad, authRouteError } from "./route-tree";
+import { createAngeeAuthProviderFromRequest } from "./providers/auth";
+import { AngeeCurrentUserDocument } from "./providers/documents.public";
 
 function gate(getIdentity: () => Promise<unknown>) {
   const authProvider = { getIdentity } as AuthProvider;
@@ -90,5 +92,35 @@ describe("authenticated route identity gate", () => {
     await beforeLoad({ location: { href: "/workflows/one" } });
     await beforeLoad({ location: { href: "/workflows/two" } });
     expect(getIdentity).toHaveBeenCalledOnce();
+  });
+
+  test("shares one identity request across two route gates, Refine checks and permissions", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const request = vi.fn(async (document: unknown) => {
+      expect(document).toBe(AngeeCurrentUserDocument);
+      return { current_user: { id: "user-1", username: "ada", firstName: "Ada", lastName: "Lovelace", roleRefs: ["angee/role:admin"], preferences: {} } };
+    });
+    const authProvider = createAngeeAuthProviderFromRequest(request as never, { queryClient });
+    const beforeLoad = authBeforeLoad(authProvider, queryClient, "/login");
+
+    await beforeLoad({ location: { href: "/workflows/one" } });
+    await expect(authProvider.check()).resolves.toEqual({ authenticated: true });
+    await expect(authProvider.getPermissions?.()).resolves.toEqual(["angee/role:admin"]);
+    await beforeLoad({ location: { href: "/workflows/two" } });
+    await expect(authProvider.check()).resolves.toEqual({ authenticated: true });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  test("redirects a logged-out session after the shared identity check", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const request = vi.fn(async () => ({ current_user: null }));
+    const authProvider = createAngeeAuthProviderFromRequest(request as never, { queryClient });
+    const beforeLoad = authBeforeLoad(authProvider, queryClient, "/login");
+
+    await expect(beforeLoad({ location: { href: "/workflows/one" } }))
+      .rejects.toMatchObject({ options: { to: "/login" } });
+    await expect(authProvider.check()).resolves.toEqual({ authenticated: false, redirectTo: "/login" });
+    await expect(authProvider.getPermissions?.()).resolves.toEqual([]);
+    expect(request).toHaveBeenCalledOnce();
   });
 });

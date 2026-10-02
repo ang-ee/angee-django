@@ -27,6 +27,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
@@ -34,6 +35,7 @@ from angee.integrate.events import EventKind
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
+from angee.messaging.testing.models import Channel
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph
@@ -53,7 +55,6 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
-from tests.messaging_models import Channel
 from tests.test_agents import InferenceProvider
 
 User = get_user_model()
@@ -185,8 +186,13 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     assert len(visible["rows"]) == 1
     assert visible["total"]["aggregate"]["count"] == visible["group_count"] == 1
     assert visible["groups"] == [{"aggregate": {"count": 1}}]
-    hidden = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider))
-    assert hidden == {"rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0}
+    hidden = _execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider)
+    unknown = _execute(
+        schema, query, {"bridge": public_id_for(Integration, bridge.pk + other.pk + 1_000_000)}, user=outsider
+    )
+    assert _data(hidden) == _data(unknown) == {
+        "rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0,
+    }
 
 
 def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:

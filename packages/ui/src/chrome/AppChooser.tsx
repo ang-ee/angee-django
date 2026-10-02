@@ -324,6 +324,7 @@ function AppChooserTile({
   return (
     <Link
       to={item.to}
+      href={item.to}
       aria-current={active ? "page" : undefined}
       onClick={onSelect}
       className={className}

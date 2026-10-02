@@ -11,7 +11,14 @@ from django.db import models
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, audit_set_null, retained_set_null
+from angee.base.mixins import (
+    AppendOnlyBaseQuerySet,
+    AppendOnlyModel,
+    AppendOnlyQuerySet,
+    AuditMixin,
+    audit_set_null,
+    retained_set_null,
+)
 from angee.base.models import AngeeQuerySet
 from tests.conftest import create_user
 
@@ -32,11 +39,11 @@ class RetainedEvidence(AppendOnlyModel, AuditMixin, models.Model):
 
 
 def test_append_only_base_manager_and_instance_writes_are_guarded(transactional_db: Any) -> None:
-    """A missing Meta base-manager declaration cannot open ordinary writes."""
+    """The declared base manager keeps ordinary writes closed."""
     del transactional_db
     with system_context(reason="test append-only base manager"):
         row = RetainedEvidence.objects.create(name="retained")
-        assert isinstance(RetainedEvidence._base_manager.get_queryset(), AppendOnlyQuerySet)
+        assert isinstance(RetainedEvidence._base_manager.get_queryset(), AppendOnlyBaseQuerySet)
         for write in (
             lambda: RetainedEvidence._base_manager.filter(pk=row.pk).update(name="changed"),
             lambda: RetainedEvidence._base_manager.filter(pk=row.pk).delete(),
@@ -60,12 +67,12 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
 
 def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(
-    transactional_db: Any,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The audit FK policy bypasses a queryset whose update path stays closed."""
 
-    del transactional_db
+    del composed_tables
     with pytest.raises(ValidationError, match="contenttypes.ContentType rows cannot be edited"):
         AppendOnlyQuerySet(model=ContentType).update(created_by=None)
     actor = create_user("append-only-auditor")

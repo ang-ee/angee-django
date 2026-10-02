@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  holdsPermission,
   rowPublicId,
   type DataResourceMetadata,
   type Row,
@@ -24,6 +25,7 @@ export interface UseFormViewRecordChromeProps {
   isCreate: boolean;
   record: Row | null;
   formReadOnly: boolean;
+  actionsBlocked?: boolean;
 }
 
 export interface FormViewRecordChromeSurface {
@@ -40,6 +42,7 @@ export function useFormViewRecordChrome({
   isCreate,
   record,
   formReadOnly,
+  actionsBlocked = false,
 }: UseFormViewRecordChromeProps): FormViewRecordChromeSurface {
   const recordChromeContext = React.useMemo<RecordChromeContext | null>(
     () =>
@@ -52,8 +55,9 @@ export function useFormViewRecordChrome({
             recordId: rowPublicId(record) ?? id,
             record,
             formReadOnly,
+            actionsBlocked,
           },
-    [canonicalResource, dataResource, formReadOnly, id, isCreate, modelLabel, record],
+    [actionsBlocked, canonicalResource, dataResource, formReadOnly, id, isCreate, modelLabel, record],
   );
   const recordActionTargets = React.useMemo<readonly ModelSlotTarget[]>(() => {
     const targets = [formViewRecordActionsSlot(canonicalResource)];
@@ -69,11 +73,13 @@ export function useFormViewRecordChrome({
   const recordActionEntries = useModelSlot(recordActionTargets);
   const recordActions = React.useMemo(() => {
     const byId = new Map<string, SlotContribution>();
-    for (const entry of recordActionEntries) byId.set(entry.id, entry);
+    for (const entry of recordActionEntries) {
+      if (!entry.permission || holdsPermission(record, entry.permission)) byId.set(entry.id, entry);
+    }
     return [...byId.values()].sort(
       (left, right) => (left.sequence ?? 0) - (right.sequence ?? 0),
     );
-  }, [recordActionEntries]);
+  }, [record, recordActionEntries]);
 
   return { recordChromeContext, recordActions };
 }

@@ -9,8 +9,8 @@ from rebac import actor_context, system_context
 
 from angee.extraction.contracts import DocumentPart, DocumentSource, ExtractionPartKind
 from angee.graphql.publishing import mute_changes
+from angee.messaging.testing.models import Part
 from tests.conftest import create_platform_admin
-from tests.messaging_models import Part
 from tests.test_extraction_models import evidence as evidence
 from tests.test_messaging_part_tree import part_tree as part_tree
 from tests.test_storage import drive as drive

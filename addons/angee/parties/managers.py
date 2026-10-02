@@ -210,6 +210,24 @@ class HandleQuerySet(AngeeQuerySet):
 class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore[misc]
     """Factory + upsert for handles (the contact-point write path)."""
 
+    def for_user(self, user: Any) -> Any:
+        """Return the account's confirmed handle for internal attribution."""
+
+        if user is None or user.pk is None:
+            raise ValueError("Handle author is required.")
+        email = (user.email or "").replace("\x00", "").strip()
+        username = user.get_username().replace("\x00", "").strip()
+        value = email or username or str(user.pk)
+        display_name = user.get_full_name().replace("\x00", "").strip() or username or value
+        return self.claim_own(
+            user,
+            platform=self.model.Platform.for_value(value),
+            value=value,
+            display_name=display_name,
+            source=LinkSource.MANUAL,
+            metadata={"user_id": str(user.pk)},
+        )
+
     def renormalize_phone_values(self) -> int:
         """Repair stored phone comparison values after normalization rules change.
 
@@ -665,11 +683,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         party.require_access("read", actor)
         handle.require_access("read", actor)
         visible = read_scoped_queryset(self.model, actor)
-        readable = (
-            tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
-            if visible is not None
-            else ()
-        )
+        readable = tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
         return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
 
     def _assess_claimed_handle_authorized(

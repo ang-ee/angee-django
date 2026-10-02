@@ -8,11 +8,20 @@ from django.db import models
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models import AngeeDataModel
-from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.hasura import _declared_aliases, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import create_user, execute_schema, make_addon, result_data
 from tests.scopedemo.models import Scope
+
+
+@pytest.fixture(autouse=True)
+def clear_declared_aliases():
+    """Each test changes model declarations before building its isolated schema."""
+
+    _declared_aliases.cache_clear()
+    yield
+    _declared_aliases.cache_clear()
 
 
 @strawberry_django.type(Scope)
@@ -32,7 +41,7 @@ def build_resource(**kwargs):
 
 @pytest.fixture(params=("parent__name", "parent.name"))
 def alias_owner(monkeypatch, request):
-    monkeypatch.setattr(Scope, "hasura_filter_aliases", {
+    monkeypatch.setattr(Scope, "hasura_aliases", {
         "parent_name": request.param, "display_title": "name",
     }, raising=False)
     resource = build_resource()
@@ -101,20 +110,20 @@ def test_alias_metadata_exposes_native_scalar_comparisons(alias_owner):
     ("parent_name", "parent", "must target a scalar"),
 ])
 def test_invalid_alias_declarations_fail_during_resource_composition(monkeypatch, alias, path, diagnostic):
-    monkeypatch.setattr(Scope, "hasura_filter_aliases", {alias: path}, raising=False)
+    monkeypatch.setattr(Scope, "hasura_aliases", {alias: path}, raising=False)
     with pytest.raises(ImproperlyConfigured, match=diagnostic):
         build_resource()
 
 
 def test_alias_cannot_override_a_computed_filter(monkeypatch):
-    monkeypatch.setattr(Scope, "hasura_filter_aliases", {"parent_name": "parent__name"}, raising=False)
-    with pytest.raises(ImproperlyConfigured, match="Duplicate filter alias 'parent_name'"):
+    monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
+    with pytest.raises(ImproperlyConfigured, match=r"duplicate filter aliases: \['parent_name'\]"):
         build_resource(filter_expressions={"parent_name": models.Value("computed", output_field=models.CharField())})
 
 
 def test_contributors_cannot_claim_the_same_alias(monkeypatch):
     """Conflicting inherited declarations fail instead of following Python MRO precedence."""
-    monkeypatch.setattr(AngeeDataModel, "hasura_filter_aliases", {"parent_name": "name"}, raising=False)
-    monkeypatch.setattr(Scope, "hasura_filter_aliases", {"parent_name": "parent__name"}, raising=False)
-    with pytest.raises(ImproperlyConfigured, match="Duplicate filter alias 'parent_name'"):
+    monkeypatch.setattr(AngeeDataModel, "hasura_aliases", {"parent_name": "name"}, raising=False)
+    monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
+    with pytest.raises(ImproperlyConfigured, match="duplicate sortable alias 'parent_name'"):
         build_resource()

@@ -1,12 +1,15 @@
 # Decisions web
 
 The routed `ResourceList` owns the inbox and record frame. Its editable default
-filter selects the current person's open seats; the native filter box supplies
-assigned/requested and open/settled predicates and saved views. The backend owns
+filter selects open seats assigned to the current person. The server-owned
+`can_act` filter finds seats they can answer, including delegated assignments;
+the native filter box supplies assigned/requested/answerable and open/settled predicates
+and saved views. The backend owns
 visibility, authority, expiry, and settlement. A requester filter does not grant access, and the other
 seats section shows only decisions the current person may read.
 The rail entry is named Decisions; messaging retains Inbox. The backend's
-`is_open` field/filter owns the open view, and `can_act` owns viewer editability.
+`is_open` field/filter owns the open view, and the `permissions` list's `act`
+value owns viewer editability.
 
 The record declares a read-only `Form` and a `Decide` action. Its dynamic args
 use the shared `jsonSchemaActionArgs` owner for the retained JSON Schema,
@@ -39,6 +42,8 @@ Decisions imports no waiting owner's concepts or queries.
 
 `Decision.kind_label` owns the inbox label and record representation. The Context
 tab lists other visible seats through the same resource list owner.
+Consumers can contribute `decisionRecordTab(model)` to show decisions for a
+record; its filter uses the backend's `subject_model` and `subject_id` fields.
 
 This schema-dependent fragment typechecks after composition and web codegen at
 the stack root. Its stories and provider-backed tests exercise the same shared

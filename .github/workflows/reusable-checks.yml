@@ -205,6 +205,10 @@ jobs:
           uv sync
           uv run manage.py angee build
           uv run manage.py schema
+      - name: Provision the composed stack
+        working-directory: stack
+        run: |
+          uv run manage.py angee provision
       - name: Install the stack JS workspace and generate typed documents
         working-directory: stack
         run: |

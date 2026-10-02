@@ -95,4 +95,12 @@ export {
   ROUND_MODEL,
   TOPIC_MODEL,
 } from "./resources";
+export { useRoundCeremonyActions } from "./round-actions";
+export { RoundComparisonGrid } from "./comparison-grid";
+export type { RoundComparisonGridProps } from "./comparison-grid";
+export { ProposalStatements } from "./proposal-statements";
+export { RoundComparisonBody } from "./comparison-body";
+export type { ProposalStatementsProps } from "./proposal-statements";
+export { useRoundComparisonData } from "./comparison-data";
+export type { ComparisonAnswer, ComparisonProposal, ComparisonTopic, RoundComparisonState } from "./comparison-data";
 export default proposals;

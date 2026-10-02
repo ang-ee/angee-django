@@ -4,7 +4,7 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useMemo, type ReactElement } from "react";
 import {
   Action, Column, ErrorBanner, Field, Form, Group, LabeledDescriptorField, List, LoadingPanel,
-  RecordReference, ResourceList, useActionOutcomeMutation, useAppRuntime,
+  RecordReference, ResourceList, actionOutcomeSubmitResult, formSubmitError, useActionOutcomeMutation, useAppRuntime,
   useEnumOptions, useRouteHref, useRuntimeAuth, useUiT,
   type RecordPanelContext, type ResourceViewFilter, type StringIdRow,
 } from "@angee/ui";
@@ -16,7 +16,7 @@ import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.c
 import { useDecisionsT } from "./i18n";
 import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./slots";
 
-/** Personal query defaults remain editable through the resource toolbar and saved views. */
+/** Start with my open seats; server-owned authority also finds delegated seats. */
 export function InboxPage(): ReactElement {
   const t = useDecisionsT();
   const uiT = useUiT();
@@ -27,9 +27,11 @@ export function InboxPage(): ReactElement {
   const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", {
     dataProviderName: "console", invalidateModels: DECISION_MODELS,
   });
-  const defaultFilter = useMemo<ResourceViewFilter>(() => ({
-    assignees: { exact: user?.id ?? "" }, is_open: { exact: true },
-  }), [user?.id]);
+  const userId = user?.id;
+  const defaultFilter = useMemo<ResourceViewFilter>(() => {
+    const open: ResourceViewFilter = { is_open: { exact: true } };
+    return userId === undefined ? open : { ...open, assignees: { exact: userId } };
+  }, [userId]);
   if (!user) return <LoadingPanel />;
 
   return (
@@ -38,6 +40,7 @@ export function InboxPage(): ReactElement {
       defaultFilter={defaultFilter}
       filterOptions={[
         { id: "assigned", label: t("inbox.assigned"), group: t("inbox.scope"), filter: { assignees: { exact: user.id } } },
+        { id: "can_act", label: t("inbox.canAct"), group: t("inbox.scope"), filter: { can_act: { exact: true } } },
         { id: "requested", label: t("inbox.requested"), group: t("inbox.scope"), filter: { requester: { exact: user.id } } },
         { id: "open", label: t("inbox.open"), group: t("inbox.state"), filter: { is_open: { exact: true } } },
         { id: "settled", label: t("inbox.settled"), group: t("inbox.state"), filter: { is_open: { exact: false } } },
@@ -55,7 +58,7 @@ export function InboxPage(): ReactElement {
         <Column field="expires_at" header={t("inbox.expiresAt")} />
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
-      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "subject_model", "subject_id"]}
+      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "permissions", "form_schema", "resolution", "subject_model", "subject_id"]}
         formExtras={({ record }) => {
           const assignees = Array.isArray(record?.assignees)
             ? record.assignees.map((value: unknown) => value && typeof value === "object" && "display_name" in value
@@ -81,7 +84,7 @@ export function InboxPage(): ReactElement {
           ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
         <Field name="is_open" hidden />
         <Field name="kind_label" title />
-        <Field name="verdict" widget="statusbar" options={verdicts} resolve={(row) =>
+        <Field name="verdict" widget="statusbar" status options={verdicts} resolve={(row) =>
           row.is_open === false && row.verdict === "PENDING" && typeof row.closed_reason === "string"
             ? { name: "verdict", options: closedReasons.filter((option) => option.value.toUpperCase() === row.closed_reason),
                 valueCodec: { toControl: () => row.closed_reason, fromControl: (value) => value } }
@@ -95,8 +98,8 @@ export function InboxPage(): ReactElement {
           <Field name="resolved_at" label={t("decision.resolvedAt")} showWhen={(row) => row.is_open === false && Boolean(row.resolved_at)} />
           <Field name="closed_reason" label={t("decision.closedReason")} showWhen={(row) => row.is_open === false && Boolean(row.closed_reason)} />
         </Group>
-        <Action id="decide" label={t("decision.submit")} primary icon="check"
-          visibleWhen={(record) => record.is_open === true && record.can_act === true}
+        <Action id="decide" label={t("decision.submit")} placement="toolbar" primary icon="check"
+          permission="act" visibleWhen={(record) => record.is_open === true}
           args={({ record }) => {
             const definition = jsonSchemaActionArgs(record?.form_schema, widgets, { initialValues: record?.resolution, translate: uiT });
             return { ...definition, size: "lg" as const,
@@ -108,12 +111,12 @@ export function InboxPage(): ReactElement {
           submit={async ({ action, ...values }, context) => {
             const record = context.record;
             if (typeof record?.id !== "string" || typeof record.revision !== "number") throw new Error(t("decision.unavailable"));
-            const outcome = await decide(record.id, { revision: record.revision, action, values });
-            if (!outcome?.ok) {
+            const result = await decide(record.id, { revision: record.revision, action, values })
+              .then(actionOutcomeSubmitResult).catch((cause) => formSubmitError(cause));
+            if (result.status !== "ok") {
               try { await context.refresh?.(); } catch { /* Keep the server's answer errors if refresh is unavailable. */ }
-              if (outcome?.validationErrors?.revision) return { status: "conflict", message: t("decision.conflict") };
             }
-            return outcome;
+            return result.status === "conflict" ? { ...result, message: t("decision.conflict") } : result;
           }}
         />
       </Form>
@@ -154,7 +157,7 @@ function DecisionDetails({ recordId, editing = false }: Pick<RecordPanelContext,
       <DecisionOriginOutlet />
       <DecisionContext context={decision.context} showFacts={content.length === 0} />
       <fieldset disabled={!editing}><DecisionContentOutlet /></fieldset>
-      {!editing ? <DecisionSeats recordId={recordId} groupId={decision.group.id} /> : null}
+      {!editing && decision.group ? <DecisionSeats recordId={recordId} groupId={decision.group.id} /> : null}
     </div>
   </DecisionContentProvider>;
 }

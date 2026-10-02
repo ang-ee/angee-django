@@ -127,7 +127,7 @@ function BoardRowCardContent<TRow extends Row>({
       ref={dragEnabled ? setNodeRef : undefined}
       style={style}
       className={cn(
-        "board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
+        "board-card-grid group/record grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
         isDragging
           ? "transition-none"
           : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
@@ -217,6 +217,33 @@ function DefaultBoardCardBody<TRow extends Row>({
       ))}
     </>
   );
+}
+
+/** Card fields follow the list's cell renderer and omit values the row did not project. */
+export function DeclaredBoardCardBody<TRow extends Row>({
+  columns,
+  modelMetadata,
+  row,
+}: {
+  columns: readonly ColumnDescriptor<TRow>[];
+  modelMetadata?: ModelMetadata | null;
+  row: TRow;
+}): React.ReactElement {
+  const [title, ...details] = columns;
+  return <>
+    {title ? <span className="block min-w-0 truncate text-sm font-semibold text-fg">
+      <ListCellContent column={title} row={row} metadata={modelMetadata} />
+    </span> : null}
+    {details.filter((column) => {
+      const value = readPath(row, column.field);
+      return value !== null && value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0);
+    }).map((column) => <div key={column.field} className="board-card-detail-grid grid min-w-0 items-start gap-x-3 text-13">
+      <span className="min-w-0 truncate text-fg-muted">{column.header ?? column.field}</span>
+      <span className="min-w-0 overflow-hidden text-right text-fg [overflow-wrap:anywhere] [&>*]:max-w-full">
+        <ListCellContent column={column} row={row} metadata={modelMetadata} />
+      </span>
+    </div>)}
+  </>;
 }
 
 function BoardCardFrame({

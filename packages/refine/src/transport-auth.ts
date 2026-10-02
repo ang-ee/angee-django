@@ -59,6 +59,17 @@ export function createCsrfTokenProvider(
 
 export type AuthFetch = (baseFetch: FetchFn) => FetchFn;
 
+/** HTTP preview actor. Read at dispatch time; never attach it to a WebSocket. */
+export function viewAsAuth(getUserId: () => string | null): AuthFetch {
+  return (baseFetch) => (input, init) => {
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    const userId = getUserId();
+    if (userId !== null) headers.set("X-Angee-View-As", userId);
+    else headers.delete("X-Angee-View-As");
+    return baseFetch(input, { ...init, headers });
+  };
+}
+
 export function sessionAuth(options: CsrfTokenOptions = {}): AuthFetch {
   return (baseFetch) => {
     const csrf = createCsrfTokenProvider({

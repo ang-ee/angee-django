@@ -265,6 +265,42 @@ describe("ResourceViewProvider favorites", () => {
     ).not.toBeNull();
   });
 
+  test("renames and pins a saved favorite through the preference owner", async () => {
+    const captured = captureRef();
+    let committed: RuntimeUserPreferences = {};
+    const persist = vi.fn(async (next: RuntimeUserPreferences) => {
+      committed = next;
+    });
+    renderFavoriteHarness({
+      captured,
+      persist,
+      resource: "notes.Note",
+      preferences: favoritesPreferences({
+        "notes.Note": [{ id: "favorite:recent", label: "Recent" }],
+      }),
+    });
+
+    act(() => captured.current?.pinFavorite?.("favorite:recent", true));
+    await waitFor(() => expect(captured.current?.savedFavorites[0]?.pinned).toBe(true));
+    act(() => captured.current?.renameFavorite?.("favorite:recent", "Last week"));
+    await waitFor(() => expect(captured.current?.savedFavorites[0]?.label).toBe("Last week"));
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(readResourceViewFavoritesSlice(committed).document.models["notes.Note"]).toEqual([
+      { id: "favorite:recent", label: "Last week", pinned: true },
+    ]);
+  });
+
+  test("a pinned favorite for another route preset is absent from this route", () => {
+    const captured = captureRef();
+    renderFavoriteHarness({ captured, resource: "notes.Note", presetIds: ["view.current"],
+      preferences: favoritesPreferences({ "notes.Note": [
+        { id: "favorite:current", label: "Current", pinned: true, preset: "view.current" },
+        { id: "favorite:other", label: "Other", pinned: true, preset: "view.other" },
+      ] }),
+    });
+    expect(captured.current?.savedFavorites.map((favorite) => favorite.id)).toEqual(["favorite:current"]);
+  });
+
   test("rolls an optimistic favorite back when persistence fails", async () => {
     window.localStorage.setItem(
       legacyStorageKey("Note"),
@@ -305,6 +341,7 @@ interface FavoriteHarnessOptions {
   persist?: (preferences: RuntimeUserPreferences) => Promise<void>;
   preferences?: RuntimeUserPreferences;
   resource: string;
+  presetIds?: readonly string[];
 }
 
 function renderFavoriteHarness({
@@ -313,6 +350,7 @@ function renderFavoriteHarness({
   persist,
   preferences = {},
   resource,
+  presetIds,
 }: FavoriteHarnessOptions): void {
   render(
     <PreferencesHarness
@@ -322,6 +360,7 @@ function renderFavoriteHarness({
     >
       <FavoriteCapture
         resource={resource}
+        presetIds={presetIds}
         onValue={(value) => { captured.current = value; }}
       />
     </PreferencesHarness>,
@@ -366,12 +405,14 @@ function PreferencesHarness({
 function FavoriteCapture({
   onValue,
   resource,
+  presetIds,
 }: {
   onValue: (value: ResourceViewContextValue) => void;
   resource: string;
+  presetIds?: readonly string[];
 }): React.ReactElement {
   return (
-    <ResourceViewProvider scope="local" resource={resource}>
+    <ResourceViewProvider scope="local" resource={resource} presetIds={presetIds}>
       <Capture onValue={onValue} />
     </ResourceViewProvider>
   );

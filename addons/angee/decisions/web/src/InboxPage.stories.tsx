@@ -38,19 +38,19 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
   const schemas = useMemo(() => {
     let conflicting = conflict;
     let rejectAttempt = invalidAttempt;
-    let current = decisionFixture({ can_act: !readOnly, context: { facts: [{ pointer: "/reference", label: "Reference", value: "R-7", authority: "source" }], references: [] } });
-    if (settled) current = { ...current, is_open: false, can_act: false, verdict: "COMPLETED", closed_reason: "RESOLVED", resolution: { action: "accept", note: "Already reviewed", reference: "R-7" },
+    let current = decisionFixture({ permissions: readOnly ? [] : ["act"], context: { facts: [{ pointer: "/reference", label: "Reference", value: "R-7", authority: "source" }], references: [] } });
+    if (settled) current = { ...current, is_open: false, permissions: [], verdict: "COMPLETED", closed_reason: "RESOLVED", resolution: { action: "accept", note: "Already reviewed", reference: "R-7" },
       resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
     if (emptyFacts) current = { ...current, expires_at: null, resolved_by: null, resolved_at: null, closed_reason: null };
     if (pendingEmpty) current = { ...current, requester: null, expires_at: null };
-    if (siblingClosed) current = { ...current, is_open: false, can_act: false, verdict: "PENDING", closed_reason: "SIBLING_SETTLED", resolution: {} };
+    if (siblingClosed) current = { ...current, is_open: false, permissions: [], verdict: "PENDING", closed_reason: "SIBLING_SETTLED", resolution: {} };
     const fixture = storySchema(async (_input, init) => {
       const { query, variables } = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       if (query.includes("decide(")) {
         if (conflicting) { current = { ...current, revision: current.revision + 1 }; conflicting = false; }
-        if (variables.revision !== current.revision) return jsonResponse({ data: { decide: {
-          ok: false, message: "The decision has changed.", validation_errors: { revision: ["Reload the decision."] },
-        } } });
+        if (variables.revision !== current.revision) return jsonResponse({ data: null, errors: [{
+          message: "The decision has changed.", path: ["decide"], extensions: { code: "STALE_REVISION" },
+        }] });
         if (rejectAttempt) {
           rejectAttempt = false;
           current = { ...current, revision: current.revision + 1 };
@@ -58,7 +58,7 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
         }
         const action = variables.action;
         if ((action !== "accept" && action !== "reject") || !isJsonObject(variables.values)) throw new Error("Unexpected story decision payload.");
-        current = { ...current, is_open: false, can_act: false, revision: current.revision + 1, verdict: action === "reject" ? "REJECTED" : "COMPLETED", closed_reason: "RESOLVED",
+        current = { ...current, is_open: false, permissions: [], revision: current.revision + 1, verdict: action === "reject" ? "REJECTED" : "COMPLETED", closed_reason: "RESOLVED",
           resolution: { action, ...variables.values }, resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
         return jsonResponse({ data: { decide: { ok: true, message: "Decision recorded.", id: current.id } } });
       }

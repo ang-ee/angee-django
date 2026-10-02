@@ -34,6 +34,7 @@ import { LARGE_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip } from "../ui/tooltip";
+import { AppBrand } from "./AppBrand";
 import { AppChooser } from "./AppChooser";
 import { AppRailTree, appRailTreeVariants } from "./AppRailTree";
 import { Glyph } from "./Glyph";
@@ -53,7 +54,7 @@ import {
   type RailDropPlacement,
 } from "./app-rail-model";
 import { useAppRailPreferences } from "./app-rail-preferences";
-import { readRuntimeRouteShortcuts, useRuntimeUserPreferences } from "../runtime";
+import { readRuntimeRouteShortcuts, useAppRuntime, useRuntimeBrand, useRuntimeUserPreferences } from "../runtime";
 
 export interface AppRailProps {
   className?: string;
@@ -96,6 +97,8 @@ export function AppRail({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  const brand = useRuntimeBrand();
+  const { confineTo } = useAppRuntime();
   const runtimeTree = useChromeMenuTree();
   const tree = useMemo(
     () => menuItems ? MenuTree.from(menuItems) : runtimeTree,
@@ -104,8 +107,10 @@ export function AppRail({
   const { railPreferences, setRailPreferences } = useAppRailPreferences();
   const runtimePreferences = useRuntimeUserPreferences();
   const shortcuts = useMemo(
-    () => readRuntimeRouteShortcuts(runtimePreferences.preferences),
-    [runtimePreferences.preferences],
+    () => readRuntimeRouteShortcuts(runtimePreferences.preferences).filter(
+      (shortcut) => !confineTo || tree.activeAppRoot(shortcut.path)?.id === confineTo,
+    ),
+    [confineTo, runtimePreferences.preferences, tree],
   );
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const drawerMode = presentation === "drawer";
@@ -122,6 +127,12 @@ export function AppRail({
     () => orderedRailItems(tree.railMenuItems(), railPreferences.order),
     [railPreferences.order, tree],
   );
+  const [onlyRoot] = items;
+  const railBrand = brand ?? (confineTo && onlyRoot
+    ? { name: onlyRoot.displayLabel, mark: onlyRoot.iconName } : null);
+  const singleApp = railBrand && items.length === 1 && onlyRoot
+    ? { root: onlyRoot, brand: railBrand }
+    : null;
   const settings = tree.settingsEntry();
   const activeRootId = activePlace.scope === place.scope
     ? activePlace.activeRootId
@@ -198,11 +209,11 @@ export function AppRail({
           expanded ? "gap-2 px-2" : "justify-center",
         )}
       >
-        <AppChooser
-          menuItems={tree}
-          className="shrink-0 text-on-rail-hi"
-        />
-        {expanded ? (
+        {singleApp ? (
+          <AppBrand name={singleApp.brand.name} mark={<Glyph name={singleApp.brand.mark} size={16} />}
+            to={singleApp.root.target} compact={!expanded} />
+        ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi" />}
+        {expanded && !singleApp ? (
           <span className="min-w-0 truncate text-13 font-semibold text-on-rail-hi">
             {t("chrome.apps")}
           </span>
@@ -222,11 +233,20 @@ export function AppRail({
           {expanded ? (
             <AppRailTree
               scope={place.scope}
+              flat={Boolean(singleApp) && !settingsActive}
               roots={settingsActive ? place.roots : items}
               activeRootId={activeRootId}
               defaultOpenRootId={place.activeRootId}
               onActiveToggle={onActiveToggle}
             />
+          ) : singleApp ? (
+            <div className="flex flex-col gap-1">
+              {(singleApp.root.targetedChildren.length ? singleApp.root.targetedChildren : [singleApp.root]).map((item) => item.target ? (
+                <RailSettingsItem key={item.id} active={item.matchesPath(pathname)} expanded={false}
+                  icon={item.iconName} label={item.displayLabel} to={item.target} pathname={pathname}
+                  onActiveToggle={onActiveToggle} onOpenNavigation={item.targetedChildren.length ? openNavigation : undefined} />
+              ) : null)}
+            </div>
           ) : (
             <SortableRail
               items={items}
@@ -303,6 +323,7 @@ function RuntimeShortcutItem({ expanded, icon, label, pathname, to }: {
   const link = (
     <Link
       to={to}
+      href={to}
       aria-label={label}
       aria-current={active ? "page" : undefined}
       data-active={active}
@@ -371,6 +392,7 @@ function RailSettingsItem({
   const link = (
     <Link
       to={to}
+      href={to}
       aria-label={label}
       aria-current={active ? "page" : undefined}
       data-active={active}
@@ -702,6 +724,7 @@ function RailItem({
       <Tooltip label={title} side="right">
         <Link
           to={target}
+          href={target}
           aria-label={label}
           aria-current={active ? "page" : undefined}
           aria-expanded={ariaExpanded}

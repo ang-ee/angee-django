@@ -2,7 +2,7 @@
 
 Register ``angee.testing.fixtures`` in the test suite's root ``pytest_plugins``
 to use ``composed_tables`` for native test-database isolation and REBAC permission
-synchronization. ``workflow_permissions`` composes installed schema contributions
+synchronization. ``composed_permissions`` composes installed schema contributions
 for source-model tests. Suites outside that conftest's scope re-export the fixture once
 from their own ``conftest.py``::
 

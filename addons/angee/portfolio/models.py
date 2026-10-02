@@ -28,11 +28,10 @@ from rebac import (
 )
 
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, ConditionalSharedReaderQuerySet, HierarchyMixin
+from angee.base.mixins import AuditMixin, HierarchyMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
-    AngeeQuerySet,
     role_anchor,
 )
 from angee.base.refs import RecordRefMixin, canonical_record_target
@@ -96,31 +95,7 @@ class ReleaseStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class WorkspaceVisibleQuerySet(ConditionalSharedReaderQuerySet[Any], AngeeQuerySet[Any]):
-    """Keep workspace reader creation on the shared reconciliation owner."""
-
-
-class WorkspaceVisibleManager(AngeeManager.from_queryset(WorkspaceVisibleQuerySet)):  # type: ignore[misc]
-    """Share the guarded workspace queryset across portfolio factories."""
-
-
-class WorkspaceVisibleMixin(ConditionalSharedReaderMixin):
-    """Make portfolio rows readable across the workspace through shared readers."""
-
-    shared_reader_relation = "reader"
-    objects = WorkspaceVisibleManager()
-
-    class Meta:
-        abstract = True
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Portfolio rows are readable by every authenticated actor."""
-
-        return True
-
-
-class ProductManager(WorkspaceVisibleManager):
+class ProductManager(AngeeManager):
     """Own the idempotent Project-to-Product maturation write."""
 
     def from_project(self, project: models.Model) -> models.Model:
@@ -160,7 +135,7 @@ class ProductManager(WorkspaceVisibleManager):
             return product
 
 
-class Product(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
+class Product(AuditMixin, AngeeDataModel):
     """A perpetual subject passing through phases rather than toward fulfillment."""
 
     runtime = True
@@ -206,7 +181,7 @@ class Product(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataModel):
+class Initiative(HierarchyMixin, AuditMixin, AngeeDataModel):
     """A tree-shaped long-horizon intent whose pushes can be fulfilled."""
 
     runtime = True
@@ -311,7 +286,7 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
         return self.name
 
 
-class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
+class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """An ordered Project placement on an ancestry-safe Initiative tree."""
 
     runtime = True
@@ -430,7 +405,7 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
                 report.sudo(reason="portfolio.demo.report").save()
 
 
-class UpdateManager(WorkspaceVisibleManager):
+class UpdateManager(AngeeManager):
     """Own target validation, authorization, and health-report creation."""
 
     TARGET_RELATIONS = {
@@ -482,7 +457,7 @@ class UpdateManager(WorkspaceVisibleManager):
             return report
 
 
-class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
     """A required-health report on a Project or Initiative, never a Product."""
 
     runtime = True
@@ -587,7 +562,7 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.record_model_label}:{self.record_public_id} {self.health}"
 
 
-class Release(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
+class Release(AuditMixin, AngeeDataModel):
     """The named artifact a ship Project leaves on a Product timeline."""
 
     runtime = True

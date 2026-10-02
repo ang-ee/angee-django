@@ -78,9 +78,10 @@ Share source-addon compositions through their owning test apps:
 [`angee.resources.testing`](../addons/angee/resources/testing/__init__.py),
 [`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py), and
 [`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
-package docstrings own the adoption contract. Register decision tables once
-from [`tests/decisions_models.py`](../tests/decisions_models.py) through the root
-conftest. The framework-generic
+package docstrings own the adoption contract. Other reusable concrete
+compositions, including [`decisions`](../addons/angee/decisions/testing/models.py)
+and [`messaging`](../addons/angee/messaging/testing/models.py), register once
+through imports in the root conftest before database setup. The framework-generic
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.

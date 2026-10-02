@@ -447,6 +447,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="revoke note workflow subject owner"):
             note.created_by = self.other
             note.save(update_fields={"created_by"})
+        note.with_actor(self.owner).transfer_ownership(self.other)
         run_until(run)
         self.assertEqual(run.status, RunStatus.FAILED)
         with system_context(reason="note workflow permission assertions"):

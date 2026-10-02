@@ -17,10 +17,44 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_hierarchy_queryset_order, check_hooks, check_impl_registries, check_rebac_database
+from angee.base.checks import (
+    check_hierarchy_queryset_order,
+    check_hooks,
+    check_impl_registries,
+    check_ownership,
+    check_rebac_database,
+)
+from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import HierarchyQuerySet
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, HierarchyQuerySet, OwnerMixin
+from angee.base.models import AngeeManager, AngeeModel
+from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_append_only_default_manager_check(guarded: bool) -> None:
+    """Django's model checks catch a concrete retained row with an ordinary manager."""
+
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class Retained(AppendOnlyModel):
+            objects = AngeeManager.from_queryset(AppendOnlyQuerySet)() if guarded else AngeeManager()
+
+            class Meta(AppendOnlyModel.Meta):
+                app_label = "contenttypes"
+                abstract = False
+
+        errors = checks.run_checks(app_configs=list(isolated.get_app_configs()), tags=[checks.Tags.models])
+        append_errors = [error for error in errors if error.id == "angee.E034"]
+        assert len(append_errors) == (0 if guarded else 1)
+        if append_errors:
+            assert append_errors[0].obj is Retained
+
+
+def test_installed_append_only_default_managers_compose_guard() -> None:
+    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
+    assert models
+    assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
 
 
 def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
@@ -35,7 +69,7 @@ def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
         },
     ):
         errors = check_impl_registries()
-    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004", "angee.E024"]
+    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004", "angee.E031"]
     assert "MissingImpl" in errors[0].msg
     assert "is not a _BaseImpl" in errors[1].msg
     assert "with key 'base'" in errors[2].msg
@@ -49,7 +83,7 @@ def test_impl_registry_check_accepts_empty_catalogue_and_rejects_unlisted_field(
         assert check_impl_registries() == []
     with override_settings(ANGEE_IMPL_REGISTRIES=[], ANGEE_TEST_IMPLS={"base": "tests.test_impl._BaseImpl"}):
         [error] = ImplClassField(_BaseImpl).check()
-    assert error.id == "angee.E025"
+    assert error.id == "angee.E032"
 
 
 def test_hook_check_imports_every_declared_path() -> None:
@@ -61,7 +95,7 @@ def test_hook_check_imports_every_declared_path() -> None:
         ANGEE_TEST_HOOKS=["builtins.len", "builtins.Ellipsis", "builtins.MissingHook"],
     ):
         errors = check_hooks()
-    assert [error.id for error in errors] == ["angee.E026"] * 3
+    assert [error.id for error in errors] == ["angee.E033"] * 3
     assert "MissingHook" in errors[0].msg
     assert "not callable" in errors[1].msg
     assert "MissingHook" in errors[2].msg
@@ -84,6 +118,21 @@ def test_installed_hook_owners_declare_their_settings() -> None:
         "ANGEE_WORK_MERGE_CONTRIBUTORS",
     } <= set(settings.ANGEE_HOOKS)
     assert check_hooks() == []
+
+
+@pytest.mark.parametrize("value", ("names", "values", "labels", "choices"))
+def test_state_field_rejects_values_that_cannot_be_reconstructed(value: str) -> None:
+    """Migration-state cloning must not generate a reserved enum member name."""
+    enum = models.TextChoices("ReservedValue", {"MEMBER": (value, "Label")})
+    field = StateField(choices_enum=enum)
+    assert any(error.id == "angee.E028" and value in error.msg for error in field.check())
+
+
+def test_named_roster_state_survives_historical_reconstruction() -> None:
+    field = Round._meta.get_field("roster_visibility")
+    assert field.clone().choices == field.choices
+    assert "named" in field.choices_enum.values
+    assert not field.check()
 
 
 @pytest.mark.parametrize("write_alias", [None, "default", "external"])
@@ -208,3 +257,55 @@ def test_rebac_database_check_covers_relationship_and_resource_stores(store_mode
 
     assert error.id == "angee.E020"
     assert error.obj is store_model
+
+
+@pytest.mark.parametrize("mutation", ["valid", "missing", "wrong", "widened", "stored-parent", "wrong-parent"])
+def test_inherited_owner_gate_uses_the_concrete_parents_transfer_permission(tmp_path, monkeypatch, mutation):
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class OwnedParent(OwnerMixin, AngeeModel):
+            owner_transfer_permission = "reassign"
+
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/owned_parent"
+
+        class OwnedChild(OwnedParent):
+            owner_transfer_permission = "unused_child_transfer"
+
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/owned_child"
+
+        source = """
+definition tests/owned_parent {
+    relation owner: auth/user // rebac:field=owner
+    permission reassign = owner
+    permission write__owner = reassign
+}
+definition tests/owned_child {
+    relation parent: tests/owned_parent // rebac:field=ownedparent_ptr
+    permission write__owner = parent->reassign
+}
+"""
+        if mutation == "missing":
+            source = source.replace("permission write__owner = parent->reassign", "")
+        elif mutation == "wrong":
+            source = source.replace("parent->reassign", "parent->write")
+        elif mutation == "widened":
+            source = source.replace("parent->reassign", "parent->reassign + authenticated")
+        elif mutation == "stored-parent":
+            source = source.replace(" // rebac:field=ownedparent_ptr", "")
+        elif mutation == "wrong-parent":
+            source = source.replace("relation parent: tests/owned_parent", "relation parent: tests/other_parent")
+        path = tmp_path / "ownership.zed"
+        path.write_text(source)
+        monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
+        errors = check_ownership([isolated.get_app_config("contenttypes")])
+
+    if mutation == "valid":
+        assert errors == []
+    else:
+        [error] = errors
+        assert error.id == "angee.E027" and error.obj is OwnedChild
+        assert "contenttypes.OwnedChild" in error.msg and "tests/owned_child" in error.msg
+        assert "->reassign" in error.msg

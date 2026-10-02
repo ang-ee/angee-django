@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.actions import authorized_action_target
+from angee.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -19,14 +20,20 @@ from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.schema import UserType
+from angee.messaging.models import NotificationPolicy
 from angee.messaging.schema import FragmentType
 from angee.parties.schema import PartyType
-from angee.spaces.models import Membership as MembershipSource
 
 Group = apps.get_model("spaces", "Group")
 Membership = apps.get_model("spaces", "Membership")
 Party = apps.get_model("parties", "Party")
 Thread = apps.get_model("messaging", "Thread")
+Channel = apps.get_model("messaging", "Channel")
+Vault = apps.get_model("knowledge", "Vault")
+
+MembershipRole = Membership._meta.get_field("role").choices_enum
+strawberry.enum(cast(Any, MembershipRole))
 
 
 @strawberry_django.type(Group)
@@ -39,24 +46,49 @@ class SpaceGroupType(AngeeNode):
     visibility: auto
     created_at: auto
     updated_at: auto
+    permissions = permissions_field(("write", "manage_roster"))
 
     parent: SpaceGroupType | None = actor_scoped_to_one("parent")
+    owner: UserType | None = actor_scoped_to_one("owner")
+
+    @strawberry_django.field
+    def membership_roles(self) -> list[MembershipRole]:  # type: ignore[valid-type]
+        """Project the roster manager's authorized role choices."""
+
+        return Membership.objects.available_roles(group=self)
 
 
 @strawberry_django.type(Membership)
 class SpaceMembershipType(AngeeNode):
     """GraphQL projection of one role-bearing group roster row."""
 
-    group: SpaceGroupType | None
+    permissions = permissions_field(("write", "write__role", "delete", "set_notifications"))
+    group: SpaceGroupType | None = actor_scoped_to_one("group")
     role: auto
     confidence: auto
     source: auto
     is_confirmed: auto
     is_dismissed: auto
+    notification_policy: auto
+    subtype_keys: list[str]
     created_at: auto
     updated_at: auto
 
     party: PartyType | None = actor_scoped_to_one("party")
+
+
+@strawberry_django.type(Channel, name="ChannelType", extend=True)
+class ChannelSpaceExtension:
+    """Project the channel's team with the shared relation read guard."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
+
+
+@strawberry_django.type(Vault, name="VaultType", extend=True)
+class VaultSpaceExtension:
+    """Project the vault's team with the shared relation read guard."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
 
 
 @strawberry_django.type(Thread)
@@ -83,11 +115,11 @@ class SpacesMembershipMutation:
         info: strawberry.Info,
         group_id: strawberry.ID,
         party_id: strawberry.ID,
-        role: MembershipSource.MembershipRole,
+        role: MembershipRole,  # type: ignore[valid-type]
     ) -> SpaceMembershipType:
-        """Add or confirm one party in a writable group at the selected role."""
+        """Resolve the selected group and let its roster authorize the selected role."""
 
-        group = authorized_action_target(info, Group, group_id, "write")
+        group = authorized_permission_target(info, Group, group_id, "read")
         party = require_instance_for_id(
             Party,
             party_id,
@@ -107,15 +139,9 @@ class SpacesMembershipMutation:
         info: strawberry.Info,
         id: strawberry.ID,
     ) -> SpaceMembershipType:
-        """Confirm a roster row and reconcile its role relationship."""
+        """Confirm an authorized roster row; access follows its persisted flags."""
 
-        del info
-        membership = require_instance_for_id(
-            Membership,
-            id,
-            queryset=Membership.objects.all(),
-            not_found="membership not found",
-        )
+        membership = authorized_action_target(info, Membership, id, "write")
         membership.confirm()
         return cast(SpaceMembershipType, membership)
 
@@ -125,16 +151,24 @@ class SpacesMembershipMutation:
         info: strawberry.Info,
         id: strawberry.ID,
     ) -> SpaceMembershipType:
-        """Dismiss a roster row and revoke its role relationship."""
+        """Dismiss an authorized roster row; access follows its persisted flags."""
 
-        del info
-        membership = require_instance_for_id(
-            Membership,
-            id,
-            queryset=Membership.objects.all(),
-            not_found="membership not found",
-        )
+        membership = authorized_action_target(info, Membership, id, "write")
         membership.dismiss()
+        return cast(SpaceMembershipType, membership)
+
+    @strawberry.mutation
+    def set_membership_notifications(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID,
+        policy: NotificationPolicy,
+        subtype_keys: list[str],
+    ) -> SpaceMembershipType:
+        """Let the roster holder choose its own team notification preference."""
+
+        membership = authorized_permission_target(info, Membership, id, "set_notifications")
+        membership.set_notifications(policy, subtype_keys)
         return cast(SpaceMembershipType, membership)
 
 
@@ -216,6 +250,7 @@ _RESOURCE_TYPES = [
 ]
 
 _SPACES_SCHEMA_BUCKET = {
+    "type_extensions": [ChannelSpaceExtension, VaultSpaceExtension],
     "query": [
         _GROUP_RESOURCE.query,
         _MEMBERSHIP_RESOURCE.query,

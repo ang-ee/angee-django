@@ -26,7 +26,7 @@ const fileResource = testDataResource("storage.File", {
   } }),
   typeNames: { filter: "files_bool_exp", order: "files_order_by" },
   recordRepresentation: "title", updateFields: ["title"], roots: { deletePreview: "delete_files_preview", aggregate: "files_aggregate" },
-  fields: ["title", "filename", "created_by_label", "upload_state", "created_at", "updated_at"].map((name) => ({
+  fields: ["title", "filename", "created_by_label", "upload_state", "visibility", "created_at", "updated_at"].map((name) => ({
     name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false,
     updatable: name === "title", requiredOnCreate: false,
@@ -37,7 +37,7 @@ const scope = { filter: { drive: { exact: "drive-a" }, is_trashed: { exact: fals
 const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
   return { id, title, filename: `${title}.bin`, url: "", drive: drive.id, folder: null,
-    is_trashed: false, upload_state: "ready", size_bytes: 1, mime_type: null,
+    is_trashed: false, upload_state: "ready", visibility: "inherited", size_bytes: 1, mime_type: null,
     created_by_label: "", updated_at: "2026-09-05T00:00:00Z" };
 }
 function deferred<T>() {
@@ -103,7 +103,7 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     forms.get("file-a")!.resolve({ data: records[0]! });
   });
   await screen.findByDisplayValue("Alpha");
-  const header = screen.getByRole("heading", { level: 2, name: "Alpha" });
+  const header = screen.getAllByRole("heading", { level: 2, name: "Alpha" })[0]!;
   const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
   const tree = screen.getByRole("tree");
   const pager = screen.getByRole("navigation", { name: "Record navigation" });

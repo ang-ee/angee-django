@@ -201,7 +201,8 @@ class MessageTriggerTests(TransactionTestCase):
         with system_context(reason="message source transfer channel"):
             self.channel.owner = self.other
             self.channel.save(update_fields=("owner",))
-        self.assertTrue(Message.objects.with_actor(self.owner).filter(pk=message.pk).exists())
+        # Attribution does not retain read access after channel ownership moves.
+        self.assertFalse(Message.objects.with_actor(self.owner).filter(pk=message.pk).exists())
         for event in system_queryset(TriggerEvent):
             self.assertTrue(Trigger.objects.admit(event))
             event.refresh_from_db()

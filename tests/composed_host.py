@@ -13,11 +13,51 @@ import argparse
 import json
 import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import environ
+
+COMPOSED_TEST_TIMEOUT = 120
+"""Bound composition and native test groups, allowing headroom over measured 15–29s runs."""
+
+
+def run_composed_tests(
+    tmp_path: Path, test_label: str, *, app: str | tuple[str, ...], test_postgresql: bool = False,
+) -> None:
+    """Run a native contract group without sharing pytest's source-model registry."""
+
+    root = Path(__file__).resolve().parents[1]
+    report = tmp_path / "composed-tests.json"
+    env = dict(os.environ)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "tests/composed_host.py"),
+            "--runtime-dir",
+            str(tmp_path / "runtime"),
+            *(["--test-postgresql"] if test_postgresql else []),
+            *(argument for name in ((app,) if isinstance(app, str) else app) for argument in ("--app", name)),
+            "--no-examples",
+            "--action",
+            "tests",
+            "--test-label",
+            test_label,
+            "--output",
+            str(report),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=COMPOSED_TEST_TIMEOUT,
+        check=False,
+    )
+    assert result.returncode == 0, f"composed tests failed:\n{result.stdout}\n{result.stderr}"
+    assert json.loads(report.read_text())["failures"] == 0
 
 
 def boot(
@@ -72,6 +112,7 @@ def boot(
             "ANGEE_ADDON_DIRS": tuple(addon_dirs),
             "INSTALLED_APPS": installed_apps,
             "DATABASES": {"default": database},
+            "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
         },
     )
     namespace = {name: value for name, value in namespace.items() if name.isupper() and not name.startswith("_")}
@@ -237,7 +278,13 @@ def main() -> None:
             assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
             assert settings.DATABASES["default"]["NAME"] == ":memory:"
         settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
-        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
+        # Generated apps have no migration history in this disposable host.
+        # Keep REBAC's native migrations and their contenttypes dependency: the
+        # library owns the schema witness required by its cached evaluator.
+        settings.MIGRATION_MODULES = {
+            config.label: None for config in apps.get_app_configs()
+            if config.label not in {"rebac", "contenttypes"}
+        }
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
         args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")
         raise SystemExit(bool(failures))

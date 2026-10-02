@@ -14,6 +14,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.base.mixins import AppendOnlyBaseQuerySet
 from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
@@ -25,10 +26,10 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
+from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from angee.messaging.testing.models import Channel
 from tests.conftest import make_integration
-from tests.integrate_models import Integration
-from tests.messaging_models import Channel
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
@@ -58,14 +59,14 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
             assert model._default_manager is model.objects
             for manager in (model.objects, model._base_manager):
                 queryset = manager.filter(pk=row.pk).order_by("pk").lock_if_supported()
-                expected = (
-                    AngeeUnscopedQuerySet
-                    if manager is model._base_manager and model is not RecordRevision
-                    else AngeeQuerySet
-                )
+                expected = AngeeQuerySet
+                if manager is model._base_manager:
+                    expected = AppendOnlyBaseQuerySet if model is RecordRevision else AngeeUnscopedQuerySet
                 assert isinstance(queryset, expected)
                 assert queryset.query.select_for_update is True
                 assert list(queryset) == [row]
+                assert manager.locked_get(pk=row.pk) == row
+                assert manager.from_public_id(str(row.sqid)) == row
         for manager, row in ((replica.links, link), (replica.discrepancies, discrepancy), (link.revisions, revision)):
             queryset = manager.filter(pk=row.pk).lock_if_supported()
             assert isinstance(queryset, AngeeQuerySet)

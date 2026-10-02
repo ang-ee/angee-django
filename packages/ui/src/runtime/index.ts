@@ -18,10 +18,14 @@ export {
   useFormOverride,
   useResourceRoute,
   useResourceRecordHref,
+  useResourceRecordMatchFields,
   useResourceRecordHrefLookup,
   useRouteHref,
+  useActiveRoute,
   useLoginPath,
   useRuntimeAuth,
+  useRuntimeBrand,
+  useRuntimeViewAs,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
   readRuntimeRouteShortcuts,
@@ -35,6 +39,7 @@ export {
   type AppRuntime,
   type RuntimeAuthState,
   type RuntimeAuthUser,
+  type RuntimeViewAs,
   type RuntimeI18n,
   type RuntimeLogoutAction,
   type ResourceRecordHrefLookup,
@@ -63,6 +68,8 @@ export {
 } from "./route-href";
 export { isModelScopedSlot, type RuntimeFormRegistration } from "./contracts";
 export type {
+  AppVocabulary,
+  RuntimeVocabulary,
   ChatterContribution,
   ChatterRoute,
   ChatterView,
@@ -74,6 +81,7 @@ export type {
   MenuItem,
   ModelSlotTarget,
   PreviewContribution,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 } from "./contracts";

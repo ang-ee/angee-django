@@ -12,36 +12,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.db import IntegrityError, transaction
-from rebac import system_context, to_object_ref
+from rebac import actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
-from angee.uom.models import Uom as AbstractUom
-from angee.uom.models import UomCategory as AbstractUomCategory
-
-
-class UomCategory(AbstractUomCategory):
-    """Concrete unit-of-measure category used by uom tests."""
-
-    class Meta(AbstractUomCategory.Meta):
-        """Django model options for the canonical test uom category."""
-
-        abstract = False
-        app_label = "uom"
-        db_table = "test_uom_category"
-        rebac_resource_type = "uom/category"
-
-
-class Uom(AbstractUom):
-    """Concrete unit of measure used by uom tests."""
-
-    class Meta(AbstractUom.Meta):
-        """Django model options for the canonical test uom."""
-
-        abstract = False
-        app_label = "uom"
-        db_table = "test_uom_uom"
-        rebac_resource_type = "uom/uom"
+from angee.uom.testing.models import Uom, UomCategory
+from tests.conftest import create_user
 
 
 def _make_category(**fields: Any) -> Any:
@@ -68,10 +45,10 @@ def _shared_reader_exists(row: Any) -> bool:
     ).exists()
 
 
-def test_native_categories_and_units_receive_per_record_shared_readers(
+def test_native_categories_and_units_use_authenticated_reads(
     composed_tables: None,
 ) -> None:
-    """Native catalogue rows opt in explicitly to the wildcard relation."""
+    """A signed-in user reads native catalogue rows without wildcard tuples."""
 
     del composed_tables
     category = _make_category(name="Native catalogue")
@@ -82,8 +59,15 @@ def test_native_categories_and_units_receive_per_record_shared_readers(
         rounding=Decimal("0.01"),
         is_reference=True,
     )
-    assert _shared_reader_exists(category)
-    assert _shared_reader_exists(unit)
+    reader = create_user("uom-reader")
+    with actor_context(reader):
+        assert UomCategory.objects.filter(pk=category.pk).exists()
+        assert Uom.objects.filter(pk=unit.pk).exists()
+    with actor_context(AnonymousUser()):
+        assert not UomCategory.objects.filter(pk=category.pk).exists()
+        assert not Uom.objects.filter(pk=unit.pk).exists()
+    assert not _shared_reader_exists(category)
+    assert not _shared_reader_exists(unit)
 
 
 @pytest.fixture()

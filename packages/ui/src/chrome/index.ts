@@ -14,10 +14,13 @@ export {
   Breadcrumb,
   BreadcrumbLabelProvider,
   useBreadcrumbLeafLabel,
+  useBreadcrumbItems,
   useBreadcrumbCollectionLink,
   type BreadcrumbItem,
   type BreadcrumbProps,
 } from "./Breadcrumb";
+export { DocumentTitle } from "./DocumentTitle";
+export { ViewAsBanner, ViewAsPicker } from "./ViewAs";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
 export {
   AppRailTree,
@@ -51,6 +54,15 @@ export {
   type SpotlightProps,
 } from "./Spotlight";
 export { Systray, type SystrayProps } from "./Systray";
+export {
+  SurfacePresentationProvider,
+  useSurfacePresentation,
+  useSurfaceAdmission,
+  isSurfaceSlotAdmitted,
+  admittedAsideTabs,
+  type SurfaceAdmission,
+  type SurfacePresentation,
+} from "./surface-policy";
 export { TopBar, type TopBarProps } from "./TopBar";
 export {
   TopMenuTabs,

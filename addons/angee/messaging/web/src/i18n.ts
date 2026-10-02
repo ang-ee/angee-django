@@ -20,12 +20,10 @@ export const enMessagingMessages: Record<string, string> = {
   "chatter.disabledHint": "This record has no model chatter thread.",
   "chatter.notFoundTitle": "Record unavailable",
   "chatter.notFoundHint": "You do not have access to this record, or it no longer exists.",
-  "chatter.following": "{count} following",
+  "chatter.following": "Following",
   "chatter.unread": "{count} unread",
   "chatter.failed": "{count} failed",
   "chatter.markRead": "Mark read",
-  "chatter.follow": "Follow",
-  "chatter.unfollow": "Unfollow",
   "chatter.search": "Search comments",
   "chatter.feedLabel": "Comments",
   "chatter.results": "{count} results",
@@ -34,6 +32,11 @@ export const enMessagingMessages: Record<string, string> = {
   "chatter.noMatchTitle": "No matching comments",
   "chatter.noMatchHint": "Try a different search.",
   "chatter.editedMeta": "edited",
+  "stream.empty": "Nothing yet",
+  "stream.emptyHint": "New entries will appear here.",
+  "stream.postingTo": "Posting to {audience}",
+  "stream.showThread": "Show conversation",
+  "stream.hideThread": "Hide conversation",
 
   // Message content tab — the nested parts data view.
   "parts.fragment": "Fragment",
@@ -45,6 +48,7 @@ export const enMessagingMessages: Record<string, string> = {
 
   // Message row affordances.
   "message.author": "Someone",
+  "message.you": "You",
   "message.reactions": "Reactions",
   "message.reactionCount": "{reaction} {count}",
   "message.reactionTitle": "{reaction} by {names}",
@@ -66,6 +70,8 @@ export const enMessagingMessages: Record<string, string> = {
   "message.directionOutbound": "Outbound",
 
   // Composer.
+  "composer.audience": "Visible to people with access to this record.",
+  "composer.help": "Use comments for discussion and notes for internal updates.",
   "composer.comment": "Comment",
   "composer.note": "Note",
   "composer.cancelReply": "Cancel reply",
@@ -85,14 +91,6 @@ export const enMessagingMessages: Record<string, string> = {
   "composer.log": "Log",
   "composer.dropFiles": "Drop files to attach",
   "composer.removeAttachment": "Remove {name}",
-  "composer.clearUploads": "Clear finished uploads",
-
-  // Upload task states.
-  "upload.preparing": "Preparing",
-  "upload.uploading": "Uploading",
-  "upload.finalizing": "Finalizing",
-  "upload.failed": "Failed",
-  "upload.attached": "Attached",
 
   // Follow subtypes.
   "subtype.legend": "Notification types",
@@ -143,8 +141,22 @@ export const enMessagingMessages: Record<string, string> = {
   "channel.action.sync": "Sync now",
   "webform.loading": "Loading form",
   "webform.unavailable": "This form is unavailable.",
+  "webform.error.invalid_request": "The request is invalid.",
+  "webform.error.body_too_large": "The submission is too large.",
+  "webform.error.unsupported_media_type": "The submission format is not supported.",
+  "webform.error.rate_limited": "Too many submissions. Try again later.",
+  "webform.error.invalid_token": "The submission could not be verified.",
+  "webform.error.guard_unavailable": "This form is temporarily unavailable.",
+  "webform.error.form_changed": "The form changed. Reload and submit again.",
+  "webform.error.invalid_submission": "The submission is invalid.",
   "webform.errorTitle": "Form unavailable",
   "webform.invalidSpec": "This form is not configured correctly.",
+  "webform.introNoReceipt": "Complete the fields below.",
+  "webform.successBodyNoReceipt": "Your response was received.",
+  "webform.website": "Website",
+  "webform.loadFailed": "Could not load this form.",
+  "webform.invalidDescription": "The form server returned an invalid description.",
+  "webform.invalidReceipt": "The form server returned an invalid receipt.",
   "webform.intro": "Complete the fields below and keep the receipt for your records.",
   "webform.submit": "Submit",
   "webform.submitting": "Submitting…",
@@ -215,6 +227,7 @@ export const enMessagingMessages: Record<string, string> = {
   "activity.markDone": "Mark done",
   "activity.cancel": "Cancel activity",
   "activity.stateDone": "Done",
+  "activity.recordedOn": "Recorded {day}",
   "activity.stateCanceled": "Canceled",
   "activity.stateOverdue": "Overdue",
   "activity.stateToday": "Today",

@@ -50,3 +50,12 @@ export const Settings: Story = {
     <RailStory expanded />
   ),
 };
+
+export const SingleApp: Story = {
+  parameters: { route: "/notes" },
+  render: () => <AppRuntimeProvider runtime={{ confineTo: "workspace", brand: { name: "Workspace", mark: "notes" } }}>
+    <AppRail presentation="drawer" menuItems={[{ id: "workspace", label: "Workspace", appRoot: true,
+      children: [{ id: "notes", label: "Notes", to: "/notes", icon: "notes" },
+        { id: "activity", label: "Activity", to: "/activity", icon: "activity" }] }]} />
+  </AppRuntimeProvider>,
+};

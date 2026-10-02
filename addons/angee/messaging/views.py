@@ -43,7 +43,7 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
     if request.method == "GET":
         channel = _published_webform(slug)
         try:
-            channel.webform_spec()
+            spec = channel.webform_spec()
         except ValidationError as error:
             raise Http404 from error
         response = JsonResponse(
@@ -52,6 +52,8 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
                 "title": str(channel.display_name or channel.slug),
                 "schema_version": int(channel.form_schema_version),
                 "form_schema": channel.form_schema,
+                "success": {"title": spec.success_title, "body": spec.success_body},
+                "honeypot_field": _webform_policy(slug).honeypot_field,
             }
         )
         response["Cache-Control"] = "no-store"
@@ -68,7 +70,6 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
     if checked.dropped:
         return JsonResponse({"submission_id": submission_id}, status=202)
 
-    channel_model = apps.get_model("messaging", "Channel")
     channel = _published_webform(slug)
     if checked.body_size > int(channel.max_body_bytes):
         return _ingress_error(
@@ -86,12 +87,13 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
             checked.payload.get("answers"),
             max_field_bytes=int(channel.max_field_bytes),
         )
+        channel.validate_webform_answers(answers)
+        parsed = channel.webform_message(
+            submission_id=submission_id,
+            answers=answers,
+        )
     except ValidationError as error:
         return _validation_error(error)
-    parsed = channel.webform_message(
-        submission_id=submission_id,
-        answers=answers,
-    )
 
     channel_model = apps.get_model("messaging", "Channel")
     message_model = apps.get_model("messaging", "Message")

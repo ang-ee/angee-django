@@ -12,6 +12,7 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import SchemaDefinition
+from rebac.models.generation import SchemaGeneration
 from reversion.middleware import RevisionMiddleware
 from reversion.models import Version
 
@@ -38,8 +39,8 @@ def _post(schema: Any, user: Any, query: str, variables: dict[str, Any]) -> dict
     return json.loads(response.content)
 
 
-def test_protected_graphql_post_loads_one_schema_for_one_or_many_rows(composed_tables: None) -> None:
-    """A read-only POST reuses its coherent permission schema inside the revision."""
+def test_protected_graphql_post_checks_one_schema_revision_for_one_or_many_rows(composed_tables: None) -> None:
+    """A read-only POST validates and reuses its cached permission schema."""
 
     owner = create_user("query-owner")
     outsider = create_user("query-outsider")
@@ -59,7 +60,9 @@ def test_protected_graphql_post_loads_one_schema_for_one_or_many_rows(composed_t
         }
     """
     schema_table = connection.ops.quote_name(SchemaDefinition._meta.db_table)
+    generation_table = connection.ops.quote_name(SchemaGeneration._meta.db_table)
     schema_reads = []
+    revision_reads = []
     query_counts = []
     versions_before = Version.objects.count()
     for size in (1, 25):
@@ -70,10 +73,14 @@ def test_protected_graphql_post_loads_one_schema_for_one_or_many_rows(composed_t
         assert all(row["title"] != "Hidden" for row in payload["data"]["pages"])
         assert payload["data"]["pages_aggregate"]["aggregate"]["count"] == 25
         schema_reads.append(sum(f"FROM {schema_table}" in item["sql"] for item in captured))
+        revision_reads.append(sum(
+            item["sql"].startswith(f'SELECT {generation_table}."revision"') for item in captured
+        ))
         query_counts.append(len(captured))
 
     assert Version.objects.count() == versions_before
-    assert schema_reads == [1, 1], "Each read-only HTTP transaction should load its permission schema once"
+    assert schema_reads == [0, 0], "An unchanged permission schema should reuse the cached definitions"
+    assert revision_reads == [1, 1], "Each read-only HTTP transaction should validate its schema revision once"
     assert query_counts[0] == query_counts[1], "Scalar row reads must not grow with page size"
 
 

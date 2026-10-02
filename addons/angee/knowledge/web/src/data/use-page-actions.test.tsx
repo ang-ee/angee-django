@@ -24,16 +24,22 @@ const sdk = vi.hoisted(() => {
     calls: unknown[];
     options: Record<string, unknown>;
   };
+  const invalidated: unknown[] = [];
   return {
     refineMutations: [] as RefineMutation[],
     invalidations: [] as unknown[],
     createPage: vi.fn(),
+    invalidatedModels: invalidated,
+    invalidateModels: (models: unknown) => {
+      invalidated.push(models);
+    },
   };
 });
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: () => [sdk.createPage, { fetching: false, error: null }],
+  useInvalidateAuthoredModels: () => sdk.invalidateModels,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
@@ -93,11 +99,11 @@ describe("knowledge page actions", () => {
     sdk.invalidations.length = 0;
     sdk.createPage.mockReset();
     sdk.createPage.mockResolvedValue({ create_page: { id: "pag_new" } });
+    sdk.invalidatedModels.length = 0;
   });
 
   test("uses refine mutations and preserves returned page id", async () => {
-    const onChanged = vi.fn();
-    const { result } = renderHook(() => usePageActions({ onChanged }), {
+    const { result } = renderHook(() => usePageActions(), {
       wrapper: MetadataWrapper,
     });
     const [updatePage, deletePage] = sdk.refineMutations;
@@ -142,13 +148,16 @@ describe("knowledge page actions", () => {
         invalidates: ["list", "many", "detail"],
       }),
     ]);
-    expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(sdk.invalidatedModels).toEqual([
+      ["knowledge.Page"],
+      ["knowledge.Page"],
+      ["knowledge.Page"],
+    ]);
   });
 
   test("keeps navigator verbs stable across rerenders", () => {
-    const onChanged = vi.fn();
     const { result, rerender } = renderHook(
-      () => usePageActions({ onChanged }),
+      () => usePageActions(),
       { wrapper: MetadataWrapper },
     );
     const first = result.current;

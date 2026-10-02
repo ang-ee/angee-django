@@ -247,7 +247,7 @@ class ExtractionManager(EvidenceManager):
         for page in pages:
             carrier = None
             if page.image_file_id:
-                carrier = readable_files.from_public_id(page.image_file_id) if readable_files is not None else None
+                carrier = readable_files.from_public_id(page.image_file_id)
                 if carrier is None:
                     raise PermissionDenied("The raster carrier is absent or inaccessible.")
                 if carrier.content_hash != page.image_digest:

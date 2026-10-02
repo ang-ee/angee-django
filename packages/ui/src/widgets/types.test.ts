@@ -12,6 +12,8 @@ describe("widget option helpers", () => {
       "done",
     );
     expect(optionLabel(undefined, null)).toBe("");
+    expect(optionLabel([{ value: "open", label: "Open" }], "OPEN")).toBe("Open");
+    expect(optionLabel([{ value: "Medium", label: "Normal" }], "medium")).toBe("Normal");
   });
 
   test("coerces text labels without stringifying React nodes", () => {

@@ -16,6 +16,7 @@ from rebac import (
 
 from angee.base.scoping import system_queryset
 from angee.integrate.schema import ConsoleImplChoicesQuery
+from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
 from angee.workflows import schema as workflow_schema
 from angee.workflows.testing.drivers import load_workflow
@@ -23,7 +24,6 @@ from angee.workflows.testing.models import Trigger, TriggerEvent
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
 from tests.conftest import Vault, Vendor, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
-from tests.integrate_models import Integration
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.workflow_steps import document
 
@@ -348,10 +348,13 @@ def test_trigger_ledger_origin_and_filters_require_operator_visibility(trigger_s
         assert len(restricted["trigger"]) == 1
         assert restricted["triggerevent"] == []
         assert restricted["by_started_run"] == []
-        if reader is viewer:
-            assert restricted["workflowrun"] == [{"id": run.sqid, "origin": "TRIGGER", "trigger_event": None}]
-        else:
-            assert restricted["workflowrun"] == []
+        # G1 guards filters that cross the unreadable admission ledger, even
+        # when the root workflow run itself is readable.
+        assert restricted["workflowrun"] == []
+    unfiltered = result_data(execute_schema(
+        schema, "{ workflowrun { id origin trigger_event { id } } }", user=viewer,
+    ))
+    assert unfiltered["workflowrun"] == [{"id": run.sqid, "origin": "TRIGGER", "trigger_event": None}]
     operator = create_user("trigger-run-operator")
     run.with_actor(editor).grant_record_access("operator", operator)
     operated = result_data(execute_schema(schema, "{ triggerevent { id started_run { id origin } } }", user=operator))

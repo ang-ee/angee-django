@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 8
 
 // A party and its related rows (handles, links, addresses, relationships) are
 // each owned by the user that created them, with platform admins reaching every
@@ -9,17 +9,13 @@
 // Each owns its own created_by rather than reaching through the party, so a
 // handle synced for an unknown sender (party still null) stays readable.
 
-// Read-model decision (v1): party visibility is a per-row `reader` grant — a
-// tuple naming a user or a group#member on the concrete row — not a directory- or
-// scope-wide read arm. A persona therefore sees a party only where a `reader`
-// grant reaches it, so demo tiers grant readers explicitly (the per-row `reader`
-// grant fixtures each parties-owning addon ships); a shared reader grant on an
-// MTI child also lands on each parent that accepts that relation and subject via
-// the resources grant loader (`addons/angee/resources/grants.py`), so a foreign
-// key typed to `parties/party` still authorizes. A first-class scoped directory
-// read arm is deliberately deferred until a real multi-tenant directory
-// requirement lands — parties are shared directory entities, not a tenant
-// isolation surface.
+// Record owners may contribute identity read arms. Private fields and private
+// uses of a party require read_private, which retains per-row grants. An
+// explicit `reader` grant on an MTI child also reaches each parent that accepts
+// the relation and subject through the resources grant loader
+// (`addons/angee/resources/grants.py`). Related rows keep their own read rules.
+// Lossless contact data and handle counts are private. created_by, updated_by
+// and their labels remain readable: attribution belongs to identity.
 
 definition parties/party {
     relation owner: auth/user // rebac:field=created_by
@@ -29,6 +25,12 @@ definition parties/party {
 
     permission create = authenticated
     permission read   = owner + editor + reader + admin->member
+    permission read_private = owner + editor + reader + admin->member
+    permission read__notes = read_private
+    permission read__first_met_note = read_private
+    permission read__raw_vcard = read_private
+    permission read__extensions = read_private
+    permission read__handle_count = read_private
     permission write  = owner + editor + admin->member
     permission delete = owner + admin->member
 }
@@ -45,6 +47,16 @@ definition parties/person {
 
     permission create = authenticated
     permission read   = owner + editor + reader + admin->member
+    permission read_private = owner + editor + reader + admin->member
+    // Field gates are per resource definition, including inherited columns.
+    permission read__notes = read_private
+    permission read__first_met_note = read_private
+    permission read__raw_vcard = read_private
+    permission read__extensions = read_private
+    permission read__handle_count = read_private
+    permission read__birthday = read_private
+    permission read__anniversary = read_private
+    permission read__nickname = read_private
     permission write  = owner + editor + admin->member
     permission delete = owner + admin->member
 }

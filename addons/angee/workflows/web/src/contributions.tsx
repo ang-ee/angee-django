@@ -12,10 +12,14 @@ export function DecisionRunOrigin() {
   const { decision } = useDecisionContent();
   const t = useWorkflowsT();
   const href = useRouteHref();
-  const query = useAuthoredQuery(DecisionWaitingRunsDocument, { group: decision.group.id }, {
+  const groupId = decision.group?.id;
+  const query = useAuthoredQuery(DecisionWaitingRunsDocument, { group: groupId ?? "" }, {
+    enabled: groupId != null,
     models: ["decisions.DecisionGroup", "workflows.StepRun"],
-    records: [{ model: "decisions.DecisionGroup", id: decision.group.id }], relatedModels: ["workflows.StepRun"],
+    records: groupId != null ? [{ model: "decisions.DecisionGroup", id: groupId }] : [],
+    relatedModels: ["workflows.StepRun"],
   });
+  if (groupId == null) return null;
   if (query.isLoading) return null;
   if (query.error) return <ErrorBanner description={t("catalogue.originUnavailable")} />;
   const steps = query.data?.steprun.flatMap((step) => step.run ? [{ ...step, run: step.run }] : []) ?? [];

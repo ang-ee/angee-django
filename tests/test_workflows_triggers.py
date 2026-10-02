@@ -413,7 +413,7 @@ def test_drain_bound_counts_candidates_including_rejections(trigger_setup, monke
 
 
 @pytest.mark.parametrize("condition", [
-    {"not_a_field": {"_eq": "value"}}, {"name": {"_unknown": "value"}}, {"id": {"_eq": "bad-public-id"}},
+    {"not_a_field": {"_eq": "value"}}, {"name": {"_unknown": "value"}},
 ])
 def test_conditions_use_actual_resource_fields_and_operators(trigger_setup, condition):
     actor, _, _, trigger = trigger_setup
@@ -438,16 +438,19 @@ def test_condition_depth_is_bounded_and_stale_configuration_disables(trigger_set
     assert not trigger.enabled and "removed_field" in trigger.disabled_reason
 
 
-def test_invalid_persisted_public_id_is_configuration_failure(trigger_setup):
+def test_invalid_public_id_condition_matches_no_records(trigger_setup):
     actor, _, record, trigger = trigger_setup
+    trigger.condition = {"id": {"_eq": "bad-public-id"}}
+    with actor_context(actor):
+        trigger.save()
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
-    system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"id": {"_eq": "bad-public-id"}})
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
     event = system_queryset(TriggerEvent).get()
-    assert not trigger.enabled and trigger.disabled_reason
-    assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
+    assert trigger.enabled and not trigger.disabled_reason
+    assert "no longer matches the condition" in event.rejection
+    assert event.evaluated_at and not event.admitted_at
 
 
 @pytest.mark.parametrize("source_path", [

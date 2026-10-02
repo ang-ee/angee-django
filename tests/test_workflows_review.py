@@ -22,6 +22,7 @@ from angee.decisions.contracts import DecisionRequest
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.forms import Action
 from angee.decisions.states import ClosedReason, Verdict
+from angee.decisions.testing.models import Decision, DecisionGroup
 from angee.workflows.definition import Definition
 from angee.workflows.reviews import Review, ReviewStep
 from angee.workflows.runner import runner
@@ -35,7 +36,6 @@ from angee.workflows.testing.models import (
     Workflow,
     WorkflowRun,
 )
-from tests.decisions_models import Decision, DecisionGroup
 
 
 class Approve(Action, key="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):
@@ -558,7 +558,7 @@ def test_review_closure_edges_and_results_expose_empty_output(review, register_s
     assert any(issue.code == "binding" for issue in Definition.check(graph)[1])
 
 
-def test_reask_chain_protects_history_and_retains_operator_resolution(review, workflow_permissions):
+def test_reask_chain_protects_history_and_retains_operator_resolution(review, composed_permissions):
     actor, people, _sent, question = review
     run, step = start_review(review, input={"reject_rounds": 2})
     original = seats(step)[0]

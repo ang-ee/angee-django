@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 from angee.base.impl import ImplBase, resolve_impl_class
 from angee.base.jsonschema import check_schema, validate, validator
 from angee.base.serialization import strip_null_bytes
+from angee.base.validation import get_type_adapter
 from angee.decisions.contracts import DecisionRequest
 from angee.workflows.states import (
     DONE_OUTCOME,
@@ -107,7 +108,7 @@ class Done(_Settlement):
         if outcome in step.empty_outcomes:
             return Done(outcome=outcome)
         parsed = step.parse_value({} if self.output is None else self.output, step.output_model, "output")
-        output = strip_null_bytes(step._adapter(step.output_model).dump_python(parsed, mode="json", by_alias=True))
+        output = strip_null_bytes(get_type_adapter(step.output_model).dump_python(parsed, mode="json", by_alias=True))
         if step.output_model is Any:
             schema = step.output_schema(config=config, outcomes={outcome})
             if schema:
@@ -211,7 +212,7 @@ class Ask(_Settlement):
             if any(action not in offered for action in request.actions):
                 raise ValidationError("A seat offers an action outside this review's declaration.")
             parsed = review.parse_value(request.basis, review.basis_model, "basis")
-            basis = review._adapter(review.basis_model).dump_python(parsed, mode="json", by_alias=True)
+            basis = get_type_adapter(review.basis_model).dump_python(parsed, mode="json", by_alias=True)
             requests.append(request.model_copy(update={"basis": basis}))
         return replace(self, requests=tuple(requests), state=step.serialize_state(self.state))
 
@@ -242,8 +243,8 @@ class Step[I, O, C](ImplBase):
     """A step with explicit execution mode and typed input, output and config.
 
     ``None`` input/output parameters accept arbitrary JSON. Typed values share
-    ``ImplBase``'s cached adapters, config parsing and field-path validation
-    errors. Step schema projections are cached by their declared type.
+    the base validation owner's cached adapters and ``ImplBase``'s config parsing
+    and field-path errors. Step schema projections are cached by their declared type.
     """
 
     registry_setting = "ANGEE_WORKFLOW_STEP_CLASSES"
@@ -293,7 +294,7 @@ class Step[I, O, C](ImplBase):
     @cache
     def _schema(cls, model: Any, mode: Literal["validation", "serialization"]) -> dict[str, Any]:
         try:
-            schema = cls._adapter(model).json_schema(mode=mode)
+            schema = get_type_adapter(model).json_schema(mode=mode)
         except (KeyError, PydanticInvalidForJsonSchema) as error:
             raise ValidationError(f"Cannot generate step schema: {error}") from error
         check_schema(schema)
@@ -335,7 +336,7 @@ class Step[I, O, C](ImplBase):
     @classmethod
     def normalize_input(cls, value: Any) -> Any:
         """Return JSON input after applying its model's defaults and validation."""
-        return cls._adapter(cls.input_model).dump_python(cls.parse_input(value), mode="json", by_alias=True)
+        return get_type_adapter(cls.input_model).dump_python(cls.parse_input(value), mode="json", by_alias=True)
 
     @staticmethod
     def done(output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
@@ -345,7 +346,7 @@ class Step[I, O, C](ImplBase):
     @classmethod
     def serialize_state(cls, state: Any) -> Any:
         """Serialize a continuation checkpoint once at the body boundary."""
-        return strip_null_bytes(cls._adapter(Any).dump_python({} if state is None else state, mode="json"))
+        return strip_null_bytes(get_type_adapter(Any).dump_python({} if state is None else state, mode="json"))
 
     @classmethod
     def check(cls, settlement: _Settlement, *, config: Any = None) -> _Settlement:

@@ -252,7 +252,7 @@ function AgentResourceListPage({
           />
         ) : null}
         <Field name="name" title />
-        <Field name="lifecycle" widget="statusbar" />
+        <Field name="lifecycle" widget="statusbar" status />
         {/* Description then instructions lead the Overview tab as full-width
             textareas; `body={false}` keeps `description` a normal field rather than
             the form's auto-detected body. */}

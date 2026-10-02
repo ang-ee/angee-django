@@ -12,6 +12,7 @@ rows:
       due_date: 2026-09-12
       sort_order: 1024.0
       sub_sort_order: 1024.0
+      owner: iam.user_alice
       created_by: iam.user_alice
       updated_by: iam.user_alice
   - xref: weekly_tools
@@ -25,6 +26,7 @@ rows:
       recurrence: FREQ=WEEKLY;BYDAY=FR
       sort_order: 2048.0
       sub_sort_order: 2048.0
+      owner: iam.user_alice
       created_by: iam.user_alice
       updated_by: iam.user_alice
   - xref: opening_day
@@ -37,5 +39,6 @@ rows:
       due_date: 2026-11-30
       sort_order: 3072.0
       sub_sort_order: 3072.0
+      owner: iam.user_alice
       created_by: iam.user_alice
       updated_by: iam.user_alice

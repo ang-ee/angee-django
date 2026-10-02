@@ -65,6 +65,9 @@ describe("work addon manifest", () => {
       "work.cycles-hub",
     ]);
     expect(work.slots?.map((slot) => slot.id)).toEqual([
+      "work.manager",
+      "work.people-rail",
+      "work.project-team",
       "work.task-fields",
       "work.task-triage-actions",
     ]);
@@ -77,6 +80,7 @@ describe("work addon manifest", () => {
       "work-duplicate",
       "work-queue",
       "work-snooze",
+      "work-start",
       "work-triage",
     ]);
   });

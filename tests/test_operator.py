@@ -11,14 +11,13 @@ import httpx
 import pytest
 import strawberry
 from django.core.cache import cache
-from rebac import LocalBackend, ObjectRef, RelationshipTuple, SubjectRef
+from rebac import ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
 
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
-from angee.operator.models import OperatorConnection as _AbstractOperatorConnection
-from angee.operator.models import OperatorRole as _AbstractOperatorRole
+from angee.testing.permissions import install_permission_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -547,34 +546,6 @@ def test_operator_contributes_only_the_console_surface() -> None:
 
 # --- REBAC const-canon reach (F-g) --------------------------------------------
 
-# The operator addon is not in the bare test INSTALLED_APPS, so the composer's
-# runtime anchors are absent. These concrete `managed = False` anchors (no table)
-# back `model_for_resource_type(...)` so the const relations on
-# `operator/connection` / `operator/role` resolve exactly as they do composed.
-
-
-class _OperatorConnectionAnchor(_AbstractOperatorConnection):
-    """Concrete table-less REBAC anchor for `operator/connection` (probe only)."""
-
-    class Meta(_AbstractOperatorConnection.Meta):
-        """Django options for the operator connection probe anchor."""
-
-        abstract = False
-        managed = False
-        app_label = "integrate"
-        rebac_resource_type = "operator/connection"
-
-
-class _OperatorRoleAnchor(_AbstractOperatorRole):
-    """Concrete table-less REBAC anchor for the `operator/role` namespace (probe only)."""
-
-    class Meta(_AbstractOperatorRole.Meta):
-        """Django options for the operator role probe anchor."""
-
-        abstract = False
-        managed = False
-        app_label = "integrate"
-        rebac_resource_type = "operator/role"
 
 
 # `operator/connection` / `operator/role` reference these cross-package types; the
@@ -605,8 +576,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
     reader = next(relation for relation in connection.relations if relation.name == "reader")
     assert reader.backing == ConstBinding(target_id="operator_admin")
 
-    backend = LocalBackend()
-    backend.set_schema(schema)
+    backend = install_permission_schema(schema)
     operator = SubjectRef.of("auth/user", "operator-1")
     connection_ref = ObjectRef("operator/connection", "default")
 

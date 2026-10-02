@@ -256,7 +256,7 @@ def test_impl_registry_and_field_collect_every_registry_fault() -> None:
     assert isinstance(faults[2], ImproperlyConfigured)
 
     field = ImplClassField(_BaseImpl)
-    assert [error.id for error in field.check()] == ["angee.E025"]
+    assert [error.id for error in field.check()] == ["angee.E032"]
     errors = check_impl_registry(_BaseImpl, obj=field)
     assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
     assert all(error.obj is field for error in errors)
@@ -274,7 +274,7 @@ def test_rowless_registry_checks_config_form_declarations() -> None:
     assert [error.id for error in errors] == ["angee.E005"]
     assert "config.headers" in errors[0].msg
     field = ImplClassField(_BaseImpl)
-    assert [error.id for error in field.check()] == ["angee.E025"]
+    assert [error.id for error in field.check()] == ["angee.E032"]
 
 
 @override_settings(ANGEE_TEST_IMPLS=["not a registry"])

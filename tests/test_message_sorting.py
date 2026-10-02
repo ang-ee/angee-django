@@ -10,8 +10,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, current_actor, system_context
 
 from angee.messaging.managers import MessageQuerySet
+from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Party, Thread
 from tests.conftest import Vendor, execute_schema, make_integration, result_data
-from tests.test_messaging import Channel, Fragment, Handle, Message, Part, Party, Thread
+from tests.messaging_campaign import grant
 from tests.test_messaging_graphql import _platform_admin, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -23,6 +24,7 @@ def test_unused_sender_order_does_not_prepare_identity_scopes() -> None:
     owner = get_user_model().objects.create_user(username="unused-sender-order")
     with system_context(reason="test.messaging.unused_sender_order.seed"):
         message = Message.objects.create(created_by=owner)
+        grant(message, "reader", owner)
     schema = _schema()
     counts = []
     with (
@@ -51,7 +53,8 @@ def test_sender_order_uses_current_resolved_arguments() -> None:
     with system_context(reason="test.messaging.resolved_sender_order.seed"):
         for label in ("Zulu", "Alpha"):
             handle = Handle.objects.create(created_by=owner, platform="email", value=label)
-            Message.objects.create(created_by=owner, sender=handle)
+            message = Message.objects.create(created_by=owner, sender=handle)
+            grant(message, "reader", owner)
     schema = _schema()
     query = """
       query ResolvedOrder($order: [messages_order_by!]) {
@@ -88,6 +91,8 @@ def test_unreadable_sender_sorts_as_empty_instead_of_its_hidden_name() -> None:
         )
         visible = Message.objects.create(created_by=owner, sender=visible_handle)
         hidden = Message.objects.create(created_by=owner, sender=hidden_handle)
+        for message in (visible, hidden):
+            grant(message, "reader", owner)
 
     rows = result_data(
         execute_schema(
@@ -130,8 +135,10 @@ def test_sender_projection_matches_visible_identity_and_regates_elevated_parents
                 display_name=envelope,
             )
             message = Message.objects.create(created_by=owner, sender=handle)
+            grant(message, "reader", owner)
             expected[str(message.sqid)] = label
         missing = Message.objects.create(created_by=owner)
+        grant(missing, "reader", owner)
         expected[str(missing.sqid)] = ""
         hidden = Message.objects.create(created_by=other, sender=handle)
 
@@ -176,6 +183,7 @@ def test_sender_sorted_pages_use_the_selected_scalar_with_bounded_sql() -> None:
                 display_name=f"Envelope {index:02}",
             )
             message = Message.objects.create(created_by=owner, sender=handle)
+            grant(message, "reader", owner)
             expected.append((label, message.pk, str(message.sqid)))
     expected.sort()
     schema = _schema()
@@ -214,6 +222,7 @@ def test_title_sort_uses_the_existing_title_part_projection() -> None:
     with system_context(reason="test.messaging.title_sort.seed"):
         for title in ("Zulu", "Alpha", ""):
             message = Message.objects.create(created_by=owner, sent_at=datetime(2026, 9, 1, tzinfo=UTC))
+            grant(message, "reader", owner)
             if title:
                 Part.objects.create(
                     created_by=owner,
@@ -243,6 +252,8 @@ def test_related_sort_values_ignore_denied_labels_and_regate_elevated_parents() 
             Message.objects.create(created_by=owner, thread=hidden, channel=other_channel),
             Message.objects.create(created_by=owner),
         ]
+        for message in rows:
+            grant(message, "reader", owner)
     schema = _schema()
     query = """{
       messages(order_by: [{thread_title: asc}, {channel_vendor_name: desc}]) {

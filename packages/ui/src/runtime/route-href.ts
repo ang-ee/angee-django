@@ -17,6 +17,14 @@ export type RouteHrefSearch =
   | string
   | Readonly<Record<string, RouteHrefSearchValue>>;
 
+/** Collection/record route names selected by the app's resource projection. */
+export interface RuntimeResourceRoutes {
+  collection: string;
+  record?: { name: string; param: string };
+  recordDestinations?: readonly { record: { name: string; param: string }; match: { field: string; equals: string } }[];
+  recordFallback?: { name: string; param: string };
+}
+
 /** Build one href from a composed route name, its params, and optional search. */
 export interface RouteHref {
   (

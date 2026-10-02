@@ -101,3 +101,25 @@ export const Loading: Story = { render: () => <DialogStory rows={[]} fetching />
 export const Error: Story = {
   render: () => <DialogStory rows={[]} error={new globalThis.Error("Access could not be loaded.")} />,
 };
+
+export const People: Story = {
+  render: () => {
+    function PeopleDialog(): React.ReactElement {
+      const [open, setOpen] = React.useState(true);
+      return <RuntimeFixture schemas={schemas}><ManageAccessDialog open={open} onOpenChange={setOpen}
+        label="Apollo" targetIds={["project-1"]} grantable={[]} entries={entries}
+        fetching={false} error={null} onRetry={() => undefined}
+        onGrant={async () => true} onRevoke={async () => undefined}
+        people={[{ subject: "auth/user:ada", label: "Ada Lovelace", roleLabel: "Manager", you: true,
+          following: true, removable: true }]}
+        roles={[{ id: "manager", label: "Manager", subjectResource: "example.Subject", offered: true }]}
+        visibility={[{ id: "audience", label: "Opening policy", value: "team",
+          consequence: "Opening this record will reveal its answers to the team.",
+          options: [{ value: "team", label: "Team" }], actionLabel: "Open record",
+          onAct: async () => undefined }]}
+        onAddRole={async () => true} onRemovePerson={async () => undefined}
+      /></RuntimeFixture>;
+    }
+    return <PeopleDialog />;
+  },
+};

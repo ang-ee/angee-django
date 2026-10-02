@@ -15,7 +15,6 @@ from django.db.models.deletion import (
     RestrictedError,
 )
 from rebac import current_actor, system_context
-from rebac.resources import model_resource_type
 
 from angee.base.identity import public_id_of
 from angee.base.scoping import read_scoped_queryset
@@ -426,10 +425,6 @@ class _PreviewRows:
         if not collected:
             return cls()
         scoped = read_scoped_queryset(model, actor)
-        if scoped is None:
-            if _requires_read_scope(model):
-                return cls(total_count=len(collected), visible_count=0)
-            return cls(total_count=len(collected), visible_count=len(collected), visible_rows=collected)
         return cls._from_scoped_collected(collected, scoped)
 
     @classmethod
@@ -466,14 +461,6 @@ class _PreviewRows:
         if total_count == 0:
             return cls()
         scoped = read_scoped_queryset(queryset.model, actor)
-        if scoped is None:
-            if _requires_read_scope(queryset.model):
-                return cls(total_count=total_count, visible_count=0)
-            return cls(
-                total_count=total_count,
-                visible_count=total_count,
-                visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
-            )
         visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
         visible_count = visible_queryset.count()
         return cls(
@@ -528,12 +515,6 @@ def _chunks(values: list[Any], size: int) -> Iterable[list[Any]]:
 
     for index in range(0, len(values), size):
         yield values[index : index + size]
-
-
-def _requires_read_scope(model: type[models.Model]) -> bool:
-    """Return whether concrete tree leaves for ``model`` must be actor scoped."""
-
-    return bool(model_resource_type(model))
 
 
 def _order_by_pk(queryset: models.QuerySet[models.Model]) -> models.QuerySet[models.Model]:

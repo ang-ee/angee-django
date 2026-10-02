@@ -13,11 +13,14 @@
 //
 // The ordered lists sort by sequence and contribution key, never by addon order.
 
+import type { ResourceViewPreset } from "@angee/ui/views/resource-view-model";
+export type { ResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import type { I18nResources } from "@angee/refine";
 // The contribution contracts moved down into the binding (`@angee/ui` owns the
 // runtime registry that consumes them); composition here builds manifests
 // against them. Re-exported here so addon manifests import one composition seam.
 import type {
+  AppVocabulary,
   ChatterContribution,
   ComposedMenuItem,
   DrawerContribution,
@@ -27,12 +30,16 @@ import type {
   ModelSlotTarget,
   PreviewContribution,
   RuntimeFormRegistration,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
+import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
+import type { AppSurface } from "./route-policy";
+export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
 import {
   DASHBOARD_STORE_SLOT,
   parseDashboardSnapshot,
@@ -48,6 +55,7 @@ import {
 } from "@angee/ui/theme";
 
 export type {
+  AppVocabulary,
   ChatterContribution,
   ComposedMenuItem,
   DrawerContribution,
@@ -57,6 +65,7 @@ export type {
   ModelSlotTarget,
   PreviewContribution,
   RuntimeFormRegistration,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 };
@@ -76,9 +85,15 @@ export interface AddonRoute {
    * Set it on
    * a routed collection action (not its `$id` child) to make the resource
    * followable: a relation field targeting it resolves this route as the detail
-   * destination. One route per resource — a second claim is a build-time error.
+   * destination. Canonical claims are unique; explicit app roots may project it.
    */
   resource?: string;
+  /** Model displayed by a projection of an existing resource. */
+  recordModel?: string;
+  /** Named shipped view selected by this collection route. */
+  defaultResourceView?: string;
+  /** This collection's record route owns records with the declared field value. */
+  recordMatch?: { field: string; equals: string };
 }
 
 /** A provider mounted once around one layout's chrome and routed content. */
@@ -93,12 +108,18 @@ export interface LayoutProviderContribution {
 /** One addon's self-describing manifest. */
 export interface AddonManifest {
   id: string;
+  /** Product identity; at most one addon claims the application brand. */
+  brand?: RuntimeBrand;
   routes?: readonly AddonRoute[];
   menus?: readonly MenuItem[];
   widgets?: WidgetMap;
   /** Product status vocabulary; normalized keys cannot claim framework defaults or another addon's value. */
   statusTones?: StatusToneMap;
   i18n?: I18nResources;
+  vocabulary?: readonly AppVocabulary[];
+  /** App and app-keyed route scopes, inherited like vocabulary. */
+  surface?: readonly AppSurface[];
+  resourceViews?: readonly ResourceViewPreset[];
   icons?: Readonly<Record<string, unknown>>;
   forms?: FormOverrideMap;
   chatter?: readonly ChatterContribution[];
@@ -136,11 +157,15 @@ export type ThemeManifestContribution =
 
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
+  brand: RuntimeBrand | null;
   routes: readonly AddonRoute[];
   menus: readonly ComposedMenuItem[];
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: I18nResources;
+  vocabulary: readonly AppVocabulary[];
+  surface: readonly AppSurface[];
+  resourceViews: Readonly<Record<string, ResourceViewPreset>>;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
@@ -257,6 +282,7 @@ export function composeAddons(
   options: ComposeAddonsOptions,
 ): ComposedAddons {
   const canonicalizeModel = options.canonicalModelLabel;
+  const identity: { brand?: RuntimeBrand } = {};
   const routes: AddonRoute[] = [];
   const menus: ComposedMenuItem[] = [];
   const widgets: WidgetMap = {};
@@ -267,6 +293,7 @@ export function composeAddons(
   const dataProviders: Record<string, unknown> = {};
   const previews: PreviewContribution[] = [];
   const routeNames: Record<string, true> = {};
+  const resourceViews: Record<string, ResourceViewPreset> = {};
   const menuIds: Record<string, true> = {};
   const previewIds: Record<string, true> = {};
   const recordSearchKeys: Record<string, true> = {};
@@ -274,6 +301,13 @@ export function composeAddons(
   const themeIds: Record<string, true> = {};
 
   for (const addon of addons) {
+    if (addon.brand) {
+      assertUnclaimed(identity, "brand", addon.id, "brand");
+      if (!addon.brand.name.trim() || !addon.brand.mark.trim()) {
+        throw new Error(`Addon "${addon.id}" declares an empty brand name or mark.`);
+      }
+      identity.brand = addon.brand;
+    }
     for (const contribution of addon.themes ?? []) {
       const definition = "definition" in contribution
         ? contribution.definition
@@ -290,14 +324,21 @@ export function composeAddons(
       assertUnclaimed(recordSearchKeys, key, addon.id, "record search key");
       recordSearchKeys[key] = true;
     }
+    for (const preset of addon.resourceViews ?? []) {
+      if (!preset.id.startsWith(`${addon.id}.`)) throw new Error(`Resource view "${preset.id}" must use addon namespace "${addon.id}".`);
+      assertUnclaimed(resourceViews, preset.id, addon.id, "resource view");
+      resourceViews[preset.id] = { ...preset, resource: canonicalizeModel(preset.resource), preset: preset.id };
+    }
     if (addon.routes) {
       for (const route of addon.routes) {
         assertUnclaimed(routeNames, route.name, addon.id, "route name");
         routeNames[route.name] = true;
         routes.push(
-          route.resource
-            ? { ...route, resource: canonicalizeModel(route.resource) }
-            : route,
+          {
+            ...route,
+            ...(route.resource ? { resource: canonicalizeModel(route.resource) } : {}),
+            ...(route.recordModel ? { recordModel: canonicalizeModel(route.recordModel) } : {}),
+          },
         );
       }
     }
@@ -350,6 +391,9 @@ export function composeAddons(
     }
     if (addon.i18n) {
       for (const [namespace, messages] of Object.entries(addon.i18n)) {
+        if (namespace === "ui") {
+          throw new Error(`Addon "${addon.id}" declares the reserved "ui" i18n namespace.`);
+        }
         const target = (i18n[namespace] ??= {});
         for (const [key, value] of Object.entries(messages)) {
           assertUnclaimed(target, key, addon.id, `i18n key "${namespace}.${key}"`);
@@ -365,6 +409,10 @@ export function composeAddons(
     }
   }
 
+  if (identity.brand && !getIcon(icons, identity.brand.mark)) {
+    throw new Error(`Brand mark "${identity.brand.mark}" is not registered by any addon.`);
+  }
+
   const slots = mergeSlotContributions(
     ...addons.map((addon) =>
       normalizeSlotContributions(
@@ -375,11 +423,15 @@ export function composeAddons(
     ),
   );
   return {
+    brand: identity.brand ?? null,
     routes,
     menus,
     widgets,
     statusTones,
     i18n,
+    vocabulary: addons.flatMap((addon) => addon.vocabulary ?? []),
+    surface: addons.flatMap((addon) => addon.surface ?? []),
+    resourceViews,
     icons,
     forms,
     dataProviders,

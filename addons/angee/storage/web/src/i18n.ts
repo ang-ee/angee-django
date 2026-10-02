@@ -5,6 +5,10 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enStorageMessages: Record<string, string> = {
+  "record.loading": "Loading attached files",
+  "record.loadingDrives": "Loading upload destinations",
+  "record.unavailable": "Files are unavailable for this record",
+  "record.empty": "No files attached",
   "upload.retry": "Retry",
   // Browser-level loading and empty states.
   "loading": "Loading files…",
@@ -70,6 +74,7 @@ export const enStorageMessages: Record<string, string> = {
   "upload.error.transfer": "Upload failed ({status}).",
   "upload.error.cannotFinalize": "Could not finalize upload.",
   "upload.error.generic": "Upload failed.",
+  "upload.error.viewAs": "Uploads are disabled while viewing as another person.",
 
   // File detail toolbar.
   "file.rename": "Rename",
@@ -85,8 +90,9 @@ export const enStorageMessages: Record<string, string> = {
   // File detail record form — section + field labels.
   "file.details": "Details",
   "file.filename": "Filename",
-  "file.owner": "Owner",
+  "file.author": "Uploaded by",
   "file.stage": "Stage",
+  "file.visibility": "Audience",
 
   // File-row stage badge.
   "stage.ready": "Ready",
@@ -98,9 +104,10 @@ export const enStorageMessages: Record<string, string> = {
   "column.name": "Name",
   "column.type": "Type",
   "column.stage": "Stage",
+  "column.visibility": "Audience",
   "column.size": "Size",
   "column.count": "Files",
-  "column.owner": "Owner",
+  "column.author": "Uploaded by",
   "column.modified": "Modified",
 
   // Settings admin console sections.

@@ -98,6 +98,7 @@ const projectFields = [
     name: "status",
     label: "Status",
     widget: "statusbar",
+    status: true,
     readOnly: true,
     options: [
       { value: "PLANNED", label: "Planned" },

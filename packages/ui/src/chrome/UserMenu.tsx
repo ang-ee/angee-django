@@ -1,4 +1,4 @@
-import { type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
@@ -31,7 +31,11 @@ export function UserMenu({
   sideOffset = 8,
 }: UserMenuProps): ReactElement {
   const t = useUiT();
-  const { user } = useRuntimeAuth();
+  const { user, viewAs } = useRuntimeAuth();
+  const [open, setOpen] = useState(false);
+  // A preview selected in the contributed picker leaves the menu so the
+  // persistent banner can receive focus and expose its exit action.
+  useEffect(() => { if (viewAs?.pending) setOpen(false); }, [viewAs?.pending]);
   const { logout, fetching } = useRuntimeLogoutAction();
   const loginPath = useLoginPath();
   const navigate = useNavigate();
@@ -55,7 +59,7 @@ export function UserMenu({
   }
 
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger
         aria-label={userMenu}
         className={cn(
@@ -74,7 +78,8 @@ export function UserMenu({
                 <div className={textRoleVariants({ role: "caption", truncate: true })}>{email}</div>
               ) : null}
             </div>
-            <DropdownMenu.Item onClick={() => appearance ? void appearance.setColorScheme(nextTheme) : localScheme.setPreference(nextTheme)}>
+            <DropdownMenu.Item disabled={Boolean(viewAs?.viewAs || viewAs?.pending)}
+              onClick={() => appearance ? void appearance.setColorScheme(nextTheme) : localScheme.setPreference(nextTheme)}>
               <Glyph name={nextTheme === "dark" ? "moon" : "sun"} />
               <span className="flex-1 truncate">{themeLabel}</span>
             </DropdownMenu.Item>

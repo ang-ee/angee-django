@@ -15,8 +15,8 @@ from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.testing.drivers import Accept, Reject, seed_group
+from angee.decisions.testing.models import Decision, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
-from tests.decisions_models import Decision, DecisionGroup
 
 
 @pytest.fixture
@@ -43,11 +43,24 @@ def query(user, text, variables=None):
 
 def test_requester_can_read_own_requested_question_and_group_without_being_issuer(inbox):
     _issuer, requester, _reviewer, outsider, _subject, group, decision = inbox
-    document = "query { decisions { id can_act is_open group { id } } }"
+    document = "query { decisions { id permissions is_open group { id } } }"
     assert query(requester, document) == {"decisions": [{
-        "id": str(decision.sqid), "can_act": False, "is_open": True, "group": {"id": str(group.sqid)},
+        "id": str(decision.sqid), "permissions": [], "is_open": True, "group": {"id": str(group.sqid)},
     }]}
     assert query(outsider, document) == {"decisions": []}
+
+
+def test_can_act_filter_uses_current_authority_and_keeps_read_scope(inbox):
+    issuer, requester, reviewer, outsider, _subject, _group, decision = inbox
+    document = "query { decisions(where: {can_act: {_eq: true}, is_open: {_eq: true}}) { id } }"
+    assert query(reviewer, document) == {"decisions": [{"id": str(decision.sqid)}]}
+    for viewer in (issuer, requester, outsider):
+        assert query(viewer, document) == {"decisions": []}
+    admin = create_platform_admin("inbox-filter-admin")
+    assert query(admin, document) == {"decisions": [{"id": str(decision.sqid)}]}
+    with system_context(reason="test.inbox_filter_inactive"):
+        type(reviewer).objects.filter(pk=reviewer.pk).update(is_active=False)
+    assert query(reviewer, document) == {"decisions": []}
 
 
 def test_superseded_link_redacts_a_replacement_in_another_group(inbox):
@@ -119,24 +132,24 @@ def test_inbox_reader_loses_subject_and_evidence_references_when_source_is_revok
     }
 
 
-def test_can_act_is_the_permission_owners_current_active_person_rule(inbox):
+def test_act_permission_is_the_permission_owners_current_active_person_rule(inbox):
     issuer, requester, reviewer, _outsider, _subject, _group, decision = inbox
-    document = "query { decisions { can_act } }"
-    assert query(issuer, document)["decisions"] == [{"can_act": False}]
-    assert query(reviewer, document)["decisions"] == [{"can_act": True}]
+    document = "query { decisions { permissions } }"
+    assert query(issuer, document)["decisions"] == [{"permissions": []}]
+    assert query(reviewer, document)["decisions"] == [{"permissions": ["act"]}]
     with system_context(reason="test inbox requester assignment"):
         decision.assignees.add(requester)
-    assert query(requester, document)["decisions"] == [{"can_act": False}]
+    assert query(requester, document)["decisions"] == [{"permissions": []}]
     admin = create_platform_admin("inbox-admin")
-    assert query(admin, document)["decisions"] == [{"can_act": True}]
+    assert query(admin, document)["decisions"] == [{"permissions": ["act"]}]
     with system_context(reason="test inbox inactive resolver"):
         type(reviewer).objects.filter(pk=reviewer.pk).update(is_active=False)
     reviewer.refresh_from_db()
-    assert query(reviewer, document)["decisions"] == [{"can_act": False}]
+    assert query(reviewer, document)["decisions"] == [{"permissions": []}]
     with system_context(reason="test inbox non-person resolver"):
         type(admin).objects.filter(pk=admin.pk).update(kind="service")
     admin.refresh_from_db()
-    assert query(admin, document)["decisions"] == [{"can_act": False}]
+    assert query(admin, document)["decisions"] == [{"permissions": []}]
 
 
 def test_live_open_state_excludes_unswept_expiry_without_losing_expiry_work(inbox):
@@ -160,10 +173,10 @@ def test_live_open_state_excludes_unswept_expiry_without_losing_expiry_work(inbo
 def test_open_resource_projection_does_not_query_each_seat(inbox):
     issuer, _requester, reviewer, _outsider, _subject, _group, _decision = inbox
     schema = addon_schema(decision_schema.schemas, "console")
-    document = "query { decisions { is_open can_act } }"
+    document = "query { decisions { is_open permissions } }"
     with CaptureQueriesContext(connection) as one:
         assert result_data(execute_schema(schema, document, user=reviewer)) == {
-            "decisions": [{"is_open": True, "can_act": True}],
+            "decisions": [{"is_open": True, "permissions": ["act"]}],
         }
     Decision.objects.admit_group([
         DecisionRequest(kind=f"reference_{index}", subject=None, assignees=(reviewer,), actions=(Reject,))
@@ -171,7 +184,7 @@ def test_open_resource_projection_does_not_query_each_seat(inbox):
     ], actor=issuer, policy="all")
     with CaptureQueriesContext(connection) as many:
         assert result_data(execute_schema(schema, document, user=reviewer)) == {
-            "decisions": [{"is_open": True, "can_act": True}] * 8,
+            "decisions": [{"is_open": True, "permissions": ["act"]}] * 8,
         }
     assert len(many) == len(one)
 
@@ -180,16 +193,16 @@ def test_nested_decision_open_and_permission_facts_are_batched(inbox):
     """Optimizer annotations follow a decision through a prefetched relation."""
     issuer, _requester, reviewer, _outsider, subject, _group, _decision = inbox
     schema = addon_schema(decision_schema.schemas, "console")
-    document = "{ decision_evidence { decision { is_open can_act } } }"
+    document = "{ decision_evidence { decision { is_open permissions } } }"
     with CaptureQueriesContext(connection) as one:
         assert result_data(execute_schema(schema, document, user=reviewer)) == {
-            "decision_evidence": [{"decision": {"is_open": True, "can_act": True}}],
+            "decision_evidence": [{"decision": {"is_open": True, "permissions": ["act"]}}],
         }
     for _ in range(7):
         seed_group(actor=issuer, assignees=(reviewer,), reference=subject)
     with CaptureQueriesContext(connection) as many:
         assert result_data(execute_schema(schema, document, user=reviewer)) == {
-            "decision_evidence": [{"decision": {"is_open": True, "can_act": True}}] * 8,
+            "decision_evidence": [{"decision": {"is_open": True, "permissions": ["act"]}}] * 8,
         }
     assert len(many) == len(one)
 
@@ -244,13 +257,14 @@ def test_inbox_sdl_and_resource_metadata_publish_backend_owned_facts():
     schema = addon_schema(decision_schema.schemas, "console")
     resource = next(item for item in schema.angee_resources if item.model_label == "decisions.Decision")
     node = schema._schema.get_type(resource.type_names.node)
-    assert str(node.fields["can_act"].type) == "Boolean!"
+    assert "permissions" in node.fields
     assert str(node.fields["is_open"].type) == "Boolean!"
     assert str(node.fields["errors"].type) == "JSON!"
     assert "is_open" in schema._schema.get_type(resource.type_names.filter).fields
-    assert {"can_act", "is_open", "errors"} <= {field.name for field in resource.fields}
+    assert {"permissions", "is_open", "errors"} <= {field.name for field in resource.fields}
     assert resource.query.fields["is_open"].filter is not None
-    assert resource.query.fields["can_act"].filter is None
+    assert resource.query.fields["can_act"].filter is not None
+    assert resource.query.fields["permissions"].filter is None
 
 
 def test_reasked_field_errors_are_returned_on_the_new_question(inbox):

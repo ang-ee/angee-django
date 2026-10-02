@@ -89,11 +89,11 @@ class Stage(models.Model):
 
     @classmethod
     def resolve_default(cls, container: models.Model) -> Any | None:
-        """Return the container's configured default stage, or its first stage.
+        """Return the container's configured default stage, or resolve its fallback.
 
         The container is the single owner of an explicit default.  A stage model
         never carries an ``is_default`` flag; if no explicit default is set, the
-        deterministic ordered first row is the primitive's fallback.
+        fallback hook selects from the container's ordered stages.
         """
 
         default_id = getattr(container, f"{cls.default_stage_field_name}_id", None)
@@ -102,6 +102,16 @@ class Stage(models.Model):
             configured = stages.filter(pk=default_id).first()
             if configured is not None:
                 return configured
+        return cls.resolve_default_fallback(stages)
+
+    @classmethod
+    def resolve_default_fallback(cls, stages: models.QuerySet[Any]) -> Any | None:
+        """Select the first ordered stage when no valid configured default exists.
+
+        Overrides receive the container-scoped, ordered queryset and can refine
+        fallback selection without replacing explicit-default resolution.
+        """
+
         return stages.first()
 
     def get_category(self) -> Any | None:

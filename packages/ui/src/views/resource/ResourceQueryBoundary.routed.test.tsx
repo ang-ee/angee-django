@@ -94,12 +94,12 @@ test.each(["list", "board"] as const)("a client-only axis in a server %s gives a
 test.each(["server", "client"] as const)("list and board group choices follow the resource's %s grouping capability", async (rowModel) => {
   const f = fixture({ rowModel });
   expect(await screen.findByText("Kept note")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Filter and group" }));
+  fireEvent.click(screen.getByRole("button", { name: "Group by" }));
   expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 
   act(() => f.view.setView("board"));
   await waitFor(() => expect(f.view.state.view).toBe("board"));
-  const trigger = await screen.findByRole("button", { name: "Filter and group" });
+  const trigger = await screen.findByRole("button", { name: "Group by" });
   if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
   expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 });

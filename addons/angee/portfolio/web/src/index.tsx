@@ -20,7 +20,7 @@ import {
   Rocket,
 } from "lucide-react";
 
-import { enPortfolioMessages, usePortfolioT } from "./i18n";
+import { enPortfolioMessages } from "./i18n";
 import {
   projectPortfolioFormSection,
   taskReleaseFormSection,
@@ -31,10 +31,6 @@ import {
   ProjectUpdatesSection,
 } from "./update-composer";
 
-function PortfolioUpdatesLabel() {
-  const t = usePortfolioT();
-  return <>{t("update.pane.title")}</>;
-}
 
 const portfolioRoutes: readonly BaseAddonRoute[] = [
   {
@@ -112,7 +108,7 @@ const portfolio = defineBaseAddon({
       content: (
         <Tab
           id="portfolio-updates"
-          label={<PortfolioUpdatesLabel />}
+          label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
           icon={<Glyph decorative name="portfolio-update" />}
         >
           <ProjectUpdatesSection />
@@ -126,7 +122,7 @@ const portfolio = defineBaseAddon({
       content: (
         <Tab
           id="portfolio-updates"
-          label={<PortfolioUpdatesLabel />}
+          label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
           icon={<Glyph decorative name="portfolio-update" />}
         >
           <InitiativeUpdatesSection />

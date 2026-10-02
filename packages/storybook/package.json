@@ -18,8 +18,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@angee/refine": "workspace:*",
+    "@angee/app": "workspace:*",
     "@angee/metadata": "workspace:*",
+    "@angee/refine": "workspace:*",
     "@angee/theme-angee": "workspace:*",
     "@angee/theme-aurora": "workspace:*",
     "@angee/theme-carbon": "workspace:*",

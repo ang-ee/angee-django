@@ -5,6 +5,10 @@ import { DataResourceQuerySchema } from "./query-schema.js";
 const FieldKindSchema = v.picklist(["scalar", "enum", "relation", "list", "object"]);
 const OptionalString = v.nullish(v.string());
 const Strings = v.pipe(v.array(v.string()), v.readonly());
+const MutationArguments = v.pipe(
+  v.array(v.object({ name: v.string(), type: v.string() })),
+  v.readonly(),
+);
 const EnumValueSchema = v.looseObject({
   value: v.string(),
   description: OptionalString,
@@ -86,6 +90,7 @@ const SubjectTypeSchema = v.looseObject({
 });
 const GrantableRelationSchema = v.looseObject({
   relation: v.string(),
+  label: v.optional(v.string()),
   permission: v.string(),
   subjects: v.pipe(v.array(SubjectTypeSchema), v.readonly()),
 });
@@ -114,6 +119,9 @@ const ResourceSchema = v.looseObject({
   createFields: v.optional(Strings),
   updateFields: v.optional(Strings),
   requiredCreateFields: v.optional(Strings),
+  createArguments: v.optional(MutationArguments),
+  updateArguments: v.optional(MutationArguments),
+  saveArguments: v.optional(MutationArguments),
   revisionFields: v.optional(Strings),
   linesResource: v.nullish(LinesSchema),
 });

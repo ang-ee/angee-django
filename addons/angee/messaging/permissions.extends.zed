@@ -1,5 +1,20 @@
+// Thread readers may read the identities of explicit followers.
+// A public group's thread readable by every signed-in user exposes its followers'
+// identities to every signed-in user too; private fields remain gated.
 // @rebac_package: messaging
 // @rebac_schema_revision: 1
+
+definition parties/party {
+    relation followed_thread: messaging/thread // rebac:field=thread_followers__thread
+
+    permission read = followed_thread->read
+}
+
+definition parties/person {
+    relation followed_thread: messaging/thread // rebac:field=party_ptr__thread_followers__thread
+
+    permission read = followed_thread->read
+}
 
 // A file referenced by a message part follows that part's read permission.
 // The reverse path is live-backed by Part.file, so deleting or changing a part

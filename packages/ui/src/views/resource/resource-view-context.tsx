@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Updater } from "@tanstack/react-table";
+import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Updater, type VisibilityState } from "@tanstack/react-table";
 import { stableSerialize } from "@angee/refine";
 import { Filter, ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { validateResourceViewState } from "./model/state";
@@ -30,6 +30,9 @@ import {
   type ResourceViewInitialState,
   type ResourceViewKind,
 } from "./resource-view-model";
+import { useAppRuntime } from "../../runtime";
+import { useValueStable } from "../../lib/use-value-stable";
+import { resourceViewPreset, resourceViewPresetDefaults } from "./model/favorites";
 import { useResourceViewFavorites } from "./resource-view-favorites";
 
 /** Group interaction state outlives a temporarily unmounted server list. */
@@ -48,6 +51,7 @@ interface ResourceViewGroups {
   expansion: ResourceViewGroupExpansion | null;
 }
 const EMPTY_GROUP_PAGINATION: GroupPagination = {};
+const EMPTY_PRESET_IDS: readonly string[] = [];
 function groupsForQuery(current: ResourceViewGroups, query: string, order: string): ResourceViewGroups {
   if (current.query !== query) return { query, order, paginationByScope: EMPTY_GROUP_PAGINATION, expansion: null };
   // Sorting changes each bucket's record window, not the grouping tree itself.
@@ -59,10 +63,18 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
+interface ResourceViewGroupUpdateOptions {
+  /** Initial default reconciliation preserves the restored page and selection. */
+  resetScope?: boolean;
+}
+
 export interface ResourceViewContextValue {
   /** Resource whose collection state this provider owns. */
   resource?: string;
   state: ResourceViewState;
+  /** Effective immutable scope: caller base filter combined with the selected preset. */
+  baseFilter?: ResourceViewFilter;
+  setColumnVisibility: OnChangeFn<VisibilityState>;
   paginationByScope: GroupPagination;
   setPaginationByScope: OnChangeFn<GroupPagination>;
   groupExpansion: ResourceViewGroupExpansion | null;
@@ -74,8 +86,14 @@ export interface ResourceViewContextValue {
   setRowSelection: OnChangeFn<RowSelectionState>;
   setFilter: OnChangeFn<ResourceViewFilter>;
   resetQuery: () => void;
-  setGroup: (group: ResourceViewGroup | null) => void;
-  setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
+  /** Whether editable query state differs from this collection's default view. */
+  queryDirty: boolean;
+  /** Restore the collection's default query, including its route preset. */
+  clearQuery: () => void;
+  /** Remove a selected shipped preset, including its immutable fixed filter. */
+  clearPreset: () => void;
+  setGroup: (group: ResourceViewGroup | null, options?: ResourceViewGroupUpdateOptions) => void;
+  setGroupStack: (groupStack: readonly ResourceViewGroup[], options?: ResourceViewGroupUpdateOptions) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
   setView: (view: ResourceViewKind) => void;
@@ -83,6 +101,8 @@ export interface ResourceViewContextValue {
   setAnchor: (anchor: string) => void;
   savedFavorites: readonly ResourceViewFavorite[];
   saveFavorite?: (label: string) => void;
+  renameFavorite?: (id: string, label: string) => void;
+  pinFavorite?: (id: string, pinned: boolean) => void;
   applyFavorite: (favorite: ResourceViewFavorite) => void;
 }
 
@@ -90,8 +110,11 @@ export interface ResourceViewProviderProps {
   children: ReactNode;
   initialState?: ResourceViewInitialState;
   resource?: string;
+  baseFilter?: ResourceViewFilter;
   /** Stable authored-collection identity for favorites when there is no model resource. */
   favoriteKey?: string;
+  /** Shipped presets declared by this collection route, besides its route default. */
+  presetIds?: readonly string[];
   scope?: ResourceViewProviderScope;
   /** Isolate this collection's URL keys when a page contains several collections. */
   namespace?: string;
@@ -102,6 +125,8 @@ export type ResourceViewProviderScope = "route" | "local";
 export interface ResourceViewScopeMountOptions {
   ambient: ResourceViewContextValue | null;
   resource?: string;
+  /** Typed resource filters are validated at this shared view boundary. */
+  baseFilter?: unknown;
   scope?: "inherit" | "local";
   /** Embedded collections own local state unless the caller explicitly opts in
    * to an ambient or route-owned view. */
@@ -109,6 +134,7 @@ export interface ResourceViewScopeMountOptions {
   initialState?: ResourceViewInitialState;
   isolated?: boolean;
   providerKey?: Key;
+  presetIds?: readonly string[];
   children: (resourceView: ResourceViewContextValue) => ReactElement;
 }
 
@@ -122,7 +148,9 @@ export function ResourceViewProvider({
   children,
   initialState,
   resource,
+  baseFilter,
   favoriteKey,
+  presetIds,
   scope = "route",
   namespace,
 }: ResourceViewProviderProps): ReactNode {
@@ -131,7 +159,9 @@ export function ResourceViewProvider({
       <LocalResourceViewProvider
         initialState={initialState}
         resource={resource}
+        baseFilter={baseFilter}
         favoriteKey={favoriteKey}
+        presetIds={presetIds}
       >
         {children}
       </LocalResourceViewProvider>
@@ -141,7 +171,9 @@ export function ResourceViewProvider({
     <RouteResourceViewProvider
       initialState={initialState}
       resource={resource}
+      baseFilter={baseFilter}
       favoriteKey={favoriteKey}
+      presetIds={presetIds}
       namespace={namespace}
     >
       {children}
@@ -153,21 +185,32 @@ export function ResourceViewProvider({
 export function withResourceViewScope({
   ambient,
   resource,
+  baseFilter,
   scope,
   presentation,
   initialState,
   isolated = false,
   providerKey,
+  presetIds,
   children,
 }: ResourceViewScopeMountOptions): ReactElement {
   const resolvedScope = scope ?? (presentation === "embedded" ? "local" : "inherit");
-  if (!isolated && resolvedScope !== "local" && ambient) return children(ambient);
+  if (!isolated && resolvedScope !== "local" && ambient) {
+    if (baseFilter === undefined) return children(ambient);
+    const scoped = {
+      ...ambient,
+      baseFilter: Filter.combineOptional(ambient.baseFilter, baseFilter),
+    };
+    return <ResourceViewContext.Provider value={scoped}>{children(scoped)}</ResourceViewContext.Provider>;
+  }
   return (
     <ResourceViewProvider
       key={providerKey}
       initialState={initialState}
       resource={resource}
+      baseFilter={baseFilter === undefined ? undefined : Filter.from(baseFilter).value}
       scope={isolated || resolvedScope === "local" ? "local" : "route"}
+      presetIds={presetIds}
     >
       <ResourceViewScopeBound>{children}</ResourceViewScopeBound>
     </ResourceViewProvider>
@@ -186,10 +229,38 @@ function RouteResourceViewProvider({
   children,
   initialState,
   resource,
+  baseFilter,
   favoriteKey,
+  presetIds = EMPTY_PRESET_IDS,
   namespace,
 }: Omit<ResourceViewProviderProps, "scope">): ReactNode {
   const search = useSearch({ strict: false });
+  const { resourceViews, defaultResourceView, menuResourceViewIds } = useAppRuntime();
+  const model = useModelMetadata(resource ?? "");
+  const modelLabel = model?.resource.modelLabel ?? resource;
+  const routePreset = defaultResourceView && resourceViews[defaultResourceView]?.resource === modelLabel
+    ? defaultResourceView : undefined;
+  const declaredPresetIds = useValueStable(presetIds);
+  const menuPresetIds = useValueStable(menuResourceViewIds ?? EMPTY_PRESET_IDS);
+  const initialPreset = initialState?.preset;
+  const allowedPresetIds = useMemo(
+    () => [...new Set([...(routePreset ? [routePreset] : []), ...declaredPresetIds, ...menuPresetIds, ...(initialPreset ? [initialPreset] : [])])],
+    [routePreset, declaredPresetIds, menuPresetIds, initialPreset],
+  );
+  const defaultsFor = useCallback((id: string | undefined) => {
+    const preset = resourceViewPreset(resourceViews, id, modelLabel, allowedPresetIds);
+    return resourceViewPresetDefaults(initialState, preset);
+  }, [initialState, resourceViews, modelLabel, allowedPresetIds]);
+  const presetKey = namespace ? `${namespace}.preset` : "preset";
+  const readState = useCallback((current: Record<string, unknown>) => {
+    try {
+      const id = current[presetKey] ?? routePreset;
+      if (id !== undefined && typeof id !== "string") throw new Error("Invalid resource view name.");
+      return resourceViewSearchToState(current, defaultsFor(id), namespace);
+    } catch (error) {
+      return { ...createResourceViewState(initialState), queryError: error instanceof Error ? error : new Error("Invalid resource view.") };
+    }
+  }, [defaultsFor, initialState, namespace, presetKey, routePreset]);
   // Narrow Router navigation to functional search updates; no from is supplied
   // because the updater is route-agnostic.
   const navigate = useNavigate() as ResourceViewNavigate;
@@ -197,8 +268,8 @@ function RouteResourceViewProvider({
     () => createResourceViewState(initialState).rowSelection,
   );
   const queryState = useMemo(
-    () => resourceViewSearchToState(search, initialState, namespace),
-    [search, initialState, namespace],
+    () => readState(search),
+    [search, readState],
   );
   const [failedTransition, setFailedTransition] = useState<{
     search: unknown;
@@ -228,26 +299,36 @@ function RouteResourceViewProvider({
         search: (current) => {
           const updated = functionalUpdate(
             updater,
-            resourceViewSearchToState(current, initialState, namespace),
+            readState(current),
           );
           return updated.queryError
             ? current
             : mergeResourceViewSearch(
                 current,
-                resourceViewStateToSearch(updated, initialState),
+                {
+                  ...resourceViewStateToSearch(updated, defaultsFor(updated.preset)),
+                  preset: updated.preset === routePreset ? undefined : updated.preset,
+                },
                 namespace,
               );
         },
         replace: true,
       });
     },
-    [initialState, navigate, namespace, queryState, rowSelection, search],
+    [defaultsFor, readState, routePreset, navigate, namespace, queryState, rowSelection, search],
+  );
+  const defaultState = useMemo(
+    () => createResourceViewState(defaultsFor(routePreset)),
+    [defaultsFor, routePreset],
   );
   const value = useResourceViewContextValue({
     updateState,
     setRowSelection,
     resource,
+    baseFilter,
     favoriteKey,
+    presetIds: allowedPresetIds,
+    defaultState,
     state,
   });
 
@@ -262,8 +343,16 @@ function LocalResourceViewProvider({
   children,
   initialState,
   resource,
+  baseFilter,
   favoriteKey,
+  presetIds,
 }: Omit<ResourceViewProviderProps, "scope">): ReactNode {
+  const declaredPresetIds = useValueStable(presetIds);
+  const initialPreset = initialState?.preset;
+  const allowedPresetIds = useMemo(
+    () => declaredPresetIds === undefined ? undefined : [...new Set([...declaredPresetIds, ...(initialPreset ? [initialPreset] : [])])],
+    [declaredPresetIds, initialPreset],
+  );
   const [state, updateState] = useState(() =>
     createResourceViewState(initialState),
   );
@@ -276,11 +365,15 @@ function LocalResourceViewProvider({
     },
     [],
   );
+  const defaultState = useMemo(() => createResourceViewState(initialState), [initialState]);
   const value = useResourceViewContextValue({
     updateState,
     setRowSelection,
     resource,
+    baseFilter,
     favoriteKey,
+    presetIds: allowedPresetIds,
+    defaultState,
     state,
   });
 
@@ -295,33 +388,55 @@ function useResourceViewContextValue({
   updateState,
   setRowSelection,
   resource,
+  baseFilter,
   favoriteKey,
+  presetIds,
+  defaultState,
   state: sourceState,
 }: {
   updateState: OnChangeFn<ResourceViewState>;
   setRowSelection: OnChangeFn<RowSelectionState>;
   resource: string | undefined;
+  baseFilter?: ResourceViewFilter;
   favoriteKey?: string;
+  presetIds?: readonly string[];
+  defaultState: ResourceViewState;
   state: ResourceViewState;
 }): ResourceViewContextValue {
   const metadata = useModelMetadata(resource ?? "");
-  const state = useMemo(
-    () =>
-      metadata
-        ? validateResourceViewState(sourceState, ResourceQuery.from(metadata))
-        : sourceState,
-    [metadata, sourceState],
+  const { resourceViews } = useAppRuntime();
+  const preset = sourceState.preset ? resourceViews[sourceState.preset] : undefined;
+  const effectiveBaseFilter = useMemo(
+    () => Filter.combineOptional(baseFilter, preset?.fixedFilter),
+    [baseFilter, preset?.fixedFilter],
   );
-  const { savedFavorites, saveFavorite } = useResourceViewFavorites(
+  const state = useMemo(() => {
+    try {
+      resourceViewPreset(resourceViews, sourceState.preset, metadata?.resource.modelLabel ?? resource, presetIds);
+      if (!metadata) return sourceState;
+      const query = ResourceQuery.from(metadata);
+      query.filterFrom(effectiveBaseFilter);
+      return validateResourceViewState(sourceState, query);
+    } catch (error) {
+      return { ...sourceState, queryError: error instanceof Error ? error : new Error("Invalid resource view.") };
+    }
+  }, [metadata, resource, sourceState, resourceViews, effectiveBaseFilter, presetIds]);
+  const queryDirty = state.preset !== defaultState.preset
+    || stableSerialize(state.filter) !== stableSerialize(defaultState.filter)
+    || stableSerialize(state.sorting ?? []) !== stableSerialize(defaultState.sorting ?? [])
+    || stableSerialize(state.groupStack) !== stableSerialize(defaultState.groupStack);
+  const { savedFavorites, saveFavorite, renameFavorite, pinFavorite } = useResourceViewFavorites(
     resource,
     state,
     favoriteKey,
+    presetIds,
   );
   // Query facts belong to ResourceView; an external Router change must discard
   // old group interaction state before any newly mounted surface starts reads.
   const groupQuery = stableSerialize([
     resource,
     state.filter,
+    effectiveBaseFilter,
     state.groupStack,
   ]);
   const groupOrder = stableSerialize(state.sorting);
@@ -418,27 +533,34 @@ function useResourceViewContextValue({
     [resetScope],
   );
   const setGroupStack = useCallback(
-    (groups: readonly ResourceViewGroup[]) => {
+    (groups: readonly ResourceViewGroup[], options?: ResourceViewGroupUpdateOptions) => {
       const groupStack = normaliseGroupStack(groups);
-      resetScope((current) => ({
+      const update = options?.resetScope === false ? updateState : resetScope;
+      update((current) => ({
         ...current,
         group: groupStack[0] ?? null,
         groupStack,
         groupDefaultCleared: groupStack.length === 0,
       }));
     },
-    [resetScope],
+    [resetScope, updateState],
   );
   return useMemo(
     () => ({
       resource,
       state,
+      baseFilter: effectiveBaseFilter,
+      setColumnVisibility: (updater: Parameters<OnChangeFn<VisibilityState>>[0]) => updateState((current) => ({
+        ...current, columnVisibility: functionalUpdate(updater, current.columnVisibility),
+      })),
       paginationByScope: activeGroups.paginationByScope,
       setPaginationByScope,
       groupExpansion: activeGroups.expansion,
       setGroupExpansion,
       savedFavorites,
       saveFavorite,
+      renameFavorite,
+      pinFavorite,
       setPagination,
       setSorting,
       setRowSelection,
@@ -458,8 +580,31 @@ function useResourceViewContextValue({
           groupDefaultCleared: true,
           queryError: null,
         })),
-      setGroup: (group: ResourceViewGroup | null) =>
-        setGroupStack(group ? [group] : []),
+      queryDirty,
+      clearQuery: () =>
+        resetScope((current) => ({
+          ...current,
+          preset: defaultState.preset,
+          filter: defaultState.filter,
+          sorting: defaultState.sorting,
+          group: defaultState.group,
+          groupStack: defaultState.groupStack,
+          groupDefaultCleared: defaultState.groupDefaultCleared,
+          queryError: null,
+        })),
+      clearPreset: () =>
+        resetScope((current) => ({
+          ...current,
+          preset: "",
+          filter: {},
+          sorting: [],
+          group: null,
+          groupStack: [],
+          groupDefaultCleared: true,
+          queryError: null,
+        })),
+      setGroup: (group: ResourceViewGroup | null, options?: ResourceViewGroupUpdateOptions) =>
+        setGroupStack(group ? [group] : [], options),
       setGroupStack,
       toggleSelectedId: (id: string, selected?: boolean) =>
         setRowSelection((current) => ({
@@ -481,8 +626,11 @@ function useResourceViewContextValue({
       applyFavorite: (favorite: ResourceViewFavorite) =>
         resetScope((current) => {
           try {
+            const presetId = favorite.preset ?? current.preset;
+            resourceViewPreset(resourceViews, presetId, metadata?.resource.modelLabel ?? resource, presetIds);
             const favoriteState = createResourceViewState({
               ...favorite,
+              preset: presetId,
               filter: Filter.from(favorite.filter).value,
               groupStack: normaliseGroupStack(favorite.groupStack ?? []),
               sort: favorite.sort ?? null,
@@ -509,12 +657,21 @@ function useResourceViewContextValue({
     [
       resource,
       state,
+      defaultState,
+      queryDirty,
+      preset,
+      effectiveBaseFilter,
+      resourceViews,
+      presetIds,
+      metadata,
       activeGroups.paginationByScope,
       activeGroups.expansion,
       setPaginationByScope,
       setGroupExpansion,
       savedFavorites,
       saveFavorite,
+      renameFavorite,
+      pinFavorite,
       setPagination,
       setSorting,
       setRowSelection,

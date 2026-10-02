@@ -6,6 +6,10 @@ checked command (``makemigrations``, ``migrate``, ``rebac sync``) — breaking t
 rebuild the uninstall triggers. ``platform``'s ``reconcile_permission_schema`` (run
 check-free by the ``reconcile_permissions`` command) is the global prune that removes
 those orphans and stale rows inside still-composed packages.
+
+Stale-schema scenarios group historical setup and reconciliation with the
+library's ``schema_changes`` so the final policy is validated after removed
+model and field references have been pruned.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ from pathlib import Path
 
 import pytest
 from django.core.management import call_command
+from rebac import schema_changes
+from rebac.schema.ast import FieldBinding, backing_to_dict
 
 _OLD_IAM_ZED = """
 // @rebac_package: iam
@@ -86,7 +92,7 @@ def _managed_relation(package: str, resource_type: str, name: str):
         definition=definition,
         name=name,
         allowed_subjects=[{"type": "auth/user", "relation": "", "wildcard": False}],
-        backing={"attname": "created_by", "kind": "fk"},
+        backing=backing_to_dict(FieldBinding(path="created_by")),
     )
     PackageManagedRecord.objects.create(
         package=package,
@@ -115,6 +121,7 @@ def _managed_relation_for_definition(
     name: str,
     *,
     backing: dict[str, str] | None,
+    subject_type: str = "auth/user",
 ):
     """Create one package-managed relation on an existing definition."""
 
@@ -125,7 +132,7 @@ def _managed_relation_for_definition(
     relation = SchemaRelation.objects.create(
         definition=definition,
         name=name,
-        allowed_subjects=[{"type": "auth/user", "relation": "", "wildcard": False}],
+        allowed_subjects=[{"type": subject_type, "relation": "", "wildcard": False}],
         backing=backing,
     )
     PackageManagedRecord.objects.create(
@@ -158,6 +165,7 @@ def _restore_iam_schema_path():
 
 
 @pytest.mark.django_db
+@schema_changes()
 def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     tmp_path: Path,
     _restore_iam_schema_path,
@@ -247,6 +255,7 @@ def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
     assert PackageManagedRecord.objects.filter(package=kept_package).exists()
 
 
+@schema_changes()
 def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
     """A removed definition in a still-installed addon is pruned before checks run."""
 
@@ -282,6 +291,7 @@ def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
 
 
 @pytest.mark.parametrize("storage_mode", ("denormalized", "registry"))
+@schema_changes()
 def test_reconcile_directly_purges_stale_relations_from_active_store(
     db,
     settings,
@@ -306,7 +316,8 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         package,
         definition,
         "party",
-        backing={"attname": "party", "kind": "fk"},
+        backing=backing_to_dict(FieldBinding(path="party")),
+        subject_type="parties/party",
     )
     stale_stored = _managed_relation_for_definition(
         package,
@@ -318,7 +329,8 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         package,
         definition,
         "party_a",
-        backing={"attname": "party_a", "kind": "fk"},
+        backing=backing_to_dict(FieldBinding(path="party_a")),
+        subject_type="parties/party",
     )
 
     relationship_model = active_relationship_model()

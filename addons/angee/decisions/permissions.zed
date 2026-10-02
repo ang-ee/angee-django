@@ -1,6 +1,6 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition decisions/group {
     relation reasked_by: decisions/group // rebac:field=reasked_by
@@ -24,7 +24,8 @@ definition decisions/decision {
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member
     permission read = assignee + requester + issuer + admin->member + group->waiter_read
-    permission act = ((assignee - requester) + admin->member) & person->active_member
+    permission eligible = (assignee - requester) & person->active_member
+    permission act = eligible + (admin->member & person->active_member)
     permission write = admin->member
     permission delete = admin->member
 }

@@ -12,8 +12,8 @@ from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
+from angee.decisions.testing.models import Decision
 from tests.conftest import create_platform_admin
-from tests.decisions_models import Decision
 from tests.extraction_models import Extraction
 from tests.mtidemo.models import MtiChild
 from tests.test_extraction_models import evidence as evidence
@@ -130,8 +130,8 @@ def test_correction_requires_target_write_even_when_evidence_stays_readable(corr
     target, actor = values["target"], values["actor"]
     owner = create_platform_admin("new-target-owner")
     with system_context(reason="tests extraction revoke target write"):
-        type(target).objects.filter(pk=target.pk).update(created_by=owner)
-        type(target.drive).objects.filter(pk=target.drive_id).update(created_by=owner)
+        type(target).objects.filter(pk=target.pk).update(owner=owner)
+        type(target.drive).objects.filter(pk=target.drive_id).update(owner=owner)
     with actor_context(owner):
         target.grant_record_access("viewer", actor)
     assert target.with_actor(actor).has_access("read")

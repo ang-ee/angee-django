@@ -8,7 +8,8 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
-import { useSlot } from "@angee/ui/runtime";
+import { useRuntimeBrand, useSlot } from "@angee/ui/runtime";
+import { Glyph } from "@angee/ui/chrome/Glyph";
 import { ThemeLogo, useThemeLogoChoice } from "@angee/ui/theme";
 
 import { useUiT } from "@angee/ui/i18n";
@@ -30,9 +31,11 @@ const LOGIN_CUBE_DARK = "#08111f";
 
 export interface LoginPageProps {
   brand?: ReactNode;
+  /** Undefined uses contributed login methods; null suppresses them. */
+  methods?: ReactNode | null;
   redirectTo?: string;
   footer?: ReactNode;
-  /** `undefined` renders the default brand hero, `null` removes it, a node replaces it. */
+  /** Undefined uses the framework hero only on unbranded hosts; null removes it. */
   hero?: ReactNode | null;
   /** `undefined` renders the default card header, `null` leaves only `brand`, a node replaces it. */
   cardHeader?: ReactNode | null;
@@ -44,6 +47,7 @@ export interface LoginPageProps {
 
 export function LoginPage({
   brand,
+  methods,
   redirectTo = "/",
   footer,
   hero,
@@ -66,6 +70,10 @@ export function LoginPage({
     window.location.assign(target);
   }, [navigate, redirectTo]);
   const t = useUiT();
+  const runtimeBrand = useRuntimeBrand();
+  const branded = brand != null || runtimeBrand !== null;
+  const name = runtimeBrand?.name ?? t("auth.productName");
+  const identity = brand ?? <LoginIdentity name={name} />;
   const methodSlot = useSlot(AUTH_LOGIN_METHOD_SLOT);
   const cardFooterSlot = useSlot(AUTH_LOGIN_CARD_FOOTER_SLOT);
   const pageFooterSlot = useSlot(AUTH_LOGIN_PAGE_FOOTER_SLOT);
@@ -83,13 +91,13 @@ export function LoginPage({
       ?? (slotEntriesHaveContent(passwordHelpSlot)
         ? <SlotOutlet entries={passwordHelpSlot} />
         : null));
-  const loginMethods = slotEntriesHaveContent(methodSlot)
-    ? <SlotOutlet entries={methodSlot} />
-    : null;
-  const defaultHero = hero === undefined;
+  const loginMethods = methods === undefined
+    ? slotEntriesHaveContent(methodSlot) ? <SlotOutlet entries={methodSlot} /> : null
+    : methods;
+  const defaultHero = hero === undefined && runtimeBrand === null;
   const defaultAtmosphere = showAtmosphere ?? true;
   const resolvedHero =
-    defaultHero ? <LoginBrandPanel brand={brand} /> : hero;
+    defaultHero ? <LoginBrandPanel brand={brand} /> : hero ?? null;
   const showHero = resolvedHero !== null;
 
   return (
@@ -143,14 +151,14 @@ export function LoginPage({
           )}
         >
           {cardHeader === null ? (
-            brand ? <div className="mb-8">{brand}</div> : null
+            branded ? <div className="mb-8">{identity}</div> : null
           ) : cardHeader ? (
             <>
-              <div className="mb-7">{brand ?? <AngeeIdentity />}</div>
+              <div className="mb-7">{identity}</div>
               <div className="mb-7">{cardHeader}</div>
             </>
           ) : (
-            <DefaultCardHeader brand={brand} />
+            <DefaultCardHeader brand={brand} branded={branded} name={name} />
           )}
           {loginMethods ? (
             <div className="mb-5">
@@ -398,90 +406,51 @@ function WanderingCube(): ReactNode {
   );
 }
 
-function AngeeIdentity({
-  tone = "default",
-}: {
-  tone?: "default" | "inverse";
-}): ReactNode {
-  return (
-    <div
-      className={cn(
-        "inline-flex items-center gap-3",
-        tone === "inverse" ? "text-n-0" : "text-fg",
-      )}
-    >
-      <span
-        className={cn(
-          "grid size-9 place-content-center rounded-6 border",
-          tone === "inverse"
-            ? "border-n-0/15 bg-n-0/8"
-            : "border-border-subtle bg-sheet",
-        )}
-      >
-        <ThemeLogo
-          aria-hidden="true"
-          size={22}
-          width={22}
-          height={22}
-        />
-      </span>
-      <span className="text-xl font-semibold">Angee</span>
-    </div>
-  );
-}
-
-function DefaultCardHeader({
-  brand,
-}: {
-  brand?: ReactNode;
-}): ReactNode {
-  const t = useUiT();
+function LoginIdentity({
+  name,
+  brand: override,
+  header = false,
+  children,
+}: { name: string; brand?: ReactNode; header?: boolean; children?: ReactNode }): ReactNode {
+  const brand = useRuntimeBrand();
   const logo = useThemeLogoChoice();
-  if (brand) {
+  if (header && override == null && brand === null) {
     return (
-      <div className="mb-8">
-        <div className="mb-6">{brand}</div>
-        <h1 className="text-28 font-semibold leading-tight text-fg">
-          {t("auth.signIn")}
-        </h1>
-        <p className="mt-2 text-sm text-fg-muted">
-          {t("auth.signInSubtextBranded")}
-        </p>
+      <div className="mb-8 grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-4 text-left">
+        <div className="pointer-events-none grid size-16 p-2" aria-hidden="true">
+          {logo === "theme" ? (
+            <AngeeLogoCube size={9} gap={0.75}
+              leftColor={LOGIN_LOGO_PRESET.colors.left} rightColor={LOGIN_LOGO_PRESET.colors.right}
+              baseDark={LOGIN_LOGO_PRESET.colors.top} animationSpeed={18} animationType="rotate" />
+          ) : <ThemeLogo logo={logo} size={48} width={48} height={48} />}
+        </div>
+        <div className="min-w-0 pt-1">
+          <p className="mb-2 text-base font-semibold leading-none text-fg">{name}</p>
+          {children}
+        </div>
       </div>
     );
   }
-
-  return (
-    <div className="mb-8 grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-4 text-left">
-      <div
-        className="pointer-events-none grid size-16 p-2"
-        aria-hidden="true"
-      >
-        {logo === "theme" ? (
-          <AngeeLogoCube
-            size={9}
-            gap={0.75}
-            leftColor={LOGIN_LOGO_PRESET.colors.left}
-            rightColor={LOGIN_LOGO_PRESET.colors.right}
-            baseDark={LOGIN_LOGO_PRESET.colors.top}
-            animationSpeed={18}
-            animationType="rotate"
-          />
-        ) : (
-          <ThemeLogo logo={logo} size={48} width={48} height={48} />
-        )}
-      </div>
-      <div className="min-w-0 pt-1">
-        <p className="mb-2 text-base font-semibold leading-none text-fg">
-          Angee
-        </p>
-        <h1 className="text-28 font-semibold leading-tight text-fg">
-          {t("auth.signIn")}
-        </h1>
-        <p className="mt-2 text-sm text-fg-muted">
-          {t("auth.signInSubtext")}
-        </p>
-      </div>
+  const identity = override ?? (
+    <div className="inline-flex items-center gap-3 text-fg">
+      <span className="grid size-9 place-content-center rounded-6 border border-border-subtle bg-sheet">
+        {brand ? <Glyph name={brand.mark} size={22} />
+          : <ThemeLogo aria-hidden="true" size={22} width={22} height={22} />}
+      </span>
+      <span className="text-xl font-semibold">{name}</span>
     </div>
+  );
+  return header ? <div className="mb-8"><div className="mb-6">{identity}</div>{children}</div> : identity;
+}
+
+function DefaultCardHeader({ brand, branded, name }: { brand?: ReactNode; branded: boolean; name: string }): ReactNode {
+  const t = useUiT();
+  return (
+    <LoginIdentity brand={brand} name={name} header>
+      <h1 className="text-28 font-semibold leading-tight text-fg">{t("auth.signIn")}</h1>
+      <p className="mt-2 text-sm text-fg-muted">
+        {t(branded ? "auth.signInSubtextBranded" : "auth.signInSubtext", { name })}
+      </p>
+    </LoginIdentity>
   );
 }

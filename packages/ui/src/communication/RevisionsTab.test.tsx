@@ -97,6 +97,16 @@ describe("RevisionsTab", () => {
     expect(screen.getByText("Body changed")).toBeTruthy();
     expect(screen.getByText("Snapshot title")).toBeTruthy();
   });
+
+  test("keeps recorded revisions visible after a refresh fails", () => {
+    dataMocks.useResourceRevisions.mockReturnValue(revisionsResult({
+      error: new Error("Refresh failed"),
+      revisions: [{ id: "v1", created_at: "2026-01-01T00:00:00Z", comment: "Saved", title: "Earlier title" }],
+    }));
+    render(<RevisionsTab resource="notes.Note" recordId="1" />);
+    expect(screen.getByText("Saved")).toBeTruthy();
+    expect(screen.queryByText("Revisions unavailable")).toBeNull();
+  });
 });
 
 function revisionsResult(overrides: Partial<RevisionsResult> = {}): RevisionsResult {

@@ -1,14 +1,23 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { testQueryField } from "@angee/metadata/testing";
-import { afterEach, describe, expect, test } from "vitest";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
+import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource, testQueryField } from "@angee/metadata/testing";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import * as v from "valibot";
+import { useEffect, type ReactElement } from "react";
 
-import { DashboardSnapshotSchema, parseDashboardSnapshot, type DashboardWidgetData, type WidgetSpec } from "./headless";
+import { DashboardSnapshotSchema, parseDashboardSnapshot, type DashboardWidgetData, type HostedResourceViewProps, type WidgetSpec } from "./headless";
 import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
+import { AppRuntimeProvider } from "../runtime/runtime";
+import { createRouteHref } from "../runtime/route-href";
+import { useResourceView } from "../views/resource/resource-view-context";
+import { ResourceToolbar } from "../toolbars/ResourceToolbar";
+import { GanttLane } from "../views/gantt/gantt-lane";
 
 const TableWidget = BUILTIN_DASHBOARD_WIDGET_KINDS.find(({ id }) => id === "table")!.Component;
+const ResourceViewWidget = BUILTIN_DASHBOARD_WIDGET_KINDS.find(({ id }) => id === "resourceView")!.Component;
 const nestedFields = {
   "step_run.run.id": testQueryField("step_run.run.id"),
   "step_run.run.workflow.name": testQueryField("step_run.run.workflow.name"),
@@ -52,9 +61,38 @@ const data: DashboardWidgetData = {
 
 afterEach(() => cleanup());
 
+const renderWidget = (node: ReactElement) => render(node, {
+  wrapper: ({ children }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>,
+});
+
 describe("dashboard table columns", () => {
+  test("uses the route's field vocabulary ahead of an old column label", () => {
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("workflows.Decision", {
+      fields: [{ name: "title", label: "Request", kind: "scalar", scalar: "String", readable: true,
+        aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    })]);
+    render(<ModelMetadataProvider metadata={metadata}><AppRuntimeProvider runtime={{}}>
+      <TableWidget spec={{ ...spec, data: { shape: "rows", source: { resource: "workflows.Decision", fields: ["title"] } },
+        options: { columns: [{ path: "title", label: "Old label" }] } }}
+        data={{ ...data, queryFields: { title: testQueryField("title") }, rows: [{ public_key: "one", title: "A" }] }} />
+    </AppRuntimeProvider></ModelMetadataProvider>);
+    expect(screen.getByRole("columnheader").textContent).toBe("Request");
+  });
+  test("keeps the table footprint while its first actor-scoped read is pending", () => {
+    renderWidget(<TableWidget spec={spec} data={{ ...data, fetching: true }} />);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("Loading");
+    expect(status.querySelectorAll("[aria-hidden='true']").length).toBeGreaterThan(2);
+  });
+  test("an explicit record route makes the first cell a native record link", () => {
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterContextProvider router={router}><AppRuntimeProvider runtime={{ routeHref: createRouteHref([{ name: "review.record", path: "/review/$id" }]) }}>
+      <TableWidget spec={{ ...spec, options: { recordRoute: "review.record" } }} data={{ ...data, rows: [{ public_key: "review-1", step_run: { step: { name: "Review" } } }] }} />
+    </AppRuntimeProvider></RouterContextProvider>);
+    expect(screen.getByRole("link").getAttribute("href")).toBe("/review/review-1");
+  });
   test("renders declared nested paths in order, with labels and nullable relations", () => {
-    render(<TableWidget
+    renderWidget(<TableWidget
       spec={{
         ...spec,
         options: {
@@ -90,7 +128,7 @@ describe("dashboard table columns", () => {
     expect(within(rows[1]!).getAllByRole("cell").map((cell) => cell.textContent))
       .toEqual(["run-1", "Document intake", "Confirm details", "Pending review"]);
     expect(within(rows[2]!).getAllByRole("cell").map((cell) => cell.textContent))
-      .toEqual(["", "", "", ""]);
+      .toEqual(["—", "—", "—", "—"]);
   });
 
   test("defaults to selected logical fields in declaration order, excluding native identity", () => {
@@ -99,7 +137,7 @@ describe("dashboard table columns", () => {
       title: testQueryField("title"),
       status: testQueryField("wire_status", { kind: "enum", values: [{ value: "PENDING", description: "Needs review" }] }),
     };
-    render(<TableWidget
+    renderWidget(<TableWidget
       spec={{ ...spec, data: { shape: "rows", source: { resource: "workflows.Decision", fields: ["public_key", "status", "title"] } } }}
       data={{ ...data, queryFields, rows: [{ public_key: "decision-1", title: "Review", wire_status: "PENDING", extra: "Not selected" }] }}
     />);
@@ -126,7 +164,7 @@ describe("dashboard table columns", () => {
         },
       }),
     };
-    render(<TableWidget
+    renderWidget(<TableWidget
       spec={{
         ...spec,
         data: { shape: "rows", source: { resource: "messaging.Message", fields: Object.keys(queryFields) } },
@@ -147,7 +185,7 @@ describe("dashboard table columns", () => {
     const rows = screen.getAllByRole("row");
     expect(within(rows[1]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["0", "Inbox", "Awaiting review"]);
     expect(within(rows[2]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["7", "chan_2", "Awaiting review"]);
-    expect(within(rows[3]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["", "", ""]);
+    expect(within(rows[3]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["—", "—", "—"]);
   });
 
   test.each([
@@ -181,7 +219,7 @@ describe("dashboard table columns", () => {
   });
 
   test("renders malformed columns as a widget error without throwing", () => {
-    render(<TableWidget spec={{ ...spec, options: { columns: false } }} data={data} />);
+    renderWidget(<TableWidget spec={{ ...spec, options: { columns: false } }} data={data} />);
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });
@@ -191,7 +229,7 @@ describe("dashboard table columns", () => {
     const queryFields = { title: testQueryField("title") };
     const first = { public_key: "decision-1", title: "First" };
     const second = { public_key: "decision-2", title: "Second" };
-    const { rerender } = render(<>
+    const { rerender } = renderWidget(<>
       <h3 id="reviews-title">Pending reviews</h3>
       <TableWidget spec={widget} data={{ ...data, queryFields, rows: [first, second] }} titleId="reviews-title" />
     </>);
@@ -215,4 +253,63 @@ describe("dashboard table columns", () => {
     });
     expect(snapshot.widgets[0]!.options.columns).toBe(false);
   });
+});
+
+test("hosts a shipped list preset with reduced chrome and reports the server total", () => {
+  const onCountChange = vi.fn();
+  const rowVerb = vi.fn();
+  const observed = vi.fn();
+  function DeclaredView(props: HostedResourceViewProps) {
+    const view = useResourceView();
+    observed({ ...props, preset: view.state.preset, queryError: view.state.queryError, baseFilter: view.baseFilter });
+    useEffect(() => {
+      props.onListStateChange({ rows: [], total: 17, page: 1, pageSize: 20,
+        pageCount: 1, hasNext: false, hasPrev: false, fetching: false });
+    }, [props.onListStateChange]);
+    return <><div>Standard list</div><button type="button" onClick={rowVerb}>Open record</button><ResourceToolbar
+      pager={{ total: 17, page: 1, pageSize: 20 }} view="list" availableViews={["list", "board"]}
+      filterOptions={[{ id: "open", label: "Open", filter: { status: "open" } }]}
+      onViewChange={() => {}} onFilterTextChange={() => {}} chrome={props.chrome}
+    /></>;
+  }
+  const hosted: WidgetSpec = { ...spec, kind: "resourceView", data: { shape: "resourceView", preset: "desk.open" },
+    options: { fullViewRoute: "desk.records" } };
+  expect(parseDashboardSnapshot({ schemaVersion: 1, columns: 12, widgets: [hosted] }).widgets[0]?.data)
+    .toEqual({ shape: "resourceView", preset: "desk.open" });
+  render(<AppRuntimeProvider runtime={{ resourceViews: {
+    "desk.open": { id: "desk.open", preset: "desk.open", label: "Open records", resource: "notes.Note",
+      fixedFilter: { status: { exact: "open" } }, view: "list" },
+  } }}>
+    <ResourceViewWidget spec={hosted}
+      data={data} hostedView={DeclaredView} onCountChange={onCountChange} />
+  </AppRuntimeProvider>);
+  expect(screen.getByText("Standard list")).toBeTruthy();
+  screen.getByRole("button", { name: "Open record" }).click();
+  expect(rowVerb).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText("Filter records")).toBeTruthy();
+  expect(screen.queryByLabelText("Previous page")).toBeNull();
+  expect(screen.queryByLabelText("Board view")).toBeNull();
+  expect(observed.mock.lastCall?.[0]).toMatchObject({ presentation: "embedded", scope: "inherit",
+    chrome: { viewSwitcher: false, pager: false, columnChooser: false },
+    preset: "desk.open", baseFilter: { status: { exact: "open" } } });
+  expect(observed.mock.lastCall?.[0].queryError).toBeFalsy();
+  expect(onCountChange).toHaveBeenCalledWith(17);
+});
+
+test("a hosted Gantt keeps the declaration's lane details", () => {
+  const hosted: WidgetSpec = { ...spec, kind: "resourceView",
+    data: { shape: "resourceView", preset: "desk.schedule" },
+    options: { fullViewRoute: "desk.schedule" } };
+  function DeclaredView(props: HostedResourceViewProps) {
+    return <div data-presentation={props.presentation}>
+      <GanttLane details={{ title: "Review rollout", secondary: "Planning", people: [{ id: "one", name: "Ari" }] }} />
+    </div>;
+  }
+  render(<AppRuntimeProvider runtime={{ resourceViews: {
+    "desk.schedule": { id: "desk.schedule", preset: "desk.schedule", label: "Schedule",
+      resource: "notes.Note", view: "gantt" },
+  } }}><ResourceViewWidget spec={hosted} data={data} hostedView={DeclaredView} /></AppRuntimeProvider>);
+  expect(screen.getByText("Review rollout").closest("[data-presentation]")?.getAttribute("data-presentation")).toBe("embedded");
+  expect(screen.getByText("Planning")).toBeTruthy();
+  expect(screen.getByText("Ari")).toBeTruthy();
 });

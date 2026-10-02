@@ -99,6 +99,23 @@ describe("expectValidBaseAddon", () => {
     expect(() => expectValidBaseAddon(addon)).toThrow(/has no parent/);
   });
 
+  test("accepts distinct record destinations for one model and rejects duplicate matches", () => {
+    const routes = [
+      ...resourcePageRoutes("notes.incoming", "/notes/incoming", Page, "notes.Note",
+        { recordMatch: { field: "queue.slug", equals: "incoming" } }),
+      ...resourcePageRoutes("notes.archive", "/notes/archive", Page, "notes.Note",
+        { recordMatch: { field: "queue.slug", equals: "archive" } }),
+    ];
+    expect(() => expectValidBaseAddon(defineBaseAddon({ id: "notes", routes }))).not.toThrow();
+    expect(() => expectValidBaseAddon(defineBaseAddon({
+      id: "notes", routes: [
+        ...routes,
+        ...resourcePageRoutes("notes.copy", "/notes/copy", Page, "notes.Note",
+          { recordMatch: { field: "queue.slug", equals: "archive" } }),
+      ],
+    }))).toThrow(/claimed by both/);
+  });
+
   test("leaves cross-addon menu route validation to full app composition", () => {
     const addon = defineBaseAddon({
       id: "notes-extension",

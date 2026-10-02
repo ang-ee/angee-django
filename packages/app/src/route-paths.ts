@@ -1,6 +1,38 @@
 import type { BaseAddonRoute } from "./define-base-addon";
 import { routeParameterName } from "@angee/ui/runtime";
 
+/** Resolve declaration ancestry once before href, menu and runtime projections. */
+export function resolveRoutePaths(routes: readonly BaseAddonRoute[]): readonly BaseAddonRoute[] {
+  const byName = new Map(routes.map((route) => [route.name, route]));
+  const resolved = new Map<string, BaseAddonRoute>();
+  const visiting = new Set<string>();
+  const resolve = (route: BaseAddonRoute): BaseAddonRoute => {
+    const cached = resolved.get(route.name);
+    if (cached) return cached;
+    if (visiting.has(route.name)) throw new Error(`Route "${route.name}" creates a parent cycle.`);
+    visiting.add(route.name);
+    const parent = route.parent ? byName.get(route.parent) : undefined;
+    if (route.parent && !parent) throw new Error(`Route "${route.name}" references unknown parent route "${route.parent}".`);
+    const result = { ...route, path: fullRoutePath(route, parent ? resolve(parent) : undefined) };
+    resolved.set(route.name, result);
+    visiting.delete(route.name);
+    return result;
+  };
+  return routes.map(resolve);
+}
+
+/** Return the nearest declared route fact, including explicit empty values. */
+export function inheritedRouteFact<T>(
+  route: BaseAddonRoute,
+  routesByName: ReadonlyMap<string, BaseAddonRoute>,
+  fact: (route: BaseAddonRoute) => T | undefined,
+): T | undefined {
+  const value = fact(route);
+  if (value !== undefined) return value;
+  const parent = route.parent ? routesByName.get(route.parent) : undefined;
+  return parent ? inheritedRouteFact(parent, routesByName, fact) : undefined;
+}
+
 export function routeChildHasTrailingParam(
   route: BaseAddonRoute,
   parent: BaseAddonRoute,

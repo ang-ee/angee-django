@@ -1,5 +1,5 @@
 import * as React from "react";
-import { extractActionOutcome, type ActionOutcome } from "@angee/refine";
+import { extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome } from "@angee/refine";
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
 
@@ -54,8 +54,12 @@ export function savedFormSubmitResult<TData>(data: TData | null | undefined, mis
 }
 
 /** Decode a transport failure; contract violations remain developer errors. */
-export function formSubmitError(cause: unknown, fallback?: string): Extract<FormSubmitResult<never>, { status: "invalid" }> {
+export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
+  if (publicGraphQLErrorsFromUnknown(cause).some((item) =>
+    item.extensions.code === "STALE_REVISION" || item.extensions.code === "CREATION_KEY_CONFLICT")) {
+    return { status: "conflict", message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
+  }
   return invalidFormSubmit(validationErrorsFromError(cause, fallback));
 }
 

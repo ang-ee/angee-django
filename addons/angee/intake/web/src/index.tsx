@@ -1,16 +1,29 @@
+import { decisionRecordTab } from "@angee/decisions";
 import { defineBaseAddon } from "@angee/app";
+import { holdsPermission } from "@angee/metadata";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { ShareAccessRailGroup } from "@angee/iam";
+import { useAuthoredQuery } from "@angee/refine";
 import {
+  ErrorBanner,
+  FormView,
   Glyph,
+  Group,
+  SkeletonStatus,
   Tab,
   formViewSectionsSlot,
   useRecordChromeContext,
+  type ChatterViewContext,
 } from "@angee/ui";
 import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { enIntakeMessages, useIntakeT } from "./i18n";
+import { TaskAccessCardSkeleton, TaskAccessDecisions } from "./TaskAccessDecisions";
+import { TaskAccessNeedsDocument } from "./documents";
+import { NEED_MODEL } from "./resources";
 import { RecordNeedsPane } from "./RecordNeedsPane";
+import { TaskRequesterAccessRole } from "./access-role";
 
 export { NEED_MODEL } from "./resources";
 
@@ -18,7 +31,22 @@ const intake = defineBaseAddon({
   id: "intake",
   i18n: { intake: enIntakeMessages },
   icons: { "intake-needs": MessageSquareQuote },
+  chatter: [{
+    id: "intake.access-decisions", label: "Decisions", sequence: 50,
+    when: (context) => context.view.kind === "record" && context.route?.modelLabel === TASK_MODEL,
+    render: (context) => <TaskAccessChatter context={context} />,
+  }],
   slots: [
+    { slot: "access.roles", model: TASK_MODEL, id: "intake.requester", content: TaskRequesterAccessRole },
+    { ...FormView.railSlot(TASK_MODEL), id: "intake.people-rail", sequence: 40,
+      content: ShareAccessRailGroup },
+    decisionRecordTab(NEED_MODEL),
+    {
+      ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
+      // Access decisions are the request's writers' business; a requester reading their own request never sees them.
+      permission: "write", requiredFields: ["permissions"],
+      content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly collapsible defaultOpen content={<TaskAccessGroup />} />,
+    },
     {
       ...formViewSectionsSlot(PROJECT_MODEL),
       id: "intake.project-needs",
@@ -26,7 +54,7 @@ const intake = defineBaseAddon({
       content: (
         <Tab
           id="needs"
-          label={<NeedsLabel />}
+          label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
           icon={<Glyph decorative name="intake-needs" />}
         >
           <RecordNeedsSection targetField="project" />
@@ -40,7 +68,7 @@ const intake = defineBaseAddon({
       content: (
         <Tab
           id="needs"
-          label={<NeedsLabel />}
+          label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
           icon={<Glyph decorative name="intake-needs" />}
         >
           <RecordNeedsSection targetField="task" />
@@ -65,9 +93,42 @@ function RecordNeedsSection({
   );
 }
 
-function NeedsLabel(): ReactElement {
+
+function TaskAccessGroup(): ReactElement {
+  const { record, recordId } = useRecordChromeContext();
   const t = useIntakeT();
-  return <>{t("needs.label")}</>;
+  const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: recordId }, {
+    models: [NEED_MODEL, "decisions.Decision"],
+  });
+  if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
+    <TaskAccessCardSkeleton />
+  </SkeletonStatus>;
+  if (query.error) return <ErrorBanner description={t("access.error")} />;
+  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []}
+    canManage={Boolean(record && holdsPermission(record, "write") && holdsPermission(record, "share"))} />;
+}
+
+function TaskAccessChatter({ context }: { context: ChatterViewContext }): ReactElement {
+  const t = useIntakeT();
+  const task = context.view.kind === "record" ? context.view.sqid ?? "" : "";
+  const query = useAuthoredQuery(TaskAccessNeedsDocument, { task }, {
+    enabled: Boolean(task), models: [NEED_MODEL, "decisions.Decision"],
+  });
+  if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
+    <TaskAccessCardSkeleton />
+  </SkeletonStatus>;
+  if (query.error) return <ErrorBanner description={t("access.error")} />;
+  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []} />;
 }
 
 export default intake;
+
+function AccessLabel(): ReactElement {
+  const t = useIntakeT();
+  return <>{t("access.label")}</>;
+}
+
+function AccessHint(): ReactElement {
+  const t = useIntakeT();
+  return <>{t("access.hint")}</>;
+}

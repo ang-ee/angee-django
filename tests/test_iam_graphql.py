@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+import strawberry
 from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
@@ -27,6 +29,9 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
+from rebac.middleware import ActorMiddleware
+from rebac.roles import grant as grant_role
+from strawberry.django.views import GraphQLView
 
 from angee.base.identity import (
     instance_from_public_id,
@@ -38,6 +43,9 @@ from angee.data.field_classification import resource_field_kind, resource_field_
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
+from angee.graphql.schema import AngeeSchema
+from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -55,6 +63,7 @@ from tests.conftest import (
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
+from tests.iam_models import Group as IAMGroup
 from tests.tables import model_tables
 
 User = get_user_model()
@@ -839,9 +848,7 @@ def test_user_crud_create_update_delete_are_admin_only(
             password: "first-secret",
             email: "console-user@example.com",
             first_name: "Console",
-            last_name: "User",
-            is_staff: true,
-            is_active: true
+            last_name: "User"
           }) {
             username
             email
@@ -856,20 +863,30 @@ def test_user_crud_create_update_delete_are_admin_only(
 
     assert _execute(console_schema, create_user, user=plain).errors is not None
 
+    for field in ("is_staff", "is_active"):
+        rejected = _execute(
+            console_schema,
+            create_user.replace('last_name: "User"', f'last_name: "User", {field}: true'),
+            user=admin,
+        )
+        assert rejected.errors is not None
+        assert f"Field '{field}' is not defined by type 'users_insert_input'" in rejected.errors[0].message
+
     created = _data(_execute(console_schema, create_user, user=admin))["insert_users_one"]
     assert created == {
         "username": "console-user",
         "email": "console-user@example.com",
         "first_name": "Console",
         "last_name": "User",
-        "is_staff": True,
+        "is_staff": False,
         "is_active": True,
         "full_name": "Console User",
     }
-    # ``password`` is write-only: it is neither a field on ``UserType`` nor in its SDL.
-    assert "password" not in _sdl_block(console_schema.as_str(), "type UserType")
+    # ``password`` is write-only: it is not a field on ``UserType``.
+    assert console_schema.get_field_for_type("password", "UserType") is None
     with system_context(reason="test.iam.user_crud.create"):
         user = User.objects.get(username="console-user")
+        # Requires strawberry-django-hasura >= 0.12.1 input-extension forwarding.
         assert user.check_password("first-secret")
     user_id = _user_public_id(user)
 
@@ -1826,6 +1843,119 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
     result = _data(_execute(console_schema, discover, {"id": oauth_client_id}, user=admin))["discover_oauth_endpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
+
+
+def test_view_as_target_has_no_pinned_admitting_actor(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real endpoint through ActorMiddleware binds only the target authority."""
+
+    admin = _platform_admin("preview-admitting-admin")
+    target = User.objects.create_user(username="preview-target", email="preview-target@example.com")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def target_authority(self, info: strawberry.Info) -> bool:
+            active = info.context.request
+            assert active.user.pk == target.pk
+            assert active.user is active.view_as.target
+            assert active.user.actor() is None
+            assert not active.user.is_sudo()
+            assert active.user.effective_actor() == (to_subject_ref(target), False)
+            return active.user.has_access("write")
+
+    view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    request = RequestFactory().post(
+        "/graphql/public/", data={"query": "{ targetAuthority }"},
+        content_type="application/json", HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
+    )
+    request.user = admin
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    assert json.loads(response.content) == {"data": {"targetAuthority": False}}
+    assert request.user is admin
+    assert not hasattr(request, "view_as")
+
+
+def test_view_as_unknown_operation_uses_strawberry_bad_request(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = _platform_admin("preview-operation-admin")
+    target = User.objects.create_user("preview-operation-target")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def hello(self) -> str:
+            return "hello"
+
+    schema = AngeeSchema(query=Query, extensions=[ViewAsReadOnlyExtension])
+    view = GraphQLView.as_view(schema=schema)
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    request = RequestFactory().post(
+        "/graphql/public/", content_type="application/json", HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
+        data={"query": "query Existing { hello }", "operationName": "Missing"},
+    )
+    request.user = admin
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    assert response.status_code == 400
+    assert request.user is admin
+    assert not hasattr(request, "view_as")
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_viewable_people_admission_is_batched_before_limit(
+    composed_tables: None, settings: Any, storage: str,
+) -> None:
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+    admin = _platform_admin("picker-query-admin")
+    User._base_manager.bulk_create([User(username=f"picker-person-{index:02}", password="!") for index in range(25)])
+    for username, flags in (
+        ("picker-000-staff", {"is_staff": True}),
+        ("picker-000-superuser", {"is_superuser": True}),
+        ("picker-000-service", {"kind": "service"}),
+        ("picker-000-inactive", {"is_active": False}),
+    ):
+        User.objects.create_user(username, **flags)
+    _platform_admin("picker-000-admin")
+    inherited_admin = User.objects.create_user("picker-000-group-admin")
+    with system_context(reason="test.preview.group_admin"):
+        group = IAMGroup.objects.create(name="Preview administrators")
+        group.add_member(str(to_subject_ref(inherited_admin)))
+        grant_role(actor=group, role="angee/role:admin")
+    assert User.objects.admit_view_as(admin, str(inherited_admin.sqid)) is None
+    assert User.objects.admit_view_as(admin, str(admin.sqid)) is None
+    # Warm native schema caches, then compare the complete picker at each size.
+    User.objects.viewable_people(admin, search="picker-", limit=1)
+    counts = []
+    for limit in (3, 13, 25):
+        with CaptureQueriesContext(connection) as queries:
+            people = User.objects.viewable_people(admin, search="picker-", limit=limit)
+        counts.append(len(queries))
+        assert [person.username for person in people] == [f"picker-person-{index:02}" for index in range(limit)]
+        for person in people:
+            assert person.actor() is None
+            assert User.objects.admit_view_as(admin, str(person.sqid)) == person
+    assert counts[0] == counts[1] == counts[2], counts
+
+
+def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    admin = _platform_admin("preview-denied-admin")
+    monkeypatch.setattr(User._default_manager, "admit_view_as", None)
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
+    request = RequestFactory().post(
+        "/graphql/public/", data={"query": "query Preview { __typename }", "operationName": "Preview"},
+        content_type="application/json", HTTP_X_ANGEE_VIEW_AS="unknown-public-id",
+    )
+    request.user = admin
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    assert response.status_code == 403
+    message = next(record for record in caplog.records if "view-as denied" in record.message)
+    assert message.levelname == "WARNING"
+    assert all(value in message.message for value in (_user_public_id(admin), "unknown-public-id", "public", "Preview"))
 
 
 def _schema(name: str) -> Any:

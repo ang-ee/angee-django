@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 from rebac import system_context, to_object_ref
@@ -13,11 +14,13 @@ from rebac.backends import backend
 from angee.agents.grants import tool_grant_ref
 from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import MCPPlacement
+from angee.agents.testing.models import Agent, MCPServer, MCPTool
 from angee.integrate.credentials import CredentialKind
 from angee.mcp.verifier import _verifier
 from tests import test_integrate_vcs  # noqa: F401 -- register the concrete relation graph
 from tests.conftest import Credential
-from tests.test_agents_graphql import Agent, MCPServer, MCPTool, User
+
+User = get_user_model()
 
 
 def test_mcp_verifier_resolves_optional_hook() -> None:

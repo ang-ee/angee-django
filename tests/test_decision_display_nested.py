@@ -1,23 +1,24 @@
 """Execution display projections remain scoped and batched through nested decisions."""
 
 import pytest
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
+from angee.decisions.testing.models import Decision
+from angee.graphql.data.hasura import with_filter_aliases
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
 from tests.conftest import create_user, execute_schema, result_data, vault_for
-from tests.decisions_models import Decision
 from tests.test_workflows_review_graphql import Accept
 from tests.test_workflows_review_graphql import schema as schema
 
 
 @pytest.fixture
-def nested_reviews(execution, register_step, workflow_permissions):
+def nested_reviews(execution, register_step, composed_permissions):
     """Reach evidence and supersession only through real review admission."""
     admin, _sent = execution
     owner, operator, assignee = (create_user(name) for name in (
@@ -92,6 +93,22 @@ def test_superseded_by_nested_decision_projects_the_replacement(schema, nested_r
         "workflow_name": workflow.name if viewer_index == 1 else None,
         "node_key": "review" if viewer_index != 3 else None,
     }}]}
+
+
+@pytest.mark.parametrize("viewer_index,ambient_index", [(1, 3), (3, 1)])
+def test_alias_projection_uses_the_queryset_actor(nested_reviews, viewer_index, ambient_index):
+    """A pinned row actor also owns related scalar visibility under another ambient actor."""
+
+    workflow, _owner, _operator, _assignee, admit = nested_reviews
+    decision = admit()
+    with actor_context(nested_reviews[ambient_index]):
+        rows = with_filter_aliases(Decision.objects.with_actor(nested_reviews[viewer_index]))
+        rows = rows.annotate(workflow_name=models.F("workflow_name"), node_key=models.F("node_key"))
+        projected = rows.values("workflow_name", "node_key").get(pk=decision.pk)
+    assert projected == {
+        "workflow_name": workflow.name if viewer_index == 1 else None,
+        "node_key": "review" if viewer_index == 1 else None,
+    }
 
 
 def test_nested_decision_display_does_not_add_queries_per_row(schema, nested_reviews):

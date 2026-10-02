@@ -8,7 +8,7 @@ from django.db import transaction
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from tests.test_messaging import Address, Handle, Party, PartyHandle
+from angee.messaging.testing.models import Address, Handle, Party, PartyHandle
 
 
 @pytest.mark.django_db(transaction=True)

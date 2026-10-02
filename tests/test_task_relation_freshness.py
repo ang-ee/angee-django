@@ -34,6 +34,8 @@ class FreshnessStage(AbstractStage):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(AbstractStage.Meta.constraints)
+        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
+        rebac_resource_type = "scopedemo/freshness_stage"
 
 
 class FreshnessMilestone(AbstractMilestone):
@@ -43,6 +45,8 @@ class FreshnessMilestone(AbstractMilestone):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(getattr(AbstractMilestone.Meta, "constraints", ()))
+        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
+        rebac_resource_type = "scopedemo/freshness_milestone"
 
 
 class FreshnessTask(TaskWork, AbstractTask):
@@ -54,6 +58,8 @@ class FreshnessTask(TaskWork, AbstractTask):
     cycle_id = None
     converted_from_activity = None
     links = None
+    file_attachments = None
+    knowledge_bindings = None
     thread_attachments = None
     thread_create_log = False
     thread_create_autofollow_author = False
@@ -63,6 +69,8 @@ class FreshnessTask(TaskWork, AbstractTask):
         abstract = False
         app_label = "scopedemo"
         constraints = _local_constraints(AbstractTask.Meta.constraints[:2])
+        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
+        rebac_resource_type = "scopedemo/freshness_task"
 
 
 @pytest.fixture
@@ -76,7 +84,7 @@ def task_relations(transactional_db: None) -> Iterator[Scope]:
 def test_unsaved_stage_category_edit_cannot_allow_system_stage_entry(task_relations: Scope) -> None:
     with system_context(reason="tests.task_relation_freshness.system_stage"):
         stage = FreshnessStage.objects.create(queue=task_relations, name="Triage", category="triage")
-    task = FreshnessTask(title="Must use capture", queue=task_relations, number=1)
+    task = FreshnessTask(title="Must use triage verb", queue=task_relations, number=1, estimate=1)
     stage.category = "started"
     task.stage = stage
 
@@ -95,6 +103,7 @@ def test_cached_stage_recategorization_projects_current_lifecycle(task_relations
             queue=task_relations,
             stage=stage,
             number=1,
+            estimate=1,
         )
         changed_stage = FreshnessStage._base_manager.get(pk=stage.pk)
         changed_stage.category = "completed"
@@ -103,6 +112,13 @@ def test_cached_stage_recategorization_projects_current_lifecycle(task_relations
 
         task.title = "Now complete"
         task.save(update_fields=("title",))
+        persisted = FreshnessTask._base_manager.get(pk=task.pk)
+        assert persisted.status == task.TaskStatus.OPEN
+        assert persisted.done_at is None
+        # Lifecycle belongs to a stage write; its projection must still ignore
+        # the cached Stage object's old category.
+        assert task.stage.category == "started"
+        task.save(update_fields=("stage",))
 
     task.refresh_from_db()
     assert task.title == "Now complete"

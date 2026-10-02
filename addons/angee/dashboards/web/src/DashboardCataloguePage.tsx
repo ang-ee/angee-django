@@ -14,6 +14,7 @@ import {
   Select,
   TextLink,
   useDashboardRegistry,
+  useAppRuntime,
   useRouteHref,
 } from "@angee/ui";
 import type { DashboardRegistry, DashboardSummary, DashboardTarget } from "@angee/ui/dashboard/headless";
@@ -38,6 +39,7 @@ function DashboardCatalogue({ store, registry }: {
   registry: DashboardRegistry;
 }): React.ReactElement {
   const catalogue = store.useCatalogue();
+  const { resourceViews } = useAppRuntime();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const [name, setName] = React.useState("");
@@ -47,16 +49,28 @@ function DashboardCatalogue({ store, registry }: {
   const [sort, setSort] = React.useState<"name" | "scope">("name");
   const t = useDashboardsT();
   const summaries = React.useMemo<readonly DashboardSummary[]>(() => {
-    const merged = new Map(catalogue.summaries.map((summary) => [targetKey(summary.target), summary]));
+    const presetResource = (preset: string) => resourceViews[preset]?.resource ?? null;
+    const merged = new Map(catalogue.summaries.map((summary) => [targetKey(summary.target), {
+      ...summary,
+      resources: [...new Set([...summary.resources, ...(summary.presets ?? []).flatMap((preset) => {
+        const resource = presetResource(preset);
+        return resource ? [resource] : [];
+      })])].sort(),
+    }]));
     for (const definition of Object.values(registry.definitions)) {
       const target: DashboardTarget = definition.resource
         ? { scope: "resource", key: definition.resource }
         : { scope: "addon", key: definition.key };
       const key = targetKey(target);
       if (merged.has(key)) continue;
-      const resources = [...new Set(definition.widgets.flatMap((widget) =>
-        widget.data.shape === "none" ? [] : [widget.data.source.resource],
-      ))].sort();
+      const resources = [...new Set(definition.widgets.flatMap((widget) => {
+        if (widget.data.shape === "none") return [];
+        if (widget.data.shape === "resourceView") {
+          const resource = presetResource(widget.data.preset);
+          return resource ? [resource] : [];
+        }
+        return [widget.data.source.resource];
+      }))].sort();
       merged.set(key, {
         id: definition.key,
         target,
@@ -65,11 +79,11 @@ function DashboardCatalogue({ store, registry }: {
         revision: 0,
         customized: false,
         available: true,
-        capabilities: { canEdit: true, canReset: false, canArchive: false },
+        capabilities: { canEdit: definition.editable !== false, canReset: false, canArchive: false },
       });
     }
     return [...merged.values()].sort((left, right) => left.title.localeCompare(right.title));
-  }, [catalogue.summaries, registry.definitions]);
+  }, [catalogue.summaries, registry.definitions, resourceViews]);
   const visibleSummaries = React.useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return summaries

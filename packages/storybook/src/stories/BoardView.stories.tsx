@@ -152,7 +152,11 @@ export const FoldDefaultsAndQuickCreate: Story = {
   render: () => <BoardFixture withFold />,
 };
 
-function BoardFixture({ withFold }: { withFold: boolean }): ReactElement {
+export const DeclaredCard: Story = {
+  render: () => <BoardFixture withFold={false} withCard />,
+};
+
+function BoardFixture({ withFold, withCard = false }: { withFold: boolean; withCard?: boolean }): ReactElement {
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
   const schemas = useMemo(createBoardStorySchemas, []);
@@ -184,6 +188,7 @@ function BoardFixture({ withFold }: { withFold: boolean }): ReactElement {
           }}
           placement="drawer"
           defaultView="board"
+          boardCard={withCard ? { title: "title", fields: ["priority"] } : undefined}
           laneSource={{
             field: "stage",
             rankField: "sort_order",

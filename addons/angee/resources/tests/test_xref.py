@@ -8,10 +8,10 @@ from rebac import actor_context, system_context
 
 from angee.base.identity import public_id_of
 from angee.resources.testing.models import Resource
+from angee.spaces.testing.models import Group
 from angee.testing.fixtures import composed_tables as composed_tables
 from tests.conftest import (
     Page,
-    Vault,
     create_platform_admin,
     create_user,
     make_addon,
@@ -31,21 +31,12 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
     with system_context(reason="resource ownership actors"):
         caller = create_user("resource-caller")
         previous_owner = create_user("resource-previous-owner")
-    vault = vault_for(previous_owner)
+    with actor_context(previous_owner):
+        target = Group.objects.create(name="Existing group", slug="resource-owned-group")
     declaration = {"path": "target.yaml"}
-    owner_field = "owner"
-    target = vault
-    fields = {"name": vault.name, "owner": "resource_ownership.caller"}
+    fields = {"name": target.name, "slug": target.slug, "owner": "resource_ownership.caller"}
     if existing_target == "adopted":
-        with actor_context(previous_owner):
-            target = Page.objects.create_in(vault, title="Existing page")
-        owner_field = "created_by"
-        fields = {
-            "title": target.title,
-            "vault": "resource_ownership.vault",
-            "created_by": "resource_ownership.caller",
-        }
-        declaration["adopt"] = ["vault", "title"]
+        declaration["adopt"] = ["slug"]
     model = type(target)
     (tmp_path / "target.yaml").write_text(
         yaml.safe_dump({"_meta": {"model": model._meta.label}, "rows": [{"xref": "target", "fields": fields}]}),
@@ -60,7 +51,7 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
         with monkeypatch.context() as patch:
             patch.setitem(apps.app_configs, addon.label, addon)
             apps.clear_cache()
-            prerequisites = {"caller": caller, "vault": vault}
+            prerequisites = {"caller": caller}
             if existing_target == "ledger":
                 prerequisites["target"] = target
             with system_context(reason="resource ownership ledger prerequisites"):
@@ -80,13 +71,12 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
             with system_context(reason="denied resource ownership remains unchanged"):
                 assert model.objects.values().get(pk=target.pk) == before_target
                 assert list(Resource.objects.order_by("pk").values()) == before_ledger
-                assert Vault.objects.count() == 1
-                assert Page.objects.count() == (existing_target == "adopted")
+                assert Group.objects.count() == 1
 
             updated = Resource.objects.load_xref(f"{addon.name}.target", model=model, actor=admin)
 
             assert updated.pk == target.pk
-            assert getattr(updated, f"{owner_field}_id") == caller.pk
+            assert updated.owner_id == caller.pk
             assert updated.with_actor(caller).has_access("write")
             assert Resource.objects.count() == len(before_ledger) + (existing_target == "adopted")
             assert Resource.objects.get(xref="target").target_id == public_id_of(target)
@@ -95,8 +85,8 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
 
 
 @pytest.mark.usefixtures("composed_tables")
-def test_load_xref_requires_create_even_when_imported_owner_can_write(tmp_path, monkeypatch):
-    """A new row's declared ownership cannot bypass its parent's create policy."""
+def test_load_xref_requires_vault_create_access_for_new_pages(tmp_path, monkeypatch):
+    """Imported attribution cannot bypass the parent-owned page create policy."""
     caller = create_user("resource-new-caller")
     previous_owner = create_user("resource-new-owner")
     vault = vault_for(previous_owner)

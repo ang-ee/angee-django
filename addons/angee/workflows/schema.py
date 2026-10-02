@@ -107,10 +107,9 @@ class WorkflowRunType(RecordReferenceNode):
         run = cast(Any, self)
         evidence = read_scoped_queryset(WorkflowRunEvidence, request_from_info(info).user)
         readable: set[tuple[str, str]] = set()
-        if evidence is not None:
-            for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
-                if row._angee_record_readable:
-                    readable.add((row.record_model_label.lower(), row.record_public_id))
+        for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
+            if row._angee_record_readable:
+                readable.add((row.record_model_label.lower(), row.record_public_id))
         return run.policy_version.definition.redacted_input(run.input, readable)
     output: JSON
     outcome: auto
@@ -211,15 +210,15 @@ class StepRunType(AngeeNode):
 class DecisionGroupWorkflowExtension:
     """Expose the unique waiting execution through its own read permission."""
 
-    step_run: StepRunType | None = actor_scoped_to_one("step_run", reverse=True)
+    step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
 
 @strawberry_django.type(Decision, name="DecisionType", extend=True)
 class DecisionWorkflowExtension:
     """Project execution display fields through every related owner's read scope."""
 
-    workflow_name: str | None
-    node_key: str | None
+    workflow_name: str | None = strawberry_django.field(annotate=F("workflow_name"))
+    node_key: str | None = strawberry_django.field(annotate=F("node_key"))
 
 
 @strawberry_django.type(StepAttempt)
@@ -328,8 +327,6 @@ class TriggerType(AngeeNode):
             if model is None or not model._meta.managed:
                 continue
             visible = read_scoped_queryset(model, actor)
-            if visible is None:
-                continue
             ids = [str(row.resource_id) for row in rows if row.resource_type == resource_type]
             for target in visible.filter(pk__in=ids):
                 labels[(resource_type, str(target.pk))] = record_display_label(target)
@@ -354,7 +351,7 @@ class TriggerEventType(RecordReferenceNode):
     """Durable admission evidence with a started run until that run is pruned."""
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
-    started_run: WorkflowRunType | None = actor_scoped_to_one("started_run", reverse=True)
+    started_run: WorkflowRunType | None = actor_scoped_to_one("started_run")
     changed_at: auto
     evaluated_at: auto
     admitted_at: auto

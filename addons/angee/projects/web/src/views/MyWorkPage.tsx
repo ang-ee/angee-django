@@ -6,7 +6,7 @@ import {
   PageHeader,
   SectionEyebrow,
   formatDateStorage,
-  useRouteHref,
+  useResourceRecordHref,
   useRuntimeAuth,
 } from "@angee/ui";
 import * as React from "react";
@@ -19,7 +19,7 @@ import { useTaskRowActions, type TaskActionRow } from "../task-actions";
 export function MyWorkPage(): React.ReactElement {
   const t = useProjectsT();
   const auth = useRuntimeAuth();
-  const routeHref = useRouteHref();
+  const recordHref = useResourceRecordHref(TASK_MODEL);
   const taskActions = useTaskRowActions<TaskActionRow>();
   const window = React.useMemo(activityWindow, []);
   const taskFilter = auth.user
@@ -41,7 +41,7 @@ export function MyWorkPage(): React.ReactElement {
             baseFilter={taskFilter}
             order={{ due_date: "ASC", sort_order: "ASC" }}
             rowActions={taskActions}
-            rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+            rowHref={recordHref ? (row) => recordHref(row.id, row) ?? "" : undefined}
             emptyContent={t("myWork.empty.tasks")}
           >
             <Column field="title" />

@@ -7,13 +7,13 @@ import type {
 } from "@angee/metadata";
 import { isDateField, rowValueAtPath, resourceFieldPathToSnake } from "@angee/metadata";
 import { type UiTranslate } from "../../../i18n";
-import { RelativeTime } from "../../../fragments/RelativeTime";
 import { enumValueLabel, groupFieldLabel, statusLabel } from "../../../lib/labels";
 import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
 import { Chip } from "../../../ui/chip";
+import { dateFromUnknown, formatDate, formatDateTime } from "../../../widgets/date-format";
+import { canonicalOptionValue } from "../../../widgets/types";
 import { RecordReference } from "../../relation/RecordReference";
-import { dateFromUnknown } from "../../../widgets/date-format";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
 import type { GroupMeasure } from "./types";
@@ -50,12 +50,18 @@ export function cellContent<TRow extends Row>(
   }
   const labelPath = queryField?.relation?.labelPath;
   const value = labelPath ? rowValueAtPath(row, labelPath) ?? projected : projected;
+  const field = queryField ?? metadata?.fields[column.field];
+  const enumOptions = field?.kind === "enum"
+    ? field.values?.map((item) => ({ value: item.value, label: enumValueLabel(item) }))
+    : undefined;
+  const enumValue = enumOptions?.find((item) => item.value === canonicalOptionValue(enumOptions, value));
   const tone = columnTone(column, value);
   if (tone) {
     const label = value == null ? "" : String(value);
-    return <Badge tone={tone}>{label ? statusLabel(label) : "-"}</Badge>;
+    return <Badge tone={tone}>{enumValue?.label ?? (label ? statusLabel(label) : "—")}</Badge>;
   }
   if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
     return (
       <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
         {value.map((item, index) => (
@@ -66,14 +72,16 @@ export function cellContent<TRow extends Row>(
       </span>
     );
   }
-  const field = queryField ?? metadata?.fields[column.field];
-  const enumValue = field?.kind === "enum" ? field.values?.find((item) => item.value === value) : undefined;
-  if (enumValue) return enumValueLabel(enumValue);
+  if (enumValue) return enumValue.label;
   const date = isDateField(field, column.field)
     ? dateFromUnknown(value)
     : null;
-  if (date) return <RelativeTime value={date} />;
+  if (date) return <CompactDate value={date} />;
   return displayValue(value, t);
+}
+
+function CompactDate({ value }: { value: Date }): React.ReactElement {
+  return <time dateTime={value.toISOString()} title={formatDateTime(value)} className="tabular-nums">{formatDate(value)}</time>;
 }
 
 export function renderCell<TRow extends Row>(
@@ -217,7 +225,7 @@ function formatMeasureValue(value: unknown): string {
 }
 
 function displayValue(value: unknown, t: UiTranslate): React.ReactNode {
-  if (value == null) return "";
+  if (value == null || value === "") return "—";
   if (typeof value === "boolean") return t(value ? "list.yes" : "list.no");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);

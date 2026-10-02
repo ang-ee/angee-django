@@ -28,8 +28,8 @@ export function UsersPage(): React.ReactElement {
         <Field name="last_name" />
       </Group>
       <Group label={t("users.group.access")} columns={2}>
-        <Field name="is_staff" />
-        <Field name="is_active" />
+        <Field name="is_staff" editOnly />
+        <Field name="is_active" editOnly />
       </Group>
       {/* Write-only: set on create, hashed server-side; password reset is separate. */}
       <Field name="password" widget="text" kind="string" createOnly />
@@ -69,7 +69,7 @@ export function UsersPage(): React.ReactElement {
       resource={MODEL}
       placement="inline"
       routed
-      returning={["assignment_subject"]}
+      returning={["can_issue_password"]}
       recordTabs={[accessTab]}
     >
       {userList}

@@ -58,6 +58,8 @@ def bind_actor(instance: models.Model, actor: Any | None) -> None:
 def aggregate_scoped_queryset(queryset: models.QuerySet[_ModelT]) -> models.QuerySet[_ModelT]:
     """Return the aggregate-safe scoped queryset for a REBAC model."""
 
+    if queryset.query.is_empty():
+        return queryset
     if requires_angee_rebac_contract(queryset.model):
         return cast(models.QuerySet[_ModelT], cast(Any, queryset).scoped_for_aggregate())
     if _is_angee_model(queryset.model):
@@ -73,18 +75,23 @@ def read_scoped_queryset(
     actor: Any | None,
     *,
     action: str = "read",
-) -> models.QuerySet[_ModelT] | None:
-    """Return a queryset scoped to ``actor`` for models with a REBAC row policy."""
+) -> models.QuerySet[_ModelT]:
+    """Return readable rows; an absent actor cannot read protected models.
 
-    if not model_resource_type(model) or actor is None:
-        return None
-    if _is_angee_model(model):
-        manager = cast(Any, model._default_manager)
-        return cast(models.QuerySet[_ModelT], manager.with_actor(actor).with_action(action))
+    Models without row policy retain their default queryset. Protected models
+    without an actor or a scoping manager return an empty queryset.
+    """
+
     manager = model._default_manager
+    if not model_resource_type(model):
+        return manager.all()
+    if actor is None:
+        return model._base_manager.none()
+    if _is_angee_model(model):
+        return cast(models.QuerySet[_ModelT], cast(Any, manager).with_actor(actor).with_action(action))
     with_actor = getattr(manager, "with_actor", None)
     if not callable(with_actor):
-        return None
+        return model._base_manager.none()
     queryset = with_actor(actor)
     with_action = getattr(queryset, "with_action", None)
     return cast(models.QuerySet[_ModelT], with_action(action) if callable(with_action) else queryset)

@@ -3,17 +3,18 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";
 import { type BaseMenuItem } from "@angee/ui";
-import type { ChatterViewContext } from "@angee/ui/runtime";
+import type { ChatterContribution, ChatterViewContext } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { enMessagingMessages } from "./i18n";
-import { channelForm } from "./ChannelsPage";
-import { messageForm } from "./MessagesPage";
+import { channelForm } from "./ChannelForm";
+import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
+import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
 import {
   RECORD_UNREAD_COUNT_MODELS,
@@ -21,7 +22,8 @@ import {
 } from "./documents";
 
 export { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
-export { CHANNEL_MODEL } from "./documents";
+export { CHANNEL_MODEL, LogRecordActivityDocument } from "./documents";
+export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
 export {
   ActivityAgendaList,
   type ActivityAgendaListProps,
@@ -57,6 +59,14 @@ export {
   type RecordThreadConversationChrome,
 } from "./RecordThreadConversation";
 export {
+  RecordThreadStream,
+  type RecordThreadStreamProps,
+  type RecordThreadStreamSource,
+  type StreamChildItem,
+  type StreamCreateAction,
+  type StreamSectionHeading,
+} from "./RecordThreadStream";
+export {
   ThreadTranscript,
   type ThreadTranscriptProps,
   type TranscriptOrder,
@@ -75,7 +85,22 @@ const messagingMenu: readonly BaseMenuItem[] = [
   },
 ];
 
-const messaging = defineBaseAddon({
+export interface MessagingAddonOptions {
+  /** Composer shortcut for this app's built-in Comments tab. */
+  submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
+}
+
+/** The shared Comments tab, configurable without constructing another addon. */
+export function recordCommentsContribution({ id = "comments", submitKey = "enter" }: MessagingAddonOptions & { id?: string } = {}): ChatterContribution {
+  return {
+    id, sequence: 10, label: "Comments", icon: "comments",
+    useCount: useRecordCommentsUnread,
+    render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+  };
+}
+
+/** Configure messaging's app contribution through the existing addon manifest. */
+export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOptions = {}) => defineBaseAddon({
   id: "messaging",
   routes: [
     {
@@ -99,14 +124,7 @@ const messaging = defineBaseAddon({
   i18n: { messaging: enMessagingMessages },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   chatter: [
-    {
-      id: "comments",
-      sequence: 10,
-      label: "Comments",
-      icon: "comments",
-      useCount: useRecordCommentsUnread,
-      render: (context) => <RecordChatterPane context={context} />,
-    },
+    recordCommentsContribution({ submitKey }),
     {
       id: "activity",
       sequence: 20,
@@ -131,6 +149,8 @@ const messaging = defineBaseAddon({
     },
   ],
 });
+
+const messaging = defineMessagingAddon();
 
 function useRecordCommentsUnread(
   context: ChatterViewContext,

@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { cn } from "../lib/cn";
 import { useFileDropTarget } from "../lib/dnd";
+import { useRuntimeViewAs } from "../runtime";
 
 export interface UploadDropTargetProps
   extends Omit<React.HTMLAttributes<HTMLDivElement>, "onDrop"> {
@@ -23,7 +24,7 @@ export const UploadDropTarget = React.forwardRef<
   {
     children,
     className,
-    disabled = false,
+    disabled: declaredDisabled = false,
     overlay,
     overlayClassName,
     onFiles,
@@ -31,6 +32,8 @@ export const UploadDropTarget = React.forwardRef<
   },
   ref,
 ) {
+  const preview = useRuntimeViewAs();
+  const disabled = declaredDisabled || Boolean(preview.viewAs || preview.pending);
   const { isOver, dropProps } = useFileDropTarget({
     disabled,
     onDrop: (files) => onFiles(files),

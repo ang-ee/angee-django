@@ -771,7 +771,7 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.18.2" },
+    { name = "django-zed-rebac", specifier = ">=0.25.0" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
@@ -792,7 +792,7 @@ addons = [
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-countries", specifier = ">=9,<10" },
     { name = "django-import-export", specifier = ">=4.4" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.18.2" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.25.0" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
@@ -992,14 +992,14 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.18.2"
+version = "0.25.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/9b/1186b75aa5288797a23fe6c6ea036d91ada9035428a3a4cf4c57e80e2bbd/django_zed_rebac-0.18.2.tar.gz", hash = "sha256:c3db42b85f39b06b37651db3b295e87ca91aedc07d53c32a31bae2491301ec20", size = 325263, upload-time = "2026-09-22T16:28:07.312Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/e0/91cd33bf0f92ae39348d750082433b61dc989cbb83ea333823291362a0aa/django_zed_rebac-0.25.0.tar.gz", hash = "sha256:ab3030bf9ca019cc94f06126e3ae7abdac3d8ba5e652f97304e66eafa1b0a0cb", size = 562102, upload-time = "2026-10-02T07:01:32.376Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/d9/d032bcf544e72095506e3da41faf64d03196ce2feff0905d30581aa757e9/django_zed_rebac-0.18.2-py3-none-any.whl", hash = "sha256:983b248609be2f560f8fc77820e5c2df7866ed3e8237cc8bf1b70be35efd8479", size = 213546, upload-time = "2026-09-22T16:28:05.796Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/65/334a0e790c283bf8e3bea856d3654845e140a1bc5237e52e2455eff01ed8/django_zed_rebac-0.25.0-py3-none-any.whl", hash = "sha256:ea1bf09c8d8bf13e2ca9b8e9bd34a2e246d98c3ac73a84290edfeb71cf58608b", size = 297726, upload-time = "2026-10-02T07:01:30.976Z" },
 ]
 
 [package.optional-dependencies]

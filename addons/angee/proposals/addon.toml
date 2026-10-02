@@ -1,12 +1,17 @@
 [addon]
 name = "angee.proposals"
-description = "PM-backed solicitation rounds with sealed proposals, comparison, and review."
+description = "Project-backed solicitation rounds with sealed proposals, comparison, and review."
 keywords = ["proposals", "solicitation", "competition", "comparison", "review"]
 category = "Productivity"
 depends_on = [
+  "angee.graphql",
+  "angee.iam",
+  "angee.messaging",
   "angee.money",
   "angee.parties",
   "angee.projects",
+  "angee.spaces",
+  "angee.storage",
 ]
 
 [resources]

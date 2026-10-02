@@ -48,7 +48,7 @@ function noteForm(t: NotesT): React.ReactElement {
   return (
     <Form resource={MODEL}>
       <Field name="title" widget="text" title />
-      <Field name="status" widget="statusbar" />
+      <Field name="status" widget="statusbar" status />
       <Group label={t("form.details")} columns={2}>
         <Field
           name="created_by_label"

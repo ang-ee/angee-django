@@ -10,6 +10,7 @@ import type {
   LiveProvider,
   MetaQuery,
 } from "@refinedev/core";
+import { resourceMutationMeta, type ResourceMutationOperations, type ResourceMutationTarget } from "./operations";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   graphQLWebSocketUrl,
@@ -22,13 +23,14 @@ import {
   stringValue,
 } from "./dialect/wire";
 import {
+  catchUpAuthoredQueries,
   createAuthoredLiveInvalidation,
-  invalidateAuthoredQueries,
+  retainedAuthoredQueryHashes,
   type AuthoredLiveChange,
 } from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
-type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
+export type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
 const noopSubscription = () => undefined;
 
 export const ANGEE_HASURA_PROVIDER_OPTIONS = {
@@ -47,6 +49,8 @@ export interface AngeeHasuraClientOptions {
 export interface AngeeHasuraDataProviderOptions
   extends AngeeHasuraClientOptions {
   providerOptions?: HasuraDataProviderOptions;
+  /** Root-argument capabilities keyed by the provider's list resource name. */
+  mutations?: Readonly<Record<string, ResourceMutationOperations>>;
 }
 
 export type AngeeHasuraWebSocketOptions =
@@ -108,6 +112,27 @@ export function createAngeeHasuraDataProvider(
     getList: (params) => provider.getList({ ...params, meta: readSelection(params.meta) }),
     getOne: (params) => provider.getOne({ ...params, meta: readSelection(params.meta) }),
     getMany: (params) => provider.getMany({ ...params, meta: readSelection(params.meta) }),
+    create: (params) => provider.create({ ...params, meta: mutationSelection(
+      "create", params.resource, options.mutations?.[params.resource]?.create, params.meta,
+    ) }),
+    update: (params) => provider.update({ ...params, meta: mutationSelection(
+      "update", params.resource, options.mutations?.[params.resource]?.update, params.meta, params.id,
+    ) }),
+  };
+}
+
+function mutationSelection(
+  kind: "create" | "update",
+  resource: string,
+  target: ResourceMutationTarget | undefined,
+  meta: MetaQuery | undefined,
+  id?: string | number,
+): MetaQuery | undefined {
+  if (!target?.arguments.length || meta?.gqlMutation || meta?.gqlQuery) return meta;
+  const variables = recordValue(meta?.gqlVariables) ?? {};
+  return {
+    ...meta,
+    ...resourceMutationMeta(kind, resource, target, meta?.fields ?? ["id"], variables, id),
   };
 }
 
@@ -167,6 +192,7 @@ export function publicGraphQLError(value: unknown): PublicGraphQLError | null {
 
 export function isPublicGraphQLErrorCode(code: unknown): boolean {
   return code === "VALIDATION" || code === "BAD_USER_INPUT"
+    || code === "STALE_REVISION" || code === "CREATION_KEY_CONFLICT" || code === "VIEW_AS_READ_ONLY"
     || code === "UNAUTHENTICATED" || code === "PERMISSION_DENIED" || code === "FORBIDDEN";
 }
 
@@ -207,7 +233,7 @@ export function createAngeeHasuraDataProviders(
 
 export function createAngeeHasuraLiveProvider(
   options: AngeeHasuraLiveProviderOptions,
-): LiveProvider {
+): AngeeChangeLiveProvider {
   const wsClient = graphqlWS.createClient({
     ...options.clientOptions,
     url: options.clientOptions?.url
@@ -225,16 +251,22 @@ type ChangeConsumer = (data: unknown) => void;
 
 interface ChangeSubscription {
   dispose: () => void;
+  start: () => void;
   consumers: Set<ChangeConsumer>;
 }
 
-type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries">;
+export interface AngeeChangeLiveProvider extends LiveProvider {
+  /** Retain mounted consumers while closing all upstream change subscriptions. */
+  setEnabled: (enabled: boolean) => void;
+}
+
+type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">;
 
 export function createAngeeChangeLiveProvider(
-  client: GraphQLWsClient,
+  client: Pick<GraphQLWsClient, "subscribe" | "on">,
   resources: readonly AngeeLiveResource[],
   options: { queryClient?: AuthoredQueryInvalidationClient } = {},
-): LiveProvider {
+): AngeeChangeLiveProvider {
   const resourcesByList = resourcesByListRoot(resources);
   const resourcesByModel = resourcesByModelLabel(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
@@ -243,6 +275,11 @@ export function createAngeeChangeLiveProvider(
   // label) alike — and tear the socket subscription down only when the last
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
+  let enabled = true;
+  let hasConnected = false;
+  let catchUpAfterEnable = false;
+  let startedSubscriptions = 0;
+  let retainedBeforeIdleReopen: Set<string> | undefined;
   let stopConnectionListener: () => void = noopSubscription;
   const liveInvalidation = options.queryClient
     ? createAuthoredLiveInvalidation(options.queryClient)
@@ -252,6 +289,8 @@ export function createAngeeChangeLiveProvider(
     if (subscriptions.size === 0) {
       stopConnectionListener();
       stopConnectionListener = noopSubscription;
+      retainedBeforeIdleReopen = undefined;
+      catchUpAfterEnable = false;
     }
   }
 
@@ -270,44 +309,77 @@ export function createAngeeChangeLiveProvider(
     };
     const entry = subscriptions.get(changesRoot) ?? {
       dispose: noopSubscription,
+      start: noopSubscription,
       consumers: new Set<ChangeConsumer>(),
     };
     entry.consumers.add(consumer);
     if (!subscriptions.has(changesRoot)) {
       if (subscriptions.size === 0) {
-        // Changes have no replay cursor. Every new socket connection must catch
-        // up native authored reads, including rows retained outside the head.
-        stopConnectionListener = client.on("connected", () => {
+        // Changes have no replay cursor. Catch-up is owed for retained reads
+        // when subscriptions resume after a gap, not for a page's first socket
+        // connection while its initial reads are still loading. An initial
+        // connection also closes the gap between HTTP and subscribing, but
+        // leaving first loads in flight accepts a possible stale first response.
+        stopConnectionListener = client.on("connected", (_socket, _payload, wasRetry) => {
+          const reconnect = hasConnected || wasRetry || catchUpAfterEnable;
+          hasConnected = true;
+          catchUpAfterEnable = false;
+          const retainedAtStart = retainedBeforeIdleReopen;
+          retainedBeforeIdleReopen = undefined;
+          if (!enabled || !reconnect) return;
           const models = resources
             .filter((resource) => subscriptions.has(resource.roots.changes ?? ""))
             .map((resource) => resource.modelLabel);
-          if (options.queryClient) void invalidateAuthoredQueries(options.queryClient, models);
+          if (options.queryClient) void catchUpAuthoredQueries(
+            options.queryClient, models, wasRetry ? undefined : retainedAtStart, wasRetry,
+          );
         });
       }
       subscriptions.set(changesRoot, entry);
-      entry.dispose = client.subscribe(
-        { query: changeSubscriptionDocument(changesRoot) },
-        {
-          next: (result) => {
-            // One upstream result is one change, however many consumers share it.
-            liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
-            entry.consumers.forEach((c) => c(result.data));
+      entry.start = () => {
+        if (startedSubscriptions === 0 && hasConnected && !catchUpAfterEnable && options.queryClient) {
+          retainedBeforeIdleReopen = retainedAuthoredQueryHashes(
+            options.queryClient,
+            resources.filter((candidate) => candidate.roots.changes).map((candidate) => candidate.modelLabel),
+          );
+        }
+        // Ignore late deliveries from a disposed subscription, even after resume.
+        let active = true;
+        const dispose = client.subscribe(
+          { query: changeSubscriptionDocument(changesRoot) },
+          {
+            next: (result) => {
+              if (!active || !enabled) return;
+              // One upstream result is one change, however many consumers share it.
+              liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
+              entry.consumers.forEach((c) => c(result.data));
+            },
+            error: (error) => {
+              if (!active) return;
+              console.error(
+                "Angee live subscription failed; the next subscriber will reconnect.",
+                { changesRoot, model: resource.modelLabel },
+                error,
+              );
+              if (subscriptions.get(changesRoot) === entry) {
+                entry.dispose();
+                subscriptions.delete(changesRoot);
+                stopUnusedConnectionListener();
+              }
+            },
+            complete: () => undefined,
           },
-          error: (error) => {
-            console.error(
-              "Angee live subscription failed; the next subscriber will reconnect.",
-              { changesRoot, model: resource.modelLabel },
-              error,
-            );
-            if (subscriptions.get(changesRoot) === entry) {
-              entry.dispose();
-              subscriptions.delete(changesRoot);
-              stopUnusedConnectionListener();
-            }
-          },
-          complete: () => undefined,
-        },
-      );
+        );
+        startedSubscriptions++;
+        entry.dispose = () => {
+          if (active) {
+            active = false;
+            startedSubscriptions--;
+            dispose();
+          }
+        };
+      };
+      if (enabled) entry.start();
     }
     return () => {
       entry.consumers.delete(consumer);
@@ -320,6 +392,17 @@ export function createAngeeChangeLiveProvider(
   }
 
   return {
+    setEnabled(next) {
+      if (next === enabled) return;
+      enabled = next;
+      retainedBeforeIdleReopen = undefined;
+      if (!enabled) liveInvalidation?.clear();
+      else catchUpAfterEnable = true;
+      subscriptions.forEach((entry) => {
+        if (enabled) entry.start();
+        else entry.dispose();
+      });
+    },
     subscribe({ channel, callback, params }) {
       const targets = changeTargetsFromSubscribeParams(
         params,

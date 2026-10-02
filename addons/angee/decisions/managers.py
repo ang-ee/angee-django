@@ -14,7 +14,9 @@ from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, ExpressionWrapper, F, Q
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Now
-from rebac import current_actor, system_context, to_subject_ref
+from rebac import current_actor, system_context, to_object_ref, to_subject_ref
+from rebac.actors import is_sudo
+from rebac.backends import backend
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import readable_records
@@ -159,14 +161,20 @@ class _Admission:
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
     """Admit immutable questions and orchestrate group-owned final transitions."""
 
+    def _admission_issuer(self, actor: Any) -> Any:
+        """Resolve admission authority before entering a transition's system context."""
+        if actor is None and not is_sudo():
+            raise PermissionDenied("System decision admission requires a named system context.")
+        return _user(actor) if actor is not None else None
+
     def admit_group(self, requests: Sequence[DecisionRequest], *, actor: Any, policy: str = "first") -> Any:
-        """Admit all seats atomically, checking standing grants without creating any."""
-        issuer = _user(actor)
+        """Admit seats; delegated assignment requires an explicit system context."""
+        issuer = self._admission_issuer(actor)
         group_model = self.model._meta.get_field("group").related_model
         group_model._meta.get_field("policy").resolve_class(policy)
         if not requests:
             raise ValidationError("A decision group needs at least one seat.")
-        prepared = [_Admission(request, tuple(_user(person, active=False) for person in request.assignees),
+        prepared = [_Admission(request, tuple(_user(person, active=False) for person in request.assignees or ()),
                      compile_form(request.actions, initial=request.initial, refine=request.refine),
                      canonical_record_target(request.subject) if request.subject is not None else (None, None))
                     for request in requests]
@@ -180,31 +188,36 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         Admission rechecks standing evidence permissions. Frozen forms, basis,
         requester and assignees stay unchanged even when action code changes.
         """
-        issuer = _user(actor)
+        issuer = self._admission_issuer(actor)
         group_model = self.model._meta.get_field("group").related_model
         with group_model.objects.hold(group_id) as group:
             group.require_access("read", issuer)
             if group.settled_at is None:
                 raise ValidationError("Only a settled group can be asked again.")
             prepared = []
-            for decision in lock_if_supported(group.decisions.order_by("index"), no_key=True):
+            for decision in lock_if_supported(group.decisions.order_by("index").prefetch_related("assignees"),
+                                              no_key=True):
                 decision.require_access("read", issuer)
                 offered = decision.form_schema["properties"]["action"]["enum"]
                 request = DecisionRequest(
                     kind=decision.kind, subject=decision.subject,
-                    assignees=tuple(decision.assignees.all()), requester=decision.requester,
+                    assignees=None if decision.is_delegated else tuple(decision.assignees.all()),
+                    requester=decision.requester,
                     actions=tuple(action for action in actions if action.key in offered), basis=decision.basis,
                     context=DecisionContext.model_validate(decision.context), supersede=decision.supersede,
                     max_attempts=decision.max_attempts, errors=errors,
                 )
                 prepared.append(_Admission(
-                    request, tuple(_user(person, active=False) for person in request.assignees), decision.form_schema,
+                    request, tuple(_user(person, active=False) for person in request.assignees or ()),
+                    decision.form_schema,
                     (decision.subject_content_type, decision.subject_object_id),
                     expires_after=(decision.expires_at - decision.created_at if decision.expires_at else None),
                 ))
             return self._admit_group(prepared, issuer=issuer, policy=group.policy, reasked_from=group)
 
     def _admit_group(self, prepared: list[_Admission], *, issuer: Any, policy: str, reasked_from: Any = None) -> Any:
+        if issuer is not None and any(item.request.assignees is None for item in prepared):
+            raise ValidationError("Delegated assignment requires system admission.")
         group_model = self.model._meta.get_field("group").related_model
         identities = {(item.request.kind, *item.subject) for item in prepared if item.request.supersede}
         for identity in identities:
@@ -240,14 +253,14 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     "A superseding question was admitted concurrently; retry admission.",
                 ) from error
             raise
-        return group.with_actor(issuer)
+        return group.with_actor(issuer) if issuer is not None else group
 
     def _prepare_evidence(self, prepared: list[_Admission], issuer: Any) -> list[tuple[Any, Any]]:
         """Require standing evidence access for issuer, assignees, and requester."""
         retained = {}
         for item in prepared:
             request = item.request
-            participants = (issuer, *item.assignees)
+            participants = (*((issuer,) if issuer is not None else ()), *item.assignees)
             if request.requester is not None and request.requester is not DEFAULT_REQUESTER:
                 participants += (_user(request.requester),)
             refs = list(request.context.records())
@@ -255,8 +268,13 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 refs.append(DecisionRecordReference(
                     model=request.subject._meta.label, id=public_id_of(request.subject),
                 ))
-            records = readable_records(tuple(refs), participants)
-            for candidate in relation_candidates(item.schema):
+            if not participants and request.context.records():
+                raise ValidationError("Retained evidence requires explicit participants.")
+            choices = relation_candidates(item.schema)
+            if not participants and choices:
+                raise ValidationError("Relation choices require explicit participants.")
+            records = readable_records(tuple(refs), participants) if participants else []
+            for candidate in choices:
                 candidates = tuple(DecisionRecordReference(model=candidate.model, id=value) for value in candidate.ids)
                 readable_records(candidates, participants, permission=candidate.permission)
             context_refs = {(ref.model.lower(), ref.id) for ref in request.context.records()}
@@ -305,7 +323,13 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         decision.assignees.set(item.assignees)
         if self.filter(pk=decision.pk).due().exists():
             raise ValidationError({"expires_at": "A decision deadline must be in the future."})
-        if not any(decision.with_actor(person).has_access("act") for person in item.assignees):
+        if request.assignees is None:
+            eligible = backend().lookup_subjects(
+                resource=to_object_ref(decision), action="eligible", subject_type="auth/user",
+            )
+            if not any(eligible):
+                raise ValidationError({"assignees": "Every delegated seat needs a current actor who can act."})
+        elif not any(decision.with_actor(person).has_access("act") for person in item.assignees):
             raise ValidationError({"assignees": "Every seat needs an assignee who can act."})
         evidence_model = apps.get_model("decisions", "DecisionEvidence")
         evidence_model.objects.bulk_create([
@@ -337,7 +361,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         error = None
         with self.hold(decision_id) as (group, decision):
             decision.require_access("act", resolver)
-            if not decision.is_pending or decision.revision != revision or group.settled_at is not None:
+            decision.require_revision(revision)
+            if not decision.is_pending or group.settled_at is not None:
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             target = self.filter(pk=decision.pk)
             if target.due().close(ClosedReason.EXPIRED):

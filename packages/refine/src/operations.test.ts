@@ -104,6 +104,7 @@ describe("Hasura custom operations", () => {
       target("documents_save"),
       {
         pk: "doc_1",
+        expected_revision: 3,
         patch: { note: "confirmed" },
         lines: [
           { id: "ln_1", label: "Keep", quantity: 3, position: 0 },
@@ -117,6 +118,7 @@ describe("Hasura custom operations", () => {
     expect(request.root).toBe("documents_save");
     expect(request.meta.gqlVariables).toEqual({
       pk: "doc_1",
+      expected_revision: 3,
       patch: { note: "confirmed" },
       lines: [
         { id: "ln_1", label: "Keep", quantity: 3, position: 0 },

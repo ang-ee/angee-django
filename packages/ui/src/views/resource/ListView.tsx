@@ -8,6 +8,8 @@ export type {
 } from "./resource-view-list-body";
 export type {
   BoardLaneSource,
+  BoardCardSpec,
+  ListChrome,
   CalendarViewSpec,
   CardActionContext,
   ListEmptyAction,

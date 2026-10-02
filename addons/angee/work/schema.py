@@ -8,15 +8,27 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import F
+from rebac import system_context, to_subject_ref
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
+from angee.base.identity import public_subject_ref
+from angee.graphql.actions import (
+    ActionResult,
+    ActionSelectionInput,
+    action_guard,
+    authorized_action_target,
+    authorized_permission_target,
+    many_actions,
+)
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_public_id
+from angee.iam.identity import user_label, user_public_id
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 
@@ -24,6 +36,11 @@ Queue = apps.get_model("work", "Queue")
 Stage = apps.get_model("work", "Stage")
 Cycle = apps.get_model("work", "Cycle")
 Task = apps.get_model("projects", "Task")
+Project = apps.get_model("projects", "Project")
+User = apps.get_model("iam", "User")
+Membership = apps.get_model("spaces", "Membership")
+Person = apps.get_model("parties", "Person")
+Milestone = apps.get_model("projects", "Milestone")
 
 
 @strawberry_django.type(Queue)
@@ -36,6 +53,7 @@ class WorkQueueType(AngeeNode):
     visibility: auto
     key: auto
     triage_enabled: auto
+    provision_stages: auto
     cycles_enabled: auto
     cycle_weeks: auto
     cycle_cooldown_weeks: auto
@@ -48,6 +66,7 @@ class WorkQueueType(AngeeNode):
     auto_close_months: auto
     created_at: auto
     updated_at: auto
+    permissions = permissions_field(("read", "write", "share"))
 
     parent: SpaceGroupType | None = actor_scoped_to_one("parent")
     default_stage: "WorkStageType | None" = actor_scoped_to_one("default_stage")
@@ -61,6 +80,9 @@ class WorkStageType(AngeeNode):
     tone: auto
     position: auto
     category: auto
+    rule_owned: auto
+    conceals: auto
+    on_path: bool = strawberry_django.field(only=["conceals", "category"])
     created_at: auto
     updated_at: auto
 
@@ -88,6 +110,27 @@ class WorkCycleType(AngeeNode):
         return cast(Any, self).display_name
 
 
+@strawberry_django.type(Project, name="ProjectType", extend=True)
+class ProjectWorkExtension:
+    """Expose the optional team through the shared relation redaction owner."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
+
+
+@strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
+class ConsoleProjectWorkExtension:
+    """Contribute the optional team to the console project node."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
+
+
+@strawberry_django.type(Milestone, name="MilestoneType", extend=True)
+class MilestoneWorkExtension:
+    """Expose the phase's rule stage through the shared relation redaction owner."""
+
+    active_stage: WorkStageType | None = actor_scoped_to_one("active_stage")
+
+
 @strawberry_django.type(Task, name="TaskType", extend=True)
 class TaskWorkExtension:
     """Contribute work columns onto projects' existing task node."""
@@ -101,6 +144,12 @@ class TaskWorkExtension:
     queue: WorkQueueType | None = actor_scoped_to_one("queue")
     stage: WorkStageType | None = actor_scoped_to_one("stage")
     cycle: WorkCycleType | None = actor_scoped_to_one("cycle")
+
+    @strawberry_django.field(annotate={"_stage_name": F("stage__name")})
+    def stage_name(self) -> str | None:
+        """Expose a readable task's status label without granting its queue."""
+
+        return cast(Any, self)._stage_name
 
     @strawberry_django.field(only=["snoozed_by_id"])
     def snoozed_by(self) -> strawberry.ID | None:
@@ -129,6 +178,8 @@ class ConsoleTaskWorkExtension:
     stage: WorkStageType | None = actor_scoped_to_one("stage")
     cycle: WorkCycleType | None = actor_scoped_to_one("cycle")
 
+    stage_name = TaskWorkExtension.__dict__["stage_name"]
+
     @strawberry_django.field(only=["snoozed_by_id"])
     def snoozed_by(self) -> strawberry.ID | None:
         """Return the snoozing user's public id without exposing auth/user."""
@@ -142,38 +193,182 @@ class ConsoleTaskWorkExtension:
         return cast(Any, self).work_key
 
 
+@strawberry.input(name="ProjectSetupInput", extend=True)
+class ProjectWorkSetupInput:
+    """Work contributes the project team without coupling projects to work."""
+
+    team: PublicID = strawberry.field(metadata={InputReference: InputReference("spaces.Group")})
+
+
+@strawberry.input(name="ProjectMilestoneSetupInput", extend=True)
+class MilestoneWorkSetupInput:
+    """Work contributes the stage mapping to the typed milestone template."""
+
+    active_stage: PublicID | None = strawberry.field(
+        default=None, metadata={InputReference: InputReference("work.Stage")},
+    )
+
+
+@action_guard("Accept task failed.")
+def accept_task(
+    info: strawberry.Info,
+    task: PublicID,
+    stage: PublicID | None = None,
+    expected_revision: int | None = None,
+) -> ActionResult:
+    """Accept one writable triage task into its selected/default stage."""
+
+    target = authorized_action_target(info, Task, task, "write")
+    target_stage = None if stage is None else authorized_permission_target(info, Stage, stage, "read")
+    target.accept(target_stage, expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
+
+@action_guard("Decline task failed.")
+def decline_task(
+    info: strawberry.Info,
+    task: PublicID,
+    reason: DroppedReason,
+    expected_revision: int | None = None,
+) -> ActionResult:
+    """Decline one writable triage task for a closed reason."""
+
+    target = authorized_action_target(info, Task, task, "write")
+    target.decline(reason, expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task declined.", id=target.sqid)
+
+@action_guard("Remove task failed.")
+def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int) -> ActionResult:
+    """Conceal a writable task through its stage owner."""
+
+    target = authorized_permission_target(info, Task, task, "write")
+    target.remove(expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task removed.", id=target.sqid)
+
+
+@strawberry.type
+class ProjectManagerPersonType:
+    """One account holding the project's team moderator seat."""
+
+    subject: str
+    label: str
+    seat_id: PublicID
+    removable: bool
+
+
+@strawberry.type
+class ProjectManagerRosterType:
+    """The manager seats and admission offer under the same roster policy."""
+
+    offered: bool
+    people: list[ProjectManagerPersonType]
+
+
+@strawberry.type
+class WorkPeopleQuery:
+    """Project team managers, derived from the live spaces roster."""
+
+    @strawberry.field
+    def project_manager_roster(self, info: strawberry.Info, project: PublicID) -> ProjectManagerRosterType:
+        """List only person accounts on the project's current team."""
+
+        target = authorized_permission_target(info, Project, project, "read")
+        if target.team_id is None:
+            return ProjectManagerRosterType(offered=False, people=[])
+        offered = target.has_access("share") and (
+            Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
+        )
+        with system_context(reason="work.project.manager_roster"):
+            seats = list(Membership._base_manager.filter(
+                group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
+                is_confirmed=True, is_dismissed=False,
+            ).order_by("pk")[:100])
+            people = {
+                person.pk: person.user for person in Person._base_manager.filter(
+                    pk__in=[seat.party_id for seat in seats], user__kind="person",
+                ).select_related("user")
+            }
+        return ProjectManagerRosterType(offered=offered, people=[
+            ProjectManagerPersonType(
+                subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))),
+                label=user_label(people[seat.party_id]), seat_id=seat.sqid, removable=offered,
+            )
+            for seat in seats if seat.party_id in people
+        ])
+
+
 @strawberry.type
 class WorkActionMutation:
     """Row-authorized task triage and cycle lifecycle actions."""
 
     @strawberry.mutation
-    @action_guard("Accept task failed.")
-    def accept_task(
-        self,
-        info: strawberry.Info,
-        task: PublicID,
-        stage: PublicID | None = None,
-    ) -> ActionResult:
-        """Accept one writable triage task into its selected/default stage."""
+    @action_guard("Project manager admission failed.")
+    def admit_project_manager(self, info: strawberry.Info, project: PublicID, user: PublicID) -> ActionResult:
+        """Use the team's roster verb and follow the project atomically."""
 
-        target = authorized_action_target(info, Task, task, "write")
-        target_stage = None if stage is None else authorized_action_target(info, Stage, stage, "read")
-        target.accept(target_stage)
-        return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
+        target = authorized_permission_target(info, Project, project, "share")
+        account = authorized_permission_target(info, User, user, "read")
+        target.admit_manager(account)
+        return ActionResult(ok=True, message="Project manager admitted.", id=target.sqid)
 
     @strawberry.mutation
-    @action_guard("Decline task failed.")
-    def decline_task(
-        self,
-        info: strawberry.Info,
-        task: PublicID,
-        reason: DroppedReason,
-    ) -> ActionResult:
-        """Decline one writable triage task for a closed reason."""
+    @action_guard("Project manager removal failed.")
+    def remove_project_manager(self, info: strawberry.Info, project: PublicID, seat: PublicID) -> ActionResult:
+        """Dismiss the selected moderator seat on this project's team."""
 
-        target = authorized_action_target(info, Task, task, "write")
-        target.decline(reason)
-        return ActionResult(ok=True, message="Task declined.", id=target.sqid)
+        target = authorized_permission_target(info, Project, project, "share")
+        membership = authorized_action_target(info, Membership, seat, "write")
+        target.remove_manager(membership)
+        return ActionResult(ok=True, message="Project manager removed.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Start task failed.")
+    def start_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Start one writable queued task."""
+
+        target = authorized_action_target(info, Task, id, "write")
+        target.start()
+        return ActionResult(ok=True, message="Task started.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Return task to triage failed.")
+    def return_task_to_triage(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Return one writable task to its queue's triage stage."""
+
+        target = authorized_action_target(info, Task, id, "write")
+        target.return_to_triage()
+        return ActionResult(ok=True, message="Task returned to triage.", id=target.sqid)
+
+    accept_task = strawberry.mutation(resolver=accept_task)
+
+    decline_task = strawberry.mutation(resolver=decline_task)
+
+    remove_task = strawberry.mutation(resolver=remove_task)
+
+    @strawberry.mutation
+    def accept_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Accept selected tasks; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: accept_task(
+            info, item.id, expected_revision=item.expected_revision,
+        ))
+
+    @strawberry.mutation
+    def decline_tasks(
+        self, info: strawberry.Info, selection: list[ActionSelectionInput], reason: DroppedReason,
+    ) -> list[ActionResult]:
+        """Decline selected tasks; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: decline_task(
+            info, item.id, reason, expected_revision=item.expected_revision,
+        ))
+
+    @strawberry.mutation
+    def remove_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Conceal selected tasks; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: remove_task(
+            info, item.id, item.expected_revision,
+        ))
 
     @strawberry.mutation
     @action_guard("Snooze task failed.")
@@ -250,6 +445,7 @@ _QUEUE_RESOURCE = hasura_model_resource(
         "parent",
         "key",
         "triage_enabled",
+        "provision_stages",
         "cycles_enabled",
         "cycle_weeks",
         "cycle_cooldown_weeks",
@@ -306,14 +502,16 @@ _STAGE_RESOURCE = hasura_model_resource(
         "tone",
         "position",
         "category",
+        "rule_owned",
+        "conceals",
         "created_at",
         "updated_at",
     ],
     sortable=["queue", "position", "name", "created_at", "updated_at"],
     aggregatable=["id", "position"],
     groupable=["queue", "tone", "category"],
-    insertable=["queue", "name", "tone", "position", "category"],
-    updatable=["name", "tone", "position", "category"],
+    insertable=["queue", "name", "tone", "position", "category", "rule_owned", "conceals"],
+    updatable=["name", "tone", "position", "category", "rule_owned", "conceals"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
     write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )
@@ -354,15 +552,17 @@ _CYCLE_RESOURCE = hasura_model_resource(
 _RESOURCE_TYPES = [*_QUEUE_RESOURCE.types, *_STAGE_RESOURCE.types, *_CYCLE_RESOURCE.types]
 
 _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
-    "query": [_QUEUE_RESOURCE.query, _STAGE_RESOURCE.query, _CYCLE_RESOURCE.query],
+    "query": [WorkPeopleQuery, _QUEUE_RESOURCE.query, _STAGE_RESOURCE.query, _CYCLE_RESOURCE.query],
     "mutation": [
         WorkActionMutation,
         _QUEUE_RESOURCE.mutation,
         _STAGE_RESOURCE.mutation,
         _CYCLE_RESOURCE.mutation,
     ],
-    "types": [WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
-    "type_extensions": [TaskWorkExtension],
+    "types": [ProjectManagerPersonType, ProjectManagerRosterType,
+              WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
+    "input_extensions": [ProjectWorkSetupInput, MilestoneWorkSetupInput],
+    "type_extensions": [TaskWorkExtension, ProjectWorkExtension, MilestoneWorkExtension],
 }
 
 schemas = {
@@ -372,6 +572,7 @@ schemas = {
         "type_extensions": [
             *_WORK_SCHEMA_BUCKET["type_extensions"],
             ConsoleTaskWorkExtension,
+            ConsoleProjectWorkExtension,
         ],
         "subscription": [
             changes(Queue, field="workQueueChanged"),

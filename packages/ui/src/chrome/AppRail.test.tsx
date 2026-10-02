@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -9,13 +9,14 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../runtime";
 import { AppRail } from "./AppRail";
-import type { ChromeMenuItem } from "./menu-tree";
+import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 
 const media = vi.hoisted(() => ({ large: false }));
+afterEach(() => cleanup());
 
 vi.mock("../lib/use-media-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/use-media-query")>()),
@@ -51,6 +52,36 @@ const menuItems: readonly ChromeMenuItem[] = [
 ];
 
 describe("AppRail intermediate navigation", () => {
+  test("uses the supplied confined tree and retains shortcuts inside its root", async () => {
+    media.large = true;
+    const confined = MenuTree.from(menuItems).confineTo("projects");
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/projects",
+        component: () => <AppRuntimeProvider runtime={{
+          confineTo: "projects",
+          userPreferences: {
+            available: true,
+            preferences: { "chrome.routeShortcuts": [
+              { id: "project-1", label: "Saved project", path: "/projects/all/1" },
+              { id: "note-1", label: "Saved note", path: "/notes/all/1" },
+            ] },
+            patchPreferences: async () => undefined,
+          },
+        }}>
+          <AppRail menuItems={confined.roots} presentation="drawer" />
+        </AppRuntimeProvider>,
+      })]),
+      history: createMemoryHistory({ initialEntries: ["/projects"] }),
+    });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByRole("link", { name: "Saved project" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Saved note" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
+  });
+
   test("opens submenu navigation without changing desktop preferences", async () => {
     media.large = false;
     const openNavigation = vi.fn();

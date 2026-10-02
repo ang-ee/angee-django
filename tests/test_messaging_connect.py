@@ -15,8 +15,8 @@ from angee.integrate.constants import RUN_SESSION_TASK
 from angee.integrate.live import PairingState, session_store_path
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.messaging import connect
+from angee.messaging.testing.models import Channel, Message
 from tests.conftest import Vendor, make_integration
-from tests.messaging_models import Channel, Message
 from tests.pairing_backend import FakePairingBackend
 
 pytest_plugins = ("tests.test_messaging_pairing_graphql",)

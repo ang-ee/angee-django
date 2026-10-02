@@ -11,6 +11,7 @@ import pytest
 import reversion
 from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from fastmcp import Context, FastMCP
@@ -44,7 +45,6 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
-import tests.test_agents_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.agents import grants as grants_module
 from angee.agents import provisioning
 from angee.agents.grants import (
@@ -55,6 +55,12 @@ from angee.agents.grants import (
     tool_grant_ref,
 )
 from angee.agents.models import ToolRole
+from angee.agents.testing.models import (
+    Agent,
+    AgentSession,
+    MCPServer,
+    MCPTool,
+)
 from angee.agents_runtime_pydantic import toolsets as toolsets_module
 from angee.agents_runtime_pydantic.runner import _BINARY_CONTENT_OMITTED, _without_binary_content
 from angee.agents_runtime_pydantic.toolsets import (
@@ -68,13 +74,8 @@ from angee.agents_runtime_pydantic.toolsets import (
 from angee.base.mixins import AuditMixin
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
-from tests.test_agents_graphql import (
-    Agent,
-    AgentSession,
-    MCPServer,
-    MCPTool,
-    User,
-)
+
+User = get_user_model()
 
 
 @reversion.register(fields=("label",))

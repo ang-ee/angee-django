@@ -27,9 +27,11 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.db import DatabaseError, transaction
-from rebac.models import active_relationship_model
+from django.db import DatabaseError
+from rebac import schema_changes, system_context
+from rebac.models import PackageManagedRecord, active_relationship_model
 from rebac.schema import resolve_schema_path
+from rebac.schema.parser import parse_zed, validate_schema
 
 # A managed record's ``external_id`` is ``<kind>:<name>``; only schema rows are ours
 # to prune (the library also manages relationship rows under other prefixes).
@@ -48,11 +50,9 @@ def reconcile_permission_schema() -> int:
 
     Idempotent and best-effort: returns the number of stale managed rows pruned,
     and is a no-op on a fresh/unmigrated database (no ``Schema*`` tables yet). Runs
-    under ``system_context`` in one transaction.
+    under ``system_context`` in the library's policy-write transaction, which
+    serializes schema changes and validates the resulting policy once.
     """
-
-    from rebac import system_context
-    from rebac.models import PackageManagedRecord
 
     composed = {app_config.name for app_config in apps.get_app_configs()}
     current_external_ids = _current_schema_external_ids_by_package()
@@ -67,13 +67,13 @@ def reconcile_permission_schema() -> int:
     if not stale:
         return 0
 
-    with system_context(reason="angee.platform.reconcile_permission_schema"), transaction.atomic():
-        _delete_stale_relationships(stale)
+    with system_context(reason="angee.platform.reconcile_permission_schema"), schema_changes():
         for record in sorted(stale, key=_prune_key):
             target = record.target
             if target is not None:
                 target.delete()
             record.delete()
+        _delete_stale_relationships(stale)
     return len(stale)
 
 
@@ -84,8 +84,6 @@ def _current_schema_external_ids_by_package() -> dict[str, set[str]]:
     still source-owned. Parse and validate every current declaration before deleting
     anything; an invalid schema must fail loudly rather than drive a destructive prune.
     """
-
-    from rebac.schema.parser import parse_zed, validate_schema
 
     current: dict[str, set[str]] = {}
     seen_definitions: dict[str, str] = {}

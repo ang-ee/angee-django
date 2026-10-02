@@ -65,7 +65,7 @@ function displayColumns<TRow extends Row>(
   options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
   return columns.map((column) => ({
-    id: column.field,
+    id: column.id ?? column.field,
     accessorFn: (row) => readPath(row, column.field),
     enableSorting:
       column.sortable !== false &&

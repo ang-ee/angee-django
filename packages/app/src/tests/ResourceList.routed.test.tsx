@@ -7,7 +7,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
   } from "@testing-library/react";
 import {
   Outlet,
@@ -361,7 +360,7 @@ describe("ResourceList", () => {
         </div>
       );
 
-      render(
+      const rendered = render(
         <TestRecordRoutes
           initialPath="/notes"
           onUrlUpdate={(url) => updates.push(url)}
@@ -382,17 +381,14 @@ describe("ResourceList", () => {
       );
       expect(await screen.findByDisplayValue("Second")).toBeTruthy();
 
-      const switcher = await screen.findByRole("group", {
-        name: "Record view switcher",
-      });
-      fireEvent.click(
-        within(switcher).getByRole("button", { name: "Board view" }),
+      expect(screen.queryByRole("group", { name: "Record view switcher" })).toBeNull();
+      rendered.unmount();
+      render(
+        <TestRecordRoutes initialPath="/notes" onUrlUpdate={(url) => updates.push(url)}>
+          <ResourceList resource="notes.Note" columns={columns} formFields={formFields}
+            list={CapturingList} routed />
+        </TestRecordRoutes>,
       );
-      await waitFor(() => {
-        const latest = updates.at(-1);
-        expect(latest?.pathname).toBe("/notes");
-        expect(latest?.searchParams.get("view")).toBe("board");
-      });
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Create routed record" }),

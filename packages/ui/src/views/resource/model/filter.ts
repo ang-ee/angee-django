@@ -1,4 +1,4 @@
-import type { SortingState } from "@tanstack/react-table";
+import type { SortingState, VisibilityState } from "@tanstack/react-table";
 import type { FilterOperator, FilterPrimitive, FilterValue, GroupSpec, QueryFilter } from "@angee/metadata";
 import type { CalendarViewMode, ResourceViewKind, ResourceViewOrderDirection, ResourceViewSortDirection } from "./capabilities";
 
@@ -21,6 +21,8 @@ export interface ResourceViewSort {
 export type ResourceViewDefaultGroups = Partial<Record<ResourceViewKind, GroupSpec | null>>;
 
 export interface ResourceViewInitialState {
+  preset?: string;
+  columnVisibility?: VisibilityState;
   page?: number;
   pageSize?: number;
   sort?: ResourceViewSort | null;

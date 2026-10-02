@@ -1,4 +1,4 @@
-import type { PaginationState, RowSelectionState, SortingState } from "@tanstack/react-table";
+import type { PaginationState, RowSelectionState, SortingState, VisibilityState } from "@tanstack/react-table";
 import type { ResourceQuery } from "@angee/metadata";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
 import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
@@ -7,6 +7,8 @@ import { normalisePageSize } from "../page-size";
 
 /** Native table state plus the Angee view facts carried by router search. */
 export interface ResourceViewState {
+  preset?: string;
+  columnVisibility: VisibilityState;
   pagination: PaginationState;
   /** Absent inherits a declaration; an empty native state explicitly clears it. */
   sorting?: SortingState;
@@ -27,6 +29,8 @@ export interface ResourceViewState {
 export function createResourceViewState(initial: ResourceViewInitialState = {}): ResourceViewState {
   const groupStack = normaliseGroupStack(initial.groupStack ?? (initial.group ? [initial.group] : []));
   return {
+    ...(initial.preset ? { preset: initial.preset } : {}),
+    columnVisibility: initial.columnVisibility ?? {},
     pagination: {
       pageIndex: Math.max(0, Number.isFinite(initial.page) ? Math.floor(initial.page!) - 1 : 0),
       pageSize: normalisePageSize(initial.pageSize ?? DEFAULT_RESOURCE_VIEW_PAGE_SIZE),

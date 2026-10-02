@@ -30,7 +30,7 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
     ...Object.fromEntries([
       "id", "kind", "kind_label", "subject_model", "subject_id", "requester.display_name",
       "assignees", "requester", "closed_reason", "expires_at", "group", "group.id",
-      "resolved_by", "resolved_at", "resolved_by.display_name", "revision", "can_act", "form_schema", "basis", "context", "resolution",
+      "resolved_by", "resolved_at", "resolved_by.display_name", "revision", "permissions", "form_schema", "basis", "context", "resolution",
     ].map((name) => [name, testQueryField(name)])),
     id: testQueryField("id", { filter: { field: "id", scalar: "String", values: [], operators: ["exact", "ne", "inList"] } }),
     assignees: testQueryField("assignees", { kind: "list", scalar: null, row: null }),
@@ -39,6 +39,9 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
     created_at: testQueryField("created_at", { sort: { field: "created_at" } }),
     is_open: testQueryField("is_open", { scalar: "Boolean", nullable: false,
       filter: { field: "is_open", scalar: "Boolean", values: [], operators: ["exact"] },
+    }),
+    can_act: testQueryField("can_act", { scalar: "Boolean", nullable: false,
+      filter: { field: "can_act", scalar: "Boolean", values: [], operators: ["exact"] },
     }),
   } }),
 });
@@ -53,7 +56,7 @@ export const decisionUserFixture = testDataResource("iam.User", {
 /** Frozen neutral question shared by decision page, slot, and story fixtures. */
 export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
   return {
-    id: "dcn_review", kind: "review", revision: 3, is_open: true, can_act: true,
+    id: "dcn_review", kind: "review", revision: 3, is_open: true, permissions: ["act"],
     form_schema: {
       $schema: "https://json-schema.org/draft/2020-12/schema", type: "object",
       properties: { action: { type: "string", enum: ["accept", "reject"], options: [

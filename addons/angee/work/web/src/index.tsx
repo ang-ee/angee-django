@@ -6,6 +6,9 @@ import {
 import {
   formViewRecordActionsSlot,
   formViewSectionsSlot,
+  Field,
+  FormView,
+  Group,
   type BaseMenuItem,
 } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
@@ -17,12 +20,16 @@ import {
   GitBranch,
   Inbox,
   Kanban,
+  Play,
   XCircle,
 } from "lucide-react";
-import { TASK_MODEL } from "@angee/projects";
+import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { ShareAccessRailGroup } from "@angee/iam";
 
+import { ProjectManagerAccessRole } from "./access-role";
 import { enWorkMessages } from "./i18n";
 import { QUEUE_MODEL } from "./resources";
+import { StageStatusbar } from "./stage-statusbar";
 import { taskWorkFormSection } from "./task-work";
 import { TriageRecordActions } from "./triage-actions";
 
@@ -143,7 +150,17 @@ const work = defineBaseAddon({
   routes: workRoutes,
   menus: workMenu,
   i18n: { work: enWorkMessages },
+  widgets: { "work.stage": { read: StageStatusbar, edit: StageStatusbar } },
   slots: [
+    { slot: "access.roles", model: PROJECT_MODEL, id: "work.manager", content: ProjectManagerAccessRole },
+    { ...FormView.railSlot(PROJECT_MODEL), id: "work.people-rail", sequence: 40,
+      content: ShareAccessRailGroup },
+    {
+      ...formViewSectionsSlot(PROJECT_MODEL),
+      id: "work.project-team",
+      sequence: 40,
+      content: <Group><Field name="team" /></Group>,
+    },
     {
       ...formViewSectionsSlot(TASK_MODEL),
       id: "work.task-fields",
@@ -162,6 +179,7 @@ const work = defineBaseAddon({
     "work-board": Kanban,
     "work-cycle": CalendarClock,
     "work-triage": Inbox,
+    "work-start": Play,
     "work-accept": CheckCircle2,
     "work-decline": XCircle,
     "work-snooze": CalendarClock,
@@ -172,4 +190,5 @@ const work = defineBaseAddon({
 
 export { estimateLabel } from "./estimates";
 export { CYCLE_MODEL, QUEUE_MODEL, STAGE_MODEL } from "./resources";
+export { useQueueRecordTabs } from "./queue-record-tabs";
 export default work;

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button, SectionEyebrow, cn } from "@angee/ui";
+import { Button, SectionEyebrow, cn, useRuntimeViewAs } from "@angee/ui";
 import type { StorageUpload, UploadTask } from "../data/use-upload";
 
 type Translate = (key: string) => string;
@@ -19,6 +19,7 @@ export function StorageUploadTasks({ uploads, t }: { uploads: StorageUpload; t: 
 }
 
 function StorageUploadTaskRow({ task, t, onRetry }: { task: UploadTask; t: Translate; onRetry?: () => void }): React.ReactElement {
+  const preview = useRuntimeViewAs();
   return (
     <div className="flex items-center gap-2 text-13">
       <span className="min-w-0 flex-1 truncate text-fg">{task.name}</span>
@@ -29,7 +30,7 @@ function StorageUploadTaskRow({ task, t, onRetry }: { task: UploadTask; t: Trans
         {t(`upload.status.${task.status}`)}
       </span>
       {task.status === "failed" && onRetry ? (
-        <Button type="button" size="sm" variant="ghost" onClick={onRetry}>{t("upload.retry")}</Button>
+        <Button type="button" size="sm" variant="ghost" disabled={Boolean(preview.viewAs || preview.pending)} onClick={onRetry}>{t("upload.retry")}</Button>
       ) : null}
     </div>
   );

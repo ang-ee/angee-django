@@ -22,8 +22,8 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
+from angee.messaging.testing.models import Message
 from tests.conftest import make_integration
-from tests.test_messaging import Message
 from tests.test_messaging_graphql import Channel
 
 

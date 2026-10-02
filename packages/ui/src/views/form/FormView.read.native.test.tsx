@@ -40,10 +40,10 @@ test("a missing record replaces loading with the shared empty state and never mo
   let resolve!: (response: { data: Row | null }) => void;
   const getOne = vi.fn(() => new Promise<{ data: Row | null }>((done) => { resolve = done; }));
   const f = fixture(getOne);
-  expect(await screen.findByRole("status")).toBeTruthy();
+  expect((await screen.findAllByRole("status")).length).toBeGreaterThan(0);
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   await act(async () => { resolve({ data: null }); });
-  expect(await screen.findByRole("heading", { name: "Record not found" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Record unavailable" })).toBeTruthy();
   expect(screen.queryByRole("textbox")).toBeNull();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   expect(screen.queryByRole("tab")).toBeNull();

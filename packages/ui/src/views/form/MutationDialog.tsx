@@ -15,6 +15,8 @@ import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } fr
 import { applyFormErrors, formSubmitError, invalidFormSubmit, type FormSubmitResult, type ValidationErrors } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
 import { ActionFormProvider } from "./ActionFormProvider";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 export {
   LabeledDescriptorField,
@@ -181,6 +183,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
 }): React.ReactElement {
   const t = useUiT();
   const toast = useToast();
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const previewBlockedRef = useLatestRef(previewBlocked);
   const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<Record<string, unknown>>({
     defaultValues: initialDialogValues(fields, initialValues),
@@ -240,7 +245,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         type="submit"
         variant="primary"
         size="sm"
-        disabled={!ready || submitting}
+        disabled={!ready || submitting || previewBlocked}
         loading={submitting}
         loadingText={submittingLabel ?? submitLabel}
       >
@@ -257,7 +262,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   };
 
   const submitReady = form.handleSubmit(async (collected) => {
-    if (submittingRef.current) return;
+    if (submittingRef.current || previewBlockedRef.current) return;
     submittingRef.current = true;
     const submittedSession = session.current;
     form.clearErrors();

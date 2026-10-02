@@ -11,6 +11,34 @@ dependencies = [
   "django-anymail>=15.1",
 ]
 
+[resources]
+master = [{ path = "resources/master/010_messaging.activitytype.yaml", adopt = "key" }]
+
+[[migrations]]
+name = "follower_party"
+app_label = "messaging"
+module = "runtime_migrations.follower_party"
+
+[[migrations]]
+name = "notification_read_at"
+app_label = "messaging"
+module = "runtime_migrations.notification_read_at"
+
+[[migrations]]
+name = "owner_column"
+app_label = "messaging"
+module = "runtime_migrations.owner_column"
+
+[[migrations]]
+name = "channel_ownerless"
+app_label = "messaging"
+module = "runtime_migrations.channel_ownerless"
+
+[[migrations]]
+name = "activity_type_key"
+app_label = "messaging"
+module = "runtime_migrations.activity_type_key"
+
 [[migrations]]
 name = "channel_sync_status"
 app_label = "messaging"

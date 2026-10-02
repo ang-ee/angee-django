@@ -8,7 +8,7 @@ import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, Self, TypeVar, cast
+from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -26,15 +26,16 @@ from rebac import (
 )
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
-from rebac.managers import RebacManager, RebacQuerySet
+from rebac.managers import RebacManager, RebacQuerySet, TrackedQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
+from angee.base.actors import instance_actor
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
-from angee.base.scoping import lock_if_supported
+from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.tiers import ResourceTier
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -46,38 +47,6 @@ class DirectRecordAccess:
 
     relation: str
     subject: SubjectRef
-
-
-class _AngeeQuerySetMixin(Generic[_ModelT]):
-    """Query conveniences shared by scoped and explicitly unscoped managers."""
-
-    model: type[_ModelT]
-
-    def from_public_id(self, value: str) -> _ModelT | None:
-        """Return the row addressed by ``value`` within this queryset policy."""
-
-        if value == "":
-            return None
-        try:
-            lookup = cast(Any, self.model).public_id_lookup(value)
-            return cast(_ModelT | None, cast(Any, self).filter(**lookup).first())
-        except TypeError, ValueError:
-            return None
-
-    def lock_if_supported(
-        self, *, of: tuple[str, ...] = ("self",), skip_locked: bool = False, no_key: bool = False
-    ) -> Self:
-        """Expose shared lock intent on Angee querysets and managers."""
-
-        return cast(
-            Self,
-            lock_if_supported(cast(models.QuerySet[_ModelT], self), of=of, skip_locked=skip_locked, no_key=no_key),
-        )
-
-    def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
-        """Return one row under a database row lock when the backend supports it."""
-
-        return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
 
 
 class AngeeQuerySet(
@@ -101,16 +70,26 @@ class AngeeQuerySet(
         """
 
         actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self.none()
+        readable = self.with_actor(actor).scoped() if actor is not None else self
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
         scalar = models.Subquery(readable.values(field)[:1])
+        if actor is None:
+            return models.Value(default, output_field=output_field or scalar.output_field)
         if default is None:
             return scalar
         return Coalesce(
             scalar,
             models.Value(default),
             output_field=output_field or scalar.output_field,
+        )
+
+    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression:
+        """Count a correlated actor-scoped row set, returning zero when empty."""
+
+        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
+        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
+            "_count", actor=actor, default=0, output_field=models.IntegerField(),
         )
 
     def keyset_page(
@@ -200,12 +179,13 @@ class AngeeQuerySet(
 
 class AngeeUnscopedQuerySet(
     _AngeeQuerySetMixin[_ModelT],
-    models.QuerySet[_ModelT],
+    TrackedQuerySet[_ModelT],
 ):
     """Angee queryset API for intentionally permission-naive managers.
 
     Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics.
+    whose unfiltered relation reads must retain native Django semantics. It
+    composes the library's tracked writes required by a declared base manager.
     """
 
     def scoped_for_aggregate(self) -> Self:
@@ -413,6 +393,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         permission = declaration_owner.record_access_permission(relation)
         self.require_access(permission)
+        self.validate_record_access_subject(relation, subject)
         write_relationships(
             [
                 RelationshipTuple(
@@ -496,16 +477,26 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return None
 
+    def validate_record_access_subject(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Validate the record's invariant before a grant, assignment, or admission.
+
+        Overrides call ``super()`` first and raise
+        :class:`angee.base.errors.RecordAccessSubjectRefused` to refuse a holder.
+        The default accepts every subject. This hook decides no visibility and
+        is never asked when revoking access or clearing ownership.
+        """
+
+        return None
+
     def require_access(self, permission: str, actor: Any = None) -> Any:
-        """Authorize and return the explicit, ambient, or pinned actor, in that order.
+        """Authorize and return the explicit, pinned, or ambient actor, in that order.
 
         The resolved requester is retained as the instance binding. Missing actors
         are denied in every strict mode unless an explicit sudo scope is active.
         A concrete requester always clears instance sudo and scopes the check.
         """
 
-        actor = actor if actor is not None else current_actor()
-        actor = actor if actor is not None else self.actor()
+        actor = actor or instance_actor(self)
         if actor is None:
             if self.is_sudo() or is_sudo():
                 return None
@@ -525,9 +516,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
         this does not authorize reading or writing model records.
         """
         return False
-
-    # Remove after downstream callers have migrated to the public owner.
-    _require_record_access = require_access
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:

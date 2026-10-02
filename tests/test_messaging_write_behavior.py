@@ -15,32 +15,38 @@ from rebac import system_context
 import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.publishing import mute_changes
 from angee.messaging import delivery
-from tests.messaging_models import Message, TrackingValue
+from angee.messaging.testing.models import Message, TrackingValue
 from tests.test_messaging import channel as channel
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("tracked", [False, True])
 def test_content_edit_validation_reads_tracking(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, tracked: bool
+    composed_tables: None,
+    django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
+    tracked: bool,
 ) -> None:
-    """Content edit validation reads tracking."""
+    """The edit and delete predicates consume the same SQL projection for free."""
     with system_context(reason="messaging edit validation setup"), mute_changes():
         message = Message.objects.create(direction=Message.Direction.INTERNAL, message_type=Message.MessageKind.COMMENT)
         if tracked:
             TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
-    with system_context(reason="messaging edit validation"):
+        message = Message.objects.annotate(
+            _has_tracking_values=Message.has_tracking_values_expression(),
+        ).get(pk=message.pk)
+    with django_assert_num_queries(0):
         assert message.content_edit_error() == ("Messages with tracking values cannot be edited." if tracked else None)
+        assert message.delete_error() == ("Messages with tracking values cannot be deleted." if tracked else None)
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
-def test_content_edit_validation_reuses_prefetched_tracking(
+def test_content_edit_validation_rechecks_tracking_after_prefetch(
     composed_tables: None,
     django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
     prefetched: bool,
 ) -> None:
-    """Native prefetch avoids another query; uncached validation reads tracking."""
+    """Stale or actor-scoped prefetches cannot hide immutable tracking values."""
     with system_context(reason="messaging prefetched tracking setup"), mute_changes():
         message = Message.objects.create(
             direction=Message.Direction.INTERNAL,
@@ -50,10 +56,9 @@ def test_content_edit_validation_reuses_prefetched_tracking(
             message = Message.objects.prefetch_related("tracking_values").get(pk=message.pk)
         TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
     with system_context(reason="messaging prefetched tracking validation"):
-        with django_assert_num_queries(0 if prefetched else 1):
-            assert message.content_edit_error() == (
-                None if prefetched else "Messages with tracking values cannot be edited."
-            )
+        # The system queryset audits its use, then checks the authoritative rows.
+        with django_assert_num_queries(2):
+            assert message.content_edit_error() == "Messages with tracking values cannot be edited."
 
 
 @pytest.mark.django_db(transaction=True)

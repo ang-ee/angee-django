@@ -368,6 +368,8 @@ def test_retained_rows_reject_instance_and_collection_mutation(evidence):
             with pytest.raises((ValidationError, ValueError)):
                 row.delete()
             for manager in (type(row).objects, type(row)._base_manager):
+                with pytest.raises(ValueError, match="only be inserted by its retention owner"):
+                    manager.bulk_create([])
                 with pytest.raises(ValidationError):
                     manager.filter(pk=row.pk).update(pk=row.pk)
                 with pytest.raises(ValidationError):

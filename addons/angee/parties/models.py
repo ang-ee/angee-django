@@ -701,7 +701,6 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
             queryset = read_scoped_queryset(model, actor)
             if (
                 public_id
-                and queryset is not None
                 and instance_from_public_id(model, public_id, queryset=queryset) is not None
             ):
                 visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
@@ -817,7 +816,7 @@ class AddressManager(AngeeManager):
                 if conflict == "raise":
                     raise ValidationError({"address": "A different address already exists for this party."})
                 is_primary = False
-            verified_actor = self.check_create({"party": (party,)})
+            verified_actor = self.check_create()
             row = self.model(
                 party=party,
                 label=" ".join(label.split()).strip()[:64],

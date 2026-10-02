@@ -10,6 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, JsonValue
+from rebac.resources import model_resource_type
 
 from angee.base.identity import instances_from_public_ids
 from angee.base.mixins import AppendOnlyModel
@@ -71,10 +72,10 @@ def readable_records(
             model = apps.get_model(label)
         except (LookupError, ValueError) as error:
             raise ValidationError({"context": "Unknown referenced model."}) from error
+        if not model_resource_type(model):
+            raise PermissionDenied("Referenced records require a standing permission.")
         for actor in actors:
             scoped = read_scoped_queryset(model, actor, action=permission)
-            if scoped is None:
-                raise PermissionDenied("Referenced records require a standing permission.")
             found = instances_from_public_ids(model, ids, queryset=scoped)
             if set(found) != ids:
                 raise PermissionDenied("Every participant requires the declared permission on every referenced record.")

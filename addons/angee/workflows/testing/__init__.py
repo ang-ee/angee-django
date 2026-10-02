@@ -13,7 +13,7 @@ settings and serving code must not depend on this test support.
 
 Pytest suites opt into ``angee.workflows.testing.fixtures`` alongside
 ``angee.testing.fixtures``. ``capture_tasks`` captures task sends; ``execution``
-also supplies an acting administrator. ``workflow_permissions`` lives in core
+also supplies an acting administrator. ``composed_permissions`` lives in core
 ``angee.testing.fixtures`` and composes installed permission contributions.
 ``observe(model)`` collects committed change publications. ``trigger_source(model)``
 temporarily enables a model's declared ``RecordChangedOptIn``; the model must

@@ -169,7 +169,6 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 "id": node_id,
                 "kind": "party",
                 "title": str(party.display_name),
-                "detail": f"{party.handle_count} handles",
                 "meta": {
                     "model": (
                         "parties.Organization"
@@ -179,9 +178,12 @@ class TieQuerySet(AngeeQuerySet[Any]):
                         else "parties.Party"
                     ),
                     "record_id": node_id,
-                    "handle_count": int(party.handle_count),
                 },
             }
+            handle_count = party.handle_count
+            if handle_count is not None:
+                nodes[node_id]["detail"] = f"{handle_count} handles"
+                nodes[node_id]["meta"]["handle_count"] = int(handle_count)
             return True
 
         if root is not None:
