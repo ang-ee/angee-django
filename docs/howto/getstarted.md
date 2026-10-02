@@ -346,22 +346,17 @@ To run one-shot management commands against the stack host (build the runtime,
 migrate, sync permissions, load data, check GraphQL SDL), drive its `manage.py`
 through `uv` from the controlling stack root. [Checks](../checks.md#composition-and-schema)
 owns the prerequisites and ordering. To work on a change in
-isolation, create a src-style workspace — the consolidated framework source and
-optional external sources are pinned to `<stack>/<name>`, the stack's name being
-the branch namespace so stacks sharing one source cache or one fork never
-collide (shared work declares a `feature/<topic>` branch instead):
+isolation, add a Jujutsu (jj) workspace of the framework's source store under
+the stack's `workspaces/` directory. Its bookmark is named `<stack>/<name>`, the
+stack's name being the branch namespace so stacks sharing one source store or
+one fork never collide (shared work uses a `feature/<topic>` bookmark instead).
+The [workspace workflow](../../.agents/skills/angee-workspace/SKILL.md#create-workspace)
+owns the commands.
 
-```sh
-# Resolve angee_root with .agents/skills/angee-workspace/SKILL.md.
-angee --root "$angee_root" ws create my-feature --template src --input angee_ref=main
-cd "$angee_root/workspaces/my-feature"
-```
-
-This creates source worktrees. It does not create an isolated running host or
-database. `angee_ref` selects the framework slot's parent; optional external
-slots use the parents declared by the template. Preserve stack-provided
-work-state defaults unless intentionally overriding them; see the
-[workspace workflow](../../.agents/skills/angee-workspace/SKILL.md#create-workspace).
+A jj workspace is a second working copy of the source. It does not create an
+isolated running host or database: run web checks and browser verification in
+the stack's `src` workspace after merging the bookmark there. The operator does
+not manage jj yet, so do not create workspaces with `angee ws create`.
 
 ## What's needed for agents to self-build?
 

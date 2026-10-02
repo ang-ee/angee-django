@@ -17,6 +17,9 @@ names unless the CLI cannot answer.
 - Source-slot operations: `angee --root "$angee_root" ws source ...`.
 - Raw Git is for committing reviewed changes, inspecting worktrees, and the
   narrow source-cache fast-forward described below when Angee cannot expose it.
+- Jujutsu workspaces: `jj`, as described in
+  [Jujutsu Source Stores](#jujutsu-source-stores). The operator does not manage
+  them yet.
 
 Resolve the controlling stack root before any workspace or GitOps command. Run
 those commands with the resolved root explicitly, even while inside a source
@@ -24,6 +27,31 @@ checkout or target workspace. Never `git checkout` or `git switch` inside an
 Angee workspace; a workspace is pinned to its `<prefix>/<name>` branch, where
 the prefix is the stack's name (from the stack's `workspace_defaults`) unless
 the workspace declares a shared `feature/<topic>` branch explicitly.
+
+## Jujutsu Source Stores
+
+Angee development uses Jujutsu (jj). A source store is a colocated jj
+repository: the path GitOps topology reports for the source contains `.jj`.
+New workspaces are jj workspaces of that store, created and driven with `jj`.
+
+The operator does not manage jj yet. Do not create workspaces with
+`angee ws create`: it materializes git worktrees, which new work no longer
+uses. The `angee ws ...` verbs address only workspaces the operator created,
+so a jj workspace is unknown to `ws list`, `ws git`, `ws status`, `sync-base`,
+and `ws source`; inspect and operate it with `jj`. Existing operator
+workspaces, including the stack's `src`, keep the operator verbs below.
+
+A slot is a jj workspace when `<slot>/.jj` exists. In such a slot:
+
+- Write with `jj` only: commit, rebase, bookmark, push. Read-only `git` (`log`,
+  `show`, `diff`, `status`) is fine. Never `git commit`, `git checkout`,
+  `git switch`, `git reset`, or `git stash` there.
+- The working copy is a change of its own on top of its parent. No branch
+  exists until a bookmark is set; name it `<prefix>/<name>` by the namespace
+  rule above.
+- Never rewrite commits reachable from a pushed bookmark or from the parent
+  ref, and never pass `--ignore-immutable`.
+- If jj reports a stale working copy, run `jj workspace update-stale`.
 
 ## Resolve The Controlling Stack Root
 
@@ -60,7 +88,10 @@ current directory, which is rarely the stack root.
    `<name>`.
 2. Otherwise require the workspace name from the command arguments or user
    prompt.
-3. Confirm with `angee --root "$angee_root" ws git <name> --json`.
+3. Confirm with `angee --root "$angee_root" ws git <name> --json`. When the
+   operator does not know the workspace and its slot has `.jj`, it is a jj
+   workspace: confirm with `jj status` inside the slot and follow the jj
+   sections of this skill.
 4. If there is more than one git source slot, operate per slot. Match slots by
    name when pulling from another workspace.
 
@@ -116,25 +147,16 @@ For status or inspection requests, resolve the workspace and read its native
 Report per-slot paths, refs, branches, cleanliness, and upstream state. Inspection
 does not create a workspace or publish changes.
 
+For a jj workspace, read `jj -R <store-path> workspace list` and, inside the
+slot, `jj status` and `jj log -r '@ | @- | <parent-ref>@origin'`. Report the
+slot path, its parent, its bookmark if one is set, and whether that bookmark is
+pushed.
+
 ## Create Workspace
 
-Use the src workspace template unless the user names another template. Read
-`angee --root "$angee_root" ws preflight --template src` before creating to
-inspect effective inputs, including the stack's `workspace_defaults`.
-
-The private work-state is wired by stack source NAME, not by path. Preserve the
-effective `work_state_source` by omitting that flag from the create command.
-If it is non-empty, verify the named source exists in GitOps topology. If it is
-empty, the optional slot skips. Supply `--input work_state_source=<source-name>`
-only to implement an explicit choice of a declared source; supply
-`--input work_state_source=` only for an explicit opt-out. Do not substitute a
-hardcoded private source name or clear an inherited default.
-
-The framework slot takes its parent from the template's `angee_ref` input:
-
-```sh
-angee --root "$angee_root" ws create <name> --template src --input angee_ref=<parent-ref>
-```
+A new workspace is a jj workspace of the framework source's store. Resolve the
+store path from GitOps topology. If that store has no `.jj`, stop and ask the
+user; do not fall back to `angee ws create`.
 
 Choose the framework's `<parent-ref>` in this order:
 
@@ -143,26 +165,61 @@ Choose the framework's `<parent-ref>` in this order:
 3. The current framework repository branch, when outside a workspace.
 4. Ask the user; do not silently fall back to `main` when the parent is unclear.
 
-This input controls the framework slot only. Optional external slots use their
-own template refs, currently `main`; the work-state source retains its own
-branch. Do not claim all slots inherit the framework parent. If a requested
-child must include unpublished external-slot work, inspect those slots and
-integrate the requested branches using the Pull workflow after creation.
+Fetch first so the parent ref is current, then add the workspace under the
+stack's `workspaces/` directory:
 
-After creation, report:
+```sh
+jj -R <store-path> git fetch
+jj -R <store-path> workspace add --colocate \
+  --name <stack>--<name> -r <parent-ref> "$angee_root/workspaces/<name>/angee"
+```
 
-- Workspace path.
-- Per-slot branch names and parent refs from Angee state.
-- Whether `.work/` was materialized at the workspace root. A stack that keeps
-  work-state as Jujutsu workspaces leaves `work_state_source` empty and attaches
-  `.work` after creation, following the work-state repository's `AGENTS.md`.
-- `angee --root "$angee_root" ws git <name>` for the per-slot state.
-- `angee --root "$angee_root" ws status <name>` for follow-up inspection.
+- `--colocate` gives the slot its own `.git`, so git tooling and the
+  repository's checks work inside it. It needs jj 0.46 or a build that has the
+  flag.
+- `<stack>` is the stack's name, the same namespace as its branch prefix.
+- Add an external slot the same way from its own store, and only when the work
+  touches that repository.
+- Attach `.work` beside the slot by the work-state repository's `AGENTS.md`.
+- The workspace has no running host, no database, and no JS install: the
+  stack's JS install links only the `src` workspace's slots. Run focused Python
+  checks in the slot. Run web checks, codegen, and browser verification on
+  `src`, after merging the workspace's bookmark there with
+  [Pull From Another Workspace Or Ref](#pull-from-another-workspace-or-ref).
+
+Remove one with `jj -R <store-path> workspace forget <stack>--<name>`, then
+delete its directory.
+
+After creation, report the slot path, the parent ref, whether `.work` was
+attached, and that no bookmark exists until the first publish.
 
 ## Pull: Bring Changes Into Current Workspace
 
 `/pull` means "get changes into the current workspace branch." It does not
 publish, and it does not commit unrelated working-tree changes.
+
+### Pull In A jj Workspace
+
+Fetch, then move the workspace's changes onto the parent:
+
+```sh
+jj git fetch
+jj rebase -b @ -d <parent-ref>@origin
+```
+
+Rebase is the default while the workspace's changes are unpublished. Once its
+bookmark is pushed, merge instead, so published commits are not rewritten:
+
+```sh
+jj new <prefix>/<name> <parent-ref>@origin -m "Merge <parent-ref> into <prefix>/<name>"
+```
+
+Use the same merge form to bring in another workspace's bookmark or ref. jj
+records conflicts in the change instead of stopping: resolve the conflicted
+files, then `jj squash` the fix into the conflicted change. jj refuses to push a
+conflicted commit.
+
+The remaining pull sections apply to operator workspaces.
 
 ### Default Pull
 
@@ -230,6 +287,24 @@ angee --root "$angee_root" ws source merge-abort <current-workspace> <slot>
 
 `/push` means "commit the current workspace changes and publish the workspace
 branch." It does not merge into the parent branch.
+
+### Push From A jj Workspace
+
+Review the change with `jj status` and `jj diff`, then seal and publish it:
+
+```sh
+jj commit -m "<message>"
+jj bookmark set <prefix>/<name> -r @-
+jj git push -b <prefix>/<name>
+```
+
+`jj commit` takes the whole working copy; there is no staging area. Pass paths
+to `jj commit` to seal only those files, and keep generated runtime output,
+scratch artifacts, and test reports out of the change as for an operator
+workspace. The first push tracks the new bookmark. Report the change, the
+bookmark, and that `<prefix>/<name>@origin` matches it.
+
+The numbered steps below apply to operator workspaces.
 
 1. Resolve the current workspace and source slots.
 2. Inspect `angee --root "$angee_root" ws git <name> --json`, then
