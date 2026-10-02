@@ -2,7 +2,7 @@
 
 The composer emits these anchors in the runtime. The bare test runtime registers
 them from conftest so the const relations on ``operator/connection`` and
-``operator/role`` resolve, for the REBAC checks and for the index, exactly as
+``operator/role`` resolve, for REBAC checks and compiled permissions, exactly as
 they do composed. ``managed = False``: never tables, only type anchors.
 """
 

@@ -1,15 +1,15 @@
 # IAM access and credential actions
 
 The Share dialog is IAM's one-record People surface. `record_readers` lists
-named effective person readers through the REBAC reverse index after the
+named effective person readers through REBAC's subject lookup after the
 model's declared share permissions are checked. Wildcard and authenticated
 audiences have no finite person roster.
-The index returns identities, not the relation paths that granted them. Exact
+The lookup returns identities, not the relation paths that granted them. Exact
 direct grants come from `record_access`, including groups, subject types and
 each grantable relation; a reader may have more than one. A model owner
 contributes an `access.roles` component keyed by model. It registers its live
 role roster and admission/removal verbs with `useAccessRole`; IAM merges those
-rows only with the effective readers returned by the reverse index. A role
+rows only with the effective readers returned by that lookup. A role
 admission that requests a follow grants read and follows in one server
 transaction. `FormView.railSlot(model)` presents the same Share adapter in the
 record rail. Direct relation labels come from scoped resource vocabulary's

@@ -683,11 +683,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         party.require_access("read", actor)
         handle.require_access("read", actor)
         visible = read_scoped_queryset(self.model, actor)
-        readable = (
-            tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
-            if visible is not None
-            else ()
-        )
+        readable = tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
         return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
 
     def _assess_claimed_handle_authorized(

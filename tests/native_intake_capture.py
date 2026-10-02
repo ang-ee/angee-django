@@ -247,7 +247,7 @@ class IntakeAccessCase(TransactionTestCase):
         with system_context(reason="test account identity"):
             return self.Party.objects.for_user(user)
 
-    def graphql(self, query, variables, *, user=None, bucket="public"):
+    def graphql(self, query, variables, *, user=None, bucket="public", error_code=None):
         user = user or self.admin
         request = RequestFactory().post("/graphql/")
         request.user = user
@@ -261,7 +261,10 @@ class IntakeAccessCase(TransactionTestCase):
                     context_value=SimpleNamespace(request=request),
                 )
             )
-        self.assertIsNone(result.errors, result.errors)
+        if error_code is None:
+            self.assertIsNone(result.errors, result.errors)
+        else:
+            self.assertEqual([error.extensions.get("code") for error in result.errors or ()], [error_code])
         return result.data
 
     def legacy_need(self, *, confirmed=False, touched=False):
@@ -330,19 +333,17 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need._account_for_party(need.party_id).pk, self.reader.pk)
         self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
 
-    def test_stale_request_revision_is_an_in_band_conflict(self):
+    def test_stale_request_revision_preserves_the_native_conflict_code(self):
         need = self.as_user(self.need())
         revision = need.revision
         need.decide_access("deny")
-        result = self.graphql("""
+        self.graphql("""
           mutation Decide($need: ID!, $revision: Int!) {
             decide_need_access(need: $need, action: APPROVE, expected_revision: $revision) {
-              ok validation_errors
+              ok code
             }
           }
-        """, {"need": str(need.sqid), "revision": revision})["decide_need_access"]
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["validation_errors"], {"conflict": ["STALE_REVISION"]})
+        """, {"need": str(need.sqid), "revision": revision}, error_code="STALE_REVISION")
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, "rejected")
 

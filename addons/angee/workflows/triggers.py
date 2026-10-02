@@ -85,10 +85,9 @@ class TriggerGrantTarget:
         model = model_for_resource_type(self.resource.resource_type)
         if model is not None and model._meta.managed:
             visible = read_scoped_queryset(model, actor)
-            if visible is not None:
-                target = visible.filter(pk=self.resource.resource_id).first()
-                if target is not None:
-                    return record_display_label(target)
+            target = visible.filter(pk=self.resource.resource_id).first()
+            if target is not None:
+                return record_display_label(target)
         return None
 
     def target_label(self, *, actor: Any | None = None) -> str:
@@ -549,8 +548,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
                         raise ValidationError("The source model changed after this event was recorded.")
                     queryset = read_scoped_queryset(model, principal)
-                    record = (condition(queryset).filter(pk=current.record_object_id).first()
-                              if queryset is not None else None)
+                    record = condition(queryset).filter(pk=current.record_object_id).first()
                     if record is None:
                         raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
                     trigger.source_class.check_access(trigger, principal, record)

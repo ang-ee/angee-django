@@ -6,7 +6,7 @@ import dataclasses
 import types as _types
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import cache, partial
 from typing import Any
 
 import strawberry
@@ -226,9 +226,9 @@ class AngeeHasuraWriteBackend:
                 "client_creation_key": client_creation_key,
                 "creation_fingerprint": fingerprint,
             })
-            replays = read_scoped_queryset(self.model, current_actor())
-            if replays is None:
+            if not model_resource_type(self.model) or current_actor() is None:
                 raise ImproperlyConfigured("Creation-key resources require an actor-scoped queryset.")
+            replays = read_scoped_queryset(self.model, current_actor())
             instance, _created = replays.replay_or_insert(scope, client_creation_key, fingerprint, insert)
             return instance
 
@@ -583,8 +583,6 @@ class _RelationIDDecoder:
 
     def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
         queryset = read_scoped_queryset(self.model, actor)
-        if queryset is None and model_resource_type(self.model):
-            queryset = self.model._default_manager.none()
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
             value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)
@@ -783,7 +781,7 @@ def _relation_scalar_queryset(
                 expression = models.ExpressionWrapper(expression if expression is not None else models.F(path), output)
             if expression is not None:
                 alias = _relation_axis_alias(path) if field.is_relation else path
-                expressions[alias] = expression
+                expressions[alias] = _scalar_alias_expression(queryset, expression)
         return queryset.alias(**expressions) if expressions else queryset
 
     return get_queryset
@@ -861,6 +859,7 @@ def declared_hasura_write_relation_fields(model: type[models.Model]) -> tuple[st
     return tuple(name for name in fields if _is_writable_relation(model._meta.get_field(name)))
 
 
+@cache
 def _declared_aliases(
     model: type[models.Model],
 ) -> tuple[dict[str, SortAlias], dict[str, tuple[models.Expression, tuple[str, ...]]]]:
@@ -944,14 +943,22 @@ def _sortable_alias_expression(
 
 
 def with_filter_aliases(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
-    """Project declared aliases using the row queryset's actor for every guard."""
+    """Register unselected aliases; field ``annotate`` hints promote selected ones."""
     projected = {}
     for name, (expression, paths) in _declared_aliases(queryset.model)[1].items():
-        source = system_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
-        projected[name] = models.Subquery(source.annotate(
-            _angee_scalar=_sortable_alias_expression(expression, paths, None, queryset),
-        ).values("_angee_scalar")[:1])
-    return queryset.annotate(**projected) if projected else queryset
+        if name in queryset.query.annotations:
+            continue
+        projected[name] = _scalar_alias_expression(
+            queryset, _sortable_alias_expression(expression, paths, None, queryset),
+        )
+    return queryset.alias(**projected) if projected else queryset
+
+
+def _scalar_alias_expression(queryset: models.QuerySet[Any], expression: Combinable) -> models.Subquery:
+    """Keep an unused alias's related joins out of its containing row query."""
+
+    source = system_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
+    return models.Subquery(source.annotate(_angee_scalar=expression).values("_angee_scalar")[:1])
 
 
 def _public_pk(model: type[models.Model], value: Any) -> Any:
@@ -1187,10 +1194,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
             queryset = with_record_reference_access(queryset)
+        queryset = with_filter_aliases(queryset)
         aliases: dict[str, models.Expression] = {}
         for name, expression in expressions.items():
             if name in model_filter_aliases:
-                expression = _sortable_alias_expression(expression, model_filter_aliases[name][1], None, queryset)
+                continue
             if record_ref_requires_read and name in (record_ref_filters or ()):
                 expression = models.Case(
                     models.When(_angee_record_readable=True, then=expression),
@@ -1202,7 +1210,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     source_read_queryset, source_aggregate = read_queryset, aggregate_source
 
     def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return with_filter_aliases(prepare_filters(source_read_queryset(info)))
+        return prepare_filters(source_read_queryset(info))
 
     def aggregate_source(info: strawberry.Info) -> models.QuerySet[Any]:
         return prepare_filters(source_aggregate(info))

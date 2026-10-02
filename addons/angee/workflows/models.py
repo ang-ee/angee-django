@@ -650,7 +650,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
         """Workflow authors can configure sources without platform administration."""
         workflows = read_scoped_queryset(cls._meta.get_field("workflow").related_model, actor, action="write")
-        return field_name == "source" and workflows is not None and workflows.exists()
+        return field_name == "source" and workflows.exists()
 
     @property
     def source_class(self) -> type[TriggerSource]:

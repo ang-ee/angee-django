@@ -4,7 +4,7 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useMemo, type ReactElement } from "react";
 import {
   Action, Column, ErrorBanner, Field, Form, Group, LabeledDescriptorField, List, LoadingPanel,
-  RecordReference, ResourceList, useActionOutcomeMutation, useAppRuntime,
+  RecordReference, ResourceList, actionOutcomeSubmitResult, formSubmitError, useActionOutcomeMutation, useAppRuntime,
   useEnumOptions, useRouteHref, useRuntimeAuth, useUiT,
   type RecordPanelContext, type ResourceViewFilter, type StringIdRow,
 } from "@angee/ui";
@@ -106,12 +106,12 @@ export function InboxPage(): ReactElement {
           submit={async ({ action, ...values }, context) => {
             const record = context.record;
             if (typeof record?.id !== "string" || typeof record.revision !== "number") throw new Error(t("decision.unavailable"));
-            const outcome = await decide(record.id, { revision: record.revision, action, values });
-            if (!outcome?.ok) {
+            const result = await decide(record.id, { revision: record.revision, action, values })
+              .then(actionOutcomeSubmitResult).catch((cause) => formSubmitError(cause));
+            if (result.status !== "ok") {
               try { await context.refresh?.(); } catch { /* Keep the server's answer errors if refresh is unavailable. */ }
-              if (outcome?.validationErrors?.revision) return { status: "conflict", message: t("decision.conflict") };
             }
-            return outcome;
+            return result.status === "conflict" ? { ...result, message: t("decision.conflict") } : result;
           }}
         />
       </Form>

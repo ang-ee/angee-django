@@ -126,10 +126,10 @@ Declared function hooks use the same owner: addons append setting names to
 check. Resource sources and trigger sources are implementation class registries,
 not caller-maintained loaders.
 
-**REBAC base-manager debt.** The current floor is 0.24.1. The append-only
-model retains its `class_prepared` binder because this release discards a
-model's declared `Meta.base_manager_name`. Once `django-zed-rebac` preserves
-that declaration and the guarded-manager test passes, the binder can go.
+**REBAC base managers.** Models declare their base manager through Django's
+`Meta.base_manager_name`; REBAC preserves it and requires a `TrackedQuerySet`.
+[`AppendOnlyModel`](../angee/base/mixins.py) declares its guarded base manager
+and checks that its default manager composes `AppendOnlyQuerySet`.
 
 Audit-history exclusions: `django-easy-audit` was evaluated and rejected because
 GPL code is incompatible with a framework composed into commercial consumers.

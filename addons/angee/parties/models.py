@@ -701,7 +701,6 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
             queryset = read_scoped_queryset(model, actor)
             if (
                 public_id
-                and queryset is not None
                 and instance_from_public_id(model, public_id, queryset=queryset) is not None
             ):
                 visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))

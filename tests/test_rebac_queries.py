@@ -8,8 +8,6 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 from rebac.resources import model_for_resource_type
 
-from tests import test_messaging as _messaging_models  # noqa: F401 -- register source model
-from tests import test_productivity_deferred_save as _task_relation_models  # noqa: F401 -- register source model
 from tests.conftest import Backend, Drive, Folder, Page, Vault, create_user
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- register source model
 

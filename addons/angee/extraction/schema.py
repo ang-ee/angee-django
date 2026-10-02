@@ -33,8 +33,7 @@ def _readable_target(field: str) -> Callable[[strawberry.Info], Prefetch]:
     def prefetch(info: strawberry.Info) -> Prefetch:
         model = apps.get_model("storage.File" if field == "file" else "messaging.Message")
         readable = read_scoped_queryset(model, request_from_info(info).user)
-        return Prefetch(field, queryset=readable if readable is not None else model.objects.none(),
-                        to_attr=f"_readable_{field}")
+        return Prefetch(field, queryset=readable, to_attr=f"_readable_{field}")
 
     return prefetch
 

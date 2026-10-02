@@ -48,9 +48,9 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
       const { query, variables } = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       if (query.includes("decide(")) {
         if (conflicting) { current = { ...current, revision: current.revision + 1 }; conflicting = false; }
-        if (variables.revision !== current.revision) return jsonResponse({ data: { decide: {
-          ok: false, message: "The decision has changed.", validation_errors: { revision: ["Reload the decision."] },
-        } } });
+        if (variables.revision !== current.revision) return jsonResponse({ data: null, errors: [{
+          message: "The decision has changed.", path: ["decide"], extensions: { code: "STALE_REVISION" },
+        }] });
         if (rejectAttempt) {
           rejectAttempt = false;
           current = { ...current, revision: current.revision + 1 };

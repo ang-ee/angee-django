@@ -257,7 +257,7 @@ def authorized_permission_target(
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     scoped = read_scoped_queryset(model, user, action=permission)
-    instance = instance_for_id(model, id, queryset=scoped) if scoped is not None else None
+    instance = instance_for_id(model, id, queryset=scoped)
     return _require_action_permission(instance, model, id, permission)
 
 

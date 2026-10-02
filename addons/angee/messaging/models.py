@@ -1969,6 +1969,23 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
             unverified_submitter_email=email if isinstance(email, str) and email else None,
         )
 
+    @classmethod
+    def has_tracking_values_expression(cls) -> models.Exists:
+        """Project immutable tracking existence independently of the reader's scope."""
+
+        tracking_model = cls._meta.get_field("tracking_values").related_model
+        return models.Exists(tracking_model.system_queryset().filter(message_id=models.OuterRef("pk")))
+
+    def has_tracking_values(self) -> bool:
+        """Use the row's SQL projection, or check authoritative tracking rows."""
+
+        projected = getattr(self, "_has_tracking_values", None)
+        if projected is not None:
+            return bool(projected)
+        return type(self)._base_manager.using(self._state.db).filter(
+            self.has_tracking_values_expression(), pk=self.pk,
+        ).exists()
+
     def content_edit_error(self) -> str | None:
         """Return why this message's body cannot be edited, or ``None`` if it can.
 
@@ -1985,7 +2002,7 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
             return "Only comment messages can be edited."
         if self.direction != self.Direction.INTERNAL:
             return "Only internally authored comments can be edited."
-        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
+        if self.has_tracking_values():
             return "Messages with tracking values cannot be edited."
         return None
 
@@ -1994,7 +2011,7 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
 
         if self.message_type != self.MessageKind.COMMENT:
             return "Only comment messages can be deleted."
-        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
+        if self.has_tracking_values():
             return "Messages with tracking values cannot be deleted."
         return None
 

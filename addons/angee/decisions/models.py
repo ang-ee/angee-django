@@ -166,6 +166,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, RecordRefMixin, AngeeDataMo
         ]
 
     @property
+    def is_delegated(self) -> bool:
+        """A system-issued seat without named assignees delegates its assignment."""
+        return self.group.issuer_id is None and not self.assignees.exists()
+
+    @property
     def is_pending(self) -> bool:
         """Return whether this snapshot still needs an answer or an expiry transition."""
         return self.verdict == Verdict.PENDING and self.closed_reason is None

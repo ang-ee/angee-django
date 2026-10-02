@@ -22,6 +22,7 @@ from rebac import (
 )
 from rebac.errors import NoActorResolvedError
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.decisions import managers as decision_managers
 from angee.decisions import schema as decision_schema
@@ -164,6 +165,42 @@ def test_reask_preserves_a_system_delegated_seat(people):
         assert not seat(second).assignees.exists()
     assert second.issuer_id is None and second.reasked_from_id == first.pk
     assert seat(first).superseded_by_id is None
+
+
+@pytest.mark.parametrize("system_actor", [False, True])
+def test_reask_requires_system_admission_for_a_delegated_seat(people, system_actor):
+    admin = create_platform_admin("delegated-reask-admission-admin")
+    request = request_for(people, assignees=None, requester=None)
+    with system_context(reason="test.delegated_reask_admission"):
+        group = Decision.objects.admit_group([request], actor=None)
+    answer(seat(group), admin, action="decline", values={"reason": "Try again"})
+    error = PermissionDenied if system_actor else ValidationError
+    with pytest.raises(error, match="system context" if system_actor else "system admission"):
+        Decision.objects.reask(group.pk, actor=None if system_actor else admin,
+                               actions=(Complete, Decline), errors={})
+    assert system_queryset(DecisionGroup).count() == 1
+
+
+def test_delegated_predicate_reuses_prefetched_assignment(people, django_assert_num_queries):
+    create_platform_admin("delegated-predicate-admin")
+    with system_context(reason="test.delegated_predicate"):
+        group = Decision.objects.admit_group([request_for(people, assignees=None, requester=None)], actor=None)
+        decision = Decision.objects.select_related("group").prefetch_related("assignees").get(group=group)
+        with django_assert_num_queries(0):
+            assert decision.is_delegated
+            assert tuple(decision.assignees.all()) == ()
+
+
+def test_delegated_relation_choices_require_explicit_participants(people):
+    _issuer, _reviewer, _outsider, subject = people
+    request = request_for(people, assignees=None, requester=None, actions=(ChooseDocument,),
+                          refine={"choose": {"document_id": {"options": [
+                              {"value": str(subject.sqid), "label": "Document"},
+                          ]}}})
+    with system_context(reason="test.delegated_relation_choices"):
+        with pytest.raises(ValidationError, match="Relation choices require explicit participants"):
+            Decision.objects.admit_group([request], actor=None)
+    assert not system_queryset(DecisionGroup).exists()
 
 
 def test_non_admin_person_without_seat_cannot_read_or_decide(people):
@@ -371,11 +408,11 @@ def test_stale_revision_and_final_answer_are_immutable(people):
     issuer, reviewer, _outsider, _subject = people
     group = Decision.objects.admit_group([request_for(people)], actor=issuer)
     decision = seat(group)
-    with pytest.raises(ValidationError):
+    with pytest.raises(StaleRevisionError):
         answer(decision, reviewer, revision=decision.revision + 1)
     assert seat(group).is_open
     answered = answer(decision, reviewer)
-    with pytest.raises(ValidationError):
+    with pytest.raises(StaleRevisionError):
         answer(decision, reviewer, action="decline", values={"reason": "Changed mind"})
     Decision.objects.cancel_group(group.pk)
     retained = seat(group)
@@ -904,6 +941,20 @@ def test_graphql_decide_uses_the_decision_instance_dispatch(people, monkeypatch)
                                                           "values": {"note": "Read"}}, user=reviewer))
     assert result == {"decide": {"ok": True}}
     assert called == [decision.pk]
+
+
+def test_graphql_stale_decision_preserves_the_native_conflict_code(people):
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    decision = seat(group)
+    answer(decision, reviewer)
+    schema = addon_schema(decision_schema.schemas, "console")
+    result = execute_schema(schema, """mutation($id: ID!, $revision: Int!) {
+      decide(id: $id, revision: $revision, action: "complete", values: {note: "Again"}) { ok code }
+    }""", {"id": str(decision.sqid), "revision": decision.revision}, user=reviewer)
+    assert result.errors and len(result.errors) == 1
+    assert result.errors[0].extensions == {"code": "STALE_REVISION", "current_revision": decision.revision + 1}
+    assert result.errors[0].message == "STALE_REVISION"
 
 
 def test_graphql_form_errors_preserve_authored_snake_case_field_names(people):

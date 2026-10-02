@@ -43,7 +43,9 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
 
 
 def test_declared_task_queue_scope_validates_in_a_widget_snapshot(monkeypatch):
-    monkeypatch.setattr("angee.dashboards.models.read_scoped_queryset", lambda _model, _actor: None)
+    monkeypatch.setattr(
+        "angee.dashboards.models.read_scoped_queryset", lambda model, _actor: model._base_manager.none(),
+    )
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,
         "columns": 12,

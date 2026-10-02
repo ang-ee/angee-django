@@ -40,7 +40,7 @@ def relation_permission_validator(actor: Any) -> Any:
             yield SchemaValidationError("The relation target is unavailable.")
             return
         queryset = read_scoped_queryset(model, actor, action=relation.get("permission", "read"))
-        if queryset is None or value not in instances_from_public_ids(model, [value], queryset=queryset):
+        if value not in instances_from_public_ids(model, [value], queryset=queryset):
             yield SchemaValidationError("The selected record is absent or inaccessible.")
     return validate_relation
 

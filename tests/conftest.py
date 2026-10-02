@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -23,7 +23,6 @@ from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
-from angee.compose.model_composition import ModelComposition
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
@@ -88,12 +87,6 @@ def activity_catalog(composed_tables: None) -> None:
     with system_context(reason="tests.messaging.activity_catalog"):
         messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
-
-
-def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
-    """Use the source composition's field ownership in installed-schema callers."""
-
-    return ModelComposition.discover(app_configs).field_gate_owners()
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):

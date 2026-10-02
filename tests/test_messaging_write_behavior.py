@@ -22,15 +22,21 @@ from tests.test_messaging import channel as channel
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("tracked", [False, True])
 def test_content_edit_validation_reads_tracking(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, tracked: bool
+    composed_tables: None,
+    django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
+    tracked: bool,
 ) -> None:
-    """Content edit validation reads tracking."""
+    """The edit and delete predicates consume the same SQL projection for free."""
     with system_context(reason="messaging edit validation setup"), mute_changes():
         message = Message.objects.create(direction=Message.Direction.INTERNAL, message_type=Message.MessageKind.COMMENT)
         if tracked:
             TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
-    with system_context(reason="messaging edit validation"):
+        message = Message.objects.annotate(
+            _has_tracking_values=Message.has_tracking_values_expression(),
+        ).get(pk=message.pk)
+    with django_assert_num_queries(0):
         assert message.content_edit_error() == ("Messages with tracking values cannot be edited." if tracked else None)
+        assert message.delete_error() == ("Messages with tracking values cannot be deleted." if tracked else None)
 
 
 @pytest.mark.django_db(transaction=True)

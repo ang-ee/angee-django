@@ -331,7 +331,7 @@ class Runner:
     def artifact(self, step_run: Any, record: Any, *, label: str, actor: Any) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
         readable = read_scoped_queryset(type(record), actor)
-        if readable is None or not readable.filter(pk=record.pk).exists():
+        if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the artifact record is required.")
         target = canonical_record_target(record)
         with self._fenced(step_run) as current:

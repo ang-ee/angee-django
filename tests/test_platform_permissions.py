@@ -8,8 +8,8 @@ check-free by the ``reconcile_permissions`` command) is the global prune that re
 those orphans and stale rows inside still-composed packages.
 
 Stale-schema scenarios group historical setup and reconciliation with the
-library's ``schema_changes`` so the final index is built after removed model
-and field references have been pruned.
+library's ``schema_changes`` so the final policy is validated after removed
+model and field references have been pruned.
 """
 
 from __future__ import annotations
