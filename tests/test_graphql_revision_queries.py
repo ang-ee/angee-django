@@ -12,12 +12,12 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import SchemaDefinition
-from rebac.models.generation import SchemaGeneration
 from reversion.middleware import RevisionMiddleware
 from reversion.models import Version
 
 from angee.knowledge import schema as knowledge_schema
 from tests.conftest import MarkdownPage, Page, addon_schema, create_user, execute_schema, vault_for
+from tests.queries import is_rebac_revision_read
 
 
 def _post(schema: Any, user: Any, query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -60,7 +60,6 @@ def test_protected_graphql_post_checks_one_schema_revision_for_one_or_many_rows(
         }
     """
     schema_table = connection.ops.quote_name(SchemaDefinition._meta.db_table)
-    generation_table = connection.ops.quote_name(SchemaGeneration._meta.db_table)
     schema_reads = []
     revision_reads = []
     query_counts = []
@@ -73,9 +72,7 @@ def test_protected_graphql_post_checks_one_schema_revision_for_one_or_many_rows(
         assert all(row["title"] != "Hidden" for row in payload["data"]["pages"])
         assert payload["data"]["pages_aggregate"]["aggregate"]["count"] == 25
         schema_reads.append(sum(f"FROM {schema_table}" in item["sql"] for item in captured))
-        revision_reads.append(sum(
-            item["sql"].startswith(f'SELECT {generation_table}."revision"') for item in captured
-        ))
+        revision_reads.append(sum(is_rebac_revision_read(item["sql"]) for item in captured))
         query_counts.append(len(captured))
 
     assert Version.objects.count() == versions_before

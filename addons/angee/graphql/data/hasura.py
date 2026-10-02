@@ -1048,7 +1048,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     model: type[models.Model],
     name: str | None = None,
     filterable: Sequence[str],
-    filter_expressions: Mapping[str, models.Expression] | None = None,
+    filter_expressions: Mapping[
+        str, models.Expression | Callable[[models.QuerySet[Any]], models.Expression]
+    ] | None = None,
     record_ref_filters: tuple[str, str] | None = None,
     record_ref_requires_read: bool = False,
     sortable: Sequence[str],
@@ -1109,6 +1111,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     Model ``hasura_aliases`` mappings contribute named Django expression
     sorts automatically, including from extension bases. They use native lazy
     ``SortAlias`` preparation with protected relation hops redacted to NULL.
+
+    A ``filter_expressions`` provider receives the target queryset so actor-aware
+    expressions work for requests and stored filters alike. Its output field is
+    inspected on an empty queryset at composition; it must perform no row reads.
     """
 
     model_aliases, model_filter_aliases = _declared_aliases(model)
@@ -1198,6 +1204,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         for name, expression in expressions.items():
             if name in model_filter_aliases:
                 continue
+            if callable(expression):
+                expression = expression(queryset)
             if record_ref_requires_read and name in (record_ref_filters or ()):
                 expression = models.Case(
                     models.When(_angee_record_readable=True, then=expression),
@@ -1301,12 +1309,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if expressions:
         assert resource.filter_type is not None
         filter_name = get_object_definition(resource.filter_type, strict=True).name
+        empty = model._default_manager.none()
+        output_fields = {
+            key: (expression(empty) if callable(expression) else expression).output_field
+            for key, expression in expressions.items()
+        }
         donor = type(f"{filter_name}Expressions", (), {
             "__annotations__": {
                 key: comparison_for_python_type(
-                    field_type_map[type(expression.output_field)], public_id=key in (field_id_decode or {}),
+                    field_type_map[type(output_field)], public_id=key in (field_id_decode or {}),
                 ) | None
-                for key, expression in expressions.items()
+                for key, output_field in output_fields.items()
             },
             **{key: strawberry.field(name=key, default=strawberry.UNSET) for key in expressions},
         })

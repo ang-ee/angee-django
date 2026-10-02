@@ -757,7 +757,10 @@ class MarkdownPageManager(AngeeManager):
         *,
         actor: SubjectRef,
     ) -> None:
-        """Insert child bodies for pages admitted by the vault clone preflight."""
+        """Insert child bodies for pages admitted by the vault clone preflight.
+
+        One INSERT per body: Django's ``bulk_create`` refuses multi-table children.
+        """
 
         copies = []
         with system_context(reason="knowledge.vault.clone.markdown"):

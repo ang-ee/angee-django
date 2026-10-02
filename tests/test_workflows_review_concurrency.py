@@ -6,12 +6,12 @@ from queue import Queue
 from time import monotonic, sleep
 
 import pytest
-from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.db.models.functions import Now
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.forms import Action
@@ -160,8 +160,9 @@ def test_review_decide_races_cancel_in_both_orders_without_lock_inversion(waitin
                 assert WorkflowRun.objects.cancel(run, actor=actor).canceled
                 contender, pid = submit(pool, lambda: answer(decision, reviewer))
                 wait_for_lock(pid, contender)
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError) as stale:
                 contender.result(timeout=10)
+            assert (stale.value.expected, stale.value.current) == (decision.revision, decision.revision + 1)
     run_until(run)
     retained = system_queryset(Decision).get(pk=decision.pk)
     assert run.status == "canceled" and not applied
@@ -200,8 +201,9 @@ def test_review_decide_races_expiry_and_worker_consumes_the_final_group(waiting_
             assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
             assert not applied and not sent
         if winner == "expiry":
-            with pytest.raises(ValidationError, match="changed; reload"):
+            with pytest.raises(StaleRevisionError) as stale:
                 contender.result(timeout=10)
+            assert (stale.value.expected, stale.value.current) == (decision.revision, decision.revision + 1)
     assert system_queryset(StepRun).get(pk=step.pk).status == "ready"
     assert [payload["kwargs"]["step_run_id"] for name, payload in sent if name == "workflows.execute"] == [step.pk]
     run_until(run)
@@ -270,8 +272,9 @@ def test_first_requesterless_answer_closes_its_concurrent_sibling(waiting_review
             wait_for_lock(pid, contender)
             assert answer(second, actor).closed_reason == "resolved"
             assert not settlements and not sent and not applied
-        with pytest.raises(ValidationError, match="changed; reload"):
+        with pytest.raises(StaleRevisionError) as stale:
             contender.result(timeout=10)
+        assert (stale.value.expected, stale.value.current) == (first.revision, first.revision + 1)
     assert settlements == [first.group_id]
     assert system_queryset(Decision).get(pk=first.pk).closed_reason == "sibling_settled"
     assert [payload["kwargs"]["step_run_id"] for name, payload in sent if name == "workflows.execute"] == [step.pk]
