@@ -2,26 +2,40 @@
 
 The GraphQL schema owns the public mutation names; this module owns the daemon
 orchestration behind those mutations: status transitions, render plans, secret
-sync, workspace/service creation, reprovision, and teardown.
+sync, workspace/service creation, reprovision, teardown, and the two ways out of
+a provision the daemon refused because its instance already exists — adopt the
+conflicting instance, or replace it.
+
+Every instance name is recorded on the agent the moment the daemon creates it,
+and blanked only once its destroy is confirmed, so the row never forgets an
+instance the daemon still holds. A conflicting instance is destroyed only after
+the agent records it as its own, so the unique instance constraints guarantee no
+verb destroys an instance another agent records.
 """
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Callable
-from dataclasses import dataclass
+import logging
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any
 
 from django.apps import apps
+from django.db import IntegrityError
 from rebac import system_context
 
 from angee.agents.grants import grant_resource_reader_role
-from angee.agents.models import AgentLifecycle
 from angee.base.transitions import TransitionNotAllowed
-from angee.graphql.actions import ActionResult, action_target
+from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.ids import PublicID
 from angee.iam.service_users import sync_service_user
-from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound
+from angee.jobs.locks import task_lock
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonConflict, OperatorInstanceKind, WorkspaceStatus
+
+logger = logging.getLogger(__name__)
+
+_LOCKED = "Another provisioning action is running for this agent; try again when it finishes."
 
 # The inference-credential chains ``_render_plan`` walks: the per-agent override
 # (``inference_credential``, with its ``oauth_client`` for an OAuth refresh) and the
@@ -53,67 +67,147 @@ class _RenderPlan:
     service_template: tuple[str, str] | None
 
 
+@dataclass
+class _CreatedInstances:
+    """The instances one operation created, each recorded on the agent as it appears.
+
+    ``reason`` prefixes the elevation reasons of the record writes. :meth:`roll_back`
+    undoes them when a later step fails.
+    """
+
+    agent: Any
+    reason: str
+    names: dict[OperatorInstanceKind, str] = field(default_factory=dict)
+
+    def workspace(self, name: str) -> None:
+        """Record a workspace the daemon just created."""
+
+        self.names[OperatorInstanceKind.WORKSPACE] = name
+        with system_context(reason=f"{self.reason}.workspace_recorded"):
+            self.agent.mark_workspace_provisioned(workspace=name)
+
+    def service(self, name: str) -> None:
+        """Record a service the daemon just created."""
+
+        self.names[OperatorInstanceKind.SERVICE] = name
+        with system_context(reason=f"{self.reason}.service_recorded"):
+            self.agent.mark_service_provisioned(service=name)
+
+    def roll_back(self, daemon: OperatorDaemon) -> dict[OperatorInstanceKind, str]:
+        """Destroy what was created, service before workspace; return the instances now gone.
+
+        Best effort: a destroy failure is logged and stops the rollback, because the
+        caller surfaces the original failure — and the agent keeps every name whose
+        destroy did not succeed.
+        """
+
+        gone: dict[OperatorInstanceKind, str] = {}
+        try:
+            _destroy(
+                daemon,
+                service=self.names.get(OperatorInstanceKind.SERVICE, ""),
+                workspace=self.names.get(OperatorInstanceKind.WORKSPACE, ""),
+                gone=gone,
+            )
+        except Exception:  # noqa: BLE001 - a rollback failure never hides the original one
+            logger.warning("agents: operator rollback failed; the agent keeps the instances it holds", exc_info=True)
+        return gone
+
+
+@contextmanager
+def _locked_agent(id: PublicID, *, reason: str) -> Iterator[Any | None]:
+    """Hold the agent's provisioning lock for one verb; yield the agent, or ``None`` when held.
+
+    Every lifecycle verb runs inside this one owner, so two verbs never drive the
+    daemon for the same agent at once. The row is read after the lock is taken. The
+    lock is advisory — the lifecycle transitions and unique instance constraints stay
+    authoritative — and no row lock is held across daemon calls.
+    """
+
+    agent_model = _agent_model()
+    target = resolve_action_target(agent_model, id, reason=reason)
+    with task_lock(target.provisioning_lock_key()) as acquired:
+        if not acquired:
+            yield None
+        else:
+            yield resolve_action_target(agent_model, id, reason=reason, select_related=_PROVISION_CHAIN)
+
+
 def provision_agent(id: PublicID) -> ActionResult:
     """Render an agent into an operator workspace + service and record the instance."""
 
-    agent_model = _agent_model()
-    with action_target(
-        agent_model,
-        id,
-        reason="agents.graphql.provision_agent",
-        select_related=_PROVISION_CHAIN,
-    ) as agent:
+    with _locked_agent(id, reason="agents.graphql.provision_agent") as agent:
+        if agent is None:
+            return ActionResult(ok=False, message=_LOCKED)
+        return _provision(agent, OperatorDaemon.from_settings())
+
+
+def adopt_agent(id: PublicID) -> ActionResult:
+    """Record the conflicting instance as the agent's own and keep its container as it is."""
+
+    with _locked_agent(id, reason="agents.graphql.adopt_agent") as agent:
+        if agent is None:
+            return ActionResult(ok=False, message=_LOCKED)
+        return _adopt(agent, OperatorDaemon.from_settings())
+
+
+def replace_agent(id: PublicID) -> ActionResult:
+    """Destroy the conflicting instance, then provision the agent afresh."""
+
+    with _locked_agent(id, reason="agents.graphql.replace_agent") as agent:
+        if agent is None:
+            return ActionResult(ok=False, message=_LOCKED)
+        return _replace(agent, OperatorDaemon.from_settings())
+
+
+def reprovision_agent(id: PublicID) -> ActionResult:
+    """Recreate an agent's service over its existing workspace, re-syncing secrets."""
+
+    with _locked_agent(id, reason="agents.graphql.reprovision_agent") as agent:
+        if agent is None:
+            return ActionResult(ok=False, message=_LOCKED)
+        return _reprovision(agent, OperatorDaemon.from_settings())
+
+
+def deprovision_agent(id: PublicID) -> ActionResult:
+    """Tear down an agent's operator workspace and service, then clear the record."""
+
+    with _locked_agent(id, reason="agents.graphql.deprovision_agent") as agent:
+        if agent is None:
+            return ActionResult(ok=False, message=_LOCKED)
+        return _deprovision(agent, OperatorDaemon.from_settings())
+
+
+def _provision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
+    """Render the agent's workspace and service, recording each the moment it exists."""
+
+    with system_context(reason="agents.graphql.provision_agent"):
         if agent.user_id is None:
             sync_service_user(agent, prefix="agent")
-        if agent.runtime_backend.runs_in_process:
-            if not agent.inference_credential_ready():
-                return ActionResult(
-                    ok=False,
-                    message="Connect a usable inference credential to this agent's provider before provisioning.",
-                )
-            try:
-                agent.mark_provisioning()
-                agent.mark_provisioned(workspace="", service="")
-                grant_resource_reader_role(agent)
-            except TransitionNotAllowed as error:
-                return ActionResult(ok=False, message=f"Provisioning failed: {error}")
-            return ActionResult(ok=True, message="Provisioned in process.")
-        if agent.workspace:
-            return ActionResult(ok=False, message="Agent is already provisioned — deprovision it first.")
-        if agent.workspace_template is None:
-            return ActionResult(ok=False, message="Set a workspace template on this agent first.")
-        if not agent.inference_credential_ready():
-            return ActionResult(
-                ok=False,
-                message="Connect a usable inference credential to this agent's provider before provisioning.",
-            )
+        if blocker := agent.provision_blocker():
+            return ActionResult(ok=False, message=blocker)
+        in_process = agent.runtime_backend.runs_in_process
         try:
             agent.mark_provisioning()
+            if in_process:
+                agent.mark_provisioned(workspace="", service="")
+                grant_resource_reader_role(agent)
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Provisioning failed: {error}")
-    created_workspace: list[str] = []
-
-    def record_workspace(workspace: str) -> None:
-        created_workspace.append(workspace)
-        with system_context(reason="agents.graphql.provision_agent.workspace_recorded"):
-            agent.mark_workspace_provisioned(workspace=workspace)
-
-    def record_service(service: str) -> None:
-        with system_context(reason="agents.graphql.provision_agent.service_recorded"):
-            agent.mark_service_provisioned(service=service)
-
+    if in_process:
+        return ActionResult(ok=True, message="Provisioned in process.")
+    created = _CreatedInstances(agent, reason="agents.graphql.provision_agent")
     try:
         with system_context(reason="agents.graphql.provision_agent.plan"):
             plan = _render_plan(agent)
         result = _render_agent(
+            daemon,
             plan,
-            on_workspace_created=record_workspace,
-            on_service_created=record_service,
+            on_workspace_created=created.workspace,
+            on_service_created=created.service,
         )
     except Exception as error:  # noqa: BLE001 - a render/plan failure is the result, not a 500
-        with system_context(reason="agents.graphql.provision_agent.failed"):
-            _record_provision_failure(agent, message=str(error), clear_instances=bool(created_workspace))
-        return ActionResult(ok=False, message=f"Provisioning failed: {error}")
+        return _failed(agent, error, verb="Provisioning", daemon=daemon, created=created)
     with system_context(reason="agents.graphql.provision_agent.recorded"):
         try:
             agent.mark_provisioned(workspace=result["workspace"], service=result["service"])
@@ -123,179 +217,331 @@ def provision_agent(id: PublicID) -> ActionResult:
     return ActionResult(ok=True, message=f"Provisioned “{result['service'] or result['workspace']}”.")
 
 
-def reprovision_agent(id: PublicID) -> ActionResult:
-    """Recreate an agent's service over its existing workspace, re-syncing secrets."""
+def _adopt(agent: Any, daemon: OperatorDaemon) -> ActionResult:
+    """Record the verified conflicting instance as the agent's own; start its service if stopped.
 
-    agent_model = _agent_model()
-    with action_target(
-        agent_model,
-        id,
-        reason="agents.graphql.reprovision_agent",
-        select_related=_PROVISION_CHAIN,
-    ) as agent:
+    Adopt keeps the container exactly as it is, with the configuration and credentials
+    it was created with: nothing is rendered, recreated or re-synced, and a running
+    service is not touched. Reprovision rebuilds the service from the agent's current
+    settings afterwards. The workspace must verify as this agent's
+    (:meth:`Agent.conflicting_instance_blocker`); the daemon reports no service
+    provenance, so the service counts as this agent's only by mounting it. A refused
+    adopt changes nothing.
+    """
+
+    with system_context(reason="agents.graphql.adopt_agent"):
+        if blocker := agent.adopt_blocker():
+            return ActionResult(ok=False, message=blocker)
+    try:
+        status, refusal = _inspect_conflict(agent, daemon)
+    except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+        return ActionResult(ok=False, message=f"Adopt failed: {error}")
+    if refusal:
+        return ActionResult(ok=False, message=f"Adopt refused: {refusal}")
+    if status is None:
+        return ActionResult(
+            ok=False, message=f"The operator no longer has workspace “{_inspected_workspace(agent)}”; replace instead."
+        )
+    service = status.services[0] if status.services else ""
+    with system_context(reason="agents.graphql.adopt_agent.recorded"):
+        try:
+            agent.mark_adopting(workspace=status.name, service=service)
+        except TransitionNotAllowed as error:
+            return ActionResult(ok=False, message=f"Adopt failed: {error}")
+        except IntegrityError:
+            refused = _recorded_elsewhere(agent, workspace=status.name, service=service)
+            return ActionResult(ok=False, message=f"Adopt refused: {refused}")
+    try:
+        if service and daemon.service_status(service) != "running":
+            daemon.start_service(service)
+    except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+        return _failed(agent, error, verb="Adopt", daemon=daemon)
+    unserved = not service and agent.runtime_backend.renders_service
+    with system_context(reason="agents.graphql.adopt_agent.provisioned"):
+        try:
+            if unserved:
+                agent.mark_provision_failed(f"No service mounts workspace “{status.name}”; reprovision to render one.")
+            else:
+                agent.mark_provisioned(workspace=status.name, service=service)
+        except TransitionNotAllowed as error:
+            return ActionResult(ok=False, message=f"Adopt failed: {error}")
+    if unserved:
+        return ActionResult(
+            ok=True, message=f"Adopted “{status.name}”; no service mounts it — reprovision to render one."
+        )
+    return ActionResult(ok=True, message=f"Adopted “{service or status.name}”.")
+
+
+def _replace(agent: Any, daemon: OperatorDaemon) -> ActionResult:
+    """Destroy the verified conflicting instance, then provision afresh.
+
+    Composes the two verbs that own each half. Refused up front — destroying
+    nothing — when the agent could not provision afterwards or when the conflicting
+    instance does not verify as this agent's.
+    """
+
+    with system_context(reason="agents.graphql.replace_agent"):
+        if blocker := agent.replace_blocker():
+            return ActionResult(ok=False, message=blocker)
+    try:
+        status, refusal = _inspect_conflict(agent, daemon)
+    except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+        return ActionResult(ok=False, message=f"Replace failed: {error}")
+    if refusal:
+        return ActionResult(
+            ok=False,
+            message=f"Replace refused: {refusal} Deprovision to clear the record without destroying it.",
+        )
+    teardown = _deprovision(agent, daemon)
+    if not teardown.ok:
+        return teardown
+    return _provision(agent, daemon)
+
+
+def _reprovision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
+    """Destroy the agent's service and render it again over the recorded workspace."""
+
+    with system_context(reason="agents.graphql.reprovision_agent"):
         if agent.user_id is None:
             sync_service_user(agent, prefix="agent")
-        workspace = agent.workspace
-        service = agent.service
-        if not workspace:
-            return ActionResult(ok=False, message="Agent isn't provisioned — provision it first.")
-        if not agent.runtime_backend.renders_service:
-            return ActionResult(ok=False, message="This agent's runtime renders no service to reprovision.")
-        if not agent.inference_credential_ready():
-            return ActionResult(
-                ok=False,
-                message="Connect a usable inference credential to this agent's provider before reprovisioning.",
-            )
+        if blocker := agent.reprovision_blocker():
+            return ActionResult(ok=False, message=blocker)
         try:
             agent.mark_provisioning()
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
-    daemon = OperatorDaemon.from_settings()
-    service_destroyed = False
+    workspace, service = agent.workspace, agent.service
+    created = _CreatedInstances(agent, reason="agents.graphql.reprovision_agent")
     try:
         with system_context(reason="agents.graphql.reprovision_agent.plan"):
             plan = _render_plan(agent)
         _sync_secrets(daemon, plan)
         if service:
-            try:
-                daemon.destroy_service(service)
-            except OperatorDaemonError as error:
-                # A 404 means the entry is already gone (a manifest re-render
-                # can drop operator-declared services); recreate over it.
-                if error.status_code != 404:
-                    raise
-            service_destroyed = True
-        new_service = _render_service(daemon, plan, workspace)
-        if new_service:
-            with system_context(reason="agents.graphql.reprovision_agent.service_recorded"):
-                agent.mark_service_provisioned(service=new_service)
+            daemon.destroy_service(service)
+            # Forget the old service now: the new one usually takes the same name.
+            with system_context(reason="agents.graphql.reprovision_agent.service_destroyed"):
+                agent.mark_service_destroyed()
+        new_service = _render_service(daemon, plan, workspace, on_service_created=created.service)
     except Exception as error:  # noqa: BLE001 - a render/plan failure is the result, not a 500
-        with system_context(reason="agents.graphql.reprovision_agent.failed"):
-            # Once the old service is destroyed its name is stale; clear it so a later
-            # deprovision doesn't try to tear down a service the daemon already removed.
-            _record_provision_failure(agent, message=str(error), clear_service=service_destroyed)
-        return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
+        return _failed(agent, error, verb="Reprovisioning", daemon=daemon, created=created)
     with system_context(reason="agents.graphql.reprovision_agent.recorded"):
         try:
             agent.mark_provisioned(workspace=workspace, service=new_service)
         except TransitionNotAllowed as error:
-            _record_provision_failure(agent, message=str(error), clear_service=service_destroyed)
+            _record_provision_failure(agent, message=str(error))
             return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
     return ActionResult(ok=True, message=f"Recreated service “{new_service}”.")
 
 
-def deprovision_agent(id: PublicID) -> ActionResult:
-    """Tear down an agent's operator workspace and services, then clear the record."""
+def _deprovision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
+    """Destroy the agent's instances, then clear the record.
 
-    agent_model = _agent_model()
-    with action_target(
-        agent_model,
-        id,
-        reason="agents.graphql.deprovision_agent",
-        select_related=_PROVISION_CHAIN,
-    ) as agent:
-        if agent.runtime_backend.runs_in_process:
-            try:
-                agent.mark_deprovisioning()
-                agent.mark_deprovisioned()
-            except TransitionNotAllowed as error:
-                return ActionResult(ok=False, message=f"Teardown failed: {error}")
-            return ActionResult(ok=True, message="Deprovisioned.")
-        if not agent.workspace and not agent.service:
-            try:
-                if agent.lifecycle == AgentLifecycle.PROVISIONING:
-                    agent.mark_deprovisioning()
-                agent.mark_deprovisioned()
-            except TransitionNotAllowed as error:
-                return ActionResult(ok=False, message=f"Teardown failed: {error}")
-            return ActionResult(ok=True, message="Deprovisioned.")
-        workspace = agent.workspace
-        service = agent.service
+    A recorded conflicting instance that verifies as this agent's is recorded as its
+    own first and destroyed with the rest. One that does not verify — or cannot be
+    verified — is left in place and the record cleared: a non-destructive way out of
+    every conflict.
+    """
+
+    with system_context(reason="agents.graphql.deprovision_agent"):
+        if blocker := agent.deprovision_blocker():
+            return ActionResult(ok=False, message=blocker)
+    note = ""
+    recorded: dict[str, str] = {}
+    if agent.conflict_kind is not None:
         try:
-            agent.mark_deprovisioning()
+            status, refusal = _inspect_conflict(agent, daemon)
+        except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+            return ActionResult(ok=False, message=f"Teardown failed: {error}")
+        if refusal:
+            note = f" Left “{agent.conflict_name}” in place: {refusal}"
+        elif status is not None:
+            if agent.conflict_kind == OperatorInstanceKind.WORKSPACE:
+                recorded["workspace"] = status.name
+            if status.services:
+                recorded["service"] = status.services[0]
+    with system_context(reason="agents.graphql.deprovision_agent.started"):
+        try:
+            agent.mark_deprovisioning(**recorded)
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Teardown failed: {error}")
-    daemon = OperatorDaemon.from_settings()
-    service_destroyed = False
+        except IntegrityError:
+            return ActionResult(ok=False, message=f"Teardown refused: {_recorded_elsewhere(agent, **recorded)}")
+    gone: dict[OperatorInstanceKind, str] = {}
     try:
-        # The service is a stack entry distinct from the workspace it mounts, so destroy
-        # it explicitly before the workspace; otherwise the next provision can 409.
-        if service:
-            try:
-                daemon.destroy_service(service)
-            except OperatorDaemonNotFound:
-                pass
-            service_destroyed = True
-        if workspace:
-            try:
-                daemon.destroy_workspace(workspace)
-            except OperatorDaemonNotFound:
-                pass
+        _destroy(daemon, service=agent.service, workspace=agent.workspace, gone=gone)
     except Exception as error:  # noqa: BLE001 - teardown failure is the result, not a 500
         with system_context(reason="agents.graphql.deprovision_agent.failed"):
-            _record_provision_failure(agent, message=f"Teardown failed: {error}", clear_service=service_destroyed)
+            _record_provision_failure(agent, message=f"Teardown failed: {error}", destroyed=gone)
         return ActionResult(ok=False, message=f"Teardown failed: {error}")
     with system_context(reason="agents.graphql.deprovision_agent.recorded"):
         try:
             agent.mark_deprovisioned()
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Teardown failed: {error}")
-    return ActionResult(ok=True, message="Deprovisioned.")
+    return ActionResult(ok=True, message=f"Deprovisioned.{note}")
+
+
+def _inspect_conflict(agent: Any, daemon: OperatorDaemon) -> tuple[WorkspaceStatus | None, str | None]:
+    """Read the workspace a recorded conflict involves and judge whether it is this agent's.
+
+    That is the conflicting workspace, or for a conflicting service the workspace this
+    agent records. Returns the daemon's report (``None`` when the daemon no longer has
+    it) and the agent's refusal (``None`` when verified). A conflicting service while
+    the agent records no workspace cannot be verified: the daemon is not asked, and
+    the refusal says so. Daemon failures raise.
+    """
+
+    workspace = _inspected_workspace(agent)
+    if not workspace:
+        return None, (
+            f"Service “{agent.conflict_name}” cannot be verified: this agent records no workspace for it to mount."
+        )
+    status = daemon.workspace_status(workspace)
+    if status is None:
+        return None, None
+    template = agent.workspace_template
+    template_ref = daemon.resolve_template_ref(name=template.name, kind=template.kind) if template else None
+    with system_context(reason="agents.graphql.conflict.inspect"):
+        return status, agent.conflicting_instance_blocker(status, template_ref=template_ref)
+
+
+def _inspected_workspace(agent: Any) -> str:
+    """Return the workspace a recorded conflict involves: itself, or the one a conflicting service mounts."""
+
+    return str(agent.conflict_name if agent.conflict_kind == OperatorInstanceKind.WORKSPACE else agent.workspace)
+
+
+def _recorded_elsewhere(agent: Any, *, workspace: str = "", service: str = "") -> str:
+    """Name the other agent that records one of these instances (admin-only result text)."""
+
+    instances = ((OperatorInstanceKind.WORKSPACE, workspace), (OperatorInstanceKind.SERVICE, service))
+    with system_context(reason="agents.graphql.conflict.recorded_elsewhere"):
+        for kind, name in instances:
+            if name and (other := agent.instance_recorded_by(kind, name)):
+                return f"The operator {kind.label.lower()} “{name}” is recorded by agent “{other.name}”."
+    return "Another agent records this operator instance."
+
+
+def _failed(
+    agent: Any,
+    error: Exception,
+    *,
+    verb: str,
+    daemon: OperatorDaemon,
+    created: _CreatedInstances | None = None,
+) -> ActionResult:
+    """Record a failed verb under the one rule that recognises a daemon conflict.
+
+    A 409 over a workspace or service no agent records is an outcome, not a failure
+    to undo: what this verb created stays recorded and the conflicting instance is
+    recorded as the agent's conflict. Any other failure — including a 409 over an
+    instance this agent or another one already records — rolls back what this verb
+    ``created``. The admin-only result may name another agent; the persisted error
+    never does.
+    """
+
+    reason = f"agents.graphql.{verb.lower()}.failed"
+    conflict = error if isinstance(error, OperatorDaemonConflict) and error.kind is not None and error.name else None
+    own = other = None
+    if conflict is not None and conflict.kind is not None:
+        own = agent.records_instance(conflict.kind, conflict.name)
+        with system_context(reason=reason):
+            other = agent.instance_recorded_by(conflict.kind, conflict.name)
+    if conflict is not None and conflict.kind is not None and not own and other is None:
+        with system_context(reason=reason):
+            _record_provision_failure(
+                agent,
+                message=str(conflict),
+                conflict_kind=conflict.kind,
+                conflict_name=conflict.name,
+            )
+        return ActionResult(ok=False, message=f"{verb} failed: {conflict}")
+    destroyed = created.roll_back(daemon) if created and created.names else {}
+    message = shown = str(error)
+    if isinstance(error, IntegrityError):
+        message = shown = "Another agent records an operator instance this agent tried to record."
+    elif conflict is not None and conflict.kind is not None and other is not None:
+        label = conflict.kind.label.lower()
+        hint = "" if agent.workspace else "; rename this agent to provision it separately"
+        message = f"The operator {label} “{conflict.name}” is recorded by another agent{hint}."
+        shown = f"The operator {label} “{conflict.name}” is recorded by agent “{other.name}”{hint}."
+    with system_context(reason=reason):
+        _record_provision_failure(agent, message=message, destroyed=destroyed)
+    return ActionResult(ok=False, message=f"{verb} failed: {shown}")
 
 
 def _record_provision_failure(
     agent: Any,
     message: str,
     *,
-    clear_instances: bool = False,
-    clear_service: bool = False,
+    destroyed: Mapping[OperatorInstanceKind, str] | None = None,
+    conflict_kind: OperatorInstanceKind | None = None,
+    conflict_name: str = "",
 ) -> None:
-    """Best-effort failure persistence that never hides the action result."""
+    """Persist a failure without hiding the action result; log when the row moved on."""
 
     try:
         agent.mark_provision_failed(
             message,
-            clear_instances=clear_instances,
-            clear_service=clear_service,
+            destroyed=destroyed,
+            conflict_kind=conflict_kind,
+            conflict_name=conflict_name,
         )
     except TransitionNotAllowed:
-        pass
+        logger.warning(
+            "agents: agent %s changed state concurrently; its failure was not recorded: %s",
+            agent.pk,
+            message,
+            exc_info=True,
+        )
+
+
+def _destroy(
+    daemon: OperatorDaemon,
+    *,
+    service: str = "",
+    workspace: str = "",
+    gone: dict[OperatorInstanceKind, str],
+) -> None:
+    """Destroy ``service``, then the ``workspace`` it mounts; note each destroyed name in ``gone``.
+
+    The service is a stack entry distinct from the workspace it mounts, so it is
+    destroyed explicitly and first; otherwise the next provision can 409. The daemon
+    client treats an instance it reports absent by name as destroyed. Any other
+    failure propagates and stops the teardown — a workspace is never destroyed under
+    a service still mounting it — leaving ``gone`` naming exactly the instances
+    confirmed absent.
+    """
+
+    if service:
+        daemon.destroy_service(service)
+        gone[OperatorInstanceKind.SERVICE] = service
+    if workspace:
+        daemon.destroy_workspace(workspace)
+        gone[OperatorInstanceKind.WORKSPACE] = workspace
 
 
 def _render_agent(
+    daemon: OperatorDaemon,
     plan: _RenderPlan,
     *,
-    on_workspace_created: Callable[[str], None] | None = None,
-    on_service_created: Callable[[str], None] | None = None,
+    on_workspace_created: Callable[[str], None],
+    on_service_created: Callable[[str], None],
 ) -> dict[str, str]:
     """Drive the daemon render for one agent over its REST API; return instance names.
 
-    The daemon owns the template ref format and the secret store. If service render
-    fails after the workspace exists, its persisted service entry and then the
-    workspace are torn down so a retry starts clean.
+    The daemon owns the template ref format and the secret store. Each instance is
+    handed to its ``on_*_created`` callback the moment the daemon creates it; the
+    caller rolls back what was created when a later step fails.
     """
 
-    daemon = OperatorDaemon.from_settings()
-    workspace_ref = daemon.resolve_template_ref(name=plan.workspace_template[0], kind=plan.workspace_template[1])
-    if not workspace_ref:
-        raise ValueError(f"No operator workspace template matches {plan.workspace_template[0]!r}.")
+    workspace_ref = _workspace_template_ref(daemon, plan)
     _sync_secrets(daemon, plan)
     workspace = daemon.create_workspace(template=workspace_ref, inputs=plan.workspace_inputs)
     if not workspace:
         raise ValueError("The operator did not return a workspace.")
-    if on_workspace_created is not None:
-        on_workspace_created(workspace)
-    try:
-        service = _render_service(
-            daemon,
-            plan,
-            workspace,
-            on_service_created=on_service_created,
-        )
-    except Exception:
-        with contextlib.suppress(Exception):  # best-effort rollback; surface the original failure
-            daemon.destroy_workspace(workspace)
-        raise
+    on_workspace_created(workspace)
+    service = _render_service(daemon, plan, workspace, on_service_created=on_service_created)
     return {"workspace": workspace, "service": service}
 
 
@@ -304,12 +550,14 @@ def _render_service(
     plan: _RenderPlan,
     workspace: str,
     *,
-    on_service_created: Callable[[str], None] | None = None,
+    on_service_created: Callable[[str], None],
 ) -> str:
     """Render and start an agent service; ``""`` for workspace-only agents.
 
-    Creation and start are separate daemon calls so the returned service name is
-    available for rollback when ``ServiceUp`` fails after persisting the manifest.
+    Creation and start are separate daemon calls so the created service reaches
+    ``on_service_created`` — recorded, and rolled back by the caller — before
+    ``ServiceUp`` runs: the daemon deliberately keeps the manifest entry when the
+    start fails.
     """
 
     if plan.service_template is None:
@@ -325,18 +573,19 @@ def _render_service(
     )
     if not service:
         raise ValueError("The operator did not return a service.")
-    try:
-        if on_service_created is not None:
-            on_service_created(service)
-        daemon.start_service(service)
-    except Exception:
-        # ServiceCreate deliberately preserves the manifest entry when ServiceUp
-        # fails. Remove it before the caller tears down the mounted workspace;
-        # a concurrent/retried cleanup may already have removed it.
-        with contextlib.suppress(Exception):  # best-effort rollback; surface the start failure
-            daemon.destroy_service(service)
-        raise
+    on_service_created(service)
+    daemon.start_service(service)
     return service
+
+
+def _workspace_template_ref(daemon: OperatorDaemon, plan: _RenderPlan) -> str:
+    """Return the daemon's ref for the agent's workspace template, or raise."""
+
+    name, kind = plan.workspace_template
+    ref = daemon.resolve_template_ref(name=name, kind=kind)
+    if not ref:
+        raise ValueError(f"No operator workspace template matches {name!r}.")
+    return ref
 
 
 def _render_plan(agent: Any) -> _RenderPlan:

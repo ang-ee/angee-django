@@ -147,6 +147,28 @@ describe("useActionMutation", () => {
     expect(mutationMock.invalidateQueries).not.toHaveBeenCalled();
   });
 
+  test("invalidates after a domain failure when the verb records its failures", async () => {
+    mutationMock.response = { ok: false, message: "Provisioning failed." };
+    const { result } = renderHook(
+      () =>
+        useActionMutation("run_probe", {
+          invalidates: [{ resource: "records", invalidates: ["list"] }],
+          invalidateModels: ["agents.Agent"],
+          invalidateOnFailure: true,
+        }),
+      { wrapper: ConsoleProvider },
+    );
+
+    let outcome: ActionOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current[0]("rec_1");
+    });
+
+    expect(outcome?.ok).toBe(false);
+    expect(mutationMock.invalidate).toHaveBeenCalledWith({ resource: "records", invalidates: ["list"] });
+    expect(mutationMock.invalidateQueries).toHaveBeenCalledOnce();
+  });
+
   test("carries the created record id and invalidates on success", async () => {
     mutationMock.response = { ok: true, message: "Created.", id: "tr_9" };
     const { result } = renderHook(

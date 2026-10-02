@@ -179,6 +179,11 @@ export interface UseActionMutationOptions {
   invalidateModels?: readonly string[];
   /** Refine invalidation calls this action should trigger after success. */
   invalidates?: readonly InvalidateParams[];
+  /**
+   * The action records its outcome even when it fails (`ok=false`) — a failed
+   * provision stores the error it hit — so invalidate after a domain failure too.
+   */
+  invalidateOnFailure?: boolean;
 }
 
 export interface UseActionMutationState {
@@ -609,7 +614,8 @@ export function useAngeeRevisions(
  * created record's `id` when the verb returns one) so callers settle success,
  * failure, and deep-linking from one value; registered resource invalidations
  * and authored-read model invalidations run only when the outcome is not a
- * domain failure.
+ * domain failure, unless `invalidateOnFailure` declares that the verb's
+ * failures persist state too.
  */
 export function useActionMutation<TField extends string = string>(
   field: TField,
@@ -651,10 +657,11 @@ export function useActionMutation<TField extends string = string>(
       });
       const outcome =
         extractActionOutcome(response.data, request.root) ?? undefined;
-      // A domain failure (ok=false) mutated nothing — skip invalidation so a
-      // failed write never refreshes caches (the same posture as the authored
-      // hooks' errorFrom gating).
-      if (!outcome || outcome.ok) {
+      // A domain failure (ok=false) normally mutated nothing — skip invalidation
+      // so a failed write never refreshes caches (the same posture as the
+      // authored hooks' errorFrom gating) — unless the verb declares that its
+      // failures are recorded state.
+      if (!outcome || outcome.ok || options.invalidateOnFailure) {
         await Promise.all([
           ...invalidates.map((target) => invalidate(target)),
           ...(invalidateModels.length > 0
@@ -672,6 +679,7 @@ export function useActionMutation<TField extends string = string>(
       invalidates,
       operationDocuments,
       options.idArgument,
+      options.invalidateOnFailure,
       queryClient,
       run.mutateAsync,
     ],

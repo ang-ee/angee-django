@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterator, cast
+from typing import Callable, Iterator, cast
 
 import httpx
 import pytest
@@ -16,7 +16,14 @@ from rebac.schema import ConstBinding, parse_zed
 
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
-from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
+from angee.operator.daemon import (
+    OperatorDaemon,
+    OperatorDaemonConflict,
+    OperatorDaemonError,
+    OperatorDaemonNotFound,
+    OperatorInstanceKind,
+    WorkspaceStatus,
+)
 from angee.testing.permissions import install_permission_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
@@ -35,29 +42,49 @@ def _clear_operator_token_cache() -> Iterator[None]:
 def test_daemon_error_surfaces_the_response_body() -> None:
     """A daemon HTTP error reports its body (JSON ``error`` field, else text), not a bare status."""
 
-    assert _daemon_error_body(500, b'{"error": "secret \\"x\\" is not resolved"}') == (
-        'HTTP 500: secret "x" is not resolved'
+    def message(status: int, body: bytes) -> str:
+        return str(OperatorDaemonError.from_response("POST", "http://op/workspaces", status, body))
+
+    assert message(500, b'{"error": "secret \\"x\\" is not resolved"}') == (
+        'operator POST workspaces: HTTP 500: secret "x" is not resolved'
     )
-    assert _daemon_error_body(409, b'{"reason": "already exists"}') == "HTTP 409: already exists"
-    assert _daemon_error_body(503, b"upstream down") == "HTTP 503: upstream down"
+    assert message(400, b'{"reason": "bad input"}') == "operator POST workspaces: HTTP 400: bad input"
+    assert message(503, b"upstream down") == "operator POST workspaces: HTTP 503: upstream down"
+    assert message(502, b"") == "operator POST workspaces: HTTP 502"
 
 
-def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    """HTTP 404 remains a readable daemon error and is typed for idempotent teardown."""
+def test_daemon_error_types_a_conflict_with_the_daemon_reported_instance() -> None:
+    """A 409 carries the daemon's own ``kind``/``name``; the client never parses the message."""
+
+    error = OperatorDaemonError.from_response(
+        "POST",
+        "http://op/workspaces",
+        409,
+        b'{"kind": "workspace", "name": "demo-ws", "reason": "already exists",'
+        b' "error": "workspace demo-ws conflicts: already exists"}',
+    )
+
+    assert isinstance(error, OperatorDaemonConflict)
+    assert (error.status_code, error.kind, error.name) == (409, OperatorInstanceKind.WORKSPACE, "demo-ws")
+    assert str(error) == "operator POST workspaces: HTTP 409: workspace demo-ws conflicts: already exists"
+
+    # A stale-etag file write is a 409 too, but names no workspace or service.
+    for body in (b"stale etag", b'{"kind": "file", "name": "settings.yaml", "error": "stale etag"}'):
+        unclassified = OperatorDaemonError.from_response("PUT", "http://op/files", 409, body)
+        assert isinstance(unclassified, OperatorDaemonConflict)
+        assert unclassified.kind is None
+
+
+def _daemon_answering(monkeypatch: pytest.MonkeyPatch, status: int, body: bytes) -> tuple[OperatorDaemon, list[str]]:
+    """Return a daemon whose every REST call gets ``status``/``body``, and the URLs it called."""
+
+    urls: list[str] = []
 
     class FakeHttpClient:
-        def request(
-            self,
-            method: str,
-            url: str,
-            *,
-            headers: dict[str, str] | None = None,
-            body: bytes | None = None,
-            allow_private: bool = False,
-            timeout: int = 60,
-        ) -> httpx.Response:
-            del method, url, headers, body, allow_private, timeout
-            return httpx.Response(404, content=b'{"error": "service \\"svc\\" is not declared"}')
+        def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            del method, kwargs
+            urls.append(url)
+            return httpx.Response(status, content=body)
 
     monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
     daemon = OperatorDaemon(
@@ -67,12 +94,96 @@ def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) 
         scope=(),
         ttl="1h",
     )
+    return daemon, urls
+
+
+def test_daemon_request_raises_typed_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A create the daemon refuses with 409 raises the typed conflict from the REST call."""
+
+    daemon, _ = _daemon_answering(
+        monkeypatch, 409, b'{"kind": "service", "name": "agent-demo", "error": "service agent-demo conflicts"}'
+    )
+
+    with pytest.raises(OperatorDaemonConflict) as raised:
+        daemon.create_service(template="services/agent", workspace="demo", inputs={})
+
+    assert (raised.value.kind, raised.value.name) == (OperatorInstanceKind.SERVICE, "agent-demo")
+
+
+def test_workspace_status_reads_template_inputs_and_mounting_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The status read keeps the template ref, the recorded inputs, and the services (not jobs) mounting it."""
+
+    body = json.dumps(
+        {
+            "name": "demo ws",
+            "template": "workspaces/agent-default",
+            "inputs": {"agent_name": "Demo", "instructions": "Hi."},
+            "mounted_by": [
+                {"kind": "service", "name": "agent-demo", "field": "mounts", "value": "workspace://demo ws"},
+                {"kind": "service", "name": "agent-demo", "field": "workdir", "value": "workspace://demo ws/"},
+                {"kind": "job", "name": "backup", "field": "mounts", "value": "workspace://demo ws"},
+            ],
+        }
+    ).encode()
+    daemon, urls = _daemon_answering(monkeypatch, 200, body)
+
+    assert daemon.workspace_status("demo ws") == WorkspaceStatus(
+        name="demo ws",
+        template="workspaces/agent-default",
+        inputs={"agent_name": "Demo", "instructions": "Hi."},
+        services=("agent-demo",),
+    )
+    assert urls == ["http://op/workspaces/demo%20ws/status"]
+
+
+def test_service_status_reads_the_service_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The daemon has no single-service read; the status comes from its service listing."""
+
+    body = b'{"nodes": [{"name": "agent-demo", "runtime": "container", "status": "exited"}], "total_count": 1}'
+    daemon, urls = _daemon_answering(monkeypatch, 200, body)
+
+    assert daemon.service_status("agent-demo") == "exited"
+    assert daemon.service_status("agent-other") is None
+    assert urls == ["http://op/services", "http://op/services"]
+
+
+@pytest.mark.parametrize(
+    ("call", "body"),
+    [
+        (lambda daemon: daemon.destroy_service("svc"), b'{"kind": "service", "name": "svc", "error": "gone"}'),
+        (lambda daemon: daemon.destroy_workspace("ws"), b'{"kind": "workspace", "name": "ws", "error": "gone"}'),
+        (lambda daemon: daemon.workspace_status("ws"), b'{"kind": "workspace", "name": "ws", "error": "gone"}'),
+    ],
+)
+def test_an_instance_is_absent_only_when_the_not_found_names_it(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[[OperatorDaemon], object], body: bytes
+) -> None:
+    """A not-found naming the asked-for instance means it is gone: destroyed already, or no status."""
+
+    daemon, _ = _daemon_answering(monkeypatch, 404, body)
+
+    assert call(daemon) is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"error": "service \\"svc\\" is not declared"}',
+        b"404 page not found",
+        b'{"kind": "service", "name": "other-svc", "error": "gone"}',
+        b'{"kind": "workspace", "name": "svc", "error": "gone"}',
+    ],
+)
+def test_a_not_found_that_names_another_instance_still_raises(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+    """A plain 404 — a proxy, a mis-mounted URL — or one about another instance is never read as destroyed."""
+
+    daemon, _ = _daemon_answering(monkeypatch, 404, body)
 
     with pytest.raises(OperatorDaemonNotFound) as raised:
         daemon.destroy_service("svc")
 
     assert raised.value.status_code == 404
-    assert str(raised.value) == 'operator POST destroy: HTTP 404: service "svc" is not declared'
+    assert str(raised.value).startswith("operator POST destroy: HTTP 404")
 
 
 def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytest.MonkeyPatch) -> None:

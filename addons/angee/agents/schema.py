@@ -196,11 +196,20 @@ class AgentType(AngeeNode):
     lifecycle: auto
     runtime_status: auto
     last_error: auto
+    conflict_kind: auto
+    conflict_name: auto
     expects_service: bool = strawberry_django.field(only=["runtime_class"])
     can_chat: bool = strawberry_django.field(only=["runtime_status", "runtime_class", "service"])
-    can_provision: bool
-    can_deprovision: bool
-    can_delete: bool
+    can_provision: bool = strawberry_django.field(
+        only=["lifecycle", "runtime_status", "workspace", "conflict_kind", "conflict_name"]
+    )
+    can_adopt: bool = strawberry_django.field(only=["lifecycle", "conflict_kind"])
+    can_replace: bool = strawberry_django.field(only=["lifecycle", "conflict_kind"])
+    can_reprovision: bool = strawberry_django.field(
+        only=["lifecycle", "workspace", "conflict_kind", "conflict_name", "runtime_class"]
+    )
+    can_deprovision: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
+    can_delete: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
     created_at: auto
     updated_at: auto
 
@@ -735,6 +744,18 @@ class AgentActionMutation:
         """Recreate the agent service over its existing workspace."""
 
         return provisioning.reprovision_agent(id)
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def adopt_agent(self, id: PublicID) -> ActionResult:
+        """Record the conflicting instance as the agent's own, keeping its container as it is."""
+
+        return provisioning.adopt_agent(id)
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def replace_agent(self, id: PublicID) -> ActionResult:
+        """Destroy the conflicting instance, then provision the agent afresh."""
+
+        return provisioning.replace_agent(id)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def agent_chat_endpoint(self, id: PublicID) -> AgentChatEndpoint:

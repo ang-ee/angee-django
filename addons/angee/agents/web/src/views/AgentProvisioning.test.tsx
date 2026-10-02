@@ -34,6 +34,8 @@ const mocks = vi.hoisted(() => ({
     service: "",
     workspace_template: { path: "workspaces/agent-default" },
     expects_service: true,
+    conflict_kind: "" as string,
+    conflict_name: "" as string,
   },
   workspaceStatus: null as {
     error?: string | null;
@@ -120,6 +122,8 @@ beforeEach(() => {
   mocks.record.workspace = "";
   mocks.record.service = "";
   mocks.record.expects_service = true;
+  mocks.record.conflict_kind = "";
+  mocks.record.conflict_name = "";
   mocks.workspaceStatus = null;
 });
 
@@ -134,6 +138,36 @@ describe("AgentProvisioning", () => {
     expect(screen.queryByRole("heading", { name: "Service" })).toBeNull();
     expect(screen.getByText(String(mocks.record.last_error))).toBeTruthy();
     expect(screen.getByText(intro)).toBeTruthy();
+  });
+
+  test("shows a conflicting workspace read-only, without the operator's destroy controls", () => {
+    mocks.record.conflict_kind = "WORKSPACE";
+    mocks.record.conflict_name = "ws-taken";
+    mocks.workspaceStatus = {
+      sources: [{ slot: "main", source: "notes", state: "ready", dirty: true, ahead: 3, behind: 0, path: "/w" }],
+    };
+
+    renderProvisioning(<AgentProvisioning agentId="agent-1" pane="workspace" />);
+
+    expect(screen.getByText(/already has a workspace named “ws-taken”/)).toBeTruthy();
+    expect(screen.getByText(enAgentsMessages["provisioning.conflictSources"] ?? "")).toBeTruthy();
+    expect(screen.getByText("+3 / -0")).toBeTruthy();
+    expect(screen.queryByTestId("workspace-row")).toBeNull();
+    expect(screen.queryByText(enAgentsMessages["provisioning.intro"] ?? "")).toBeNull();
+  });
+
+  test("shows a conflicting service's logs on the service tab", () => {
+    mocks.record.lifecycle = "READY";
+    mocks.record.workspace = "ws-own";
+    mocks.record.conflict_kind = "SERVICE";
+    mocks.record.conflict_name = "agent-ws-own";
+
+    renderProvisioning(<AgentProvisioning agentId="agent-1" pane="service" />);
+
+    expect(screen.getByText(/already has a service named “agent-ws-own”/)).toBeTruthy();
+    const logs = screen.getByTestId("service-logs");
+    expect(logs.getAttribute("data-name")).toBe("agent-ws-own");
+    expect(screen.queryByTestId("service-row")).toBeNull();
   });
 
   test("renders the service row first and service logs underneath", () => {
