@@ -38,7 +38,7 @@ import {
 
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
-  "total_deleted_count has_blockers " +
+  "total_deleted_count has_blockers refusals " +
   "deleted { label count } updated { label count } blocked { label count } " +
   "root { label object_label object_id " +
   "children { label object_label object_id " +
@@ -589,6 +589,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "  deleted: DeletePreviewGroup[];",
     "  updated: DeletePreviewGroup[];",
     "  blocked: DeletePreviewGroup[];",
+    "  refusals: string[];",
     "  root: DeletePreviewNode;",
     "}",
     "",

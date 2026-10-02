@@ -1945,13 +1945,6 @@ class AgentSession(AuditMixin, AngeeDataModel):
                 locked.cancel_turn(turn, actor=actor)
             self.refresh_from_db()
 
-    def delete_blocker(self) -> str | None:
-        """Require active execution to be stopped before deleting its transcript."""
-
-        if self.turns.active().exists():
-            return ACTIVE_TURN_DELETE_MESSAGE
-        return None
-
     def claim_turn(self) -> Any | None:
         """Claim the oldest pending turn under the session lock, never an active turn.
 

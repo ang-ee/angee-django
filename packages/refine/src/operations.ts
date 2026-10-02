@@ -186,6 +186,7 @@ export interface DeletePreview {
   deleted: readonly DeletePreviewGroup[];
   updated: readonly DeletePreviewGroup[];
   blocked: readonly DeletePreviewGroup[];
+  refusals: readonly string[];
   hasBlockers: boolean;
   root: DeletePreviewNode;
 }
@@ -434,11 +435,15 @@ export function extractDeletePreview(
   ) {
     return null;
   }
+  const refusals = Array.isArray(preview.refusals)
+    ? preview.refusals.filter((message): message is string => typeof message === "string")
+    : [];
   return {
     totalDeletedCount: preview.total_deleted_count,
     deleted: deletePreviewGroups(preview.deleted),
     updated: deletePreviewGroups(preview.updated),
     blocked: deletePreviewGroups(preview.blocked),
+    refusals,
     hasBlockers: preview.has_blockers,
     root: previewRoot,
   };

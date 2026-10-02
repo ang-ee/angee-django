@@ -13,6 +13,7 @@ from rebac.backends import backend
 from rebac.backends.local import LocalBackend
 
 from angee.graphql.capabilities import held_permissions, permission_annotations
+from angee.graphql.deletion import DeletePreview
 from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_models import Proposal, Round
@@ -26,6 +27,27 @@ pytest_plugins = ("tests.proposals_campaign",)
 # selected columns; reading a filled result cache adds no guard statements.
 REBAC_TRACK_STATUS_QUERY_CEILING = 149
 REBAC_ROUND_QUERY_CEILING = 43
+
+
+def test_round_delete_preview_checks_collected_proposals_without_rechecking_them(
+    campaign: ProposalCampaign,
+) -> None:
+    """Touched proposals project one refusal without a per-proposal round query loop."""
+
+    query_counts = []
+    for proposal_count in (1, 20):
+        round = campaign.round()
+        for index in range(proposal_count):
+            campaign.admit(round, f"responder-{index}")
+        with system_context(reason="tests.proposals.delete_preview.queries"):
+            Proposal._base_manager.filter(round=round).update(statement="Retained commitment")
+            DeletePreview.from_instance(round)  # Warm shared schema/ContentType caches.
+            with CaptureQueriesContext(connection) as queries:
+                preview = DeletePreview.from_instance(round)
+        assert preview.has_blockers
+        assert preview.refusals == ["Only an untouched draft proposal can be deleted."]
+        query_counts.append(len(queries))
+    assert query_counts[0] == query_counts[1], query_counts
 
 
 def _list_statement_categories(queries, model, *, roster=False, projection=None, audits=None) -> Counter[str]:

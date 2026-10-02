@@ -74,6 +74,25 @@ agents_schema = importlib.import_module("angee.agents.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 
+_DELETE_AGENT_PREVIEW = """
+    mutation DeleteAgent($id: ID!, $confirm: Boolean! = false) {
+      delete_agent(id: $id, confirm: $confirm) {
+        total_deleted_count
+        has_blockers
+        refusals
+        deleted { label count }
+        blocked { label count }
+        root {
+          object_id object_label
+          children {
+            label object_id object_label
+            children { object_id object_label }
+          }
+        }
+      }
+    }
+"""
+
 
 def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) -> None:
     """A console read→write round-trip posts choices columns by member NAME.
@@ -253,6 +272,216 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     assert deleted == {"id": created["id"], "name": "Renamed"}
     with system_context(reason="test.agents.hasura_delete.verify"):
         assert not Agent.objects.filter(sqid=created["id"]).exists()
+
+
+def test_agent_resource_exposes_authored_delete_preview() -> None:
+    """Final resource metadata enables the shared UI delete action for agents."""
+
+    resource = next(item for item in _schema().angee_resources if item.model_label == "agents.Agent")
+    assert resource.roots.delete_preview_name == "delete_agent"
+    assert resource.type_names.delete_payload == "DeletePreview"
+    assert "deletePreview" in resource.capabilities
+    assert resource.as_wire(schema_name="console")["roots"]["deletePreview"] == "delete_agent"
+
+
+def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(composed_tables: None) -> None:
+    """An owner sees cascade counts but only readable session and turn identities."""
+
+    owner = User.objects.create_user(username="agt-preview-owner")
+    other = User.objects.create_user(username="agt-preview-other")
+    with system_context(reason="test.agents.delete_preview.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
+        visible_session = AgentSession.objects.create(agent=agent, owner=owner, title="Own conversation")
+        hidden_session = AgentSession.objects.create(agent=agent, owner=other, title="Secret conversation")
+        visible_turn = AgentTurn.objects.create(
+            session=visible_session,
+            index=1,
+            prompt="Own prompt",
+            status="completed",
+        )
+        hidden_turn = AgentTurn.objects.create(
+            session=hidden_session,
+            index=1,
+            prompt="Secret prompt",
+            status="completed",
+        )
+    console = _schema()
+    preview = _data(_execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner))["delete_agent"]
+    assert preview["has_blockers"] is False
+    assert preview["blocked"] == []
+    assert preview["refusals"] == []
+    deleted = {group["label"]: group["count"] for group in preview["deleted"]}
+    assert deleted["agents"] == 1
+    assert deleted["agent sessions"] == deleted["agent turns"] == 2
+    assert preview["total_deleted_count"] == sum(deleted.values())
+    assert preview["root"]["object_id"] == str(agent.sqid)
+    groups = {group["label"]: group for group in preview["root"]["children"]}
+    for label, visible in (("agent sessions", visible_session), ("agent turns", visible_turn)):
+        group = groups[label]
+        assert group["object_label"] == f"2 {label}"
+        assert group["children"] == [
+            {"object_id": str(visible.sqid), "object_label": str(visible)},
+            {"object_id": None, "object_label": "1 more records"},
+        ]
+    serialized = json.dumps(preview)
+    for secret in (str(hidden_session.sqid), str(hidden_turn.sqid), "Secret conversation", "Secret prompt"):
+        assert secret not in serialized
+    with system_context(reason="test.agents.delete_preview.verify_preview"):
+        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert AgentSession.objects.filter(agent=agent).count() == 2
+        assert AgentTurn.objects.filter(session__agent=agent).count() == 2
+    confirmed = _data(
+        _execute(
+            console,
+            _DELETE_AGENT_PREVIEW,
+            {"id": str(agent.sqid), "confirm": True},
+            user=owner,
+        )
+    )["delete_agent"]
+    assert confirmed == preview
+    with system_context(reason="test.agents.delete_preview.verify_confirm"):
+        assert not Agent.objects.filter(pk=agent.pk).exists()
+        assert not AgentSession.objects.filter(pk__in=[visible_session.pk, hidden_session.pk]).exists()
+        assert not AgentTurn.objects.filter(pk__in=[visible_turn.pk, hidden_turn.pk]).exists()
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_agent_delete_preview_reports_provisioned_blocker(composed_tables: None, confirm: bool) -> None:
+    """A provisioned agent reports its owning refusal without attempting deletion."""
+
+    owner = User.objects.create_user(username="agt-provisioned-preview-owner")
+    with system_context(reason="test.agents.provisioned_preview.seed"):
+        agent = Agent.objects.create(name="Provisioned", owner=owner, lifecycle="ready", service="svc-agent")
+    preview = _data(
+        _execute(
+            _schema(),
+            _DELETE_AGENT_PREVIEW,
+            {"id": str(agent.sqid), "confirm": confirm},
+            user=owner,
+        )
+    )["delete_agent"]
+    assert preview["has_blockers"] is True
+    assert preview["blocked"] == []
+    assert preview["refusals"] == ["Deprovision this agent before deleting it."]
+    with system_context(reason="test.agents.provisioned_preview.verify"):
+        assert Agent.objects.filter(pk=agent.pk).exists()
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+def test_agent_delete_preview_reports_hidden_active_turn_blockers(
+    composed_tables: None,
+    confirm: bool,
+    status: str,
+) -> None:
+    """Agent and turn refusals are readable even when the active transcript is hidden."""
+
+    owner = User.objects.create_user(username="agt-active-preview-owner")
+    other = User.objects.create_user(username="agt-active-preview-other")
+    with system_context(reason="test.agents.active_preview.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        session = AgentSession.objects.create(agent=agent, owner=other, title="Secret conversation")
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Secret prompt", status=status)
+    preview = _data(
+        _execute(
+            _schema(),
+            _DELETE_AGENT_PREVIEW,
+            {"id": str(agent.sqid), "confirm": confirm},
+            user=owner,
+        )
+    )["delete_agent"]
+    assert preview["has_blockers"] is True
+    assert preview["blocked"] == []
+    messages = set(preview["refusals"])
+    assert messages == {
+        "Stop all active turns before deleting this agent.",
+        "An agent turn is still running or awaiting approval; stop it first.",
+    }
+    serialized = json.dumps(preview)
+    for secret in (str(session.sqid), str(turn.sqid), "Secret conversation", "Secret prompt"):
+        assert secret not in serialized
+    with system_context(reason="test.agents.active_preview.verify"):
+        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
+
+
+def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_tables: None) -> None:
+    """Collecting 1 or 50 private active sessions adds no per-session blocker queries."""
+
+    owner = User.objects.create_user(username="agt-preview-budget-owner")
+    other = User.objects.create_user(username="agt-preview-budget-session-owner")
+    agents = []
+    with system_context(reason="test.agents.preview_budget.seed"):
+        for size in (1, 50):
+            agent = Agent.objects.create(name=f"Assistant {size}", owner=owner, lifecycle="deprovisioned")
+            agents.append(agent)
+            for _ in range(size):
+                session = AgentSession.objects.create(agent=agent, owner=other)
+                AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
+    console = _schema()
+    _data(_execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agents[0].sqid)}, user=owner))
+    counts = []
+    for agent in agents:
+        with CaptureQueriesContext(connection) as captured:
+            result = _execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agent.sqid)}, user=owner)
+            preview = _data(result)["delete_agent"]
+        assert preview["blocked"] == []
+        assert preview["refusals"] == [
+            "Stop all active turns before deleting this agent.",
+            "An agent turn is still running or awaiting approval; stop it first.",
+        ]
+        counts.append(len(captured))
+    assert counts[0] == counts[1], counts
+
+
+@pytest.mark.parametrize("surface", ["agent", "user"])
+def test_graphql_delete_receivers_refuse_after_preview_race(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, surface: str,
+) -> None:
+    """Authored and IAM Hasura deletes return readable late refusals and retain all rows."""
+
+    owner = User.objects.create_user(username="agt-preview-race-owner")
+    admin = _platform_admin("agt-preview-race-admin")
+    with system_context(reason="test.agents.preview_race.seed"):
+        agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
+        session = AgentSession.objects.create(agent=agent, owner=owner)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
+        principal = agent.user
+    from_instance = DeletePreview.from_instance
+
+    def unblocked_preview(instance: Any) -> DeletePreview:
+        preview = from_instance(instance)
+        preview.refusals = []
+        preview.has_blockers = False
+        return preview
+
+    monkeypatch.setattr(DeletePreview, "from_instance", unblocked_preview)
+    mutation = (
+        _DELETE_AGENT_PREVIEW if surface == "agent"
+        else "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }"
+    )
+    result = _execute(
+        _schema(), mutation,
+        {"id": str(agent.sqid), "confirm": True} if surface == "agent" else {"id": str(owner.sqid)},
+        user=admin,
+    )
+    message = "An agent turn is still running or awaiting approval; stop it first."
+    if surface == "agent":
+        preview = _data(result)["delete_agent"]
+        assert preview["has_blockers"] is True
+        assert preview["refusals"] == [message]
+        assert preview["blocked"] == []
+    else:
+        assert result.errors is not None
+        assert result.errors[0].message == message
+        assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    with system_context(reason="test.agents.preview_race.verify"):
+        assert User.objects.filter(pk=owner.pk).exists()
+        assert User.objects.filter(pk=principal.pk, is_active=True).exists()
+        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert AgentSession.objects.filter(pk=session.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, status="running").exists()
 
 
 def test_agent_delete_capability_has_constant_query_count(composed_tables: None) -> None:
@@ -485,7 +714,8 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
     refused = _execute(console, mutation, {"id": str(agent.sqid)}, user=owner)
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-    assert refused.errors[0].message == "Stop all active turns before deleting this agent."
+    assert "Stop all active turns before deleting this agent." in refused.errors[0].message
+    assert "An agent turn is still running or awaiting approval; stop it first." in refused.errors[0].message
     with system_context(reason="test.agents.active_agent_delete.verify_and_stop"):
         assert Agent.objects.filter(pk=agent.pk).exists()
         assert AgentSession.objects.filter(pk=session.pk).exists()
@@ -506,10 +736,19 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
 
 
 @pytest.mark.parametrize("relation", ["reader", "editor"])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }",
+        "mutation Delete($id: ID!) { delete_agent(id: $id) { total_deleted_count } }",
+        "mutation Delete($id: ID!) { delete_agent(id: $id, confirm: true) { total_deleted_count } }",
+    ],
+)
 def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
     relation: str,
+    operation: str,
 ) -> None:
     """Read/write reach alone cannot lock a delete target or inspect its blockers."""
 
@@ -547,7 +786,7 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
     monkeypatch.setattr(DeletePreview, "from_instance", record_preview)
     result = _execute(
         _schema(),
-        "mutation Delete($id: String!) { delete_agents_by_pk(id: $id) { id } }",
+        operation,
         {"id": str(agent.sqid)},
         user=reader,
     )
@@ -671,14 +910,22 @@ def test_transcript_queryset_delete_refuses_active_turns(
 @pytest.mark.parametrize("cascade", ["agent_owner", "session_owner"])
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
 @pytest.mark.parametrize(
-    "mutation",
+    ("mutation", "is_preview"),
     [
-        "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }",
-        "mutation Delete($id: ID!) { delete_user(id: $id, confirm: true) { has_blockers } }",
+        ("mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }", False),
+        (
+            "mutation Delete($id: ID!) { delete_user(id: $id, confirm: true) { "
+            "has_blockers refusals blocked { label count } } }",
+            True,
+        ),
     ],
 )
 def test_user_delete_refuses_active_turn_cascades(
-    composed_tables: None, cascade: str, status: str, mutation: str,
+    composed_tables: None,
+    cascade: str,
+    status: str,
+    mutation: str,
+    is_preview: bool,
 ) -> None:
     """IAM cannot delete an active turn through either user-owned cascade."""
 
@@ -692,12 +939,19 @@ def test_user_delete_refuses_active_turn_cascades(
         principal = agent.user
     target = owner if cascade == "agent_owner" else other
     result = _execute(_schema(), mutation, {"id": str(target.sqid)}, user=admin)
-    assert result.errors is not None
-    assert result.errors[0].extensions == {
-        "code": "VALIDATION",
-        "validationErrors": {},
-        "formErrors": ["An agent turn is still running or awaiting approval; stop it first."],
-    }
+    turn_message = "An agent turn is still running or awaiting approval; stop it first."
+    agent_message = "Stop all active turns before deleting this agent."
+    if is_preview:
+        preview = _data(result)["delete_user"]
+        assert preview["has_blockers"] is True
+        assert preview["blocked"] == []
+        assert preview["refusals"] == ([agent_message, turn_message] if cascade == "agent_owner" else [turn_message])
+    else:
+        assert result.errors is not None
+        assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+        assert result.errors[0].message == (
+            f"{agent_message} {turn_message}" if cascade == "agent_owner" else turn_message
+        )
     with system_context(reason="test.agents.user_cascade.verify"):
         assert User.objects.filter(pk__in=[owner.pk, other.pk, principal.pk]).count() == 3
         assert User.objects.filter(pk=principal.pk, is_active=True).exists()
@@ -855,8 +1109,8 @@ def test_user_delete_requires_owned_agent_deprovisioning(composed_tables: None) 
         {"id": str(owner.sqid)}, user=admin,
     )
     assert result.errors is not None
-    assert result.errors[0].extensions["code"] == "VALIDATION"
-    assert result.errors[0].extensions["formErrors"] == ["Deprovision this agent before deleting it."]
+    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert result.errors[0].message == "Deprovision this agent before deleting it."
     with system_context(reason="test.agents.user_provisioned.verify"):
         assert User.objects.filter(pk__in=[owner.pk, principal.pk]).count() == 2
         assert User.objects.filter(pk=principal.pk, is_active=True).exists()

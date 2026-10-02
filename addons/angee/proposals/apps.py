@@ -10,3 +10,11 @@ class ProposalsConfig(AppConfig):
 
     default = True
     name = "angee.proposals"
+
+    def ready(self) -> None:
+        """Bind deletion enforcement after the model registry is populated."""
+
+        super().ready()
+        from angee.proposals.signals import connect
+
+        connect()

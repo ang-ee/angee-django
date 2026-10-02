@@ -1006,6 +1006,18 @@ and current contracts before applying a historical example to a new deployment.
   signals calling the owning model rules. Agents' teardown and active-turn guards
   use `pre_delete`; service-user deactivation uses `post_delete`. See the
   [agents receivers](../../addons/angee/agents/signals.py).
+- **Deletion refusals have one model owner.** Override
+  [`AngeeModel.delete_blocker()`](../../angee/base/models.py) with a public-safe
+  message. [`DeletePreview`](../../addons/angee/graphql/deletion.py) reports each
+  distinct refusal before deleting, without row counts or hidden identities.
+  A model overriding the hook must bind a `pre_delete` receiver enforcing that
+  same rule on every deletion path; an instance override cannot protect cascades.
+  Receivers remain authoritative when state changes after preview and ensure
+  Django collects those models rather than fast-deleting them.
+  When deleting a model needs locks in a domain order (a parent before the row),
+  override its [`lock_for_delete()`](../../angee/base/models.py); its `pre_delete`
+  receiver and every confirmed-delete caller of that model then lock through the
+  hook, callers only after their permission preflight.
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with
