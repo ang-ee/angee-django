@@ -409,6 +409,23 @@ def test_epoch_reset_retains_identity_and_reverifies_baseline(stream_bridge: Cha
     assert RecordLink.objects.count() == RecordRevision.objects.count() == 1
 
 
+@pytest.mark.parametrize("fault", ["stalled", "reset"])
+def test_native_sync_rejects_stalled_pages_and_repeated_resets(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, fault: str,
+) -> None:
+    """The native drain shares PageResult's bounded continuation contract."""
+    adapter = MemoryAdapter(pages=[CursorInvalid(), CursorInvalid()] if fault == "reset" else [
+        StreamPage((), {}, exhausted=False), StreamPage((), {}, exhausted=False),
+    ])
+    monkeypatch.setattr(type(stream_bridge), "backend", property(lambda self: adapter))
+
+    with pytest.raises(RuntimeError if fault == "reset" else AdapterContractError,
+                       match="fresh baseline" if fault == "reset" else "repeated a page"):
+        sync_bridge(stream_bridge)
+
+    assert adapter.extracted == 2 and adapter.closed == 1
+
+
 def test_sweep_counts_absence_then_retains_confirmed_tombstone(stream_bridge: Channel) -> None:
     stream = SyncStream.objects.current(
         stream_bridge,

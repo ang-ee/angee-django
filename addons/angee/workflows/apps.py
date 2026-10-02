@@ -38,9 +38,11 @@ class WorkflowsConfig(AppConfig):
 
     def ready(self) -> None:
         """Subscribe the waiter owner to the decisions lifecycle."""
+        from angee.workflows.subjects import check_run_subject_models
         from angee.workflows.triggers import check_record_changed_models
 
         checks.register(check_record_changed_models, checks.Tags.models)
+        checks.register(check_run_subject_models, checks.Tags.models)
         decision_group_settled.connect(wake_review, dispatch_uid="workflows.review_settled")
         post_delete.connect(
             deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),

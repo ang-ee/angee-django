@@ -1,7 +1,7 @@
 [addon]
 name = "angee.workflows_integrate"
-description = "Reviewed archive imports through integration extractors"
-keywords = ["workflows", "integrate", "archive"]
+description = "Durable bridge sync cycles and reviewed archive imports"
+keywords = ["workflows", "integrate", "sync", "archive"]
 category = "Workflows"
 depends_on = ["angee.workflows", "angee.decisions", "angee.integrate", "angee.storage"]
 

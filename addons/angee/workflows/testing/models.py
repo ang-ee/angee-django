@@ -1,6 +1,44 @@
 """Concrete workflow sources for native Django test database setup."""
 
+from typing import Any
+
+from django.core.exceptions import ValidationError
+from django.db import models
+
+from angee.base.models import AngeeDataModel
 from angee.workflows import models as sources
+from angee.workflows.subjects import RunSubject
+
+
+class RunSubjectRecord(RunSubject, AngeeDataModel):
+    """Persist hook observations and refusals for generic lifecycle proofs."""
+
+    admissions = models.PositiveIntegerField(default=0)
+    settlements = models.JSONField(default=list)
+    refuse_admission = models.BooleanField(default=False)
+    refuse_settlement = models.BooleanField(default=False)
+
+    def admit_run(self, run: Any) -> None:
+        """Retain each admission unless the record refuses the run."""
+        if self.refuse_admission:
+            raise ValidationError("The subject refuses admission.")
+        self.admissions += 1
+        self.save(update_fields=["admissions"])
+
+    def settle_run(self, run: Any, status: str) -> None:
+        """Record terminal facts, optionally refusing after the write to prove rollback."""
+        self.settlements.append({"run": run.pk, "status": status, "output": run.output})
+        self.save(update_fields=["settlements"])
+        if self.refuse_settlement:
+            raise ValidationError("The subject refuses settlement.")
+
+    class Meta(AngeeDataModel.Meta):
+        """Keep test-only subject state in the optional testing app."""
+
+        abstract = False
+        app_label = "workflows_testing"
+        db_table = "test_workflows_subject"
+        rebac_resource_type = "workflows_testing/subject"
 
 
 class Workflow(sources.Workflow):
