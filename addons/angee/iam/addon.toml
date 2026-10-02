@@ -14,6 +14,8 @@ dependencies = [
 name = "normalize_person_emails"
 app_label = "iam"
 module = "runtime_migrations.normalize_person_emails"
+# The released body raised in applies() on a new stack's history; its copies stay valid.
+compatible_source_sha256 = ["7da79f37fc8a1b17f705391aa1921ab7f1c129b356d54fe3a4625dff920d66ea"]
 
 [resources]
 demo = [

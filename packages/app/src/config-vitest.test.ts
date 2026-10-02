@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { loadConfigFromFile } from "vite";
 import { describe, expect, test } from "vitest";
 
-import { gqlAliasFor } from "../config/vitest";
+import {
+  defineAngeePackageVitestConfig,
+  defineAngeeWebVitestConfig,
+  gqlAliasFor,
+} from "../config/vitest";
 
 describe("gqlAliasFor", () => {
   test("explains how to materialize a missing composed runtime", () => {
@@ -51,4 +55,25 @@ test("the emitted addon Vitest config loads the public web defaults", async () =
   } finally {
     rmSync(addonRoot, { recursive: true, force: true });
   }
+});
+
+describe("watcher defaults", () => {
+  test.each([
+    ["package", defineAngeePackageVitestConfig()],
+    ["web", defineAngeeWebVitestConfig({ gqlAlias: [] })],
+  ])("%s defaults never watch the jj store", (_kind, config) => {
+    expect(config.server?.watch?.ignored).toEqual(
+      expect.arrayContaining(["**/.jj/**"]),
+    );
+  });
+
+  test("a caller's own ignores are kept alongside the jj store", () => {
+    const config = defineAngeePackageVitestConfig({
+      server: { watch: { ignored: ["**/tmp/**"] } },
+    });
+
+    expect(config.server?.watch?.ignored).toEqual(
+      expect.arrayContaining(["**/.jj/**", "**/tmp/**"]),
+    );
+  });
 });

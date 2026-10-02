@@ -11,17 +11,18 @@ from django.db.migrations.state import ProjectState
 
 
 def applies(project_state: ProjectState) -> bool:
+    """Apply only to a user history that still lacks the person email constraint.
+
+    A history that already carries the constraint is complete: a new stack's
+    initial migration creates it with the empty table, so nothing needs normalizing.
+    """
+
     model = project_state.models.get(("iam", "user"))
     if model is None or not {"email", "kind"}.issubset(model.fields):
         return False
-    for constraint in model.options.get("constraints", []):
-        if constraint.name != "iam_user_person_email_unique":
-            continue
-        raise ValueError(
-            "The person email constraint precedes its normalization migration; "
-            "reconcile that history before materializing normalize_person_emails."
-        )
-    return True
+    return not any(
+        constraint.name == "iam_user_person_email_unique" for constraint in model.options.get("constraints", [])
+    )
 
 
 def normalize_email(email):
