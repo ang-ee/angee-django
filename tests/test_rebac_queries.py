@@ -10,21 +10,22 @@ from rebac.resources import model_for_resource_type
 
 from tests.conftest import Backend, Drive, Folder, Page, Vault, create_user
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 -- register source model
+from tests.queries import is_rebac_revision_read
 
 
 @pytest.mark.parametrize(
     ("resource_type", "permission", "expected_queries"),
     (
-        ("messaging/message_edge", "read", 9),
-        ("projects/task_relation", "read", 7),
-        ("knowledge/record_binding", "read", 4),
-        ("projects/task", "comment", 6),
-        ("decisions/decision", "act", 6),
-        ("extraction/extraction", "read", 13),
-        ("storage/file", "read", 8),
-        ("storage/file_attachment", "read", 9),
-        ("projects/link", "read", 7),
-        ("messaging/thread", "read", 7),
+        ("messaging/message_edge", "read", 8),
+        ("projects/task_relation", "read", 6),
+        ("knowledge/record_binding", "read", 3),
+        ("projects/task", "comment", 5),
+        ("decisions/decision", "act", 5),
+        ("extraction/extraction", "read", 12),
+        ("storage/file", "read", 7),
+        ("storage/file_attachment", "read", 8),
+        ("projects/link", "read", 6),
+        ("messaging/thread", "read", 6),
     ),
 )
 def test_large_permission_reads_keep_one_application_statement(
@@ -39,9 +40,12 @@ def test_large_permission_reads_keep_one_application_statement(
     queryset = model.objects.with_actor(actor).with_action(permission).scoped()
     with CaptureQueriesContext(connection) as queries:
         list(queryset.values_list("pk", flat=True)[:1])
-    # Three schema-revision witnesses and one consumer-row query, plus the
+    # The projection guard runs only when fetching and shares one schema read
+    # across columns; reading a filled cache does not run it again. The guard and
+    # scope read two revision witnesses around one consumer-row query, plus the
     # compiler's role/constant facts, arrow-target IDs, and recursive seed reads.
     assert len(queries) == expected_queries, (resource_type, permission, queries.captured_queries)
+    assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 2
     table = connection.ops.quote_name(model._meta.db_table)
     assert sum(item["sql"].startswith(f"SELECT {table}.") for item in queries) == 1
 
@@ -64,7 +68,7 @@ def test_recursive_reads_stay_bounded_across_fifty_levels(composed_tables: None,
             pks = set(rows.with_actor(viewer).with_action("read").scoped().values_list("pk", flat=True))
         # Include the compiler's policy/seed reads as well as the final query.
         # Bound statements independently of the fifty application rows.
-        assert len(queries) <= 12, queries.captured_queries
+        assert len(queries) <= 8, queries.captured_queries
         assert max(len(query["sql"]) for query in queries) <= 32_768, queries.captured_queries
         return pks
 

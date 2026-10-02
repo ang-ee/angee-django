@@ -44,7 +44,7 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac>=0.25.2",
+  "django-zed-rebac>=0.25.3",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
@@ -84,6 +84,8 @@ dev = [
   # Test-only: channels.testing imports daphne (ChannelsLiveServerTestCase). It is
   # not a runtime dependency — Angee serves with uvicorn (see [project.dependencies]).
   "daphne>=4.0",
+  # Test-only: E024 fixtures retain and validate CEL caveat declarations.
+  "django-zed-rebac[caveats]>=0.25.3",
   "faker>=30.0",
   # Source-addon tests import django.contrib.postgres field types even when the
   # test database is SQLite; the former base wrapper selected the core extra.
@@ -109,7 +111,7 @@ addons = [
     "django-axes>=8.0",
     "django-countries>=9,<10",
     "django-import-export>=4.4",
-    "django-zed-rebac[strawberry-django]>=0.25.2",
+    "django-zed-rebac[strawberry-django]>=0.25.3",
     "fastmcp>=3.4.2,<4",
     "httpcore>=1.0,<2",
     "httpx>=0.28.1,<0.29",

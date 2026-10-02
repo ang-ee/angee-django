@@ -272,9 +272,14 @@ def test_empty_creation_key_fails_before_a_clone_is_written(clone_template):
 
 
 def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables, record_property):
-    """Cloning may cross batch boundaries but must not issue per-page statements."""
+    """Cloning issues one child insert per markdown page and no other per-page statement.
+
+    Django's ``bulk_create`` refuses multi-table children, so each markdown body is its
+    own INSERT; everything else may only cross a few native batch boundaries.
+    """
 
     author, actor = create_user("budget-author"), create_user("budget-actor")
+    child_insert = f"INSERT INTO {connection.ops.quote_name(MarkdownPage._meta.db_table)}"
     counts = []
     for size in (5, 60):
         with actor_context(author), system_context(reason="test.clone.budget.template_setup"):
@@ -288,14 +293,14 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
         _grant(source, "viewer", actor)
         with actor_context(actor), CaptureQueriesContext(connection) as captured, reversion.create_revision():
             clone = Vault.objects.create_from(source, name=f"Copy {size}")
-        counts.append(len(captured))
+        child_inserts = sum(query["sql"].startswith(child_insert) for query in captured.captured_queries)
+        assert child_inserts == size
+        counts.append(len(captured) - child_inserts)
         record_property(f"clone_queries_{size}", len(captured))
         with system_context(reason="test.clone.budget.contents"):
             assert Page.objects.filter(vault=clone).count() == size
             assert MarkdownPage.objects.filter(vault=clone).count() == size
             assert Page.history.filter(vault_id=clone.pk).count() == size
-    # Leave this guard red until the child-row bulk-insert owner is decided.
-    # A few native batch boundaries are allowed; one statement per child is not.
     assert counts[1] - counts[0] <= 6, counts
 
 

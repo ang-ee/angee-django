@@ -16,16 +16,19 @@ from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
 from tests.proposals_models import Proposal, Round
+from tests.queries import is_rebac_revision_read
 
 pytest_plugins = ("tests.proposals_campaign",)
 
 # django-zed-rebac owns these fixed scope-compilation reads. Application row
 # reads and roster expansion have separate exact guards below.
-REBAC_TRACK_STATUS_QUERY_CEILING = 150
-REBAC_ROUND_QUERY_CEILING = 44
+# Projection guards run only on a fetch, sharing one schema operation across
+# selected columns; reading a filled result cache adds no guard statements.
+REBAC_TRACK_STATUS_QUERY_CEILING = 149
+REBAC_ROUND_QUERY_CEILING = 43
 
 
-def _list_statement_categories(queries, model, *, roster=False) -> Counter[str]:
+def _list_statement_categories(queries, model, *, roster=False, projection=None, audits=None) -> Counter[str]:
     """Separate native list projections from the permission compiler's reads."""
 
     categories: Counter[str] = Counter()
@@ -33,14 +36,19 @@ def _list_statement_categories(queries, model, *, roster=False) -> Counter[str]:
     row_prefix = f"SELECT {quote(model._meta.db_table)}.{quote(model._meta.pk.column)},"
     roster_prefix = f"SELECT {quote(Proposal._meta.db_table)}.{quote(Proposal._meta.pk.column)},"
     for query in queries:
-        sql = query["sql"]
-        if sql.startswith(row_prefix):
+        statement = query["sql"]
+        # Django records streamed PostgreSQL reads as DECLARE ... FOR SELECT.
+        # Classify their SELECT payload while counting each captured statement.
+        sql = statement.partition(" FOR ")[2] if statement.startswith("DECLARE ") else statement
+        if sql.startswith(row_prefix) or (
+            projection and f" AS {quote(projection)} FROM {quote(model._meta.db_table)}" in sql
+        ):
             category = "application"
         elif roster and sql.startswith(roster_prefix):
             category = "roster"
-        elif roster and sql.startswith('INSERT INTO "rebac_permissionauditevent"'):
-            category = "roster_audit"
-        elif sql.startswith('SELECT "rebac_schemageneration"."revision"'):
+        elif sql.startswith('INSERT INTO "rebac_permissionauditevent"'):
+            category = "bypass_audit"
+        elif is_rebac_revision_read(statement):
             category = "schema_revision"
         elif sql.startswith('SELECT 1 AS "a" FROM "rebac_schemageneration"'):
             category = "constant_decision"
@@ -49,11 +57,11 @@ def _list_statement_categories(queries, model, *, roster=False) -> Counter[str]:
         elif sql.startswith("SELECT ") and sql.partition(" FROM ")[0].endswith(' AS "pk"'):
             category = "decided_rows"
         else:
-            pytest.fail(f"Unexpected statement in list projection: {sql}")
+            pytest.fail(f"Unexpected statement in list projection: {statement}")
         categories[category] += 1
     assert categories["application"] == 1, categories
     assert categories["roster"] == int(roster), categories
-    assert categories["roster_audit"] == int(roster), categories
+    assert categories["bypass_audit"] == (int(roster) if audits is None else audits), categories
     return categories
 
 
@@ -144,7 +152,7 @@ def test_round_and_proposal_read_scopes_compile_to_sql_for_non_admins(campaign: 
         assert "SELECT" in sql.upper()
 
 
-def test_waiting_list_is_one_query_per_page_and_private_to_each_recipient(campaign: ProposalCampaign) -> None:
+def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(campaign: ProposalCampaign) -> None:
     c = campaign
     # Django probes SQLite JSON support on first use; that connection setup is
     # outside the per-page projection budget.
@@ -166,8 +174,10 @@ def test_waiting_list_is_one_query_per_page_and_private_to_each_recipient(campai
         (c.person("responder"), set()),
     ):
         with actor_context(actor):
-            # Schema setup is outside the budget: the page executes one SQL projection.
+            # The compiled scope prepares bounded actor/arrow facts at SQL
+            # execution, then one row projection.
             expression = Task.clarification_waiting_expression(to_subject_ref(actor))
+            categories = []
             for limit in (5, 50):
                 rows = (
                     Task.objects.as_user(actor)
@@ -181,7 +191,9 @@ def test_waiting_list_is_one_query_per_page_and_private_to_each_recipient(campai
                 )
                 with CaptureQueriesContext(connection) as queries:
                     waiting = list(rows)
-                assert len(queries) == 1, [query["sql"] for query in queries]
+                categories.append(_list_statement_categories(
+                    queries, Task, projection="_clarification_waiting", audits=2,
+                ))
                 assert len(waiting) == limit
                 assert {entry["id"] for entry in waiting[0]} == expected
                 all_waiting = {c.person("responder").pk, c.person("peer").pk, c.person("third").pk}
@@ -189,6 +201,8 @@ def test_waiting_list_is_one_query_per_page_and_private_to_each_recipient(campai
                     {entry["id"] for entry in row} == (all_waiting if actor == manager else {actor.pk})
                     for row in waiting[1:]
                 )
+            assert categories[0] == categories[1], categories
+            assert categories[0].total() <= 19, categories
     with actor_context(manager):
         as_actor(round, manager).remove_responder(c.person("third"))
         waiting = as_actor(questions[0], manager).clarification_waiting()
@@ -227,7 +241,16 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
         rows = Task.objects.filter(pk=task.pk).annotate(waiting=expression).values_list("waiting", flat=True)
         with CaptureQueriesContext(connection) as queries:
             assert list(rows) == [[{"id": c.person("responder").pk, "name": c.person("responder").username}]]
-        assert len(queries) == 1
+        # SQL execution prepares the actor/arrow facts and emits the two native
+        # bypass audits; the recipient payload still uses one application SELECT.
+        assert _list_statement_categories(queries, Task, projection="waiting", audits=2) == Counter(
+            application=1,
+            bypass_audit=2,
+            schema_revision=1,
+            actor_sets=1,
+            decided_rows=1,
+            constant_decision=1,
+        )
     with actor_context(c.person("responder")):
         as_actor(task, c.person("responder")).message_post("Answered")
     with actor_context(manager):
@@ -301,4 +324,4 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
                 rows = read(limit)
             assert len(rows) == limit
             counts.append(len(queries))
-        assert counts[0] == counts[1], counts
+        assert counts == [44, 44], counts

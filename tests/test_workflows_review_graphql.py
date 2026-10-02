@@ -301,3 +301,19 @@ def test_decision_display_filters_and_dashboard_counts_do_not_leak(schema, linke
         assert list(condition(Decision.objects.with_actor(actor)).values_list("pk", flat=True)) == (
             [decision.pk] if visible else []
         )
+
+
+def test_stored_can_act_filter_uses_the_queryset_actor(schema, linked_decision):
+    """Permission expressions follow an explicit queryset actor over ambient identity."""
+    decision, owner, operator, stranger, assignee = linked_decision[3:]
+    schemas = GraphQLSchemas([SchemaAddon(decision_schema.schemas), SchemaAddon(workflow_schema.schemas)])
+    condition = schemas.resource_filter(Decision, {"can_act": {"_eq": True}})
+    query = "{ decisions(where: {can_act: {_eq: true}}) { id } }"
+    for actor, visible in ((owner, False), (operator, False), (stranger, False), (assignee, True)):
+        assert result_data(execute_schema(schema, query, user=actor)) == {
+            "decisions": [{"id": decision.sqid}] if visible else [],
+        }
+        with actor_context(stranger if visible else assignee):
+            assert list(condition(Decision.objects.with_actor(actor)).values_list("pk", flat=True)) == (
+                [decision.pk] if visible else []
+            )

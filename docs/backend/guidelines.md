@@ -725,11 +725,11 @@ data through REBAC, never a queryset bypass.
 - The local backend compiles permissions into queries over application tables;
   it maintains no permission index. Run `migrate` and `rebac sync` to prepare
   the database and store the schema. There is nothing to rebuild or verify.
-- Hierarchies deeper than 8 levels need PostgreSQL. A permission over a recursive
-  hierarchy compiles to nested SQL, and at the framework's default
-  `REBAC_DEPTH_LIMIT` of 16 it exceeds SQLite's expression-depth limit of 1000
-  (storage folders, and the extraction and decisions reads that pass through
-  them). The SQLite test host pins the limit to 8 in `tests/settings.py`.
+- `REBAC_DEPTH_LIMIT` bounds compiled SQL nesting and inherited permission hops.
+  On SQLite (default 8), access inherited through more than eight parent hops is
+  denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
+  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../angee/base/autoconfig.py)
+  owns the defaults; explicit environment values take precedence over project settings.
 - If a removed or renamed definition in an otherwise composed package fails
   `rebac.E009`, run the check-free `reconcile_permissions` first; it prunes stale
   package-managed schema rows before `makemigrations` / `rebac sync` can run.
