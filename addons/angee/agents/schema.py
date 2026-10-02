@@ -239,6 +239,7 @@ class AgentTurnType(AngeeNode):
     session: AgentSessionType
     index: auto
     prompt: auto
+    context: JSON
     status: auto
     updates: JSON
     text: auto
@@ -754,10 +755,10 @@ class AgentActionMutation:
         """Render the ``<system_context>`` block for an agent and the user's open view.
 
         ``view`` is the view envelope ``{kind, type: "<app>/<model>", sqid?, sqids?,
-        params?}``. The chat client calls this each send and prefixes the result, so
-        the agent reads what the user is looking at. Resolving the agent (admin-gated)
-        confirms the caller may drive it; the model-generic rendering lives in
-        ``agents.context``.
+        params?}``. This preview does not modify a session or a stored prompt.
+        In-process chat supplies the envelope on each ACP prompt; its runtime
+        renders the retained turn context through the same ``agents.context`` owner.
+        Resolving the agent (admin-gated) confirms the caller may drive it.
         """
 
         resolve_action_target(Agent, id, reason="agents.graphql.render_agent_prompt")

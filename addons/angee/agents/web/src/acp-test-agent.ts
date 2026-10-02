@@ -37,10 +37,12 @@ export class FakeAcpAgent {
   readonly permissions: Array<v1.RequestPermissionResponse | v2.RequestPermissionResponse> = [];
   readonly opened: AcpTransport[] = [];
   readonly initialized: number[] = [];
+  readonly created: Array<v1.NewSessionRequest | v2.NewSessionRequest> = [];
+  readonly prompts: Array<v1.PromptRequest | v2.PromptRequest> = [];
   listCalls = 0;
   promptCalls = 0;
   echoBeforeResponse = true;
-  stateBeforeResponse = true;
+  startWork = true;
   failPrompt = false;
   repeatCursor = false;
   private turn = 0;
@@ -69,7 +71,8 @@ export class FakeAcpAgent {
           this.initialized.push(params.protocolVersion);
           return { protocolVersion: 2, info: { name: "test-agent", version: "1" }, capabilities: { session: {} } };
         })
-        .onRequest(v2.methods.agent.session.new, () => {
+        .onRequest(v2.methods.agent.session.new, ({ params }) => {
+          this.created.push(params);
           const sessionId = this.create(); peer.sessionId = sessionId; return { sessionId };
         })
         .onRequest(v2.methods.agent.session.resume, async ({ params, client }) => {
@@ -86,6 +89,7 @@ export class FakeAcpAgent {
         })
         .onRequest(v2.methods.agent.session.list, ({ params }) => this.list(params.cursor))
         .onRequest(v2.methods.agent.session.prompt, async ({ params }) => {
+          this.prompts.push(params);
           const session = this.get(params.sessionId);
           peer.sessionId = session.id;
           const messageId = `m-${++this.turn}`;
@@ -98,11 +102,13 @@ export class FakeAcpAgent {
           } };
           const accept = async () => {
             await this.emitV2(note);
-            if (startsWork && this.stateBeforeResponse) await this.state(session.id, "running");
           };
           if (this.echoBeforeResponse) await accept();
-          else setTimeout(() => { void accept(); }, 10);
-          // Queued insertion does not start another bracket. Tests can delay work explicitly.
+          // Schedule after the handler returns, so the prompt response precedes running.
+          setTimeout(() => { void (async () => {
+            if (!this.echoBeforeResponse) await accept();
+            if (startsWork && this.startWork) await this.state(session.id, "running");
+          })(); }, this.echoBeforeResponse ? 0 : 10);
           return { messageId };
         })
         .onNotification(v2.methods.agent.session.cancel, ({ params }) => this.finish(params.sessionId, "cancelled"))
@@ -129,13 +135,15 @@ export class FakeAcpAgent {
             sessionCapabilities: { ...(this.capabilities.list ? { list: {} } : {}), ...(this.capabilities.resume ? { resume: {} } : {}) },
           } };
         })
-        .onRequest(v1.methods.agent.session.new, () => {
+        .onRequest(v1.methods.agent.session.new, ({ params }) => {
+          this.created.push(params);
           const sessionId = this.create(); peer.sessionId = sessionId; return { sessionId };
         })
         .onRequest(v1.methods.agent.session.load, ({ params, client }) => restore(params.sessionId, client, "session/load"))
         .onRequest(v1.methods.agent.session.resume, ({ params, client }) => restore(params.sessionId, client, "session/resume"))
         .onRequest(v1.methods.agent.session.list, ({ params }) => this.list(params.cursor))
         .onRequest(v1.methods.agent.session.prompt, ({ params }) => {
+          this.prompts.push(params);
           this.promptCalls += 1;
           if (this.failPrompt) throw new Error("Test prompt rejected");
           const session = this.get(params.sessionId);

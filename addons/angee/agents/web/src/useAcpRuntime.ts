@@ -3,7 +3,7 @@ import * as React from "react";
 import { createMessageQueue, SimpleImageAttachmentAdapter, useExternalStoreRuntime, type MessageQueueController, type AppendMessage, type CompleteAttachment } from "@assistant-ui/react";
 import type { AvailableCommand, ContentBlock, McpServer, PromptCapabilities, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import * as v from "valibot";
-import { useActiveDataProviderName, useAuthoredMutation, useInfiniteQuery, useQueryClient, type DocumentVariables } from "@angee/refine";
+import { stableKey, useActiveDataProviderName, useAuthoredMutation, useInfiniteQuery, useQueryClient, type DocumentVariables } from "@angee/refine";
 import { useLatestRef } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 
@@ -20,6 +20,7 @@ const MAX_RECONNECT_MS = 30_000;
 class EndpointError extends Error {}
 export type AcpStatus = "idle" | "connecting" | "ready" | "error" | "closed";
 export interface AcpPermission { id: number; protocolVersion: 1 | 2; request: AcpPermissionRequest }
+type RecordOverride = { viewKey: string; attached: boolean } | null;
 export interface AcpRuntimeOptions {
   agentId: string;
   view: AgentChatView;
@@ -60,13 +61,26 @@ export interface AcpRuntime {
  * V2 rejection reasons travel on the selected outcome as _meta.angee.reason.
  * Ordered running/output/idle brackets attribute each turn to the oldest accepted,
  * unsettled user message. Queued acceptance never changes the foreground turn.
+ * V2 sends the normalized view on session creation and, while Current view is
+ * attached, on each prompt as _meta.angee.context. V1 renders prompt context.
+ * Both versions auto-attach a view differing from the last locally sent context,
+ * consume it on send, and allow a manual override until the view changes.
+ * Reloaded replay has no normalized envelope: treat it as not yet sent. V2
+ * reconnect preserves locally known sent envelopes by native message identity.
  */
 export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
   const { agentId, view, protocolVersion, showSessions = false } = options;
   const t = useAgentsT();
   const dataProviderName = useActiveDataProviderName();
   const queryClient = useQueryClient();
-  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
+  const [messages, publishMessages] = React.useState<ChatMessage[]>([]);
+  // The same log is available synchronously when the native queue advances
+  // before React commits a render. Sent-view history lives only on its prompts.
+  const messagesRef = React.useRef(messages);
+  const setMessages = React.useCallback((update: React.SetStateAction<ChatMessage[]>) => {
+    messagesRef.current = typeof update === "function" ? update(messagesRef.current) : update;
+    publishMessages(messagesRef.current);
+  }, []);
   const [status, setStatus] = React.useState<AcpStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
   const [v1Running, setV1Running] = React.useState(false);
@@ -77,7 +91,15 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
   const [session, setSession] = React.useState<AcpSession>(emptySession);
   const [activeSessionId, setActiveSessionId] = React.useState<string | null>(null);
   const [reconnectNonce, setReconnectNonce] = React.useState(0);
-  const [recordAttached, setRecordAttached] = React.useState(true);
+  const [recordOverride, publishRecordOverride] = React.useState<RecordOverride>(null);
+  const recordOverrideRef = React.useRef<RecordOverride>(null);
+  const setRecordOverride = React.useCallback((override: RecordOverride) => {
+    recordOverrideRef.current = override;
+    publishRecordOverride(override);
+  }, []);
+  const viewKey = stableKey(agentChatViewInput(view));
+  if (recordOverride !== null && recordOverride.viewKey !== viewKey) setRecordOverride(null);
+  const recordAttached = isRecordAttached(messages, activeSessionId, viewKey, recordOverride);
   const [permissions, setPermissions] = React.useState<AcpPermission[]>([]);
   const connectionRef = React.useRef<AcpClient | null>(null);
   const endpointRef = React.useRef<AgentChatEndpoint | null>(null);
@@ -85,12 +107,13 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
   const sessionCwdRef = React.useRef("/workspace");
   const sessionRef = React.useRef(emptySession);
   const bindingRef = React.useRef<string | undefined>(undefined);
+  // Native drafts have a local id before ACP creates their remote session.
+  const threadIdRef = React.useRef(options.knownSessionId ?? `draft-${agentId}`);
   const optionsRef = useLatestRef(options);
   const pendingPermissions = React.useRef(new Map<number, { version: 1 | 2; resolve: (answer: RequestPermissionResponse) => void }>());
   const messageCounter = React.useRef(0);
   const permissionCounter = React.useRef(0);
   const sendingRef = React.useRef(false);
-  const recordAttachedRef = useLatestRef(recordAttached);
   const viewRef = useLatestRef(view);
   const statusRef = useLatestRef(status);
   const [mintEndpoint] = useAuthoredMutation(AgentChatEndpointMutation);
@@ -131,10 +154,11 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     if (bindingRef.current !== agentId) {
       sessionIdRef.current = optionsRef.current.knownSessionId ?? null;
+      threadIdRef.current = sessionIdRef.current ?? `draft-${agentId}`;
       sessionCwdRef.current = "/workspace";
       setMessages([]);
       setActiveSessionId(sessionIdRef.current);
-      setRecordAttached(true);
+      setRecordOverride(null);
       bindingRef.current = agentId;
     }
     const tearDown = (): void => {
@@ -220,7 +244,10 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
         if (!current()) return;
         if (replayLog !== null) {
           const replayed = replayLog;
-          setMessages((log) => [...replayed, ...log.filter((message) => message.deliveryFailed)]);
+          setMessages((log) => [...replayed.map((message) => {
+            const local = log.find((entry) => entry.id === message.id);
+            return local?.sentContext ? { ...message, sentContext: local.sentContext } : message;
+          }), ...log.filter((message) => message.deliveryFailed)]);
           replayLog = null;
         }
         setActiveSessionId(sessionIdRef.current);
@@ -244,17 +271,18 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
     };
     void connect();
     return () => { active = false; ++generation; tearDown(); };
-  }, [agentId, protocolVersion, reconnectNonce, mintEndpoint, t, dismissPermissions, queryClient]);
+  }, [agentId, protocolVersion, reconnectNonce, mintEndpoint, t, dismissPermissions, queryClient, setMessages, setRecordOverride]);
 
   const createSession = React.useCallback(async (): Promise<string> => {
     const connection = connectionRef.current;
     const config = endpointRef.current;
     if (!connection || !config) throw new Error(t("chat.responseFailed"));
-    const created = await connection.newSession({ cwd: "/workspace", mcpServers: toMcpServers(config.mcp_servers) });
+    const created = await connection.newSession({ cwd: "/workspace", mcpServers: toMcpServers(config.mcp_servers),
+      ...(connection.protocolVersion === 2 ? { _meta: { [ACP_META_NAMESPACE]: { context: agentChatViewInput(viewRef.current) } } } : {}),
+    });
     if (connectionRef.current !== connection) throw new Error(t("chat.responseFailed"));
     sessionIdRef.current = created.sessionId;
     sessionCwdRef.current = "/workspace";
-    setActiveSessionId(created.sessionId);
     await selectSessionModel(connection, created, config.model_handle, t("chat.modelUnavailable", { model: config.model_handle }));
     refreshRef.current();
     return created.sessionId;
@@ -287,6 +315,11 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
       return;
     }
     const blocks = attachmentBlocks(message.attachments, connection.promptCapabilities);
+    const promptView = agentChatViewInput(viewRef.current);
+    const promptViewKey = stableKey(promptView);
+    const override = recordOverrideRef.current;
+    const attached = isRecordAttached(messagesRef.current, sessionIdRef.current, promptViewKey, override);
+    const promptContext = attached ? promptView : undefined;
     setMessages((log) => [...log, { id: optimisticId, role: "user", optimistic: true, parts: echoParts }]);
     setError(null);
     sendingRef.current = true;
@@ -294,17 +327,37 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
     if (connection.protocolVersion === 1) setV1Running(true);
     else setPendingTurn(true);
     let sent = false;
+    let consumedOverride: RecordOverride | undefined;
     try {
       const sessionId = sessionIdRef.current ?? await createSession();
-      const context = recordAttachedRef.current ? await fetchSystemContext(renderPrompt, agentId, viewRef.current) : "";
+      setActiveSessionId(sessionId);
+      const context = connection.protocolVersion === 1 && attached ? await fetchSystemContext(renderPrompt, agentId, promptView) : "";
       if (connectionRef.current !== connection || sessionIdRef.current !== sessionId) throw new Error();
       sent = true;
-      const result = await connection.prompt({ sessionId, prompt: buildPromptBlocks(context, userText, connection.promptCapabilities, blocks) });
+      const response = connection.prompt({
+        sessionId, prompt: buildPromptBlocks(context, userText, connection.promptCapabilities, blocks),
+        ...(connection.protocolVersion !== 2 || promptContext === undefined ? {} : { _meta: { [ACP_META_NAMESPACE]: { context: promptContext } } }),
+      });
+      // Record only context actually carried on the wire (v1 slash commands
+      // and an empty render have no context block). Failed deliveries are ignored.
+      if (attached) {
+        const carriesContext = connection.protocolVersion === 2 || (context !== "" && !userText.startsWith("/"));
+        if (carriesContext) setMessages((log) => log.map((entry) => entry.id === optimisticId ? { ...entry, sentContext: { sessionId, view: promptView } } : entry));
+        if (recordOverrideRef.current === override) {
+          // Even when the carrier omits context, sending consumes this badge.
+          consumedOverride = carriesContext ? null : { viewKey: promptViewKey, attached: false };
+          setRecordOverride(consumedOverride);
+        }
+      }
+      const result = await response;
       if (sessionIdRef.current !== sessionId) return;
       if (result.messageId !== undefined) setMessages((log) => reconcileUserMessage(log, optimisticId, result.messageId));
       else setMessages((log) => settleLog(log, result.stopReason, t("chat.turnFailed"), t("chat.turnStopped"), optimisticId));
     } catch {
       setMessages((log) => log.map((entry) => entry.id === optimisticId ? { ...entry, optimistic: false, deliveryFailed: true } : entry));
+      if (consumedOverride !== undefined && recordOverrideRef.current === consumedOverride && stableKey(agentChatViewInput(viewRef.current)) === promptViewKey) {
+        setRecordOverride({ viewKey: promptViewKey, attached: true });
+      }
       setError(t(sent ? "chat.responseFailed" : "chat.messageNotSent"));
       restoreComposer();
       if (sessionRef.current.state === "idle") setPendingTurn(false);
@@ -313,7 +366,7 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
       setSending(false);
       if (connection.protocolVersion === 1) { setV1Running(false); dismissPermissions(); refreshRef.current(); }
     }
-  }, [agentId, createSession, renderPrompt, t, dismissPermissions]);
+  }, [agentId, createSession, renderPrompt, t, dismissPermissions, setMessages, setRecordOverride]);
   const onCancel = React.useCallback(async (): Promise<void> => {
     const connection = connectionRef.current;
     const sessionId = sessionIdRef.current;
@@ -324,26 +377,35 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
     } catch { setError(t("chat.responseFailed")); }
   }, [dismissPermissions, t]);
   const reconnect = React.useCallback(() => setReconnectNonce((nonce) => nonce + 1), []);
-  const clear = React.useCallback(() => setMessages([]), []);
-  const attachRecord = React.useCallback(() => setRecordAttached(true), []);
-  const clearRecord = React.useCallback(() => setRecordAttached(false), []);
-  const renderContext = React.useCallback(() => fetchSystemContext(renderPrompt, agentId, viewRef.current), [agentId, renderPrompt]);
+  const clear = React.useCallback(() => setMessages([]), [setMessages]);
+  const attachRecord = React.useCallback(() => setRecordOverride({ viewKey: stableKey(agentChatViewInput(viewRef.current)), attached: true }), [setRecordOverride]);
+  const clearRecord = React.useCallback(() => setRecordOverride({ viewKey: stableKey(agentChatViewInput(viewRef.current)), attached: false }), [setRecordOverride]);
+  const renderContext = React.useCallback(() => fetchSystemContext(renderPrompt, agentId, agentChatViewInput(viewRef.current)), [agentId, renderPrompt]);
+  const bindSession = React.useCallback((id: string, cwd: string) => {
+    sessionIdRef.current = id;
+    threadIdRef.current = id;
+    sessionCwdRef.current = cwd;
+    setMessages([]);
+    setRecordOverride(null);
+    setPendingTurn(false);
+    setV1Running(false);
+    sessionRef.current = emptySession;
+    setSession(emptySession);
+    dismissPermissions();
+    setActiveSessionId(id);
+  }, [dismissPermissions, setMessages, setRecordOverride]);
   const selectSession = React.useCallback((id: string, cwd: string) => {
     if (id === sessionIdRef.current) return;
-    sessionIdRef.current = id;
-    sessionCwdRef.current = cwd;
-    setActiveSessionId(id);
+    bindSession(id, cwd);
     reconnect();
-  }, [reconnect]);
+  }, [bindSession, reconnect]);
   const newSession = React.useCallback(() => {
     if (sendingRef.current || statusRef.current !== "ready") return;
     void createSession().then((id) => {
-      setMessages([]);
-      sessionRef.current = emptySession;
-      setSession(emptySession);
+      bindSession(id, "/workspace");
       optionsRef.current.onSessionChange?.(id);
     }).catch(() => setError(t("chat.responseFailed")));
-  }, [createSession, t]);
+  }, [createSession, bindSession, t]);
   const answerPermission = React.useCallback((id: number, optionId: string, reason?: string) => {
     const pending = pendingPermissions.current.get(id);
     if (!pending) return;
@@ -365,7 +427,11 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
   const runtime = useExternalStoreRuntime({
     isRunning: client?.protocolVersion === 2 ? session.state !== "idle" || pendingTurn : v1Running,
     isDisabled: status !== "ready", isSendDisabled: sending || (client?.protocolVersion === 1 && v1Running),
-    messages, onNew, onCancel, convertMessage, adapters: { attachments: attachmentAdapter },
+    messages, onNew, onCancel, convertMessage, adapters: { attachments: attachmentAdapter,
+      threadList: { threadId: threadIdRef.current, threads: [{ id: threadIdRef.current,
+        remoteId: activeSessionId ?? undefined, status: "regular" }],
+      },
+    },
     queue: client?.protocolVersion === 2 ? queue.adapter : undefined,
   });
   const runtimeRef = useLatestRef(runtime);
@@ -386,6 +452,13 @@ export function useAcpRuntime(options: AcpRuntimeOptions): AcpRuntime {
   };
 }
 
+/** One attach/consume/toggle rule for both protocol carriers and queued sends. */
+function isRecordAttached(log: ChatMessage[], sessionId: string | null, viewKey: string, override: RecordOverride): boolean {
+  if (override?.viewKey === viewKey) return override.attached;
+  const last = log.findLast((message) => message.role === "user" && message.sentContext?.sessionId === sessionId && !message.deliveryFailed);
+  return last?.sentContext === undefined || stableKey(last.sentContext.view) !== viewKey;
+}
+
 function parseEndpoint(data: DocumentType<typeof AgentChatEndpointMutation> | undefined, unsupported: string, invalid: string, explicit?: 1 | 2): AgentChatEndpoint {
   const payload = data?.agent_chat_endpoint;
   if (payload && ((payload.protocol_version !== 1 && payload.protocol_version !== 2) || (explicit !== undefined && explicit !== payload.protocol_version))) throw new EndpointError(unsupported);
@@ -395,10 +468,10 @@ function parseEndpoint(data: DocumentType<typeof AgentChatEndpointMutation> | un
 }
 async function fetchSystemContext(
   renderPrompt: (variables: DocumentVariables<typeof RenderAgentPrompt>) => Promise<DocumentType<typeof RenderAgentPrompt> | undefined>,
-  agentId: string, view: AgentChatView,
+  agentId: string, view: ReturnType<typeof agentChatViewInput>,
 ): Promise<string> {
   try {
-    const data = await renderPrompt({ id: agentId, view: agentChatViewInput(view) });
+    const data = await renderPrompt({ id: agentId, view });
     return data?.render_agent_prompt ?? "";
   } catch { return ""; }
 }

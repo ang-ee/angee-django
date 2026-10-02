@@ -3,6 +3,7 @@
 // lives here too so both ACP transports share one exhaustive ChatPart mapping.
 
 import type { ThreadMessageLike } from "@assistant-ui/react";
+import type { JsonObject } from "@angee/ui";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { ContentBlock, SessionUpdate, StateUpdate, type ContentBlock as Content, type ToolCallContent, type UpdateSessionNotification } from "@agentclientprotocol/sdk/experimental/v2";
 import type { AcpNotification } from "./acp-client";
@@ -32,6 +33,8 @@ export interface ChatMessage {
   parts: ChatPart[];
   optimistic?: boolean;
   deliveryFailed?: boolean;
+  /** Normalized view carried by this runtime's sent prompt; replay may omit it. */
+  sentContext?: { sessionId: string; view: JsonObject };
   failed?: boolean;
   /** The latest foreground output was a full message containing readable text. */
   hasReadableMessage?: boolean;
@@ -146,7 +149,11 @@ function applyUpdate(assistant: ChatMessage, update: SessionNotification["update
 
 /** Replace the optimistic id with the prompt's authoritative id, regardless of echo order. */
 export function reconcileUserMessage(log: ChatMessage[], optimisticId: string, messageId: string): ChatMessage[] {
-  if (log.some((message) => message.id === messageId)) return log.filter((message) => message.id !== optimisticId);
+  if (log.some((message) => message.id === messageId)) {
+    const local = log.find((message) => message.id === optimisticId);
+    return log.filter((message) => message.id !== optimisticId).map((message) =>
+      message.id === messageId && local?.sentContext ? { ...message, sentContext: local.sentContext } : message);
+  }
   return log.map((message) => message.id === optimisticId ? { ...message, id: messageId } : message);
 }
 

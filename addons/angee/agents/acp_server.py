@@ -11,13 +11,14 @@ import asyncio
 import logging
 import traceback
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import wraps
 from importlib import metadata
 from typing import Any
 
 from acp import schema as v1
+from acp.connection import StreamDirection, StreamEvent
 from acp.exceptions import RequestError
 from acp.experimental.v2 import schema as v2
 from channels.db import database_sync_to_async
@@ -73,17 +74,22 @@ class _Delivery:
     updates: int = 0
     prompt_sent: bool = False
     status: str = ""
+    started: bool = False
+    acknowledged: bool = True
 
 
 @dataclass
 class _Attachment:
     session: Any
-    latest_turn: Any = None
     turns: dict[str, _Delivery] = field(default_factory=dict)
+    pending: dict[str, Any] = field(default_factory=dict)
     state: tuple[str, str | None] | None = None
 
     def observe(self, turn: Any) -> None:
-        self.latest_turn = self.session.latest_chat_turn(self.latest_turn, turn)
+        turn_id = str(turn.sqid)
+        delivery = self.turns.setdefault(turn_id, _Delivery())
+        if delivery.status not in STOP_REASONS:
+            self.pending[turn_id] = turn
 
 
 class SessionAgent(ABC):
@@ -104,12 +110,19 @@ class SessionAgent(ABC):
         self.ready = asyncio.Event()
         self.follower: asyncio.Task[None] | None = None
 
-    @rpc_operation
-    async def new_session(self, cwd: str, **kwargs: Any) -> Any:
+    @staticmethod
+    def _view_context(kwargs: dict[str, Any], *, label: str) -> dict[str, Any]:
+        """Extract the optional view object from SDK-expanded Angee metadata."""
+
         envelope = kwargs.get(ANGEE_META_KEY, {})
         context = envelope.get("context", {}) if isinstance(envelope, dict) else None
         if not isinstance(context, dict):
-            raise RequestError(-32602, "Session context must be an object.")
+            raise RequestError(-32602, f"{label} context must be an object.")
+        return context
+
+    @rpc_operation
+    async def new_session(self, cwd: str, **kwargs: Any) -> Any:
+        context = self._view_context(kwargs, label="Session")
         session = await self._db(
             self.session_model.objects.start,
             self.agent,
@@ -181,6 +194,7 @@ class SessionAgent(ABC):
 
     @rpc_operation
     async def prompt(self, session_id: str, prompt: list[Any], **kwargs: Any) -> Any:
+        context = self._view_context(kwargs, label="Message")
         blocks: list[str] = []
         for block in prompt:
             if block.type == "text":
@@ -192,7 +206,7 @@ class SessionAgent(ABC):
         session = await self._db(self._session, session_id)
         await self._attach(session, replay=False)
         async with self.lock:
-            turn = await self._db(session.post, "\n".join(blocks), actor=self.user)
+            turn = await self._db(session.post, "\n".join(blocks), context=context, actor=self.user)
             self.attachments[session_id].observe(turn)
             acknowledgment = await self._accepted(session_id, turn)
         return await self._acknowledge(turn, acknowledgment)
@@ -273,23 +287,25 @@ class SessionAgent(ABC):
             session_id = str(session.sqid)
             if session_id in self.attachments and not replay and not current_state:
                 return
-            attachment = self.attachments.setdefault(session_id, _Attachment(session))
+            self.attachments.setdefault(session_id, _Attachment(session))
             turns = await self._db(
                 lambda: list(session.turns.with_actor(self.user).order_by("index")),
                 thread_sensitive=False,
             )
-            attachment.latest_turn = session.latest_chat_turn(*turns)
-            if replay:
-                attachment.turns.clear()
-            elif not attachment.turns:
-                for turn in turns:
-                    attachment.turns[str(turn.sqid)] = _Delivery(len(turn.updates), True, turn.status)
-                await self._snapshot(session_id, turns)
-            if replay:
-                for turn in turns:
-                    await self._deliver(session_id, turn, replay=True)
+            await self._restore(session_id, turns, replay=replay)
             if current_state:
-                await self._report_state(session_id, force=True)
+                await self._report_state(session_id)
+
+    async def _restore(self, session_id: str, turns: list[Any], *, replay: bool) -> None:
+        attachment = self.attachments[session_id]
+        if replay:
+            attachment.turns.clear()
+            attachment.pending.clear()
+            for turn in turns:
+                await self._deliver(session_id, turn, replay=True)
+        elif not attachment.turns:
+            for turn in turns:
+                attachment.turns[str(turn.sqid)] = _Delivery(len(turn.updates), True, turn.status)
 
     async def _follow(self) -> None:
         try:
@@ -336,45 +352,40 @@ class SessionAgent(ABC):
     async def _deliver(self, session_id: str, turn: Any, *, replay: bool = False) -> None:
         turn_id = str(turn.sqid)
         delivery = self.attachments[session_id].turns.setdefault(turn_id, _Delivery())
-        await self._before_output(session_id, turn, delivery, replay=replay)
         if not delivery.prompt_sent:
             await self._user_message(session_id, turn)
             delivery.prompt_sent = True
-        if self._live_updates(delivery) or replay:
-            for update in turn.updates[delivery.updates :]:
-                await self._update(session_id, self._project_update(turn_id, update))
+        for position, update in enumerate(self._project_updates(turn)):
+            if position >= delivery.updates:
+                await self._update(session_id, update)
         delivery.updates = len(turn.updates)
         if delivery.status != turn.status:
             await self._status_changed(session_id, turn, replay=replay)
         delivery.status = turn.status
+        if turn.status in STOP_REASONS:
+            self.attachments[session_id].pending.pop(turn_id, None)
 
     @abstractmethod
     async def _user_message(self, session_id: str, turn: Any) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def _project_update(self, turn_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    def _project_updates(self, turn: Any) -> Iterator[dict[str, Any]]:
         raise NotImplementedError
 
     @abstractmethod
     async def _update(self, session_id: str, update: dict[str, Any]) -> None:
         raise NotImplementedError
 
-    def _live_updates(self, delivery: _Delivery) -> bool:
-        return True
-
-    async def _before_output(self, session_id: str, turn: Any, delivery: _Delivery, *, replay: bool) -> None:
-        pass
-
     async def _status_changed(self, session_id: str, turn: Any, *, replay: bool) -> None:
         pass
 
-    async def _snapshot(self, session_id: str, turns: list[Any]) -> None:
-        pass
-
     @abstractmethod
-    async def _report_state(self, session_id: str, *, force: bool = False) -> None:
+    async def _report_state(self, session_id: str) -> None:
         raise NotImplementedError
+
+    async def observe_stream(self, event: StreamEvent) -> None:
+        """Receive SDK-owned wire events; v1 needs no post-response delivery."""
 
     def _turn_deleted(self, turn_id: str) -> None:
         pass
@@ -444,8 +455,8 @@ class V1SessionAgent(SessionAgent):
             session_id, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": turn.prompt}}
         )
 
-    def _project_update(self, turn_id: str, update: dict[str, Any]) -> dict[str, Any]:
-        return update
+    def _project_updates(self, turn: Any) -> Iterator[dict[str, Any]]:
+        return iter(turn.updates)
 
     async def _update(self, session_id: str, update: dict[str, Any]) -> None:
         note = v1.SessionNotification.model_validate({"sessionId": session_id, "update": update})
@@ -466,12 +477,12 @@ class V1SessionAgent(SessionAgent):
             if not waiter.done():
                 waiter.set_exception(error)
 
-    async def _report_state(self, session_id: str, *, force: bool = False) -> None:
+    async def _report_state(self, session_id: str) -> None:
         """V1 exposes settlement through its prompt response, without session state."""
 
 
 class V2SessionAgent(SessionAgent):
-    """Native v2 insertion acknowledgments, upserts and foreground state."""
+    """Bracket each foreground turn in session order, for live delivery and replay."""
 
     schema = v2
     config_id_key = "configId"
@@ -487,18 +498,104 @@ class V2SessionAgent(SessionAgent):
         )
 
     async def _accepted(self, session_id: str, turn: Any) -> Any:
-        await self._deliver(session_id, turn)
+        delivery = self.attachments[session_id].turns[str(turn.sqid)]
+        delivery.acknowledged = False
+        await self._user_message(session_id, turn)
+        delivery.prompt_sent = True
         return v2.PromptResponse.model_validate({"messageId": message_id(turn.sqid, "user")})
 
     async def _acknowledge(self, turn: Any, acknowledgment: Any) -> Any:
         return acknowledgment
 
-    def _live_updates(self, delivery: _Delivery) -> bool:
-        return delivery.status != TurnStatus.CANCELED
+    async def observe_stream(self, event: StreamEvent) -> None:
+        """Release accepted output only after the SDK sends its insertion response."""
 
-    async def _before_output(self, session_id: str, turn: Any, delivery: _Delivery, *, replay: bool) -> None:
-        if (replay and turn.status == TurnStatus.CANCELED) or (not replay and not delivery.status):
-            await self._state(session_id, "running", None)
+        result = event.message.get("result")
+        if event.direction != StreamDirection.OUTGOING or not isinstance(result, dict):
+            return
+        accepted_id = result.get("messageId")
+        if accepted_id is None:
+            return
+        async with self.lock:
+            for session_id, attachment in self.attachments.items():
+                for turn_id, delivery in attachment.turns.items():
+                    if not delivery.acknowledged and message_id(turn_id, "user") == accepted_id:
+                        delivery.acknowledged = True
+                        await self._drain(session_id)
+                        return
+
+    async def _restore(self, session_id: str, turns: list[Any], *, replay: bool) -> None:
+        attachment = self.attachments[session_id]
+        unacknowledged = {turn_id for turn_id, delivery in attachment.turns.items() if not delivery.acknowledged}
+        if replay:
+            attachment.turns.clear()
+            attachment.pending.clear()
+            attachment.state = None
+        historical = not replay
+        for turn in turns:
+            turn_id = str(turn.sqid)
+            historical = historical and turn.status in STOP_REASONS
+            if historical and turn_id not in attachment.turns:
+                attachment.turns[turn_id] = _Delivery(len(turn.updates), True, turn.status)
+            attachment.observe(turn)
+            if turn_id in unacknowledged:
+                attachment.turns[turn_id].acknowledged = False
+        await self._drain(session_id, snapshot=not replay)
+        for turn in attachment.pending.values():
+            delivery = attachment.turns[str(turn.sqid)]
+            if not delivery.prompt_sent:
+                await self._user_message(session_id, turn)
+                delivery.prompt_sent = True
+        if not replay and not attachment.pending and attachment.state is None and turns:
+            await self._state(session_id, "idle", turns[-1])
+
+    async def _deliver(self, session_id: str, turn: Any, *, replay: bool = False) -> None:
+        attachment = self.attachments[session_id]
+        delivery = attachment.turns[str(turn.sqid)]
+        if not delivery.prompt_sent:
+            await self._user_message(session_id, turn)
+            delivery.prompt_sent = True
+        await self._drain(session_id)
+
+    async def _drain(self, session_id: str, *, snapshot: bool = False) -> None:
+        """Settle a bracket before opening the next, even before its worker claim.
+
+        Later turns may be echoed at insertion, but their output waits for every
+        earlier bracket. Retain only unclosed rows; delivered cursors also fence
+        off output appended after cancellation.
+        """
+
+        attachment = self.attachments[session_id]
+        for turn in sorted(attachment.pending.values(), key=lambda row: row.index):
+            turn_id = str(turn.sqid)
+            delivery = attachment.turns[turn_id]
+            if not delivery.acknowledged:
+                break
+            if not delivery.prompt_sent:
+                await self._user_message(session_id, turn)
+                delivery.prompt_sent = True
+            opening = not delivery.started
+            if opening:
+                await self._state(session_id, "running", None)
+                delivery.started = True
+            projected = list(self._project_updates(turn))[delivery.updates :]
+            for update in self._snapshot_updates(projected) if snapshot and opening else projected:
+                await self._update(session_id, update)
+            delivery.updates = len(turn.updates)
+            delivery.status = turn.status
+            if turn.status not in STOP_REASONS:
+                break
+            if turn.status == TurnStatus.FAILED:
+                await self._update(
+                    session_id,
+                    {
+                        "sessionUpdate": "agent_message",
+                        "messageId": message_id(turn.sqid, "error"),
+                        "content": [{"type": "text", "text": turn.error}],
+                    },
+                )
+            await self._state(session_id, "idle", turn)
+            attachment.pending.pop(turn_id)
 
     async def _user_message(self, session_id: str, turn: Any) -> None:
         await self._update(
@@ -510,44 +607,40 @@ class V2SessionAgent(SessionAgent):
             },
         )
 
-    def _project_update(self, turn_id: str, update: dict[str, Any]) -> dict[str, Any]:
-        kind = update["sessionUpdate"]
-        if kind in ("agent_message_chunk", "agent_thought_chunk"):
-            part = "agent" if kind == "agent_message_chunk" else "thought"
-            return {**update, "messageId": message_id(turn_id, part)}
-        if kind in ("tool_call", "tool_call_update"):
-            return {**update, "sessionUpdate": "tool_call_update"}
-        return update
+    def _project_updates(self, turn: Any) -> Iterator[dict[str, Any]]:
+        """Identify contiguous text/thought segments by their first stored position.
+
+        Stored v1-shaped chunks need no IDs or migration. Every projection uses
+        the full retained prefix so batching, snapshots and replay agree.
+        """
+
+        previous = None
+        segment = 0
+        for position, update in enumerate(turn.updates):
+            kind = update["sessionUpdate"]
+            if kind != previous:
+                segment = position
+            if kind in ("agent_message_chunk", "agent_thought_chunk"):
+                part = "agent" if kind == "agent_message_chunk" else "thought"
+                yield {**update, "messageId": message_id(turn.sqid, f"{part}:{segment}")}
+            elif kind in ("tool_call", "tool_call_update"):
+                yield {**update, "sessionUpdate": "tool_call_update"}
+            else:
+                yield update
+            previous = kind
 
     async def _update(self, session_id: str, update: dict[str, Any]) -> None:
         note = v2.UpdateSessionNotification.model_validate({"sessionId": session_id, "update": update})
         await self.connection.session_update(session_id=session_id, update=note.update)
 
-    async def _status_changed(self, session_id: str, turn: Any, *, replay: bool) -> None:
-        if turn.status == TurnStatus.FAILED:
-            await self._update(
-                session_id,
-                {
-                    "sessionUpdate": "agent_message",
-                    "messageId": message_id(turn.sqid, "error"),
-                    "content": [{"type": "text", "text": turn.error}],
-                },
-            )
-            await self._state(session_id, "idle", turn)
-            if not replay:
-                await self._report_state(session_id)
-        elif replay:
-            if turn.status == TurnStatus.CANCELED:
-                await self._state(session_id, "idle", turn)
-        else:
-            await self._report_state(session_id)
-
-    async def _report_state(self, session_id: str, *, force: bool = False) -> None:
+    async def _report_state(self, session_id: str) -> None:
         attachment = self.attachments[session_id]
-        state, settled = attachment.session.chat_state(attachment.latest_turn)
-        key = state, STOP_REASONS[settled.status] if settled is not None else None
-        if force or attachment.state != key:
-            await self._state(session_id, state, settled)
+        # Replay already reported its newest bracket. Never settle a queued row
+        # from a newest-turn snapshot or repeat a historical settlement.
+        if attachment.state is None and not attachment.pending:
+            await self._state(session_id, "idle", None)
+        elif any(turn.status == TurnStatus.AWAITING_APPROVAL for turn in attachment.pending.values()):
+            await self._state(session_id, "idle", None)
 
     async def _state(self, session_id: str, state: str, settled: Any) -> None:
         stop = STOP_REASONS[settled.status] if settled is not None else None
@@ -561,28 +654,22 @@ class V2SessionAgent(SessionAgent):
         )
         self.attachments[session_id].state = state, stop
 
-    async def _snapshot(self, session_id: str, turns: list[Any]) -> None:
-        for turn in turns:
-            if turn.status in STOP_REASONS:
-                continue
-            await self._user_message(session_id, turn)
-            messages: dict[str, str] = {}
-            tools: dict[str, dict[str, Any]] = {}
-            for update in turn.updates:
-                kind = update["sessionUpdate"]
-                if kind in ("agent_message_chunk", "agent_thought_chunk"):
-                    messages[kind] = messages.get(kind, "") + update["content"]["text"]
-                elif kind in ("tool_call", "tool_call_update"):
-                    tools.setdefault(update["toolCallId"], {}).update(self._project_update(str(turn.sqid), update))
-            for kind, text in messages.items():
-                part = "agent" if kind == "agent_message_chunk" else "thought"
-                await self._update(
-                    session_id,
+    def _snapshot_updates(self, updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Upsert each projected part in its original arrival order."""
+
+        parts: dict[tuple[str, str], dict[str, Any]] = {}
+        for update in updates:
+            kind = update["sessionUpdate"]
+            if kind in ("agent_message_chunk", "agent_thought_chunk"):
+                part = parts.setdefault(
+                    (kind, update["messageId"]),
                     {
                         "sessionUpdate": kind.removesuffix("_chunk"),
-                        "messageId": message_id(turn.sqid, part),
-                        "content": [{"type": "text", "text": text}],
+                        "messageId": update["messageId"],
+                        "content": [{"type": "text", "text": ""}],
                     },
                 )
-            for update in tools.values():
-                await self._update(session_id, update)
+                part["content"][0]["text"] += update["content"]["text"]
+            elif kind == "tool_call_update":
+                parts.setdefault((kind, update["toolCallId"]), {}).update(update)
+        return list(parts.values())

@@ -1,9 +1,10 @@
 """Render a model-generic ``<system_context>`` prompt block from a view envelope.
 
-The chat client prefixes each message with the context of what the user is looking
-at — the open record, a list selection, or a dashboard. The browser sends a view
-envelope; this builds a compact text block the agent can read: the view metadata,
-short previews of the selected rows, and a pointer to the MCP tools for full bodies.
+The browser attaches an optional view envelope separately from a message's text —
+the open record, a list selection, or a dashboard. The runtime retains the rendered
+block in that turn's model request history: the view metadata, short previews of
+the selected rows, and a pointer to the MCP tools for full bodies. Later turns
+retain that context without sending the attachment again.
 Model-generic: it resolves the model from the envelope's ``app/model`` type and
 summarises each row from a few public fields, so any addon's model works without a
 per-model branch here.

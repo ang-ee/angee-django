@@ -18,6 +18,7 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
@@ -1809,6 +1810,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
+    """The view from which this conversation was started, independent of its turns."""
     status = StateField(choices_enum=SessionStatus, default=SessionStatus.IDLE)
     replay_state = models.JSONField(default=list, blank=True)
     usage = models.JSONField(default=dict, blank=True)
@@ -1854,10 +1856,16 @@ class AgentSession(AuditMixin, AngeeDataModel):
 
         return self.title or str(self.agent)
 
-    def post(self, text: str, *, actor: Any = None) -> Any:
-        """Queue a prompt under the posting actor; broker failure leaves it pending."""
+    def post(self, text: str, *, context: Mapping[str, Any] = MappingProxyType({}), actor: Any = None) -> Any:
+        """Queue a prompt with this message's view context under the posting actor.
+
+        Context must be an object; omission retains no view context and never
+        inherits the session's starting view. Broker failure leaves the turn pending.
+        """
 
         actor = actor or instance_actor(self)
+        if not isinstance(context, Mapping):
+            raise ValidationError({"context": "Message context must be an object."})
         prompt = text.strip()
         if not prompt:
             raise ValidationError({"text": "A message is required."})
@@ -1873,7 +1881,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
                 raise ValidationError({"session": "Stop the pending tool approval before sending another message."})
             turns = locked.turns.with_actor(actor)
             next_index = int(turns.aggregate(last=models.Max("index"))["last"] or 0) + 1
-            turn = turns.create(session=locked, index=next_index, prompt=prompt)
+            turn = turns.create(session=locked, index=next_index, prompt=prompt, context=dict(context))
             if not locked.title:
                 locked.title = prompt[:200]
                 locked.save(update_fields=["title", "updated_at"])
@@ -1939,21 +1947,6 @@ class AgentSession(AuditMixin, AngeeDataModel):
             if turn is not None:
                 locked.cancel_turn(turn, actor=actor)
             self.refresh_from_db()
-
-    def latest_chat_turn(self, *turns: Any) -> Any:
-        """Select the newest retained turn from a snapshot or changed-row candidates."""
-
-        return max((turn for turn in reversed(turns) if turn is not None), key=lambda turn: turn.index, default=None)
-
-    def chat_state(self, latest_turn: Any) -> tuple[str, Any]:
-        """Project accepted work and the latest settlement, independently of transport."""
-
-        if latest_turn is not None:
-            if latest_turn.status in (TurnStatus.PENDING, TurnStatus.RUNNING):
-                return "running", None
-            if latest_turn.status in (TurnStatus.COMPLETED, TurnStatus.CANCELED, TurnStatus.FAILED):
-                return "idle", latest_turn
-        return "idle", None
 
     def delete_blocker(self) -> str | None:
         """Require active execution to be stopped before deleting its transcript."""
@@ -2107,6 +2100,8 @@ class AgentTurn(AuditMixin, AngeeDataModel):
     session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")
     index = models.PositiveIntegerField()
     prompt = models.TextField()
+    context = models.JSONField(default=dict, blank=True, editable=False)
+    """Server-retained view context supplied when this message was posted."""
     status = StateField(choices_enum=TurnStatus, default=TurnStatus.PENDING)
     updates = models.JSONField(default=list, blank=True)
     text = models.TextField(blank=True)

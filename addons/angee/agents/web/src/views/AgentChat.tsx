@@ -9,6 +9,7 @@ import {
   ThreadPrimitive,
   useAttachment,
   useMessage,
+  unstable_useThreadMessageIds,
   type ImageMessagePartComponent,
   type ReasoningMessagePartComponent,
   type TextMessagePartComponent,
@@ -199,7 +200,7 @@ function AgentChatContent({
               <ThreadPrimitive.Empty>
                 <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{t("chat.empty")}</p>
               </ThreadPrimitive.Empty>
-              <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+              <Transcript />
               {runtimeState.permissions.map((permission) => (
                 <AgentPermission key={permission.id} permission={permission} answer={runtimeState.answerPermission} />
               ))}
@@ -231,10 +232,10 @@ function AgentChatContent({
                 attachments={
                   <>
                     <RecordAttachmentChip
-                        attached={recordAttached}
-                        attachRecord={attachRecord}
-                        clearRecord={clearRecord}
-                        renderContext={renderContext}
+                      attached={recordAttached}
+                      attachRecord={attachRecord}
+                      clearRecord={clearRecord}
+                      renderContext={renderContext}
                     />
                     <ComposerPrimitive.Attachments>
                       {() => <ComposerImageAttachment />}
@@ -274,6 +275,13 @@ function AgentChatContent({
       </div>
     </AssistantRuntimeProvider>
   );
+}
+
+/** Native id scopes survive session replacement and message-id reconciliation. */
+function Transcript(): React.ReactElement {
+  const ids = unstable_useThreadMessageIds();
+  return <>{ids.map((id) => <ThreadPrimitive.Unstable_MessageById key={id} messageId={id}
+    components={{ UserMessage, AssistantMessage }} />)}</>;
 }
 
 /** One user message: a right-aligned bubble of plain text and any inline images sent with it. */
@@ -353,11 +361,9 @@ function useObjectUrl(file: File | undefined): string | null {
 }
 
 /**
- * The current-view-as-record chip. This is deliberately NOT a native assistant-ui attachment:
- * composer attachments are cleared on every send and freeze their content at create-time, which
- * would break the record's default-present/persistent and fresh-at-send requirements, and would
- * route a second context-assembly path through `onNew`. Instead its presence is runtime state
- * (`recordAttached`) that gates the single leading context block in `buildPromptBlocks`.
+ * The runtime owns automatic attachment, consumption and manual toggles for both
+ * protocol carriers. Compose the shared attachment chip and reattach button here;
+ * native image attachments retain their own adapter and lifecycle.
  *
  * When attached it shows a chip whose label opens an inspector (the freshly rendered
  * `<system_context>`) and whose remove control clears the record; when cleared it shows a button
@@ -379,7 +385,7 @@ function RecordAttachmentChip({
   const context = useRenderedContext(renderContext, open);
 
   if (!attached) {
-    return <ChatHeaderAction onClick={attachRecord}>{t("chat.attachView")}</ChatHeaderAction>;
+    return <ChatHeaderAction type="button" onClick={attachRecord}>{t("chat.attachView")}</ChatHeaderAction>;
   }
 
   return (

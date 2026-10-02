@@ -16,12 +16,14 @@ from pydantic_ai.messages import BinaryContent, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
+from rebac import SubjectRef, actor_context
 
 from angee.agents.context import render_view_context
 from angee.agents.models import normalize_inference_usage
 from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
+from angee.base.actors import user_subject_type
 
 _BINARY_CONTENT_OMITTED = "[Binary tool content omitted from persisted history; use a bounded file handle.]"
 """Replay-safe placeholder until the storage-handle follow-on lands."""
@@ -39,20 +41,31 @@ class PydanticAISessionRunner(SessionRunner):
         emit: SessionUpdateSink,
         deadline: float,
     ) -> TurnOutcome:
-        """Bridge the session's synchronous task into pydantic-ai's async loop."""
+        """Render the view as its poster, then run as the ambient agent principal.
+
+        AuditMixin retains the poster in ``turn.created_by_id``, including admin
+        posts to another user's session. Unattributed turns add no view context.
+        Native user history retains the rendered block at this turn.
+        """
 
         history = ModelMessagesTypeAdapter.validate_python(session.replay_state or [])
-        context = render_view_context(dict(session.context or {}))
-        instructions = "\n\n".join(part for part in (session.agent.instructions.strip(), context.strip()) if part)
         inference_model = session.agent.inference_model()
         toolsets = toolsets_for_session(session)
         limits = _usage_limits()
         deferred = _deferred_tool_results(deferred_results)
+        prompt: str | list[str] | None = None
+        if deferred is None:
+            context = ""
+            if turn.created_by_id is not None:
+                with actor_context(SubjectRef.of(user_subject_type(), str(turn.created_by_id))):
+                    context = render_view_context(dict(turn.context))
+            # Native user content persists in all_messages(); instructions apply only to this run.
+            prompt = [context, str(turn.prompt)] if context else str(turn.prompt)
         return async_to_sync(self._run_async)(
-            prompt=None if deferred is not None else str(turn.prompt),
+            prompt=prompt,
             history=history,
             deferred=deferred,
-            instructions=instructions,
+            instructions=session.agent.instructions.strip(),
             inference_model=inference_model,
             toolsets=toolsets,
             limits=limits,
@@ -63,7 +76,7 @@ class PydanticAISessionRunner(SessionRunner):
     async def _run_async(
         self,
         *,
-        prompt: str | None,
+        prompt: str | list[str] | None,
         history: list[Any],
         deferred: DeferredToolResults | None,
         instructions: str,

@@ -73,6 +73,28 @@ test("an empty sessions page inserts nothing until New session or the first send
   expect(agent.sessions.size).toBe(1);
 });
 
+test.each([true, false])("New session switches a thinking turn to an empty usable chat (foreground started: %s)", async (startWork) => {
+  const agent = new FakeAcpAgent(2); agent.startWork = startWork;
+  const mounted = mount(agent);
+  const input = await screen.findByPlaceholderText("Message the agent…");
+  fireEvent.change(input, { target: { value: "Start work" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByRole("button", { name: "Stop" });
+  await screen.findByText("Agent is thinking…");
+  await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "New session" }).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "New session" }));
+  await waitFor(() => expect(mounted.router.state.location.search.session).toBe("s-2"));
+  await waitFor(() => expect(screen.queryByText("Start work")).toBeNull());
+  expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  const fresh = screen.getByPlaceholderText("Message the agent…");
+  fireEvent.change(fresh, { target: { value: "New work" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(agent.promptCalls).toBe(2));
+  if (!startWork) await act(async () => { await agent.state("s-2", "running"); });
+  await act(async () => { await agent.chunk("s-2", "New answer"); await agent.finish("s-2"); });
+  await screen.findByText("New answer");
+});
+
 test("reload mid-turn restores the URL session and follows its live output", async () => {
   const agent = new FakeAcpAgent(2);
   const first = mount(agent);

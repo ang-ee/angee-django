@@ -718,6 +718,13 @@ Hard-won traps — the wise learn from others' mistakes
   [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
   owns `?session=` through route search; the ACP runtime restores known/newest
   sessions and creates on first send or New session. Native Query pages own the list.
+- **ACP view context follows the protocol owner.** The
+  [runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts) derives Current view
+  attachment from the session's sent prompts: first/changed views attach automatically,
+  sending consumes the badge, and users can remove or reattach it. Replayed history
+  without a known normalized envelope starts unsent. V2 sends context on session
+  creation and attached prompts for server rendering; v1 retains its rendered carrier.
+  Native assistant-ui thread/message identities follow ACP session/message ids.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:

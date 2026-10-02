@@ -85,6 +85,48 @@ def test_turns_drain_in_order_one_per_task(
     assert runner.history == [[], [{"reply": "retained"}]]
 
 
+def test_post_retains_each_messages_context_without_inheriting_the_session(session: AgentSession) -> None:
+    context = {"kind": "list", "type": "agents/agent", "params": {"search": "First view"}}
+    first = session.post("First", context=context, actor=session.owner)
+    second = session.post("Second")
+    context["kind"] = "record"
+    first.refresh_from_db()
+    second.refresh_from_db()
+    session.refresh_from_db()
+    assert first.context == {"kind": "list", "type": "agents/agent", "params": {"search": "First view"}}
+    assert second.context == {}
+    assert first.created_by_id == second.created_by_id == session.owner_id
+    assert session.context == {"label": "Session context"}
+    assert (first.prompt, second.prompt) == ("First", "Second")
+    assert session.title == "First"
+
+
+def test_admin_post_retains_the_poster_instead_of_the_session_owner(session: AgentSession) -> None:
+    """The post permission's admin arm admits a poster distinct from the owner."""
+
+    admin = create_platform_admin("session-post-admin")
+    turn = session.post("Posted by an admin", actor=admin)
+    turn.refresh_from_db()
+    assert admin.pk != session.owner_id
+    assert turn.created_by_id == admin.pk
+
+
+@pytest.mark.parametrize("context", [None, [], ["pair", "value"], "text", 42, False])
+def test_post_refuses_non_object_context_before_insertion(
+    session: AgentSession,
+    capture_tasks: list[Any],
+    context: Any,
+) -> None:
+    capture_tasks.clear()
+    with pytest.raises(ValidationError) as refused:
+        session.post("Refused", context=context)
+    assert refused.value.message_dict == {"context": ["Message context must be an object."]}
+    assert not session.turns.exists()
+    session.refresh_from_db()
+    assert session.title == ""
+    assert capture_tasks == []
+
+
 def test_post_during_execution_preserves_the_running_turn(session: AgentSession, runner: FakeRunner) -> None:
     first = session.post("First")
     posted: list[Any] = []
@@ -892,26 +934,19 @@ def test_chat_blocker_is_shared_by_start_post_and_claim(
     assert pending.status == TurnStatus.FAILED and pending.error == blocker
 
 
-def test_session_owns_active_selection_and_chat_state(session: AgentSession) -> None:
-    assert session.chat_state(None) == ("idle", None)
+def test_session_cancels_active_work_without_canceling_queued_turns(session: AgentSession) -> None:
     first = session.post("Active")
-    assert session.chat_state(first) == ("running", None)
     claimed = session.claim_turn()
-    assert session.chat_state(claimed) == ("running", None)
+    assert claimed.pk == first.pk
     second = session.post("Queued")
-    latest = session.latest_chat_turn(claimed, second)
-    assert latest.pk == second.pk and session.chat_state(latest) == ("running", None)
     session.cancel_active_turn()
     first.refresh_from_db()
     second.refresh_from_db()
     assert first.status == TurnStatus.CANCELED and second.status == TurnStatus.PENDING
-    refreshed = session.latest_chat_turn(claimed, first)
-    assert refreshed is first
-    assert session.chat_state(refreshed) == ("idle", first)
     claimed = session.claim_turn()
+    assert claimed.pk == second.pk
     with system_context(reason="test suspended state projection"):
         claimed.mark_awaiting_approval()
-    assert session.chat_state(claimed) == ("idle", None)
     session.cancel_active_turn()
     claimed.refresh_from_db()
-    assert session.chat_state(claimed) == ("idle", claimed)
+    assert claimed.status == TurnStatus.CANCELED

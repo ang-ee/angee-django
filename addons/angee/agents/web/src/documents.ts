@@ -48,10 +48,10 @@ export const AgentChatEndpointSchema = v.object({
 
 export type AgentChatEndpoint = v.InferOutput<typeof AgentChatEndpointSchema>;
 
-// Render the `<system_context>` block for the agent and the user's open view. Rendered
-// fresh each send and emitted by `buildPromptBlocks` as its OWN leading `ContentBlock`
-// (an embedded `resource` when the agent advertises `embeddedContext`, else a plain
-// `text` block) — never prefixed or string-merged into the user's text.
+// V1 renders view context fresh per prompt as a separate content block; v2 sends
+// the view envelope on session/new and on prompts with Current view attached.
+// The server renders v2 context; prompt content blocks never contain its rendering.
+// Explicit context inspection also uses this authored operation.
 export const RenderAgentPrompt = graphql(`
   mutation RenderAgentPrompt($id: ID!, $view: JSON!) {
     render_agent_prompt(id: $id, view: $view)
@@ -133,7 +133,7 @@ export const UpdateInferenceProvider = graphql(`
   }
 `);
 
-// The view envelope the chat sends to `render_agent_prompt`: what the user is looking at.
+// The view envelope for v1 context rendering and v2 session/prompt metadata.
 export interface AgentChatView extends Record<string, unknown> {
   kind: "record" | "list" | "dashboard";
   type: string;
@@ -142,7 +142,7 @@ export interface AgentChatView extends Record<string, unknown> {
   params?: Record<string, unknown>;
 }
 
-/** Normalize the view envelope once where an authored JSON variable consumes it. */
+/** Normalize the view envelope at its JSON boundary, including ACP session metadata. */
 export function agentChatViewInput(view: AgentChatView): JsonObject {
   const params = jsonObjectFromUnknown(view.params);
   return {

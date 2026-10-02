@@ -29,7 +29,7 @@ function text(hook: Awaited<ReturnType<typeof mount>>): string {
   return hook.result.current.runtime.thread.getState().messages.flatMap((message) => message.content.map((part) => part.type === "text" ? part.text : "")).join("|");
 }
 
-async function send(hook: Awaited<ReturnType<typeof mount>>, agent: FakeAcpAgent, message = "Hello") {
+async function send(hook: Pick<Awaited<ReturnType<typeof mount>>, "result">, agent: FakeAcpAgent, message = "Hello") {
   const before = agent.promptCalls;
   act(() => hook.result.current.runtime.thread.append(message));
   await waitFor(() => expect(agent.promptCalls).toBe(before + 1));
@@ -179,6 +179,213 @@ test.each([1, 2] as const)("v%s mounts without creating and creates lazily on fi
   expect(agent.sessions.size).toBe(1);
 });
 
+test.each([
+  { version: 1, attached: true }, { version: 1, attached: false },
+  { version: 2, attached: true }, { version: 2, attached: false },
+] as const)("v$version sends view context at the protocol's owning boundary (attached: $attached)", async ({ version, attached }) => {
+  const agent = new FakeAcpAgent(version);
+  const renderPrompt = vi.fn(async () => "<system_context>Private view</system_context>");
+  const currentView = { kind: "record", type: "agents/agent", sqid: "record-1", params: { focus: "details" } } as const;
+  const hook = await mount(agent, undefined, version, { view: { ...currentView, displayLabel: "Not part of the envelope" } }, { renderPrompt });
+  if (!attached) act(() => hook.result.current.clearRecord());
+  await send(hook, agent, "User text");
+  await waitFor(() => expect(agent.prompts).toHaveLength(1));
+  if (version === 2) {
+    expect(agent.created[0]?._meta).toEqual({ angee: { context: currentView } });
+    expect(agent.prompts[0]?._meta).toEqual(attached ? { angee: { context: currentView } } : undefined);
+    expect(agent.prompts[0]?.prompt).toEqual([{ type: "text", text: "User text" }]);
+    expect(renderPrompt).not.toHaveBeenCalled();
+    expect(text(hook)).not.toContain("system_context");
+  } else {
+    expect(agent.created[0]?._meta).toBeUndefined();
+    expect(agent.prompts[0]?._meta).toBeUndefined();
+    expect(agent.prompts[0]?.prompt).toEqual([
+      ...(attached ? [{ type: "text", text: "<system_context>Private view</system_context>" }] : []),
+      { type: "text", text: "User text" },
+    ]);
+    expect(renderPrompt).toHaveBeenCalledTimes(attached ? 1 : 0);
+    await act(async () => { await agent.finish("s-1"); });
+  }
+});
+
+test.each([1, 2] as const)("v%s auto-attaches changed normalized views, consumes sends, and allows manual toggles", async (version) => {
+  const agent = new FakeAcpAgent(version);
+  const renderPrompt = vi.fn(async () => "Rendered view");
+  const providers = createAcpTestProviders(agent, version, { renderPrompt });
+  fixtures.push(agent, { close: providers.clearClients });
+  transport.open.mockImplementation(agent.open);
+  const initialProps: Pick<AcpRuntimeOptions, "view"> = { view: { ...view, params: { a: 1, b: 2 } } };
+  const hook = renderHook(({ view }: Pick<AcpRuntimeOptions, "view">) => useAcpRuntime({ agentId: "agt-1", view }), {
+    wrapper: providers.Provider, initialProps,
+  });
+  await waitFor(() => expect(hook.result.current.status).toBe("ready"));
+  const sendAndFinish = async (message: string, attached: boolean) => {
+    await send(hook, agent, message);
+    await waitFor(() => expect(hook.result.current.recordAttached).toBe(false));
+    const prompt = agent.prompts.at(-1);
+    if (version === 2) {
+      expect(prompt?._meta).toEqual(attached ? { angee: { context: initialProps.view } } : undefined);
+      expect(prompt?.prompt).toEqual([{ type: "text", text: message }]);
+    } else {
+      expect(prompt?._meta).toBeUndefined();
+      expect(prompt?.prompt).toEqual([
+        ...(attached ? [{ type: "text", text: "Rendered view" }] : []), { type: "text", text: message },
+      ]);
+    }
+    await act(async () => { await agent.finish("s-1"); });
+    await waitFor(() => expect(hook.result.current.runtime.thread.getState().isRunning).toBe(false));
+  };
+  expect(hook.result.current.recordAttached).toBe(true);
+  await sendAndFinish("First", true);
+  // Extra presentation fields and object key order are not a view change.
+  hook.rerender({ view: { ...view, displayLabel: "New label", params: { b: 2, a: 1 } } });
+  expect(hook.result.current.recordAttached).toBe(false);
+  await sendAndFinish("Same view", false);
+  act(() => hook.result.current.attachRecord());
+  expect(hook.result.current.recordAttached).toBe(true);
+  await sendAndFinish("Explicit reattach", true);
+  initialProps.view = { kind: "record", type: "agents/agent", sqid: "record-2" };
+  hook.rerender(initialProps);
+  expect(hook.result.current.recordAttached).toBe(true);
+  act(() => hook.result.current.clearRecord());
+  expect(hook.result.current.recordAttached).toBe(false);
+  await sendAndFinish("Removed changed view", false);
+  act(() => hook.result.current.attachRecord());
+  await sendAndFinish("Changed view attached", true);
+  // Only the most recent context counts, so returning to the old view attaches.
+  hook.rerender({ view });
+  expect(hook.result.current.recordAttached).toBe(true);
+  act(() => hook.result.current.clearRecord());
+  hook.rerender(initialProps);
+  expect(hook.result.current.recordAttached).toBe(false);
+  hook.rerender({ view });
+  expect(hook.result.current.recordAttached).toBe(true);
+  expect(renderPrompt).toHaveBeenCalledTimes(version === 1 ? 3 : 0);
+});
+
+test("v2 queued prompts consume the badge before the native queue advances", async () => {
+  const agent = new FakeAcpAgent(2);
+  const hook = await mount(agent);
+  act(() => {
+    hook.result.current.runtime.thread.append("First");
+    hook.result.current.runtime.thread.append("Queued same view");
+    hook.result.current.runtime.thread.append("Still same view");
+  });
+  await waitFor(() => expect(agent.prompts).toHaveLength(3));
+  expect(agent.prompts.map((prompt) => prompt._meta)).toEqual([
+    { angee: { context: view } }, undefined, undefined,
+  ]);
+  expect(hook.result.current.recordAttached).toBe(false);
+});
+
+test.each([1, 2] as const)("v%s failed delivery preserves manual reattachment of an already sent view", async (version) => {
+  const agent = new FakeAcpAgent(version);
+  const hook = await mount(agent, undefined, version, {}, { renderPrompt: async () => "Rendered view" });
+  await send(hook, agent);
+  await act(async () => { await agent.finish("s-1"); });
+  await waitFor(() => expect(hook.result.current.recordAttached).toBe(false));
+  act(() => hook.result.current.attachRecord());
+  agent.failPrompt = true;
+  await send(hook, agent, "Retry with context");
+  await waitFor(() => expect(hook.result.current.error).toBe("The agent did not respond."));
+  expect(hook.result.current.recordAttached).toBe(true);
+  expect(hook.result.current.runtime.thread.composer.getState().text).toBe("Retry with context");
+});
+
+test.each(["empty render", "slash command"] as const)("v1 consumes an attached badge even with %s, without claiming context was sent", async (carrier) => {
+  const agent = new FakeAcpAgent(1);
+  const hook = await mount(agent, undefined, 1, {}, { renderPrompt: async () => carrier === "empty render" ? "" : "Rendered view" });
+  const message = carrier === "slash command" ? "/help" : "Hello";
+  await send(hook, agent, message);
+  expect(agent.prompts[0]?.prompt).toEqual([{ type: "text", text: message }]);
+  expect(hook.result.current.recordAttached).toBe(false);
+  await act(async () => { await agent.finish("s-1"); });
+  await send(hook, agent, "Same view");
+  expect(agent.prompts[1]?.prompt).toEqual([{ type: "text", text: "Same view" }]);
+});
+
+test("v2 queued prompts attach only changed or manually attached views without replacing session context", async () => {
+  const agent = new FakeAcpAgent(2);
+  const providers = createAcpTestProviders(agent);
+  fixtures.push(agent, { close: providers.clearClients });
+  transport.open.mockImplementation(agent.open);
+  const initialProps: Pick<AcpRuntimeOptions, "view"> = { view };
+  const hook = renderHook(({ view }: Pick<AcpRuntimeOptions, "view">) => useAcpRuntime({ agentId: "agt-1", view }), {
+    wrapper: providers.Provider, initialProps,
+  });
+  await waitFor(() => expect(hook.result.current.status).toBe("ready"));
+  await send(hook, agent, "First view");
+  await waitFor(() => expect(hook.result.current.sessions.ready).toBe(true));
+  expect(hook.result.current.recordAttached).toBe(false);
+  await send(hook, agent, "Same view queued");
+  await waitFor(() => expect(hook.result.current.sessions.ready).toBe(true));
+  expect(agent.prompts[1]?._meta).toBeUndefined();
+  const nextView = { kind: "record", type: "agents/agent", sqid: "record-2", params: { focus: "details" } } as const;
+  hook.rerender({ view: nextView });
+  await send(hook, agent, "Next view");
+  expect(agent.created).toHaveLength(1);
+  expect(agent.created[0]?._meta).toEqual({ angee: { context: view } });
+  expect(agent.prompts[2]?._meta).toEqual({ angee: { context: nextView } });
+  expect(agent.prompts[2]?.prompt).toEqual([{ type: "text", text: "Next view" }]);
+  await waitFor(() => expect(hook.result.current.sessions.ready).toBe(true));
+  act(() => hook.result.current.attachRecord());
+  await send(hook, agent, "Explicit queued view");
+  expect(agent.prompts[3]?._meta).toEqual({ angee: { context: nextView } });
+  await waitFor(() => expect(hook.result.current.sessions.ready).toBe(true));
+  hook.rerender({ view });
+  act(() => hook.result.current.clearRecord());
+  await send(hook, agent, "Removed queued view");
+  expect(agent.prompts[4]?._meta).toBeUndefined();
+});
+
+test.each([1, 2] as const)("v%s reload treats replayed views as unsent and New session resets manual removal", async (version) => {
+  const agent = new FakeAcpAgent(version);
+  const providerOptions = { renderPrompt: async () => "Rendered view" };
+  const first = await mount(agent, undefined, version, {}, providerOptions);
+  await send(first, agent);
+  await act(async () => { await agent.chunk("s-1", "Answer"); await agent.finish("s-1"); });
+  await waitFor(() => expect(first.result.current.recordAttached).toBe(false));
+  first.unmount();
+  const second = await mount(agent, "s-1", version, {}, providerOptions);
+  expect(text(second)).toContain("Answer");
+  expect(second.result.current.recordAttached).toBe(true);
+  act(() => second.result.current.clearRecord());
+  act(() => second.result.current.sessions.create());
+  await waitFor(() => expect(second.result.current.sessions.currentId).toBe("s-2"));
+  expect(second.result.current.recordAttached).toBe(true);
+});
+
+test.each([true, false])("v2 reconnect retains locally sent context through replay (echo before response: %s)", async (echoBeforeResponse) => {
+  const agent = new FakeAcpAgent(2); agent.echoBeforeResponse = echoBeforeResponse;
+  const hook = await mount(agent);
+  await send(hook, agent);
+  await waitFor(() => expect(hook.result.current.recordAttached).toBe(false));
+  await act(async () => { await agent.finish("s-1"); });
+  act(() => hook.result.current.reconnect());
+  await waitFor(() => expect(agent.restored).toHaveLength(1));
+  await waitFor(() => expect(hook.result.current.status).toBe("ready"));
+  expect(hook.result.current.recordAttached).toBe(false);
+  await send(hook, agent, "After reconnect");
+  expect(agent.prompts[1]?._meta).toBeUndefined();
+});
+
+test("ACP session identity owns the native assistant-ui thread on creation and selection", async () => {
+  const agent = new FakeAcpAgent(2);
+  const hook = await mount(agent);
+  await send(hook, agent);
+  await waitFor(() => expect(hook.result.current.runtime.threads.getState().mainThreadId).toBe("draft-agt-1"));
+  expect(hook.result.current.runtime.threads.mainItem.getState().remoteId).toBe("s-1");
+  await waitFor(() => expect(hook.result.current.sessions.ready).toBe(true));
+  act(() => hook.result.current.sessions.create());
+  await waitFor(() => expect(hook.result.current.runtime.threads.getState().mainThreadId).toBe("s-2"));
+  expect(hook.result.current.runtime.thread.getState().messages).toHaveLength(0);
+  expect(hook.result.current.runtime.thread.getState().isRunning).toBe(false);
+  act(() => hook.result.current.sessions.select("s-1", "/workspace"));
+  await waitFor(() => expect(hook.result.current.status).toBe("ready"));
+  expect(hook.result.current.runtime.threads.getState().mainThreadId).toBe("s-1");
+  await waitFor(() => expect(text(hook)).toContain("Hello"));
+});
+
 test("Chat tab reload mid-turn resumes newest and follows the same turn", async () => {
   const agent = new FakeAcpAgent(2);
   const first = await mount(agent);
@@ -212,15 +419,15 @@ test("chatter latest-session updates and rail toggles never reconnect the bindin
   expect(text(hook)).toContain("Retained");
 });
 
-test.each([true, false])("v2 keeps Stop through acceptance in either running/response order (%s)", async (stateBeforeResponse) => {
-  const agent = new FakeAcpAgent(2); agent.stateBeforeResponse = stateBeforeResponse;
+test.each([true, false])("v2 keeps Stop after acceptance before foreground work starts (%s)", async (startWork) => {
+  const agent = new FakeAcpAgent(2); agent.startWork = startWork;
   const hook = await mount(agent);
   act(() => hook.result.current.runtime.thread.append("Pending"));
   expect(hook.result.current.runtime.thread.getState().isRunning).toBe(true);
   await waitFor(() => expect(agent.promptCalls).toBe(1));
   await waitFor(() => expect(hook.result.current.runtime.thread.getState().messages.filter((message) => message.role === "user")).toHaveLength(1));
   expect(hook.result.current.runtime.thread.getState().isRunning).toBe(true);
-  if (!stateBeforeResponse) {
+  if (!startWork) {
     expect(agent.sessions.get("s-1")?.state).toBe("idle");
     await act(async () => { await agent.state("s-1", "running"); });
   }
@@ -300,11 +507,11 @@ test.each([1, 2] as const)("v%s removes or marks a rejected optimistic prompt an
   expect(hook.result.current.runtime.thread.getState().isRunning).toBe(false);
 });
 
-test("a send racing reconnect is retained and visibly reported instead of dropped", async () => {
-  const agent = new FakeAcpAgent(2);
+test("a v1 context render racing reconnect is retained and visibly reported instead of dropped", async () => {
+  const agent = new FakeAcpAgent(1);
   let release: (value: string) => void = () => undefined;
   const context = new Promise<string>((resolve) => { release = resolve; });
-  const hook = await mount(agent, undefined, 2, {}, { renderPrompt: () => context });
+  const hook = await mount(agent, undefined, 1, {}, { renderPrompt: () => context });
   act(() => hook.result.current.runtime.thread.append("Retain this"));
   await waitFor(() => expect(agent.sessions.size).toBe(1));
   act(() => agent.opened[0]?.close());

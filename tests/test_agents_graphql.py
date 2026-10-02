@@ -2429,7 +2429,7 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
         )
     with actor_context(owner):
         session = AgentSession.objects.start(agent, owner=owner, context={"kind": "list"})
-        turn = session.post("Private question")
+        turn = session.post("Private question", context={"kind": "record"})
     console = _schema()
     target = _data(
         _execute(
@@ -2442,18 +2442,20 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
     query = """
         query Chat($id: String!) {
           agent_sessions { id context agent { permissions } }
-          agent_turns { id prompt }
-          agent_turns_by_pk(id: $id) { id prompt }
+          agent_turns { id prompt context }
+          agent_turns_by_pk(id: $id) { id prompt context }
         }
     """
     mine = _data(_execute(console, query, {"id": str(turn.sqid)}, user=owner))
     assert mine == {
         "agent_sessions": [{"id": str(session.sqid), "context": {"kind": "list"}, "agent": {"permissions": ["call"]}}],
-        "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question"}],
-        "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question"},
+        "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}}],
+        "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}},
     }
     hidden = _data(_execute(console, query, {"id": str(turn.sqid)}, user=reader))
     assert hidden == {"agent_sessions": [], "agent_turns": [], "agent_turns_by_pk": None}
+    mutation_fields = _data(_execute(console, "{ __schema { mutationType { fields { name } } } }", user=owner))
+    assert not any("agent_turns" in field["name"] for field in mutation_fields["__schema"]["mutationType"]["fields"])
 
 
 def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None) -> None:

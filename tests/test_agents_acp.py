@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from importlib import import_module
 from typing import Any
@@ -19,6 +19,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from rebac import (
     MissingActorError,
     RelationshipTuple,
@@ -33,6 +35,7 @@ from rebac import (
 from angee import asgi
 from angee.agents.acp_server import SessionAgent
 from angee.agents.asgi import websocket_urlpatterns
+from angee.agents.context import render_view_context
 from angee.agents.models import AgentSessionManager, TurnStatus
 from angee.agents.protocol import ACP_PATH, TURN_FAILED_STOP_REASON, TURN_FAILURE_CODE
 from angee.agents.runners import TurnOutcome
@@ -41,6 +44,7 @@ from angee.agents.testing.drivers import FakeRunner
 from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
+from angee.agents_runtime_pydantic import runner as pydantic_runner
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.graphql.publishing import connect_change_broadcast_receiver, connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
@@ -89,6 +93,7 @@ class Peer:
         self.updates: list[dict[str, Any]] = []
         self.notifications: list[dict[str, Any]] = []
         self.responses: dict[int, dict[str, Any]] = {}
+        self.events: list[dict[str, Any]] = []
 
     async def connect(self) -> dict[str, Any]:
         assert await self.socket.connect(timeout=5) == (True, None)
@@ -114,6 +119,7 @@ class Peer:
 
     async def receive(self) -> None:
         payload = json.loads(await self.socket.receive_from(timeout=5))
+        self.events.append(payload)
         if payload.get("method") == "session/update":
             self.updates.append(payload["params"]["update"])
             self.notifications.append(payload["params"])
@@ -161,6 +167,10 @@ class Peer:
         await self.socket.send_json_to(
             {"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}}
         )
+
+    async def settlements(self, count: int) -> None:
+        while len([u for u in self.updates if "stopReason" in u]) < count:
+            await self.receive()
 
 
 async def _row(session_id: str, owner: Any) -> Any:
@@ -210,7 +220,7 @@ def test_initialize_new_prompt_stream_and_queued_turns(chat: Any, runner: FakeRu
             assert (await peer.response(second))["result"] == {"stopReason": "end_turn"}
             assert not any(u["sessionUpdate"] == "state_update" for u in peer.updates)
         else:
-            await peer.state("idle", "end_turn")
+            await peer.settlements(2)
             assert len([u for u in peer.updates if u.get("state") == "running"]) == 2
             users = [u for u in peer.updates if u["sessionUpdate"] == "user_message"]
             assert [u["messageId"] for u in users] == [first_id, second_id]
@@ -236,6 +246,7 @@ def test_failed_turn_and_failure_replay_keep_error_out_of_history(
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
     completed = runner.outcome
+    runner.during_turn = lambda session, turn, emit: None
     if approval:
         runner.outcome = TurnOutcome(kind="needs_approval", replay_state=[{"must_not_enter_history": True}])
     else:
@@ -262,6 +273,12 @@ def test_failed_turn_and_failure_replay_keep_error_out_of_history(
         else:
             idle = await peer.state("idle", TURN_FAILED_STOP_REASON)
             failure = next(u for u in peer.updates if u["sessionUpdate"] == "agent_message")
+            assert [u.get("state", u["sessionUpdate"]) for u in peer.updates] == [
+                "user_message",
+                "running",
+                "agent_message",
+                "idle",
+            ]
             assert failure["content"] == [{"type": "text", "text": readable_error}]
             assert "_meta" not in idle and "_meta" not in failure
         await peer.socket.disconnect()
@@ -269,6 +286,7 @@ def test_failed_turn_and_failure_replay_keep_error_out_of_history(
         await replay.connect()
         await replay.resume(session_id)
         if version == 2:
+            assert replay.updates == peer.updates
             assert next(u for u in replay.updates if u["sessionUpdate"] == "agent_message") == failure
             assert "_meta" not in await replay.state("idle", TURN_FAILED_STOP_REASON)
         else:
@@ -389,7 +407,8 @@ def test_disconnect_resume_running_turn_and_other_tab_cancel(
                 if isinstance(u.get("content"), dict)
             )
             if version == 2:
-                assert second.updates[-1]["state"] == "running"
+                assert second.updates[1] == {"sessionUpdate": "state_update", "state": "running"}
+                assert not any(u.get("state") == "idle" for u in second.updates)
             third = Peer(application, agent, cookie, version)
             await third.connect()
             await third.resume(session_id, replay=False)
@@ -447,10 +466,9 @@ def test_disconnect_resume_running_turn_and_other_tab_cancel(
             await completed.resume(session_id)
             if version == 2:
                 assert completed.updates[-1]["stopReason"] == ("cancelled" if cancel else "end_turn")
-                if cancel:
-                    assert completed.updates[0] == {"sessionUpdate": "state_update", "state": "running"}
-                else:
-                    assert not any(u.get("state") == "running" for u in completed.updates)
+                assert completed.updates[0]["sessionUpdate"] == "user_message"
+                assert completed.updates[1] == {"sessionUpdate": "state_update", "state": "running"}
+                assert len([u for u in completed.updates if u.get("state") == "idle"]) == 1
                 assert [
                     u["content"]["text"] for u in completed.updates if u["sessionUpdate"] == "agent_message_chunk"
                 ] == ["So far", " and end"]
@@ -767,6 +785,129 @@ def test_model_config_and_list_are_agent_scoped(chat: Any, version: int) -> None
 
 
 @pytest.mark.parametrize("version", [1, 2])
+def test_prompt_context_reaches_each_turn_and_its_native_model_request(
+    chat: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    version: int,
+) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+    agent.instructions = "Answer the user's question."
+    agent.save(update_fields=["instructions"])
+    contexts = [
+        {"kind": "list", "type": "agents/agent", "params": {"search": "First view"}},
+        {},
+        {"kind": "record", "type": "agents/agent", "params": {"search": "Second view"}},
+    ]
+    origin = {"kind": "list", "type": "agents/agent", "params": {"search": "Session origin"}}
+    with system_context(reason="test ACP context principal"):
+        principal = agent.principal_subject()
+    with actor_context(owner):
+        blocks = [render_view_context(context) for context in contexts]
+    assert all(agent.name in block for block in blocks if block)
+    requests: list[tuple[str | None, ModelRequest]] = []
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        assert current_actor() == principal
+        request = messages[-1]
+        assert isinstance(request, ModelRequest)
+        requests.append((info.instructions, request))
+        yield "Reply"
+
+    monkeypatch.setattr(Agent, "inference_model", lambda selected: FunctionModel(stream_function=respond))
+    monkeypatch.setattr(pydantic_runner, "toolsets_for_session", lambda selected: [])
+
+    async def scenario() -> None:
+        peer = Peer(application, agent, cookie, version)
+        await peer.connect()
+        session_id = await peer.new(_meta={"angee": {"context": origin}})
+        session = await _row(session_id, owner)
+        posted: list[int] = []
+        prompts = ["First", "Follow up", "Second view"]
+        for text, context in zip(prompts, contexts, strict=True):
+            params: dict[str, Any] = {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]}
+            if context:
+                params["_meta"] = {"angee": {"context": context}}
+            if text == "First":
+                params["prompt"].append(
+                    {"type": "resource_link", "name": "Document", "uri": "https://resource.example/document"}
+                )
+            posted.append(await peer.send("session/prompt", params))
+            if version == 2:
+                assert "messageId" in (await peer.response(posted[-1]))["result"]
+        await _wait_turn(session, count=3)
+        rows = await database_sync_to_async(
+            lambda: list(session.turns.with_actor(owner).order_by("index").values("prompt", "context"))
+        )()
+        prompts[0] += "\nDocument: https://resource.example/document"
+        assert rows == [{"prompt": text, "context": context} for text, context in zip(prompts, contexts, strict=True)]
+        for request_id in posted:
+            await _worker(session)
+            if version == 1:
+                assert (await peer.response(request_id))["result"] == {"stopReason": "end_turn"}
+        if version == 2:
+            await peer.settlements(3)
+        else:
+            assert not any(update["sessionUpdate"] == "state_update" for update in peer.updates)
+        await database_sync_to_async(session.refresh_from_db)()
+        assert session.context == origin
+        assert session.title == prompts[0]
+        assert len(requests) == 3
+        for index, (instructions, request) in enumerate(requests):
+            assert instructions == request.instructions == agent.instructions
+            expected = [blocks[index], prompts[index]] if blocks[index] else prompts[index]
+            assert [part.content for part in request.parts if isinstance(part, UserPromptPart)] == [expected]
+
+        user_kind = "user_message" if version == 2 else "user_message_chunk"
+        for replay in (False, True):
+            if replay:
+                peer.updates.clear()
+                await peer.resume(session_id)
+            users = [update for update in peer.updates if update["sessionUpdate"] == user_kind]
+            if version == 1 and not replay:
+                assert users == []
+                continue
+            assert len(users) == 3
+            assert [update["content"] for update in users] == [
+                [{"type": "text", "text": text}] if version == 2 else {"type": "text", "text": text} for text in prompts
+            ]
+        await peer.socket.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("context", [None, [], "text", 42, False])
+def test_invalid_prompt_context_is_rejected_before_insertion(chat: Any, version: int, context: Any) -> None:
+    agent, owner, application, tasks = chat
+    cookie = _cookie(owner)
+
+    async def scenario() -> None:
+        peer = Peer(application, agent, cookie, version)
+        await peer.connect()
+        session_id = await peer.new()
+        error = await peer.response(
+            await peer.send(
+                "session/prompt",
+                {
+                    "sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "Refused"}],
+                    "_meta": {"angee": {"context": context}},
+                },
+            )
+        )
+        assert error["error"] == {"code": -32602, "message": "Message context must be an object.", "data": None}
+        session = await _row(session_id, owner)
+        assert not await database_sync_to_async(lambda: session.turns.with_actor(owner).exists())()
+        assert session.title == ""
+        assert tasks == []
+        assert peer.updates == []
+        await peer.socket.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("version", [1, 2])
 @pytest.mark.parametrize("context", [None, [], "text", 42, False])
 def test_invalid_context_is_rejected_before_start(chat: Any, version: int, context: Any) -> None:
     agent, owner, application, _ = chat
@@ -869,7 +1010,7 @@ def test_resource_links_are_prompt_text(chat: Any, runner: FakeRunner, version: 
         )
         if version == 2:
             await peer.response(request)
-            assert peer.updates[0] == {"sessionUpdate": "state_update", "state": "running"}
+            assert peer.updates[0]["sessionUpdate"] == "user_message"
         session = await _row(sid, owner)
         await _wait_turn(session)
         await _worker(session)
@@ -921,7 +1062,7 @@ def test_v2_thought_and_tool_projection_and_snapshot(chat: Any, runner: FakeRunn
         await _worker(session)
         await peer.state("idle", "end_turn")
         thought = next(u for u in peer.updates if u["sessionUpdate"] == "agent_thought_chunk")
-        assert thought["messageId"] == f"{turn.sqid}:thought" and thought["content"]["text"] == "Thinking"
+        assert thought["messageId"] == f"{turn.sqid}:thought:0" and thought["content"]["text"] == "Thinking"
         tools = [u for u in peer.updates if u["sessionUpdate"] == "tool_call_update"]
         assert [u["status"] for u in tools] == ["pending", "completed"]
         assert tools[1]["content"][0]["content"]["text"] == "Found"
@@ -933,11 +1074,355 @@ def test_v2_thought_and_tool_projection_and_snapshot(chat: Any, runner: FakeRunn
             u for u in peer.updates if u["sessionUpdate"] != "state_update"
         ]
         assert [u for u in replay.updates if u["sessionUpdate"] == "state_update"] == [
-            {"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}
+            {"sessionUpdate": "state_update", "state": "running"},
+            {"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"},
         ]
         await replay.socket.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("finish_before_response", [False, True])
+def test_v2_prompt_echo_and_response_precede_its_running_and_output(
+    chat: Any, runner: FakeRunner, monkeypatch: pytest.MonkeyPatch, finish_before_response: bool
+) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+    post = AgentSession.post
+
+    def accepted(session: Any, *args: Any, **kwargs: Any) -> Any:
+        turn = post(session, *args, **kwargs)
+        if finish_before_response:
+            run_session.run(session.pk)
+        return turn
+
+    monkeypatch.setattr(AgentSession, "post", accepted)
+
+    async def scenario() -> None:
+        peer = Peer(application, agent, cookie, 2)
+        await peer.connect()
+        sid = await peer.new()
+        peer.events.clear()
+        request = await peer.prompt(sid, "Hello")
+        response = await peer.response(request)
+        session = await _row(sid, owner)
+        if not finish_before_response:
+            await _worker(session)
+        await peer.settlements(1)
+        assert peer.events[0]["params"]["update"]["sessionUpdate"] == "user_message"
+        assert peer.events[1] == response
+        assert peer.events[0]["params"]["update"]["messageId"] == response["result"]["messageId"]
+        assert [
+            event["params"]["update"].get("state", event["params"]["update"]["sessionUpdate"])
+            for event in peer.events
+            if event.get("method") == "session/update"
+        ] == ["user_message", "running", "agent_message_chunk", "idle"]
+        assert peer.updates[-1]["stopReason"] == "end_turn"
+        await peer.socket.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_v2_queued_turns_bracket_on_both_connections_before_next_claim(
+    chat: Any, runner: FakeRunner, fail_first: bool
+) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+    if fail_first:
+        runner.during_turn = lambda session, turn, emit: None
+        runner.error = RuntimeError("Private failure")
+
+    async def scenario() -> None:
+        peers = [Peer(application, agent, cookie, 2) for _ in range(2)]
+        for peer in peers:
+            await peer.connect()
+        sid = await peers[0].new()
+        await peers[1].resume(sid, replay=False)
+        peers[1].updates.clear()
+        await peers[0].response(await peers[0].prompt(sid, "One"))
+        for peer in peers:
+            await peer.state("running")
+        await peers[0].response(await peers[0].prompt(sid, "Two"))
+        while len([u for u in peers[1].updates if u["sessionUpdate"] == "user_message"]) < 2:
+            await peers[1].receive()
+        for peer in peers:
+            assert [u.get("state", u["sessionUpdate"]) for u in peer.updates] == [
+                "user_message",
+                "running",
+                "user_message",
+            ]
+        session = await _row(sid, owner)
+        await _worker(session)
+        for peer in peers:
+            while len([u for u in peer.updates if u.get("state") == "running"]) < 2:
+                await peer.receive()
+            assert peer.updates[-2:] == [
+                {
+                    "sessionUpdate": "state_update",
+                    "state": "idle",
+                    "stopReason": TURN_FAILED_STOP_REASON if fail_first else "end_turn",
+                },
+                {"sessionUpdate": "state_update", "state": "running"},
+            ]
+        queued = await database_sync_to_async(lambda: session.turns.order_by("index").last())()
+        assert queued.status == TurnStatus.PENDING
+        runner.error = None
+        runner.during_turn = None
+        await _worker(session)
+        for peer in peers:
+            await peer.settlements(2)
+        assert peers[0].updates == peers[1].updates
+        for peer in peers:
+            await peer.socket.disconnect()
+        replay = Peer(application, agent, cookie, 2)
+        await replay.connect()
+        await replay.resume(sid)
+        assert [u.get("state", u["sessionUpdate"]) for u in replay.updates] == [
+            "user_message",
+            "running",
+            "agent_message" if fail_first else "agent_message_chunk",
+            "idle",
+            "user_message",
+            "running",
+            "agent_message_chunk",
+            "idle",
+        ]
+        for kind in ("user_message", "agent_message", "agent_message_chunk"):
+            assert [u for u in replay.updates if u["sessionUpdate"] == kind] == [
+                u for u in peers[0].updates if u["sessionUpdate"] == kind
+            ]
+        await replay.socket.disconnect()
+
+    asyncio.run(scenario())
+
+
+def test_v2_resume_mid_second_queued_turn_keeps_its_bracket_open(
+    chat: Any, runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+    release = threading.Event()
+    monkeypatch.setattr("angee.agents.sessions.SESSION_UPDATE_FLUSH_SECONDS", 0)
+
+    def stream(session: Any, turn: Any, emit: Any) -> None:
+        emit(_chunk("So far"))
+        assert release.wait(10)
+        emit(_chunk(" and end"))
+
+    async def scenario() -> None:
+        first = Peer(application, agent, cookie, 2)
+        await first.connect()
+        sid = await first.new()
+        for text in ("One", "Two"):
+            await first.response(await first.prompt(sid, text))
+        session = await _row(sid, owner)
+        await _worker(session)
+        runner.during_turn = stream
+        worker = _worker(session)
+        try:
+            while not any(u.get("content") == {"type": "text", "text": "So far"} for u in first.updates):
+                await first.receive()
+            await first.socket.disconnect()
+            replay = Peer(application, agent, cookie, 2)
+            await replay.connect()
+            await replay.resume(sid)
+            assert [u.get("state", u["sessionUpdate"]) for u in replay.updates] == [
+                "user_message",
+                "running",
+                "agent_message_chunk",
+                "idle",
+                "user_message",
+                "running",
+                "agent_message_chunk",
+            ]
+            before = replay.updates[-1]
+            release.set()
+            await worker
+            await replay.settlements(2)
+            assert replay.updates[-2]["content"]["text"] == " and end"
+            assert replay.updates[-2]["messageId"] == before["messageId"]
+            assert [u.get("state", u["sessionUpdate"]) for u in replay.updates][-2:] == ["agent_message_chunk", "idle"]
+            await replay.socket.disconnect()
+        finally:
+            release.set()
+            await worker
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("full_replay", [False, True])
+def test_v2_pending_cancellation_waits_for_its_own_bracket_live_and_on_resume(chat: Any, full_replay: bool) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+
+    async def scenario() -> None:
+        first = Peer(application, agent, cookie, 2)
+        await first.connect()
+        sid = await first.new()
+        await first.response(await first.prompt(sid, "Active"))
+        session = await _row(sid, owner)
+        active = await database_sync_to_async(session.claim_turn)()
+        await first.response(await first.prompt(sid, "Cancel queued"))
+        queued = await database_sync_to_async(lambda: session.turns.order_by("index").last())()
+        await database_sync_to_async(session.cancel_turn)(queued, actor=owner)
+        replay = Peer(application, agent, cookie, 2)
+        await replay.connect()
+        await replay.resume(sid, replay=full_replay)
+        assert [u.get("state", u["sessionUpdate"]) for u in replay.updates] == [
+            "user_message",
+            "running",
+            "user_message",
+        ]
+        # The newest row is canceled, but it has not become foreground yet.
+        assert not any("stopReason" in u for u in replay.updates)
+        await database_sync_to_async(session.settle_turn)(active, TurnOutcome(kind="completed", text=""))
+        for peer in (first, replay):
+            await peer.settlements(2)
+            assert [u.get("state", u["sessionUpdate"]) for u in peer.updates] == [
+                "user_message",
+                "running",
+                "user_message",
+                "idle",
+                "running",
+                "idle",
+            ]
+            assert [u["stopReason"] for u in peer.updates if "stopReason" in u] == ["end_turn", "cancelled"]
+            await peer.socket.disconnect()
+        history = Peer(application, agent, cookie, 2)
+        await history.connect()
+        await history.resume(sid)
+        assert [u.get("state", u["sessionUpdate"]) for u in history.updates] == [
+            "user_message",
+            "running",
+            "idle",
+            "user_message",
+            "running",
+            "idle",
+        ]
+        assert history.updates[-1]["stopReason"] == "cancelled"
+        await history.socket.disconnect()
+
+    asyncio.run(scenario())
+
+
+def test_v2_segments_keep_arrival_order_and_ids_across_flushes_snapshot_and_replay(
+    chat: Any, runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+    release = threading.Event()
+    monkeypatch.setattr("angee.agents.sessions.SESSION_UPDATE_FLUSH_SECONDS", 0)
+
+    def stream(session: Any, turn: Any, emit: Any) -> None:
+        emit(_chunk("Before"))
+        emit(_chunk(" more"))
+        emit({"sessionUpdate": "tool_call", "toolCallId": "lookup", "title": "Lookup", "status": "pending"})
+        emit({"sessionUpdate": "tool_call_update", "toolCallId": "lookup", "status": "completed"})
+        emit(_chunk("After"))
+        emit(_chunk("Thinking", thought=True))
+        emit(_chunk("Final"))
+        emit(_chunk("Again", thought=True))
+        assert release.wait(10)
+
+    runner.during_turn = stream
+
+    async def scenario() -> None:
+        peer = Peer(application, agent, cookie, 2)
+        await peer.connect()
+        sid = await peer.new()
+        await peer.response(await peer.prompt(sid, "Parts"))
+        session = await _row(sid, owner)
+        turn = await database_sync_to_async(lambda: session.turns.first())()
+        worker = _worker(session)
+        try:
+            while not any(u.get("content") == {"type": "text", "text": "Again"} for u in peer.updates):
+                await peer.receive()
+            segments = [u for u in peer.updates if u["sessionUpdate"] in ("agent_message_chunk", "agent_thought_chunk")]
+            assert [u["messageId"] for u in segments] == [
+                f"{turn.sqid}:agent:0",
+                f"{turn.sqid}:agent:0",
+                f"{turn.sqid}:agent:4",
+                f"{turn.sqid}:thought:5",
+                f"{turn.sqid}:agent:6",
+                f"{turn.sqid}:thought:7",
+            ]
+            snapshot = Peer(application, agent, cookie, 2)
+            await snapshot.connect()
+            await snapshot.resume(sid, replay=False)
+            assert [u.get("state", u["sessionUpdate"]) for u in snapshot.updates] == [
+                "user_message",
+                "running",
+                "agent_message",
+                "tool_call_update",
+                "agent_message",
+                "agent_thought",
+                "agent_message",
+                "agent_thought",
+            ]
+            snapshot_ids = [
+                u["messageId"] for u in snapshot.updates if u["sessionUpdate"] in ("agent_message", "agent_thought")
+            ]
+            assert snapshot_ids == [u["messageId"] for u in segments if u["content"]["text"] != " more"]
+            assert snapshot.updates[2]["content"] == [{"type": "text", "text": "Before more"}]
+            release.set()
+            await worker
+            await peer.settlements(1)
+            await snapshot.settlements(1)
+            await snapshot.socket.disconnect()
+            replay = Peer(application, agent, cookie, 2)
+            await replay.connect()
+            await replay.resume(sid)
+            assert replay.updates == peer.updates
+            replay.updates.clear()
+            await replay.resume(sid)
+            assert replay.updates == peer.updates
+            await replay.socket.disconnect()
+            await peer.socket.disconnect()
+        finally:
+            release.set()
+            await worker
+
+    asyncio.run(scenario())
+
+
+def test_v2_replays_pre_rebuild_thought_and_message_chunks_with_full_bracket(chat: Any) -> None:
+    agent, owner, application, _ = chat
+    cookie = _cookie(owner)
+    session = AgentSession.objects.start(agent, owner=owner, context={})
+    session.post("Historical")
+    turn = session.claim_turn()
+    stored = [_chunk("Think", thought=True), _chunk(" more", thought=True), _chunk("Hello"), _chunk("!")]
+    with actor_context(agent.principal_subject()):
+        turn.append_updates(stored)
+    session.settle_turn(turn, TurnOutcome(kind="completed", text="Hello!"))
+
+    async def scenario() -> None:
+        peer = Peer(application, agent, cookie, 2)
+        await peer.connect()
+        await peer.resume(str(session.sqid))
+        assert [u.get("state", u["sessionUpdate"]) for u in peer.updates] == [
+            "user_message",
+            "running",
+            "agent_thought_chunk",
+            "agent_thought_chunk",
+            "agent_message_chunk",
+            "agent_message_chunk",
+            "idle",
+        ]
+        assert [u["messageId"] for u in peer.updates[2:-1]] == [
+            f"{turn.sqid}:thought:0",
+            f"{turn.sqid}:thought:0",
+            f"{turn.sqid}:agent:2",
+            f"{turn.sqid}:agent:2",
+        ]
+        assert [u["content"]["text"] for u in peer.updates[2:-1]] == ["Think", " more", "Hello", "!"]
+        assert peer.updates[-1] == {"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}
+        await peer.socket.disconnect()
+
+    asyncio.run(scenario())
+    turn.refresh_from_db()
+    assert turn.updates == stored
 
 
 def test_v1_stop_cancels_own_pending_waiters(chat: Any, runner: FakeRunner) -> None:
@@ -1277,7 +1762,8 @@ def test_resume_awaiting_approval_is_idle_without_a_stop_reason(chat: Any, repla
         await peer.connect()
         await peer.resume(str(session.sqid), replay=replay)
         assert [u for u in peer.updates if u["sessionUpdate"] == "state_update"] == [
-            {"sessionUpdate": "state_update", "state": "idle"}
+            {"sessionUpdate": "state_update", "state": "running"},
+            {"sessionUpdate": "state_update", "state": "idle"},
         ]
         await peer.socket.disconnect()
 

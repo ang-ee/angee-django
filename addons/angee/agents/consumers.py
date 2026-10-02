@@ -8,6 +8,7 @@ import logging
 from importlib import import_module
 from typing import Any
 
+from acp.connection import StreamEvent
 from acp.experimental import AgentProtocolRouter
 from channels.auth import get_user
 from channels.db import database_sync_to_async
@@ -104,8 +105,14 @@ class _AgentACPConsumer(AsyncWebsocketConsumer):
         self.connection = AgentProtocolRouter(
             v1=lambda connection: build(connection, V1SessionAgent),
             v2=lambda connection: build(connection, V2SessionAgent),
-        ).connect(self.transport)
+        ).connect(self.transport, observers=[self.observe_stream])
         await self.accept()
+
+    async def observe_stream(self, event: StreamEvent) -> None:
+        """Forward native SDK delivery events to the negotiated adapter."""
+
+        if self.adapter is not None:
+            await self.adapter.observe_stream(event)
 
     async def receive(self, text_data: str | None = None, bytes_data: bytes | None = None) -> None:
         self.transport.feed(text_data.encode("utf-8") if text_data is not None else bytes_data or b"")
