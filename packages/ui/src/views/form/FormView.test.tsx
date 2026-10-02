@@ -2722,6 +2722,35 @@ describe("FormView", () => {
     expect(document.querySelectorAll("aside")).toHaveLength(1);
   });
 
+  test("a full-bleed tab fills compact chrome while document tabs retain their column and editor draft", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} defaultRecordTab="editor"
+      recordTabs={[
+        { id: "editor", label: "Editor", presentation: "full-bleed", keepMounted: true,
+          render: () => <input aria-label="Editor draft" defaultValue="Original" /> },
+        { id: "activity", label: "Activity", render: () => <p>Activity content</p> },
+      ]} />);
+    const editor = await screen.findByRole("tabpanel", { name: "Editor" });
+    const draft = within(editor).getByRole("textbox", { name: "Editor draft" });
+    fireEvent.change(draft, { target: { value: "Unsaved draft" } });
+    expect(editor.className).toContain("flex-1");
+    expect(editor.className).toContain("overflow-hidden");
+    expect(editor.closest('[data-tabs-root]')?.className ?? editor.parentElement?.className).toContain("h-full");
+    expect(editor.innerHTML).not.toContain("max-w-[1100px]");
+    expect(editor.firstElementChild?.className).toContain("h-full");
+    expect(draft.parentElement?.parentElement?.className).toContain("h-full");
+    expect(draft.parentElement?.parentElement?.className).toContain("grid-rows-[minmax(0,1fr)]");
+    expect(screen.getByRole("textbox", { name: "Title" }).closest("header")?.className).toContain("gap-1");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    const activity = await screen.findByRole("tabpanel", { name: "Activity" });
+    expect(activity.className).toContain("max-w-[1100px]");
+    expect(screen.getByRole("textbox", { name: "Title" }).closest("header")?.className).toContain("gap-4");
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByLabelText("Reminder")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+    expect(screen.getByRole("textbox", { name: "Editor draft" })).toBe(draft);
+    expect(draft).toHaveProperty("value", "Unsaved draft");
+  });
+
   test("workspace records without tabs keep the compact header and scrolling form body", async () => {
     renderWithProviders(
       <FormView

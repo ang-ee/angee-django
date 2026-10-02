@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
-import { FormView, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
+import { FormView, GraphView, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
 
@@ -233,6 +233,22 @@ export const RetainedPanelActivity: Story = {
       <PublishedActivity />
     </div>
   </RuntimeFixture></PrimaryPaneProvider>,
+};
+
+const graphNodes = Array.from({ length: 13 }, (_, index) => ({ id: `node-${index}`, kind: "item", title: `Item ${index + 1}` }));
+const graphEdges = graphNodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: graphNodes[index]!.id, target: node.id, kind: "next" }));
+export const FullBleedTab: Story = {
+  render: () => <RuntimeFixture schemas={storySchemas}>
+    <div className="h-[600px]">
+      <FormView resource="notes.Note" id={storyRecord.id} fields={readOnlyFields} defaultRecordTab="graph"
+        recordTabs={[
+          { id: "graph", label: "Graph", presentation: "full-bleed", keepMounted: true, render: () =>
+            <GraphView className="min-h-0 flex-1" nodes={graphNodes} edges={graphEdges}
+              nodeStyles={{ item: graphNodeStyle("var(--border-strong)", "neutral") }} layout={{ rankdir: "LR" }} initialView={{ minZoom: 0.65 }} miniMap /> },
+          { id: "activity", label: "Activity", render: () => <p>Document content keeps its centered column.</p> },
+        ]} />
+    </div>
+  </RuntimeFixture>,
 };
 
 const railFields = ["title", "owner", "priority"].map((name) => ({

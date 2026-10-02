@@ -105,6 +105,8 @@ export interface RecordToolbarContext {
 export interface RecordTabDescriptor {
   id: string;
   label: TabLabel;
+  /** Fill the available content area beneath compact record chrome. Other tabs retain document layout. */
+  presentation?: "full-bleed";
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
