@@ -758,7 +758,7 @@ def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeyp
     assert projected.outcomes == {"done": "Done", "error": "Error"}
 
 
-@pytest.mark.parametrize("broken", ["retired", "tightened"])
+@pytest.mark.parametrize("broken", ["retired", "tightened", "malformed"])
 def test_broken_published_child_is_a_located_issue_for_query_save_and_publish(schema, callers, register_step, broken):
     from angee.workflows.awaits import AwaitRun
 
@@ -777,6 +777,12 @@ def test_broken_published_child_is_a_located_issue_for_query_save_and_publish(sc
     if broken == "retired":
         from django.conf import settings
         settings.ANGEE_WORKFLOW_STEP_CLASSES.pop(Child.key)
+    elif broken == "malformed":
+        with system_context(reason="test historical published document no longer parses"):
+            version = type(child.published).objects.create(
+                workflow=child, number=2, document={"nodes": []}, content_hash="historical",
+            )
+            system_queryset(Workflow).filter(pk=child.pk).update(published=version)
     else:
         class Tightened(BaseModel):
             minimum: int = Field(ge=2)
@@ -800,13 +806,12 @@ def test_broken_published_child_is_a_located_issue_for_query_save_and_publish(sc
 
 def test_await_resolution_is_batched_and_configurations_are_bounded(callers, register_step):
     from angee.workflows.awaits import AwaitRun
-    from angee.workflows.managers import StepConfiguration
 
     register_step(AwaitRun)
     admin, _, _ = callers
     children = [load_workflow(document("entry"), key=f"batch_{index}", actor=admin) for index in range(3)]
     def entries(count):
-        return [StepConfiguration(node=f"node_{index}", step="await_run", config={"expects": children[index % 3].key})
+        return [{"node": f"node_{index}", "step": "await_run", "config": {"expects": children[index % 3].key}}
                 for index in range(count)]
     with CaptureQueriesContext(connection) as one:
         Workflow.objects.authoring_outcomes(entries(1), actor=admin)
@@ -818,3 +823,30 @@ def test_await_resolution_is_batched_and_configurations_are_bounded(callers, reg
     assert len(contract_queries) == 1
     with pytest.raises(ValidationError, match="100"):
         Workflow.objects.authoring_outcomes(entries(101), actor=admin)
+
+@pytest.mark.parametrize("config", [[], "invalid", 1])
+def test_outcome_configuration_wire_shape_errors_are_located_native_validation(schema, callers, config):
+    admin, _, _ = callers
+    workflow = load_workflow(document("entry"), actor=admin)
+    query = """query($id: ID!, $configurations: [WorkflowStepConfiguration!]!) {
+      workflow_step_outcomes(id: $id, configurations: $configurations) { node outcomes }
+    }"""
+    result = execute_schema(schema, query, {"id": workflow.sqid, "configurations": [
+        {"node": "valid", "step": "echo", "config": {}},
+        {"node": "bad", "step": "echo", "config": config},
+    ]}, user=admin)
+    assert result.errors[0].extensions["code"] == "VALIDATION"
+    assert "configurations.1.config" in result.errors[0].extensions["validationErrors"]
+
+
+def test_outcome_configuration_bound_and_entry_errors_share_the_manager_adapter(schema, callers):
+    admin, _, _ = callers
+    workflow = load_workflow(document("entry"), actor=admin)
+    query = """query($id: ID!, $configurations: [WorkflowStepConfiguration!]!) {
+      workflow_step_outcomes(id: $id, configurations: $configurations) { node outcomes }
+    }"""
+    result = execute_schema(schema, query, {"id": workflow.sqid, "configurations": [
+        {"node": str(index), "step": "echo", "config": []} for index in range(101)
+    ]}, user=admin)
+    assert result.errors[0].extensions["code"] == "VALIDATION"
+    assert "100" in str(result.errors[0].extensions["validationErrors"]["configurations"])

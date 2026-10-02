@@ -166,7 +166,7 @@ class WorkflowManager(AngeeManager):
                 continue
             try:
                 config["outcomes"] = expected.published.definition.output_schemas
-            except (ImproperlyConfigured, ValidationError):
+            except (ImproperlyConfigured, ValidationError, PydanticValidationError):
                 issues.append(Issue(
                     node=key, path=[*path, "config", "expects"], code="expected_workflow",
                     message=f"Expected workflow {expects!r} has an invalid published contract.",
@@ -174,13 +174,16 @@ class WorkflowManager(AngeeManager):
         return issues
 
     def authoring_outcomes(
-        self, configurations: list[StepConfiguration], *, actor: Any
+        self, configurations: list[dict[str, Any]], *, actor: Any
     ) -> list[tuple[str, dict[str, str], list[Issue]]]:
         """Resolve each unfinished node independently under the viewer's read scope."""
         try:
             entries = _CONFIGURATIONS.validate_python(configurations)
         except PydanticValidationError as error:
-            raise ValidationError("At most 100 typed step configurations are supported.") from error
+            raise ValidationError({
+                ".".join(["configurations", *(str(part) for part in issue["loc"])]): [issue["msg"]]
+                for issue in error.errors()
+            }) from error
         declarations: list[tuple[str, Body, list[str | int]]] = [
             (entry.node, entry, ["nodes", entry.node]) for entry in entries
         ]

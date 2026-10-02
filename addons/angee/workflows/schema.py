@@ -38,7 +38,6 @@ from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 from angee.workflows.definition import Body, Definition, Issue
-from angee.workflows.managers import StepConfiguration
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerGrantTarget
@@ -680,7 +679,7 @@ class WorkflowStudioQuery:
                 issues=cast(list[WorkflowIssue], issues),
             )
             for node, outcomes, issues in Workflow.objects.authoring_outcomes(
-                [StepConfiguration.model_validate({"node": entry.node, "step": entry.step, "config": entry.config})
+                [{"node": entry.node, "step": entry.step, "config": entry.config}
                  for entry in configurations],
                 actor=request_from_info(info).user,
             )
