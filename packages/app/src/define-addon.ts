@@ -584,4 +584,3 @@ function normalizeSlotContributions(
       : { ...entry, model: canonicalizeModel(entry.model) };
   });
 }
-
