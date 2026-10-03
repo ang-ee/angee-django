@@ -50,7 +50,7 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
     </AppMenuLink>
     {items.map((item) => {
       const children = rail.menus(item);
-      const removed = rail.removedUnder(item.id);
+      const removed = rail.removedUnder(item.id).filter((node) => !node.app);
       if ((!children.length && !removed.length) || (!item.to && children.length === 1 && !removed.length)) {
         const destination = children[0] ?? item;
         return <Tooltip key={item.id} label={rail.describe(destination)} side="bottom">
@@ -82,14 +82,15 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
 /** Developer mode: menus a layer removed, struck through where they showed, naming who removed them. */
 function RemovedMenus({ rail, parentId, inMenu = false }: { rail: DeveloperRail; parentId: string; inMenu?: boolean }): ReactElement | null {
   const t = useUiT();
-  const removed = rail.removedUnder(parentId);
+  // Removed apps show in the rail, where included apps live.
+  const removed = rail.removedUnder(parentId).filter((node) => !node.app);
   if (!removed.length) return null;
   return <>{removed.map((node) => {
     const label = t("developer.removedBy", { label: node.displayLabel, layer: node.by });
     return inMenu
       ? <DropdownMenu.Item key={node.id} disabled className="line-through">{label}</DropdownMenu.Item>
       : <Tooltip key={node.id} label={node.route ? `${node.id} → ${node.route}` : node.id} side="bottom">
-        <span tabIndex={0} className={cn(menuItemClass, "cursor-default line-through")}>{label}</span>
+        <span tabIndex={0} role="link" aria-disabled="true" className={cn(menuItemClass, "cursor-default line-through")}>{label}</span>
       </Tooltip>;
   })}</>;
 }

@@ -110,10 +110,13 @@ export function AppRailTree({
         ) : null}
         <div className={styles.tree()}>
           {flat && roots.length === 1 && onlyRoot ? (
-            rail.apps(onlyRoot).map((item) => (
-              <MenuLink key={item.id} item={item}
-                pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
-            ))
+            <>
+              {rail.apps(onlyRoot).map((item) => (
+                <MenuLink key={item.id} item={item}
+                  pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
+              ))}
+              <RemovedMenuItems parentId={onlyRoot.id} styles={styles} />
+            </>
           ) : <Accordion.Root
             variant="flush"
             value={openRootId ? [openRootId] : []}
@@ -144,13 +147,14 @@ export function AppRailTree({
 /** Developer mode: removed apps, struck through where they showed, naming who removed them. */
 function RemovedMenuItems({ parentId, styles }: { parentId: string | null; styles: AppRailTreeStyles }): ReactElement | null {
   const t = useUiT();
-  const removed = useRail().removedUnder(parentId);
+  // Under a root only removed apps belong to the rail; removed menus show in the top bar.
+  const removed = useRail().removedUnder(parentId).filter((node) => parentId === null || node.app);
   if (!removed.length) return null;
   return (
     <>
       {removed.map((node) => (
         <Tooltip key={node.id} label={node.route ? `${node.id} → ${node.route}` : node.id} side="right">
-          <span tabIndex={0} className={`${styles.link()} cursor-default line-through`}>
+          <span tabIndex={0} role="link" aria-disabled="true" className={`${styles.link()} cursor-default line-through`}>
             <Glyph name="x" size={14} aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate">{t("developer.removedBy", { label: node.displayLabel, layer: node.by })}</span>
           </span>
@@ -197,7 +201,7 @@ function RootMenuItem({
   const rail = useRail();
   if (!item.target) return null;
   const children = rail.apps(item);
-  if (!children.length) {
+  if (!children.length && !rail.removedUnder(item.id).some((node) => node.app)) {
     return (
       <div className={styles.rootItem()}>
         <MenuLink
@@ -239,6 +243,7 @@ function RootMenuItem({
           styles={styles}
           onActiveToggle={onActiveToggle}
         />
+        <RemovedMenuItems parentId={item.id} styles={styles} />
       </Accordion.Panel>
     </Accordion.Item>
   );
