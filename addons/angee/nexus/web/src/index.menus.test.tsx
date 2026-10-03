@@ -15,7 +15,7 @@ const upstream = [
   defineBaseAddon({ id: "parties", menus: [{ id: "parties", children: [
     { id: "parties.people", label: "People" },
     { id: "parties.organizations", label: "Organizations" },
-  ] }] }),
+  ] }], containers: { "parties.overview#items": {} } }),
   defineBaseAddon({ id: "spaces", menus: [{ id: "spaces", label: "Spaces", route: "spaces.groups" }],
     routes: [{ name: "spaces.groups", path: "/spaces/groups", layout: "console" }] }),
   defineBaseAddon({ id: "posts", menus: [{ id: "posts", label: "Posts", route: "posts.feeds" }],

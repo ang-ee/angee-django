@@ -280,8 +280,10 @@ export function resolveContainer<TContent = unknown>(
   if (!declared) return extra as readonly ComposedContainerChild<TContent>[];
   const name = containerName(address);
   const addresses = declared.models ? [address, ...models.map((model) => `${model}#${name}`)] : [address];
+  // One id on a model and on its MTI parent (one addon's, as ids are namespaced): the model's own stands.
+  const byId = new Map(addresses.flatMap((at) => composed.children[at] ?? []).map((child) => [child.id, child]));
   const merged = [
-    ...positionSiblings(orderById(addresses.flatMap((at) => composed.children[at] ?? [])), `Children of "${address}"`),
+    ...positionSiblings(orderById([...byId.values()]), `Children of "${address}"`),
     ...extra,
   ];
   const rules = addresses.flatMap((at) => composed.rules[at] ?? [])
@@ -315,9 +317,11 @@ export function resolveContainer<TContent = unknown>(
       if (taken) throw new Error(`Children "${taken.id}" and "${child.id}" of "${address}" are both variants of "${child.variant.of}" for this row.`);
       variants.set(child.variant.of, child);
     }
-    // A variant positioned in its own right keeps its place; one without stands where its original stood.
+    // A variant positioned in its own right keeps its place; one without stands where
+    // its original stood, or keeps its own when the original is not on this page.
     const placed = (child: ComposedContainerChild): boolean =>
-      child.sequence !== undefined || child.before !== undefined || child.after !== undefined;
+      child.sequence !== undefined || child.before !== undefined || child.after !== undefined
+      || (child.variant !== undefined && !originals.has(child.variant.of));
     visible = visible
       .filter((child) => !child.variant || (variants.get(child.variant.of) === child && placed(child)))
       .flatMap((child) => {

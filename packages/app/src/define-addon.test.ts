@@ -179,7 +179,7 @@ describe("composeAddons", () => {
     ]);
   });
 
-  test("addresses model tabs per model; one id belongs to one address of the family", () => {
+  test("addresses model tabs per model; the address carries the model, so one id may sit on two models", () => {
     const history = { content: { label: "History" } };
     const composed = composeAddons([defineAddon({
       id: "history",
@@ -194,10 +194,16 @@ describe("composeAddons", () => {
     ]);
     expect(ids(resolveContainer(composed.containers, "record#aside", { models: ["parties.Party"] }))).toContain("history.party");
     expect(ids(resolveContainer(composed.containers, "record#aside", { models: ["parties.Party"] }))).not.toContain("history.circle");
-    expect(() => composeAddons([defineAddon({
+    const both = composeAddons([defineAddon({
       id: "history",
       containers: { "parties.Party#aside": { "history.history": history }, "parties.Circle#aside": { "history.history": history } },
-    })], IDENTITY_CANONICALIZER)).toThrow(/"history.history" at "parties.Party#aside" and "parties.Circle#aside"; one id per container/);
+    })], IDENTITY_CANONICALIZER);
+    expect(ids(resolveContainer(both.containers, "record#aside", { models: ["parties.Circle"] }))).toContain("history.history");
+    // The kind's own address renders with every model's, so there one id is one child.
+    expect(() => composeAddons([defineAddon({
+      id: "history",
+      containers: { "record#aside": { "history.history": history }, "parties.Circle#aside": { "history.history": history } },
+    })], IDENTITY_CANONICALIZER)).toThrow(/"history.history" at "record#aside" and "parties.Circle#aside", which render together; one id per container/);
   });
 
   test("an addon declares children only in its namespace and alters only its dependencies' children", () => {

@@ -165,6 +165,11 @@ describe("compileContainers", () => {
     });
     const composed = compileContainers([messaging, product], [...core, aside, views]);
     expect(composed.removed).toEqual([{ address: "record#aside", id: "chatter.comments", by: "messaging" }]);
+    // Removing again still takes the right to alter the child.
+    const owned = layer("work", { "form#sections": { "work.task": { content: 1 } } });
+    const workRemoves = layer("pm", { "form#sections": { "work.task": { remove: true } } }, ["work"]);
+    expect(() => compileContainers([owned, workRemoves, layer("stranger", { "form#sections": { "work.task": { remove: true } } })], core))
+      .toThrow(/"stranger".*"work"/);
     expect(composed.provenance["record#aside/chatter.activity"]).toEqual({ content: "framework", sequence: "messaging" });
     // product's only names a framework child; messaging is no dependent of product's, so its tab is narrowed out too.
     expect(ids(resolveContainer(composed, "record#aside"))).toEqual(["chatter.activity"]);
@@ -193,6 +198,8 @@ describe("compileContainers", () => {
     expect(() => compileContainers([layer("work", { "form#sections": [{ "work.x": { content: 1 }, when: { route: "r" } }] })], core)).toThrow(/under a condition/);
     expect(() => compileContainers([layer("work", { "form#sections": { "iam.x": { content: 1 } } })], core)).toThrow(/outside its namespace/);
     expect(() => compileContainers([layer("work", { "form#sections": { when: { device: "phone" } } })], core)).toThrow(/unknown condition "device"/);
+    expect(() => compileContainers([layer("work", { "form#sections": { only: [], when: { route: 5 } } })], core))
+      .toThrow(/condition "route" must be an id or a list of ids/);
   });
 
   test("an id belongs to the addon whose id is its longest prefix", () => {
@@ -220,15 +227,33 @@ describe("compileContainers", () => {
       .toThrow(/"#sections" is a model kind \("form#sections"\) and "iam.user" is not a model/);
   });
 
-  test("ids are unique within a family: one id at the kind and a model address clashes", () => {
+  test("ids are unique where they render together: the kind with a model, not two models", () => {
     expect(() => compileContainers([layer("work", {
       "form#actions": { "work.archive": { content: 1 } },
       "projects.Task#actions": { "work.archive": { content: 2 } },
-    })], core)).toThrow(/"work" declares child "work.archive" at "form#actions" and "projects.Task#actions"; one id per container/);
-    expect(() => compileContainers([layer("work", {
-      "projects.Task#actions": { "work.archive": { content: 1 } },
-      "projects.Project#actions": { "work.archive": { content: 2 } },
-    })], core)).toThrow(/one id per container/);
+    })], core)).toThrow(/"work" declares child "work.archive" at "form#actions" and "projects.Task#actions", which render together; one id per container/);
+    // The address carries the model: one id on two models is two children (M3).
+    const twoModels = compileContainers([layer("accounting", {
+      "parties.Person#sections": { "accounting.party": { content: "person" } },
+      "parties.Organization#sections": { "accounting.party": { content: "organization" } },
+    })], core);
+    expect(resolveContainer(twoModels, "form#sections", { models: ["parties.Person"] }).map((child) => child.content)).toEqual(["person"]);
+    // A kind-level alteration reaches the id at every model; a model-level one, its own.
+    const hidden = compileContainers([
+      layer("accounting", { "parties.Person#sections": { "accounting.party": { content: 1 } }, "parties.Organization#sections": { "accounting.party": { content: 2 } } }),
+      layer("product", { "form#sections": { "accounting.party": { remove: true } } }, ["accounting"]),
+    ], core);
+    expect(hidden.removed.map((entry) => entry.address)).toEqual(["parties.Person#sections", "parties.Organization#sections"]);
+    expect(() => compileContainers([
+      layer("accounting", { "parties.Person#sections": { "accounting.party": { content: 1 } }, "parties.Organization#sections": { "accounting.party": { content: 2 } } }),
+      layer("product", { "parties.Party#sections": { "accounting.party": { hide: true } } }, ["accounting"]),
+    ], core)).toThrow(/alters child "accounting.party" at "parties.Party#sections", which "parties.Person#sections" and "parties.Organization#sections" declare/);
+    // On a model and its MTI parent, the model's own stands at render.
+    const inherited = compileContainers([layer("accounting", {
+      "parties.Party#sections": { "accounting.party": { content: "party" } },
+      "parties.Person#sections": { "accounting.party": { content: "person" } },
+    })], core);
+    expect(resolveContainer(inherited, "form#sections", { models: ["parties.Party", "parties.Person"] }).map((child) => child.content)).toEqual(["person"]);
     // Families are separate: one id may sit in #sections and #actions.
     expect(() => compileContainers([layer("work", {
       "form#sections": { "work.archive": { content: 1 } },
@@ -246,6 +271,11 @@ describe("compileContainers", () => {
     const composed = compileContainers([messaging, bridge], [aside]);
     expect(ids(resolveContainer(composed, "record#aside"))).toEqual(["chatter.activity"]);
     expect(composed.removed).toEqual([{ address: "record#aside", id: "chatter.comments", by: "messaging" }]);
+    // Removing again still takes the right to alter the child.
+    const owned = layer("work", { "form#sections": { "work.task": { content: 1 } } });
+    const workRemoves = layer("pm", { "form#sections": { "work.task": { remove: true } } }, ["work"]);
+    expect(() => compileContainers([owned, workRemoves, layer("stranger", { "form#sections": { "work.task": { remove: true } } })], core))
+      .toThrow(/"stranger".*"work"/);
     expect(() => compileContainers([messaging, layer("tags", { "record#aside": { "chatter.comments": { sequence: 5 } } })], [aside]))
       .toThrow(/"tags" alters child "chatter.comments" of container "record#aside", which "messaging" removed/);
     expect(() => compileContainers([messaging, layer("tags", { "record#aside": [{ "chatter.comments": { hide: true }, when: { app: "tags" } }] })], [aside]))
@@ -264,6 +294,11 @@ describe("compileContainers", () => {
       { id: "workflow", owner: "page", address: "record#aside", content: "workflow" }];
     expect(ids(resolveContainer(composed, "record#aside", { extra: page, scope: scope(["files.browse"]) }))).toEqual(["chatter.comments", "details"]);
     expect(ids(resolveContainer(composed, "record#aside", { extra: page, scope: scope(["files.list"]) }))).toEqual(["chatter.comments", "details", "workflow"]);
+    // Developer mode lists the ids no declaration holds, in case one is a typo.
+    expect(composed.diagnostics).toEqual([
+      `Addon "files" narrows container "record#aside" to unknown child "details", unless a page adds it.`,
+      `Addon "files" narrows container "record#aside" to unknown child "records", unless a page adds it.`,
+    ]);
     // Without extras the same narrowing names an unknown child.
     expect(() => compileContainers([layer("files", { "form#sections": { only: ["details"] } })], core)).toThrow(/unknown child "details"/);
   });
@@ -313,18 +348,36 @@ describe("compileContainers", () => {
     expect(composed.provenance["resource#views/calendar"]).toMatchObject({ sequence: "pm" });
   });
 
-  test("positions are checked per family at compile: a cycle throws, a dangling anchor is a diagnostic", () => {
+  test("a variant whose original is not on the page keeps its own place", () => {
+    const composed = compileContainers([layer("work", {
+      "projects.Project#actions": { "work.resume": { content: 1 } },
+      "projects.Task#actions": { "work.fast": { content: 2, variant: { of: "work.resume", impl: "fast" } }, "work.archive": { content: 3 } },
+    })], core);
+    expect(ids(resolveContainer(composed, "form#actions", { models: ["projects.Task"], impls: ["fast"] }))).toEqual(["work.archive", "work.fast"]);
+    expect(ids(resolveContainer(composed, "form#actions", { models: ["projects.Task"] }))).toEqual(["work.archive"]);
+  });
+
+  test("positions are checked where children render together: a cycle throws, a dangling anchor is a diagnostic", () => {
     expect(() => compileContainers([layer("work", {
       "form#sections": { "work.a": { content: 1, before: "work.b" } },
       "projects.Task#sections": { "work.b": { content: 2, before: "work.a" } },
     })], core)).toThrow(/before\/after cycle/);
     const composed = compileContainers([layer("work", { "projects.Task#sections": { "work.a": { content: 1, after: "gone.child" } } })], core);
     expect(composed.diagnostics).toEqual([`Child "work.a" of "projects.Task#sections" positions itself against "gone.child", which "form#sections" does not hold.`]);
-    // Variant collisions are a family's too: two variants of one original for one impl fail at compile.
+    // Two models never render together, so neither their cycles nor their variants clash.
+    expect(() => compileContainers([layer("work", {
+      "projects.Task#sections": { "work.a": { content: 1, before: "work.b" }, "work.b": { content: 2 } },
+      "projects.Project#sections": { "work.b": { content: 2, before: "work.a" }, "work.a": { content: 1 } },
+    })], core)).not.toThrow();
     expect(() => compileContainers([layer("work", {
       "form#actions": { "work.resume": { content: 1 } },
       "projects.Task#actions": { "work.fast": { content: 2, variant: { of: "work.resume", impl: "fast" } } },
       "projects.Project#actions": { "work.quick": { content: 3, variant: { of: "work.resume", impl: "fast" } } },
-    })], core)).toThrow(/"work.fast" and "work.quick" of "form#actions" are both variants of "work.resume" for impl "fast"/);
+    })], core)).not.toThrow();
+    // Variants that render together for one impl fail at compile.
+    expect(() => compileContainers([layer("work", {
+      "form#actions": { "work.resume": { content: 1 }, "work.quick": { content: 3, variant: { of: "work.resume", impl: "fast" } } },
+      "projects.Task#actions": { "work.fast": { content: 2, variant: { of: "work.resume", impl: "fast" } } },
+    })], core)).toThrow(/"work.quick" and "work.fast" of "projects.Task#actions" are both variants of "work.resume" for impl "fast"/);
   });
 });

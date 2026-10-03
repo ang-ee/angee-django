@@ -119,20 +119,25 @@ export function compileContainers(
     return address;
   };
   const familyOf = (address: string): string => modelKinds.get(containerName(address)) ?? address;
+  // Two addresses of a family render together when one is the kind's own: a page
+  // merges the kind with its model's addresses, never two unrelated models.
+  const meet = (left: string, right: string): boolean =>
+    left === right || left === familyOf(left) || right === familyOf(right);
 
-  // Children by address and by family (a kind and its model addresses).
+  // Children by address and, per family (a kind and its model addresses), by id.
   const children = new Map<string, Child>();
-  const families = new Map<string, Map<string, Child>>();
+  const families = new Map<string, Map<string, Child[]>>();
   const childKey = (address: string, id: string): string => `${address}/${id}`;
   const addChild = (child: Child, where: string): void => {
-    const family = families.get(familyOf(child.address)) ?? new Map<string, Child>();
-    const clash = family.get(child.id);
+    const family = families.get(familyOf(child.address)) ?? new Map<string, Child[]>();
+    const same = family.get(child.id) ?? [];
+    const clash = same.find((other) => meet(other.address, child.address));
     if (clash) {
       throw new Error(clash.address === child.address
         ? `${where} redefines child "${child.id}" of container "${child.address}".`
-        : `${where} declares child "${child.id}" at "${clash.address}" and "${child.address}"; one id per container.`);
+        : `${where} declares child "${child.id}" at "${clash.address}" and "${child.address}", which render together; one id per container.`);
     }
-    family.set(child.id, child);
+    family.set(child.id, [...same, child]);
     families.set(familyOf(child.address), family);
     children.set(childKey(child.address, child.id), child);
   };
@@ -143,7 +148,8 @@ export function compileContainers(
     }
   }
   const rules = new Map<string, ContainerRule[]>();
-  const removed = new Map<string, ComposedContainers["removed"][number]>();
+  const removed = new Map<string, ComposedContainers["removed"][number] & { owner: string }>();
+  const diagnostics: string[] = [];
   const pending: { layer: string; address: string; id: string; alteration: ContainerAlteration; when?: ContainerCondition }[] = [];
   const pendingRules: { layer: string; address: string; entry: Entry }[] = [];
 
@@ -191,31 +197,49 @@ export function compileContainers(
   const dependentsOf = (layer: string): string[] =>
     layers.filter((other) => ancestors.get(other.id)?.has(layer)).map((other) => other.id);
 
+  // The children an alteration at `address` reaches: at the kind's own address,
+  // the id at every address; at a model's, the id there, else the kind's, else
+  // the one model address declaring it (its MTI parent's).
+  const targetsOf = (layer: string, address: string, id: string): Child[] => {
+    const family = familyOf(address);
+    const all = families.get(family)?.get(id) ?? [];
+    if (address === family) return all;
+    const here = all.filter((child) => child.address === address);
+    if (here.length) return here;
+    const kind = all.filter((child) => child.address === family);
+    if (kind.length || all.length < 2) return kind.length ? kind : all;
+    throw new Error(`Addon "${layer}" alters child "${id}" at "${address}", which ${all.map((child) => `"${child.address}"`).join(" and ")} declare; alter it at one of them.`);
+  };
   for (const { layer, address, id, alteration, when } of pending) {
-    // A child is found at its own address or, for a model-level alteration, anywhere in its family.
-    const child = families.get(familyOf(address))?.get(id);
-    if (!child) {
-      const gone = removed.get(childKey(familyOf(address), id));
+    const targets = targetsOf(layer, address, id);
+    if (!targets.length) {
+      const gone = [...removed.values()].find((entry) => entry.id === id && familyOf(entry.address) === familyOf(address));
+      // Removing again is idempotent, for any layer that may alter the child.
+      if (gone && gone.owner !== FRAMEWORK) assertMayAlter(ancestors, layer, gone.owner, `child "${id}" of container "${address}"`);
       if (gone && alteration.remove) continue;
       throw new Error(gone
         ? `Addon "${layer}" alters child "${id}" of container "${address}", which "${gone.by}" removed.`
         : `Addon "${layer}" alters unknown child "${id}" of container "${address}".`);
     }
-    // The framework's own children are every addon's to adjust, as its containers are.
-    if (child.owner !== FRAMEWORK) assertMayAlter(ancestors, layer, child.owner, `child "${id}" of container "${address}"`);
-    for (const field of ["sequence", "before", "after"] as const) {
-      if (alteration[field] === undefined) continue;
-      if (child.address !== address) throw new Error(`Addon "${layer}" positions child "${id}" at "${address}"; position it at "${child.address}".`);
-      const previous = child.setBy[field] === FRAMEWORK ? undefined : child.setBy[field];
-      if (overridesField(ancestors, previous, layer, `child "${id}" of "${address}" ${field}`)) {
-        (child as unknown as Record<string, unknown>)[field] = alteration[field];
-        child.setBy[field] = layer;
+    for (const child of targets) {
+      // The framework's own children are every addon's to adjust, as its containers are.
+      if (child.owner !== FRAMEWORK) assertMayAlter(ancestors, layer, child.owner, `child "${id}" of container "${address}"`);
+      for (const field of ["sequence", "before", "after"] as const) {
+        if (alteration[field] === undefined) continue;
+        if (child.address !== address) throw new Error(`Addon "${layer}" positions child "${id}" at "${address}"; position it at "${child.address}".`);
+        const previous = child.setBy[field] === FRAMEWORK ? undefined : child.setBy[field];
+        if (overridesField(ancestors, previous, layer, `child "${id}" of "${address}" ${field}`)) {
+          (child as unknown as Record<string, unknown>)[field] = alteration[field];
+          child.setBy[field] = layer;
+        }
       }
-    }
-    if (alteration.remove) {
-      children.delete(childKey(child.address, id));
-      families.get(familyOf(address))?.delete(id);
-      removed.set(childKey(familyOf(address), id), { address: child.address, id, by: layer });
+      if (alteration.remove) {
+        children.delete(childKey(child.address, id));
+        const family = families.get(familyOf(child.address))!;
+        const rest = family.get(id)!.filter((other) => other !== child);
+        if (rest.length) family.set(id, rest); else family.delete(id);
+        removed.set(childKey(child.address, id), { address: child.address, id, by: layer, owner: child.owner });
+      }
     }
     if (alteration.hide !== undefined) {
       addRule(address, { layer, rank: rankOf(layer), ...(when ? { when } : {}),
@@ -227,12 +251,14 @@ export function compileContainers(
     const family = familyOf(address);
     const owner = declared[family]?.owner ?? FRAMEWORK;
     if (owner !== FRAMEWORK) assertMayAlter(ancestors, layer, owner, `container "${address}"`);
-    // A container that takes children at render time (a page's chatter tabs) admits ids composition cannot know.
-    if (!declared[family]?.extras) {
-      const ids = new Set([...(families.get(family)?.values() ?? [])].flatMap((child) => [child.id, ...(child.variant ? [child.variant.of] : [])]));
-      for (const id of [...(entry.only ?? []), ...(entry.except ?? [])]) {
-        if (!ids.has(id)) throw new Error(`Addon "${layer}" narrows container "${address}" to unknown child "${id}".`);
-      }
+    const ids = new Set([...(families.get(family)?.values() ?? [])].flat().flatMap((child) => [child.id, ...(child.variant ? [child.variant.of] : [])]));
+    for (const id of [...(entry.only ?? []), ...(entry.except ?? [])]) {
+      if (ids.has(id)) continue;
+      const unknown = `Addon "${layer}" narrows container "${address}" to unknown child "${id}"`;
+      // A container that takes children at render time (a page's chatter tabs) admits
+      // ids composition cannot know; developer mode lists them in case of a typo.
+      if (!declared[family]?.extras) throw new Error(`${unknown}.`);
+      diagnostics.push(`${unknown}, unless a page adds it.`);
     }
     addRule(address, {
       layer,
@@ -244,29 +270,34 @@ export function compileContainers(
     });
   }
 
-  // Variants, positions and unique keys are checked per family against the final inventory.
-  const diagnostics: string[] = [];
+  // Variants, positions and unique keys are checked against the final inventory,
+  // per group a page renders together: the kind's children with one model's.
   for (const [family, members] of families) {
-    const list = [...members.values()];
-    const variantKeys = new Map<string, string>();
-    for (const child of list) {
-      if (!child.variant) continue;
-      if (!members.has(child.variant.of)) throw new Error(`Child "${child.id}" of "${child.address}" is a variant of unknown child "${child.variant.of}".`);
-      const key = `${child.variant.of}\0${child.variant.impl}`;
-      if (variantKeys.has(key)) throw new Error(`Children "${variantKeys.get(key)}" and "${child.id}" of "${family}" are both variants of "${child.variant.of}" for impl "${child.variant.impl}".`);
-      variantKeys.set(key, child.id);
-    }
-    for (const child of list) {
+    const all = [...members.values()].flat();
+    for (const child of all) {
+      if (child.variant && !members.has(child.variant.of)) throw new Error(`Child "${child.id}" of "${child.address}" is a variant of unknown child "${child.variant.of}".`);
       const anchor = child.before ?? child.after;
       if (anchor !== undefined && !members.has(anchor)) diagnostics.push(`Child "${child.id}" of "${child.address}" positions itself against "${anchor}", which "${family}" does not hold.`);
     }
-    positionSiblings(orderById(list), `Children of "${family}"`);
-    if (declared[family]?.unique === "key") {
-      const keys = new Map<string, string>();
-      for (const child of list) {
-        if (child.key === undefined) throw new Error(`Child "${child.id}" of "${child.address}" needs a key: the container renders one child per key.`);
-        if (keys.has(child.key)) throw new Error(`Children "${keys.get(child.key)}" and "${child.id}" of "${family}" share key "${child.key}".`);
-        keys.set(child.key, child.id);
+    const models = [...new Set(all.map((child) => child.address))].filter((address) => address !== family);
+    const groups = models.length ? models.map((model) => all.filter((child) => meet(child.address, model))) : [all];
+    for (const group of groups) {
+      const where = group.find((child) => child.address !== family)?.address ?? family;
+      const variantKeys = new Map<string, string>();
+      for (const child of group) {
+        if (!child.variant) continue;
+        const key = `${child.variant.of}\0${child.variant.impl}`;
+        if (variantKeys.has(key)) throw new Error(`Children "${variantKeys.get(key)}" and "${child.id}" of "${where}" are both variants of "${child.variant.of}" for impl "${child.variant.impl}".`);
+        variantKeys.set(key, child.id);
+      }
+      positionSiblings(orderById(group), `Children of "${where}"`);
+      if (declared[family]?.unique === "key") {
+        const keys = new Map<string, string>();
+        for (const child of group) {
+          if (child.key === undefined) throw new Error(`Child "${child.id}" of "${child.address}" needs a key: the container renders one child per key.`);
+          if (keys.has(child.key)) throw new Error(`Children "${keys.get(child.key)}" and "${child.id}" of "${where}" share key "${child.key}".`);
+          keys.set(child.key, child.id);
+        }
       }
     }
   }
@@ -280,7 +311,7 @@ export function compileContainers(
     declared,
     children: composed,
     rules: Object.fromEntries(rules),
-    removed: [...removed.values()],
+    removed: [...removed.values()].map(({ owner: _owner, ...entry }) => entry),
     provenance: Object.fromEntries([...children.values()].map((child) => [childKey(child.address, child.id), { ...child.setBy }])),
     diagnostics,
   };
@@ -303,8 +334,11 @@ function validateEntry(layer: string, address: string, entry: Entry): void {
   if (entry.models !== undefined && entry.models !== true) throw new Error(`${where}: models must be true.`);
   if (entry.when !== undefined) {
     if (typeof entry.when !== "object" || entry.when === null) throw new Error(`${where}: when must be a mapping.`);
-    for (const key of Object.keys(entry.when)) {
+    for (const [key, value] of Object.entries(entry.when)) {
       if (!CONDITION_KEYS.has(key)) throw new Error(`${where}: unknown condition "${key}".`);
+      if (typeof value !== "string" && !(Array.isArray(value) && value.every((item) => typeof item === "string"))) {
+        throw new Error(`${where}: condition "${key}" must be an id or a list of ids.`);
+      }
     }
   }
   for (const [key, value] of Object.entries(entry)) {
