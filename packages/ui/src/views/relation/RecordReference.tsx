@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { useModelMetadata } from "@angee/metadata";
+import { useNavigate } from "@tanstack/react-router";
 
 import { useResourceRecordHrefLookup } from "../../runtime";
 import { Button } from "../../ui/button";
@@ -19,10 +20,12 @@ export interface RecordReferenceProps {
 /** Display a record through its metadata and follow its registered record route. */
 export function RecordReference({ model, id, label, onOpen }: RecordReferenceProps): ReactElement {
   const recordHref = useResourceRecordHrefLookup();
+  const navigate = useNavigate();
   const content = label || <RecordReferenceLabel model={model} id={id} />;
   if (onOpen) return <Button type="button" size="sm" variant="ghost" className="h-auto min-h-btn-sm max-w-full whitespace-normal py-1 text-left leading-snug [overflow-wrap:anywhere]" onClick={onOpen}>{content}</Button>;
   const href = recordHref(model, id);
-  return href ? <TextLink href={href} className="[overflow-wrap:anywhere]">{content}</TextLink> : <span className="[overflow-wrap:anywhere]">{content}</span>;
+  // Follow the route in-app; a plain anchor would reload the whole console.
+  return href ? <TextLink href={href} onNavigate={(to) => void navigate({ href: to })} className="[overflow-wrap:anywhere]">{content}</TextLink> : <span className="[overflow-wrap:anywhere]">{content}</span>;
 }
 
 function RecordReferenceLabel({ model, id }: Pick<RecordReferenceProps, "model" | "id">): ReactElement {

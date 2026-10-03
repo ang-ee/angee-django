@@ -56,13 +56,19 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
   ], [settings, app, rail]);
   const currentIndex = entries.findIndex((entry) => entry.kind === "menu" && match?.trail.some((node) => node.id === entry.node.id));
   const [containerRef, measurementRef, visible, overflow] = useOverflowCount(entries, currentIndex);
-  if ((!app && !settings) || !entries.length) return null;
-  // The breadcrumb strip names the app; the bar carries only its menus.
+  if (!app && !settings) return null;
   const label = settings ? t("chrome.settings") : app!.displayLabel;
+  const appTarget = settings?.target ?? app?.target;
   const currentId = match?.item.id;
   const overflowCurrent = visible.length === 0 && currentIndex >= 0;
+  // The app's name titles its menus; it is not one of them, so it never carries the current mark.
+  const title = <AppMenuLink to={appTarget} href={appTarget}
+    className="flex h-full max-w-48 shrink-0 items-center truncate rounded-4 text-15 font-semibold text-on-rail-hi no-underline outline-none focus-visible:focus-ring">
+    {label}
+  </AppMenuLink>;
+  if (!entries.length) return title;
 
-  return <nav ref={containerRef} aria-label={t("chrome.appMenu", { label })}
+  return <>{title}<span aria-hidden="true" className="h-4 w-px shrink-0 bg-on-rail-mut/40" /><nav ref={containerRef} aria-label={t("chrome.appMenu", { label })}
     className={cn("relative flex h-full min-w-0 flex-1 items-center gap-1 overflow-hidden", className)}>
     {/* One intrinsic ordered list; inert and hidden so its copies are never navigable. */}
     <div ref={measurementRef} inert aria-hidden="true"
@@ -93,7 +99,7 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
         </DropdownMenu.Positioner>
       </DropdownMenu.Portal>
     </DropdownMenu.Root> : null}
-  </nav>;
+  </nav></>;
 }
 
 type RemovedMenu = ReturnType<DeveloperRail["removedUnder"]>[number];

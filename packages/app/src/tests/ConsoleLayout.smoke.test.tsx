@@ -330,11 +330,8 @@ describe("ConsoleLayout", () => {
       name: "Collapse primary panel",
     })).toBeNull();
 
-    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
-    expect(topBar.contains(breadcrumb)).toBe(false);
-    expect(breadcrumb.closest("[data-console-breadcrumbs]")?.previousElementSibling).toBe(topBar);
-    expect(within(breadcrumb).getByText("Notes").getAttribute("aria-current"))
-      .toBe("page");
+    // A menu destination needs no trail: the top bar names the app and its menus.
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
 
     expect(screen.getByRole("main").textContent).toContain("Body content");
     expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();

@@ -123,32 +123,35 @@ describe("Breadcrumb", () => {
   });
 });
 
-describe("Breadcrumb app lead", () => {
+describe("Breadcrumb in a console place", () => {
   const desk: readonly ChromeMenuItem[] = [{ id: "desk", label: "Desk", to: "/desk", children: [
     { id: "desk.notes", label: "Notes", to: "/desk/notes" },
   ] }];
 
-  test("leads with the selected app when the trail does not name it", async () => {
-    refineMocks.breadcrumbs = [{ label: "Notes" }];
+  test("a menu destination has no trail: the top bar names the app and its menus", async () => {
+    refineMocks.breadcrumbs = [{ label: "Desk", href: "/desk" }, { label: "Notes", href: "/desk/notes" }];
     renderBreadcrumb({ menus: desk, path: "/desk/notes" });
     const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
-    expect(breadcrumb.textContent).toBe("Desk/Notes");
-    expect(within(breadcrumb).getByRole("link", { name: "Desk" }).getAttribute("href")).toBe("/desk");
+    expect(breadcrumb.textContent).toBe("");
   });
 
-  test("does not repeat an app the trail already names", async () => {
-    refineMocks.breadcrumbs = [{ label: "Desk", href: "/desk" }, { label: "Notes" }];
-    renderBreadcrumb({ menus: desk, path: "/desk/notes" });
+  test("a record shows the menu page, with its return link, then the record", async () => {
+    refineMocks.breadcrumbs = [{ label: "Desk", href: "/desk" }, { label: "Notes", href: "/desk/notes" }, { label: "Show" }];
+    renderBreadcrumb({
+      menus: desk, path: "/desk/notes/7", leafLabel: "Weekly review",
+      collection: { to: "/desk/notes", href: "/desk/notes?group=owner" },
+    });
     const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
-    expect(within(breadcrumb).getAllByText("Desk")).toHaveLength(1);
+    await waitFor(() => expect(breadcrumb.textContent).toBe("Notes/Weekly review"));
+    expect(within(breadcrumb).getByRole("link", { name: "Notes" }).getAttribute("href")).toBe("/desk/notes?group=owner");
   });
 
-  test("leads Settings pages with the Settings place", async () => {
-    refineMocks.breadcrumbs = [{ label: "Tags", href: "/tags" }, { label: "Urgent" }];
-    renderBreadcrumb({ menus: [{ id: "tags", label: "Tags", group: "platform", to: "/tags" }], path: "/tags/urgent" });
+  test("a record whose trail skips its menu page still leads with that page", async () => {
+    refineMocks.breadcrumbs = [{ label: "Desk", href: "/desk" }, { label: "Show" }];
+    renderBreadcrumb({ menus: desk, path: "/desk/notes/7", leafLabel: "Weekly review" });
     const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
-    expect(breadcrumb.textContent).toBe("Settings/Tags/Urgent");
-    expect(within(breadcrumb).getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("/tags");
+    await waitFor(() => expect(breadcrumb.textContent).toBe("Notes/Weekly review"));
+    expect(within(breadcrumb).getByRole("link", { name: "Notes" }).getAttribute("href")).toBe("/desk/notes");
   });
 });
 

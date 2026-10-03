@@ -9,6 +9,12 @@ import { createUiTestProviders } from "../testing";
 import { ConsoleLayout } from "./ConsoleLayout";
 
 const viewport = vi.hoisted(() => ({ mobile: false }));
+// Refine resolves the trail from its router binding; the test harness has none, so the trail is given.
+const trail = vi.hoisted(() => ({ crumbs: [] as { label: string; href?: string }[] }));
+vi.mock("@refinedev/core", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@refinedev/core")>(),
+  useBreadcrumb: () => ({ breadcrumbs: trail.crumbs }),
+}));
 vi.mock("../lib/use-media-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/use-media-query")>();
   return { ...actual, useMediaQuery: (query: string) => query === actual.MOBILE_VIEWPORT_QUERY ? viewport.mobile : !viewport.mobile };
@@ -17,11 +23,20 @@ afterEach(() => { cleanup(); viewport.mobile = false; });
 
 const ui = createUiTestProviders({ refineResources: [
   { name: "menu:desk", list: "/desk", meta: { menuId: "desk", label: "Desk", appRoot: true } },
-  { name: "menu:desk.notes", list: "/notes", meta: { menuId: "desk.notes", label: "Notes", parent: "menu:desk" } },
+  { name: "menu:desk.notes", list: "/notes", show: "/notes/:id", meta: { menuId: "desk.notes", label: "Notes", parent: "menu:desk" } },
 ] });
 
 describe("ConsoleLayout breadcrumb strip", () => {
-  test("places the breadcrumb directly below TopBar and keeps app navigation in TopBar", async () => {
+  test("a menu destination shows no strip; the top bar already names the app and its menus", async () => {
+    renderConsole(true, "/notes");
+    const header = await screen.findByRole("banner", { name: "Workspace top bar" });
+    expect(within(header).getByRole("navigation", { name: "Desk menu" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
+    expect(screen.getByRole("main").closest(".console-grid")?.getAttribute("style"))
+      .toContain("--breadcrumbbar-current-h: 0px");
+  });
+
+  test("nested navigation places the trail directly below TopBar and keeps app navigation in TopBar", async () => {
     renderConsole();
     const header = await screen.findByRole("banner", { name: "Workspace top bar" });
     const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
@@ -56,7 +71,8 @@ describe("ConsoleLayout breadcrumb strip", () => {
   });
 });
 
-function renderConsole(breadcrumb = true) {
+function renderConsole(breadcrumb = true, path = "/notes/7") {
+  trail.crumbs = [{ label: "Desk", href: "/desk" }, { label: "Notes", href: "/notes" }, ...(path === "/notes" ? [] : [{ label: "Show" }])];
   const root = createRootRoute({ component: () => <ui.Provider>
     <AppRuntimeProvider runtime={breadcrumb ? {} : {
       // The regions container as a layer leaves it once it hides the breadcrumb strip.
@@ -65,7 +81,9 @@ function renderConsole(breadcrumb = true) {
       <ConsoleLayout><div>Page</div></ConsoleLayout>
     </AppRuntimeProvider>
   </ui.Provider> });
-  const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/notes" })]),
-    history: createMemoryHistory({ initialEntries: ["/notes"] }) });
+  const router = createRouter({ routeTree: root.addChildren([
+    createRoute({ getParentRoute: () => root, path: "/notes" }),
+    createRoute({ getParentRoute: () => root, path: "/notes/$id" }),
+  ]), history: createMemoryHistory({ initialEntries: [path] }) });
   render(<RouterProvider router={router} />);
 }

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
-import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
+import { BreadcrumbLabelProvider, useNestedBreadcrumbItems } from "../chrome/Breadcrumb";
 import { BreadcrumbBar } from "../chrome/BreadcrumbBar";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
@@ -37,7 +37,9 @@ export interface ConsoleLayoutProps {
 }
 
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
-  return <ChromePlaceProvider><ChatterProvider defaultCollapsed><ConsoleLayoutBody {...props} /></ChatterProvider></ChromePlaceProvider>;
+  return <ChromePlaceProvider><ChatterProvider defaultCollapsed><BreadcrumbLabelProvider>
+    <ConsoleLayoutBody {...props} />
+  </BreadcrumbLabelProvider></ChatterProvider></ChromePlaceProvider>;
 }
 
 function ConsoleLayoutBody({
@@ -46,7 +48,11 @@ function ConsoleLayoutBody({
 }: ConsoleLayoutProps): React.ReactElement {
   const { visible: showChatter } = useChatterPresentation();
   const notices = useContainer("shell#notices");
-  const showBreadcrumbs = useShellRegion("chrome.breadcrumbs");
+  const breadcrumbsRegion = useShellRegion("chrome.breadcrumbs");
+  // The strip appears only for nested navigation (a record, and deeper); a menu
+  // destination is already named by the top bar.
+  const nestedTrail = useNestedBreadcrumbItems();
+  const showBreadcrumbs = breadcrumbsRegion && nestedTrail.length > 0;
   const [controlHost, setControlHost] =
     React.useState<HTMLDivElement | null>(null);
   const [statusHost, setStatusHost] =
@@ -98,7 +104,7 @@ function ConsoleLayoutBody({
       <DrawerProvider>
         <ControlBandProvider host={controlHost}>
           <StatuslineProvider host={statusHost}>
-            <BreadcrumbLabelProvider>
+            <>
               <DocumentTitle />
               <div
                 style={{
@@ -200,7 +206,7 @@ function ConsoleLayoutBody({
               <DrawerOverlay edge="bottom" />
               <DrawerRail edge="right" />
               <DrawerRail edge="bottom" />
-            </BreadcrumbLabelProvider>
+            </>
           </StatuslineProvider>
         </ControlBandProvider>
       </DrawerProvider>

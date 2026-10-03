@@ -118,6 +118,15 @@ describe("AppMenu", () => {
     expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
   });
 
+  test("titles the bar with the selected app's name, outside its menus and never current", async () => {
+    renderMenu("/desk");
+    const nav = await screen.findByRole("navigation", { name: "Desk menu" });
+    const title = screen.getByRole("link", { name: "Desk" });
+    expect(nav.contains(title)).toBe(false);
+    expect(title.getAttribute("href")).toBe("/desk");
+    expect(title.getAttribute("aria-current")).toBeNull();
+  });
+
   test("an aggregator shows only its own items", async () => {
     renderMenu("/suite/inbox");
     const nav = await screen.findByRole("navigation", { name: "Suite menu" });

@@ -4,12 +4,12 @@ import { cn } from "../lib/cn";
 import { barVariants } from "../layouts/bar";
 import { Breadcrumb } from "./Breadcrumb";
 
-/** The narrow trail directly below the top bar, on the top bar's surface. */
+/** The sheet-surface trail directly below the top bar. */
 export function BreadcrumbBar({ className }: { className?: string }): ReactElement {
   return <div data-console-breadcrumbs className={cn(
-    barVariants({ height: "breadcrumbs", edge: "none", tone: "rail", pad: "flush" }),
+    barVariants({ height: "breadcrumbs", edge: "bottom", tone: "sheet", pad: "flush", text: "13-muted" }),
     "area-breadcrumbs overflow-hidden", className,
   )}>
-    <Breadcrumb tone="rail" className="text-xs" />
+    <Breadcrumb />
   </div>;
 }
