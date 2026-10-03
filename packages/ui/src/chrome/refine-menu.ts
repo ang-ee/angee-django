@@ -3,10 +3,11 @@ import { useMenu, type TreeMenuItem } from "@refinedev/core";
 import { useRouterState } from "@tanstack/react-router";
 
 import { isMenuTone } from "../lib/tones";
-import { useDeveloperMode } from "../runtime";
+import { useAppRuntime, useDeveloperMode } from "../runtime";
 import {
   type ChromeMenuGroup,
   type ChromeMenuItem,
+  type ChromeMenuNode,
   type ChromeMenuStatus,
   type ChromeMenuTone,
   MenuTree,
@@ -18,6 +19,8 @@ interface RefineChromeMenuMeta {
   /** Own resolved href, or null when Refine's list borrows a descendant target. */
   menuTarget?: unknown;
   parent?: unknown;
+  menuParent?: unknown;
+  menuOrder?: unknown;
   appRoot?: unknown;
   app?: unknown;
   icon?: unknown;
@@ -72,7 +75,8 @@ function ChromePlaceOwner({ menuItems, children }: {
   const searchStr = useRouterState({ select: (state) => state.location.searchStr });
   // Developer mode's rail lists hidden apps, so the top bar follows into them.
   const developerMode = useDeveloperMode();
-  const match = useMemo(() => tree.match(pathname, searchStr, developerMode), [tree, pathname, searchStr, developerMode]);
+  const { activeMenuId } = useAppRuntime();
+  const match = useMemo(() => tree.match(pathname, searchStr, developerMode, activeMenuId ?? undefined), [tree, pathname, searchStr, developerMode, activeMenuId]);
   const place = useMemo(() => ({ tree, pathname, searchStr, match }), [tree, pathname, searchStr, match]);
   return createElement(ChromePlaceContext.Provider, { value: place }, children);
 }
@@ -86,18 +90,30 @@ export function useChromePlace(): ChromePlace {
 export function chromeMenuItemsFromRefine(
   menuItems: readonly TreeMenuItem[],
 ): readonly ChromeMenuItem[] {
-  return menuItems.flatMap((item) => chromeMenuItemFromRefine(item));
+  const order = new Map<string, number>();
+  const items = menuItems.flatMap((item) => chromeMenuItemFromRefine(item, order));
+  items.sort((left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity));
+  const originals = new Map(items.map((item) => [item.id, item]));
+  const nested = (node: ChromeMenuNode): ChromeMenuItem => ({
+    ...originals.get(node.id)!,
+    ...(node.children?.length ? { children: node.children.map(nested) } : {}),
+  });
+  return MenuTree.from(items).roots.map(nested);
 }
 
 function chromeMenuItemFromRefine(
   item: TreeMenuItem,
+  order: Map<string, number>,
+  inheritedParent?: string,
 ): readonly ChromeMenuItem[] {
   const meta = chromeMenuMeta(item);
   const id = stringValue(meta.menuId) ?? item.identifier ?? item.name;
+  const position = numberValue(meta.menuOrder);
+  if (position !== undefined) order.set(id, position);
   const label = stringValue(item.label) ?? stringValue(meta.menuId) ?? item.name;
   const target = meta.menuTarget === undefined ? item.route : stringValue(meta.menuTarget);
-  const parentId = menuParentId(meta.parent);
-  const children = item.children.flatMap((child) => chromeMenuItemFromRefine(child));
+  const parentId = menuParentId(meta.menuParent ?? meta.parent) ?? inheritedParent;
+  const children = item.children.flatMap((child) => chromeMenuItemFromRefine(child, order, id));
   const menuItem: ChromeMenuItem = {
     id,
     label,
@@ -112,9 +128,8 @@ function chromeMenuItemFromRefine(
     ...(menuTone(meta.tone) ? { tone: menuTone(meta.tone) } : {}),
     ...(numberValue(meta.badge) !== undefined ? { badge: numberValue(meta.badge) } : {}),
     ...(meta.hidden === true ? { hidden: true } : {}),
-    ...(children.length ? { children } : {}),
   };
-  return [menuItem];
+  return [menuItem, ...children];
 }
 
 function chromeMenuMeta(item: TreeMenuItem): RefineChromeMenuMeta {

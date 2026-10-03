@@ -1165,9 +1165,13 @@ Hard-won traps — the wise learn from others' mistakes
   `route.menu` identifies a route's owning item when references are ambiguous.
   Ambiguous root ownership still throws under a perspective; confinement does
   not choose an owner for the route. `useChromePlace()` shares one memoized
-  `MenuTree.match(pathname, searchStr)` across the rail and top bar.
+  `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
-  trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
+  trail. Match path length and search params first, then the route's menu anchor
+  (inherited by record children), then depth and pre-order. The route projection
+  publishes the winning `activeMenuId`; the Refine router binding uses that same
+  destination for native breadcrumbs. A more specific preset or parameterized
+  target wins over an anchor. Breadcrumbs occupy the
   sheet strip below the top bar; pane toggles stay in the top bar.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and

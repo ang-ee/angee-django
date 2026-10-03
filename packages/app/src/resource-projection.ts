@@ -11,6 +11,7 @@ import {
   MenuTree,
   pathMatchesTarget,
   type ChromeMenuNode,
+  type MenuMatch,
 } from "@angee/ui/chrome/menu-tree";
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
@@ -80,12 +81,14 @@ export function refineRouteResourceProjection(
   for (const node of navigationTree.byId.values()) {
     const menuTrail = navigationTree.trailFor(node.id);
     menuTrail.forEach((item, index) => {
+      const breadcrumbTrail = breadcrumbTrailFromMenuTrail(menuTrail.slice(0, index + 1));
       addMenuRouteResource(
         resourcesByIdentifier,
         item,
         menuTrail[index - 1],
         appRootIds.has(item.id),
         menuRouteShowPath(item, routesByName, childrenByParentName),
+        breadcrumbTrail.at(-2),
       );
     });
   }
@@ -247,8 +250,16 @@ export class AppRouteProjection {
     return root;
   }
 
-  activeApp(pathname: string): string | undefined {
-    return this.confineTo ?? this.menuTree.activeAppRoot(pathname)?.id;
+  /** Record routes inherit their collection's declared chrome anchor. */
+  menuAnchor(routeName?: string): ChromeMenuNode | undefined {
+    const route = routeName ? this.routesByName.get(routeName) : undefined;
+    if (!route) return undefined;
+    const owner = inheritedRouteFact(route, this.routesByName, (item) => item.menu ? item : undefined);
+    return owner ? menuNodeForRoute(owner, this.menuTree) : undefined;
+  }
+
+  activeMenu(pathname: string, routeName?: string, search?: string): MenuMatch | undefined {
+    return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
   }
 
   /** Collection defaults are inherited by its record children. */
@@ -297,6 +308,7 @@ function addMenuRouteResource(
   parent: ChromeMenuNode | undefined,
   appRoot: boolean,
   showPath: string | undefined,
+  breadcrumbParent: ChromeMenuNode | undefined,
 ): void {
   const target = item.target;
   if (!target || target === "#") return;
@@ -320,6 +332,7 @@ function addMenuRouteResource(
       label: item.displayLabel,
       icon: item.iconName,
       menuId: item.id,
+      menuOrder: resourcesByIdentifier.size,
       // Refine's list may borrow a descendant's target; chrome needs the own target.
       menuTarget: item.to ?? null,
       ...(appRoot ? { appRoot: true } : {}),
@@ -330,7 +343,9 @@ function addMenuRouteResource(
       ...(item.tone ? { tone: item.tone } : {}),
       ...(item.badge !== undefined ? { badge: item.badge } : {}),
       ...(item.hidden ? { hidden: true } : {}),
-      ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
+      // Native breadcrumbs collapse repeated labels; chrome retains the full menu hierarchy.
+      ...(breadcrumbParent ? { parent: menuRouteResourceIdentifier(breadcrumbParent.id) } : {}),
+      ...(parent ? { menuParent: menuRouteResourceIdentifier(parent.id) } : {}),
     },
   });
 }
@@ -419,7 +434,7 @@ function menuRouteShowPath(
   return child ? fullRoutePath(child, route) : undefined;
 }
 
-function menuRouteResourceIdentifier(menuId: string): string {
+export function menuRouteResourceIdentifier(menuId: string): string {
   return `menu:${menuId}`;
 }
 

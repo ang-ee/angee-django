@@ -13,7 +13,7 @@ import {
   OperationDocumentsProvider,
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
-  tanStackRouterProvider,
+  createTanStackRouterProvider,
   viewAsAuth,
   type AngeeHasuraSchemaConfig,
   type SchemaOperationDocuments,
@@ -123,6 +123,7 @@ import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
   AppRouteProjection,
+  menuRouteResourceIdentifier,
   resourceMutationsForSchema,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
@@ -461,8 +462,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   function RootOutlet(): ReactNode {
     const pathname = useRouterState({ select: (state) => state.location.pathname });
+    const searchStr = useRouterState({ select: (state) => state.location.searchStr });
     const activeRoute = useActiveRoute(routes);
-    const app = projection.activeApp(pathname);
+    const match = projection.activeMenu(pathname, activeRoute?.name, searchStr);
+    const activeMenuId = match?.item.id ?? null;
+    const app = confineTo ?? match?.trail[0]?.id;
     const words = vocabularyForRoute(app, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
@@ -490,9 +494,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
           perspective: confineTo !== undefined ? composed.shell.perspective?.id ?? null : null,
         },
         activeRouteName: activeRoute?.name ?? null,
+        activeMenuId,
         activeApp: app ?? null,
       };
-    }, [app, activeRoute, words, publicRoute]);
+    }, [app, activeRoute, activeMenuId, words, publicRoute]);
     return (
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
@@ -509,9 +514,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
   }
 
   function RefineRoot({ i18nProvider }: { i18nProvider: I18nProvider }): ReactNode {
-    const { vocabulary, routesByResource: selected } = useAppRuntime();
+    const { vocabulary, routesByResource: selected, activeMenuId } = useAppRuntime();
     const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary), [selected, vocabulary]);
     const refineNotificationProvider = useRefineNotificationProvider();
+    const routerProvider = useMemo(() => createTanStackRouterProvider(activeMenuId ? menuRouteResourceIdentifier(activeMenuId) : undefined), [activeMenuId]);
     return (
       <Refine
         authProvider={refineAuthProvider}
@@ -521,7 +527,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         liveProvider={refineLiveProvider}
         notificationProvider={refineNotificationProvider}
         resources={labeledResources}
-        routerProvider={tanStackRouterProvider}
+        routerProvider={routerProvider}
         options={{
           liveMode: refineLiveProvider ? "auto" : "off",
           syncWithLocation: false,

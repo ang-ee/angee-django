@@ -4,6 +4,7 @@ import { parse } from "graphql";
 import { createElement, useEffect, type ReactNode } from "react";
 import { cleanup, waitFor } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
+import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   useAppRuntime,
@@ -27,7 +28,7 @@ import {
   type RefineLayoutChromeProps,
 } from "./create-app";
 import { MenuTree, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
-import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
+import { ChromePlaceProvider, useChromeMenuTree, useChromePlace } from "@angee/ui/chrome/refine-menu";
 import {
   captureChrome,
   chromeSnapshot,
@@ -45,6 +46,98 @@ import { testDataResource } from "@angee/metadata/testing";
 import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
+
+describe("route-owned chrome", () => {
+  test("a parameterized destination beats the dashboard anchor in chrome, app scope and native breadcrumbs", async () => {
+    let captured: { item?: string; app?: string; activeApp?: string | null; breadcrumbs: ReactNode[] } | undefined;
+    function CapturePlace(): ReactNode {
+      const { match } = useChromePlace();
+      const { activeApp } = useAppRuntime();
+      const breadcrumbs = useRefineBreadcrumb().breadcrumbs;
+      useEffect(() => {
+        captured = { item: match?.item.id, app: match?.app?.id, activeApp, breadcrumbs: breadcrumbs.map((item) => item.label) };
+      }, [match, activeApp, breadcrumbs]);
+      return null;
+    }
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/dashboards/addon/accounts-payable");
+    const app = createApp(testAppInput([
+      { id: "dashboards", routes: [
+        { name: "dashboards.index", path: "/dashboards", component: EmptyPage },
+        { name: "dashboards.addon", path: "/dashboards/addon/$key", component: EmptyPage, menu: "dashboards" },
+      ], menus: [{ id: "dashboards", label: "Dashboards", route: "dashboards.index" }] },
+      { id: "accounting", menus: [{ id: "accounting", label: "Accounting", children: [
+        { id: "accounting.vendors", label: "Vendors", children: [
+          { id: "accounting.payable", label: "Accounts Payable", route: "dashboards.addon", params: { key: "accounts-payable" } },
+        ] },
+      ] }] },
+    ], { console: { requireAuth: false, chrome: () => createElement(ChromePlaceProvider, { children: createElement(CapturePlace) }) } }));
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(captured?.item).toBe("accounting.payable"));
+      expect(captured).toMatchObject({ app: "accounting", activeApp: "accounting" });
+      expect(captured?.breadcrumbs).toEqual(["Accounting", "Vendors", "Accounts Payable"]);
+      expect(app.explain.menus.diagnostics).toEqual([]);
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test.each([
+    { owner: "workflows", label: "Workflows", menu: "workflows.runs", itemLabel: "Runs",
+      route: "workflows.runs", path: "/workflows/runs", model: "workflows.WorkflowRun",
+      foreign: "integrate-odoo", foreignLabel: "Odoo", groupLabel: "Diagnostics" },
+    { owner: "arp-base", label: "Companies", menu: "arp-base.companies", itemLabel: "Companies",
+      route: "arp.companies", path: "/companies", model: "arp.Company",
+      foreign: "accounting", foreignLabel: "Accounting", groupLabel: "Configuration" },
+  ])("$label keeps list and record chrome when a deeper foreign item targets its route", async (fixture) => {
+    const addons: BaseAddon[] = [
+      { id: fixture.owner, routes: resourcePageRoutes(fixture.route, fixture.path, EmptyPage, fixture.model, { menu: fixture.menu }),
+        menus: [{ id: fixture.owner, label: fixture.label, children: [
+          { id: fixture.menu, label: fixture.itemLabel, route: fixture.route },
+        ] }] },
+      { id: fixture.foreign, menus: [{ id: fixture.foreign, label: fixture.foreignLabel, children: [
+        { id: `${fixture.foreign}.group`, label: fixture.groupLabel, children: [
+          { id: `${fixture.foreign}.link`, label: "Foreign link", route: fixture.route },
+        ] },
+      ] }] },
+    ].reverse();
+    for (const path of [fixture.path, `${fixture.path}/record-1`]) {
+      let captured: { item?: string; app?: string; activeApp?: string | null; breadcrumbs: ReactNode[] } | undefined;
+      function CapturePlace(): ReactNode {
+        const { match } = useChromePlace();
+        const { activeApp } = useAppRuntime();
+        const breadcrumbs = useRefineBreadcrumb().breadcrumbs;
+        useEffect(() => {
+          captured = { item: match?.item.id, app: match?.app?.id, activeApp, breadcrumbs: breadcrumbs.map((item) => item.label) };
+        }, [match, activeApp, breadcrumbs]);
+        return null;
+      }
+      const host = document.createElement("div");
+      document.body.append(host);
+      history.replaceState(null, "", path);
+      const app = createApp({
+        ...testAppInput(addons, { console: { requireAuth: false,
+          chrome: () => createElement(ChromePlaceProvider, { children: createElement(CapturePlace) }) } }),
+        schemas: testSchemasWithConsoleResources([testDataResource(fixture.model)]),
+      });
+      const root = app.mount(host);
+      try {
+        await waitFor(() => expect(captured).toBeDefined());
+        expect(captured).toMatchObject({ item: fixture.menu, app: fixture.owner, activeApp: fixture.owner });
+        expect(captured?.breadcrumbs).toContain(path === fixture.path ? fixture.label : fixture.itemLabel);
+        expect(captured?.breadcrumbs).not.toContain(fixture.foreignLabel);
+        expect(captured?.breadcrumbs).not.toContain(fixture.groupLabel);
+        expect(app.explain.menus.diagnostics).toEqual([]);
+      } finally {
+        root.unmount();
+        host.remove();
+      }
+    }
+  });
+});
 
 describe("createApp confinement", () => {
   const addons: readonly BaseAddon[] = [{

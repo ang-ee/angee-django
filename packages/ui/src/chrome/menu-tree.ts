@@ -383,10 +383,9 @@ export class MenuTree {
     return this.match(pathname)?.item;
   }
 
-  /** Own-path matches rank by length, equal params, fewer mismatches, depth, then pre-order. */
-  /** The item a location selects; developer mode's `includeHidden` lets a hidden app be the active one. */
-  match(path: string, search?: string | URLSearchParams, includeHidden = false): MenuMatch | undefined {
-    return matchWithin(this.roots, path, search, includeHidden);
+  /** Rank by path, params, route anchor, depth, then pre-order. */
+  match(path: string, search?: string | URLSearchParams, includeHidden = false, menuId?: string): MenuMatch | undefined {
+    return matchWithin(this.roots, path, search, includeHidden, menuId);
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -425,18 +424,19 @@ function matchWithin(
   path: string,
   search?: string | URLSearchParams,
   includeHidden = false,
+  menuId?: string,
 ): MenuMatch | undefined {
   const location = new URL(path, "https://angee.invalid");
   const params = new URLSearchParams(search ?? location.search);
   let best: { item: ChromeMenuNode; trail: readonly ChromeMenuNode[] } | undefined;
-  let bestRank = [-1, -1, -Infinity, -1];
+  let bestRank = [-1, -1, -Infinity, -1, -1];
   const visit = (item: ChromeMenuNode, ancestors: readonly ChromeMenuNode[]): void => {
     const trail = [...ancestors, item];
     if (item.path && pathMatchesTarget(location.pathname, item.path)) {
       const targetParams = [...new URLSearchParams(item.search)];
       const equalParams = targetParams.filter(([key, value]) => params.getAll(key).includes(value)).length;
       const mismatches = targetParams.length - equalParams;
-      const rank = [item.path.length, equalParams, -mismatches, trail.length];
+      const rank = [item.path.length, equalParams, -mismatches, Number(item.id === menuId), trail.length];
       const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
       if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
         best = { item, trail };
