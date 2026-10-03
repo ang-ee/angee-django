@@ -79,8 +79,10 @@ test("committed run changes refetch once while preserving the canvas and node UR
   let change: ((id: string) => void) | undefined;
   const socket: Parameters<typeof createAngeeChangeLiveProvider>[0] = {
     subscribe: (_request, sink) => {
-      change = (id) => sink.next({ data: { workflowRunChanged: { model: RUN_MODEL, id, action: "update" } } }
-        as Parameters<typeof sink.next>[0]);
+      change = (id) => {
+        const event = { data: { workflowRunChanged: { model: RUN_MODEL, id, action: "update" } } };
+        sink.next(event as Parameters<typeof sink.next>[0]);
+      };
       return () => { change = undefined; };
     },
     on: () => () => undefined,

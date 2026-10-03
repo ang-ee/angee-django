@@ -155,7 +155,7 @@ describe("GraphView interactions", () => {
     await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(2));
     fireEvent.keyDown(node, { key: " " });
     await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(3));
-    fireEvent.keyDown(screen.getByTitle("Fit View"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Fit view" }), { key: "Enter" });
     expect(onNodeClick).toHaveBeenCalledTimes(3);
 
     expect(onNodeClick).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "draft" }), { source: "pointer" });
