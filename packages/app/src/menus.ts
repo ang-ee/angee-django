@@ -275,6 +275,7 @@ function resolve(
       by,
       ...(parent !== undefined ? { parent } : {}),
       ...(typeof node.fields.label === "string" ? { label: node.fields.label } : {}),
+      ...(node.declaredRoot && parentOf(node) !== undefined && !node.fields.flatten ? { app: true } : {}),
     });
     for (const child of children.get(node.id) ?? []) collectRemoved(child, by);
   };

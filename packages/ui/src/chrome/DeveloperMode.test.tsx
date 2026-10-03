@@ -39,6 +39,7 @@ const composition: RuntimeComposition = {
       { id: "desk.board", route: "desk.board", by: "suite", parent: "desk", label: "Board" },
       { id: "desk.reports.old", by: "suite", parent: "desk.reports", label: "Old reports" },
       { id: "legacy", by: "suite", label: "Legacy" },
+      { id: "ledger", by: "suite", parent: "desk", label: "Ledger", app: true },
     ],
     hidden: [{ id: "desk.archive", by: "suite", reason: "hide" }],
     unavailable: { "desk.board": 'menu item "desk.board" was removed' },
@@ -87,8 +88,10 @@ describe("developer mode", () => {
     // A menu whose children were all removed opens to show them.
     fireEvent.click(screen.getByRole("button", { name: "Reports" }));
     expect(await screen.findByText("Old reports — removed by suite")).toBeTruthy();
-    // The rail lists apps; a removed app shows at its root.
+    // The rail lists apps; a removed app shows at its root, and a removed included app under its root, not in the top bar.
     expect(screen.getByText("Legacy — removed by suite")).toBeTruthy();
+    expect(screen.getByText("Ledger — removed by suite").closest("nav")).toBeNull();
+    expect(screen.getByText("Ledger — removed by suite").closest("[role=link]")?.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "Composition" }));
     expect(await screen.findByRole("dialog")).toBeTruthy();
@@ -103,9 +106,15 @@ describe("developer mode", () => {
     const { result } = renderHook(() => useDeveloperRail(), { wrapper: runtimeWrapper({ composition }) });
     expect(result.current.describe(tree.byId.get("desk.notes")!)).toBe("desk.notes · ← desk, suite");
     expect(result.current.describe(tree.byId.get("desk.archive")!)).toBe("desk.archive · hidden by suite (hide)");
-    expect(result.current.children(tree.byId.get("desk")!).map((item) => item.id)).toEqual(["desk.notes", "desk.archive", "desk.reports"]);
+    expect(result.current.menus(tree.byId.get("desk")!).map((item) => item.id)).toEqual(["desk.notes", "desk.archive", "desk.reports"]);
     expect(MenuTree.from([{ id: "a", to: "/a" }, { id: "b", to: "/b", hidden: true }]).railMenuItems(true).map((item) => item.id))
       .toEqual(["a", "b"]);
+    // On a hidden app's page the top bar follows the rail into it only in developer mode.
+    const suite = MenuTree.from([{ id: "suite", label: "Suite", to: "/suite", children: [
+      { id: "suite.desk", label: "Desk", to: "/desk", app: true, hidden: true, children: [{ id: "suite.desk.notes", label: "Notes", to: "/desk/notes" }] },
+    ] }]);
+    expect(suite.match("/desk/notes")?.app?.id).toBe("suite");
+    expect(suite.match("/desk/notes", undefined, true)?.app?.id).toBe("suite.desk");
   });
 
   test("the switch stores the preference and wins for the session over the URL flag and the stored value", () => {

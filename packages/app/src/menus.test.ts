@@ -54,6 +54,14 @@ describe("compileMenus", () => {
         ["legacy.page", undefined], ["messaging", true], ["parties", true],
       ]);
     }
+    // A removed included app is recorded as one, so developer mode shows it in the rail.
+    const removedApp = compileMenus([
+      { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
+      { id: "parties", menus: { parties: { route: "parties.people" } } },
+      { id: "nexus", dependsOn: ["messaging", "parties"], menus: { nexus: { route: "nexus.inbox", include: ["messaging", "parties"] } } },
+      { id: "product", dependsOn: ["nexus"], menus: { parties: { remove: true } } },
+    ]);
+    expect(removedApp.removed).toEqual([{ id: "parties", route: "parties.people", by: "product", parent: "nexus", app: true }]);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { app: true } } } as unknown as MenuLayer]))
       .toThrow(/unknown key "app"/);
     expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", app: true }] } as unknown as MenuLayer]))

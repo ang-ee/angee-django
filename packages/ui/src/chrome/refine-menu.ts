@@ -3,6 +3,7 @@ import { useMenu, type TreeMenuItem } from "@refinedev/core";
 import { useRouterState } from "@tanstack/react-router";
 
 import { isMenuTone } from "../lib/tones";
+import { useDeveloperMode } from "../runtime";
 import {
   type ChromeMenuGroup,
   type ChromeMenuItem,
@@ -69,7 +70,9 @@ function ChromePlaceOwner({ menuItems, children }: {
   const tree = useMemo(() => MenuTree.from(menuItems ?? runtimeTree), [menuItems, runtimeTree]);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const searchStr = useRouterState({ select: (state) => state.location.searchStr });
-  const match = useMemo(() => tree.match(pathname, searchStr), [tree, pathname, searchStr]);
+  // Developer mode's rail lists hidden apps, so the top bar follows into them.
+  const developerMode = useDeveloperMode();
+  const match = useMemo(() => tree.match(pathname, searchStr, developerMode), [tree, pathname, searchStr, developerMode]);
   const place = useMemo(() => ({ tree, pathname, searchStr, match }), [tree, pathname, searchStr, match]);
   return createElement(ChromePlaceContext.Provider, { value: place }, children);
 }

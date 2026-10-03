@@ -38,6 +38,8 @@ export interface RemovedMenuItem {
   by: string;
   parent?: string;
   label?: string;
+  /** It was an included app, which shows in the rail rather than the top bar. */
+  app?: boolean;
 }
 
 /** A surviving menu item left out of the rail, by a `hide` or by a layer's `only`. */
