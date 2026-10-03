@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, tzinfo
 from threading import Barrier, Lock
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -22,6 +23,8 @@ from django.db import (
 from django.utils import timezone
 from rebac import system_context
 
+from angee.integrate import streams as stream_driver
+from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import merge_json_state
 from angee.integrate.states import (
@@ -34,9 +37,11 @@ from angee.integrate.states import (
 )
 from angee.integrate.streams import (
     ApplyResult,
+    BridgeSyncError,
     ChangeKind,
     CursorInvalid,
     LocalChange,
+    PartitionFailure,
     RecordChange,
     SemanticError,
     StreamDefinition,
@@ -419,10 +424,12 @@ def test_native_sync_rejects_stalled_pages_and_repeated_resets(
     ])
     monkeypatch.setattr(type(stream_bridge), "backend", property(lambda self: adapter))
 
-    with pytest.raises(RuntimeError if fault == "reset" else AdapterContractError,
-                       match="fresh baseline" if fault == "reset" else "repeated a page"):
+    with pytest.raises(BridgeSyncError, match="records: Integration operation failed") as refused:
         sync_bridge(stream_bridge)
 
+    cause = refused.value.__cause__
+    assert isinstance(cause, RuntimeError if fault == "reset" else AdapterContractError)
+    assert ("fresh baseline" if fault == "reset" else "repeated a page") in str(cause)
     assert adapter.extracted == 2 and adapter.closed == 1
 
 
@@ -1310,7 +1317,7 @@ def test_parallel_partitions_close_each_adapter_once_even_after_failure(
     stream_bridge.config = {**stream_bridge.config, "sync_parallelism": 2, "sync_time_budget": 60}
     stream_bridge.save(update_fields=["config"])
     if failed_partition:
-        with pytest.raises(RuntimeError, match="one or more partitions"):
+        with pytest.raises(BridgeSyncError, match="messages.*sent.*Integration operation failed"):
             sync_bridge(stream_bridge)
         assert list(AppliedRecord.objects.values_list("key", flat=True)) == ["inbox"]
     else:
@@ -1321,6 +1328,131 @@ def test_parallel_partitions_close_each_adapter_once_even_after_failure(
     assert SyncStream.objects.count() == 2
     assert SyncStream.objects.get(partition="inbox").cursor == {"done": True}
     assert SyncStream.objects.get(partition="sent").cursor == ({} if failed_partition else {"done": True})
+
+
+@pytest.mark.parametrize("execution", ["serial", "pool", "single"])
+@pytest.mark.parametrize("safe", [False, True])
+@pytest.mark.parametrize("stage", ["pull", "push", "reconcile"])
+def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_progress(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    execution: str, safe: bool, stage: str,
+) -> None:
+    failure = IntegrationError("The address book is unavailable.") if safe else RuntimeError("vendor payload")
+    partition = "https://login:password@dav.example/books/a-failed/?token=private"
+
+    class PartitionAdapter(MemoryAdapter):
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+            definitions = (StreamDefinition("contacts", partition), StreamDefinition("contacts", "z-healthy"))
+            return definitions[:1] if execution == "single" else definitions
+
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            if stream.partition == partition and stage == "pull":
+                raise failure
+            return StreamPage((stream.partition,), {"done": True})
+
+    if stage != "pull":
+        name = "push_stream" if stage == "push" else "reconcile_stream"
+        original = getattr(stream_driver, name)
+
+        def fail_operation(stream: Any, *args: Any, **kwargs: Any) -> Any:
+            if stream.partition == partition:
+                raise failure
+            return original(stream, *args, **kwargs)
+
+        monkeypatch.setattr(stream_driver, name, fail_operation)
+
+    if execution == "pool":
+        # Exercise the future collector deterministically on SQLite. Native
+        # threaded database behavior is covered by the PostgreSQL test above.
+        class InlinePool:
+            def __init__(self, **kwargs: Any) -> None:
+                pass
+
+            def __enter__(self) -> InlinePool:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+            def submit(self, fn: Any, *args: Any) -> Future:
+                future: Future = Future()
+                try:
+                    future.set_result(fn(*args))
+                except Exception as error:
+                    future.set_exception(error)
+                return future
+
+        monkeypatch.setattr(stream_driver, "connection", SimpleNamespace(vendor="postgresql", in_atomic_block=False))
+        monkeypatch.setattr(stream_driver, "ThreadPoolExecutor", InlinePool)
+        monkeypatch.setattr(
+            stream_driver, "_drain_partition",
+            lambda bridge, definition, deadline: stream_driver._drain(bridge, bridge.backend, definition, deadline),
+        )
+
+    monkeypatch.setattr(Channel, "backend", property(lambda row: PartitionAdapter(sync_parallelism=2)))
+    stream_bridge.config = {"sync_parallelism": 2 if execution == "pool" else 1, "sync_time_budget": 60}
+    stream_bridge.save(update_fields=["config"])
+    with pytest.raises(BridgeSyncError) as refused:
+        stream_bridge.run_sync(now=timezone.now())
+
+    message = "The address book is unavailable." if safe else "Integration operation failed."
+    expected = f"contacts (/books/a-failed/): {message}"
+    assert refused.value.public_message == expected
+    assert refused.value.__cause__ is failure
+    stream_bridge.refresh_from_db()
+    assert stream_bridge.sync_error == stream_bridge.last_error == expected
+    assert stream_bridge.sync_progress["stage"] == stream_bridge.SyncStage.FAILED
+    assert stream_bridge.sync_progress["details"] == {
+        "stream": "contacts", "partition": "/books/a-failed/", "stage": stage,
+        "failures": [{"stream": "contacts", "partition": "/books/a-failed/", "stage": stage, "message": message}],
+    }
+    logs = [record for record in caplog.records if record.name == "angee.integrate.streams"]
+    assert len(logs) == 1
+    assert logs[0].exc_info and logs[0].exc_info[1] is failure and logs[0].exc_info[2] is not None
+    assert str(stream_bridge.pk) in logs[0].message
+    assert "contacts" in logs[0].message and "/books/a-failed/" in logs[0].message and stage in logs[0].message
+    assert "password" not in caplog.text and "token=private" not in caplog.text
+    if execution != "single":
+        assert AppliedRecord.objects.filter(key="z-healthy").exists()
+        assert SyncStream.objects.get(partition="z-healthy").cursor == {"done": True}
+
+
+def test_partition_error_names_all_failures_in_order_and_bounds_the_total_message() -> None:
+    failures = [
+        PartitionFailure(StreamDefinition("contacts", "b"), "pull", RuntimeError("private payload")),
+        PartitionFailure(StreamDefinition("contacts", "a"), "pull", IntegrationError("Login refused.")),
+    ]
+    assert BridgeSyncError(failures).public_message == (
+        "contacts (a): Login refused.; contacts (b): Integration operation failed."
+    )
+    failures.append(PartitionFailure(StreamDefinition("contacts", "c"), "pull", IntegrationError("x" * 5000)))
+    assert len(BridgeSyncError(failures).public_message) == 4096
+    assert BridgeSyncError(failures).public_message.endswith("…")
+
+
+def test_bridge_reports_and_logs_each_failed_partition(stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
+                                                     caplog: pytest.LogCaptureFixture) -> None:
+    class RefusedAdapter(MemoryAdapter):
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+            return (StreamDefinition("contacts", "b"), StreamDefinition("contacts", "a"))
+
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            if stream.partition == "a":
+                raise IntegrationError("Login refused.")
+            raise RuntimeError("private vendor payload")
+
+    monkeypatch.setattr(Channel, "backend", property(lambda row: RefusedAdapter()))
+    with pytest.raises(BridgeSyncError) as refused:
+        stream_bridge.run_sync(now=timezone.now())
+    assert refused.value.public_message == (
+        "contacts (a): Login refused.; contacts (b): Integration operation failed."
+    )
+    stream_bridge.refresh_from_db()
+    assert stream_bridge.sync_error == refused.value.public_message
+    assert [failure["partition"] for failure in stream_bridge.sync_progress["details"]["failures"]] == ["a", "b"]
+    logs = [record for record in caplog.records if record.name == "angee.integrate.streams"]
+    assert len(logs) == 2
+    assert all(record.exc_info and record.exc_info[2] is not None for record in logs)
 
 
 def test_json_merge_uses_fresh_locked_row_for_stale_partition_instances(stream_bridge: Channel) -> None:

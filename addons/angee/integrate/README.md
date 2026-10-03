@@ -71,6 +71,12 @@ reflection and use the remote version precondition. If the process loses the
 response, the next observation must reconcile that uncertainty; this protocol
 does not promise an atomic commit across two systems.
 
+Partition failures retain healthy partitions' committed pages. Both serial and
+parallel syncs report each failed stream, partition and operation through the
+shared safe failure projection, and log the original exception with its traceback.
+The terminal progress details identify failures after all partitions finish, so a
+healthy partition cannot replace them with its last page's progress.
+
 Bounded callers resolve declarations through `open_stream`, use `begin_stream_cycle(stream, adapter)`
 once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The

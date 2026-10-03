@@ -12,6 +12,10 @@ a backend raises a plain subclass with the message it composed itself.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from django.core.exceptions import ValidationError
+
 INTEGRATION_FAILURE_MESSAGE = "Integration operation failed."
 """The bounded message every unclassified integration failure projects to."""
 
@@ -28,3 +32,20 @@ class IntegrationError(Exception):
         """Return the bounded text safe to persist and show to operators."""
 
         return str(self) or INTEGRATION_FAILURE_MESSAGE
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationFailure:
+    """An integration-owned, safe failure message for persisted telemetry."""
+
+    message: str
+
+
+def _safe_integration_failure(error: Exception) -> IntegrationFailure:
+    """Project safe integration refusals; keep unclassified vendor text private."""
+
+    if isinstance(error, IntegrationError):
+        return IntegrationFailure(error.public_message)
+    if isinstance(error, ValidationError):
+        return IntegrationFailure("Integration configuration is invalid.")
+    return IntegrationFailure(INTEGRATION_FAILURE_MESSAGE)
