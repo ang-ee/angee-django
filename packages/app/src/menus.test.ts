@@ -56,7 +56,7 @@ describe("compileMenus", () => {
     expect(ids(navigation)).toEqual([{ pm: [
       "pm.inbox", "projects.my-work", "work.triage-hub", "projects.tasks", "work.cycles-hub",
     ] }]);
-    expect(removed).toEqual([{ id: "projects.board", route: "projects.board" }]);
+    expect(removed).toEqual([{ id: "projects.board", route: "projects.board", by: "pm" }]);
   });
 
   test("removal takes the subtree; hide keeps the node in the logical tree only", () => {
@@ -129,5 +129,18 @@ describe("compileMenus", () => {
     const one: MenuLayer = { id: "one", menus: { one: { sequence: 2 } } };
     const two: MenuLayer = { id: "two", menus: { two: { sequence: 1 } } };
     expect(ids(compileMenus([one, two]).logical)).toEqual(ids(compileMenus([two, one]).logical));
+  });
+
+  test("records who removed and hid each node, and legacy ids outside their namespace", () => {
+    const product: MenuLayer = { id: "product", dependsOn: ["pm", "projects", "work"], menus: {
+      work: { remove: true }, "projects.tasks": { hide: true }, pm: { only: ["projects", "pm.inbox"] },
+    } };
+    const stray: MenuLayer = { id: "stray", menus: [{ id: "elsewhere.page", route: "elsewhere.page" }] };
+    const compiled = compileMenus([projects, work, pm, product, stray]);
+    expect(compiled.removed).toContainEqual({ id: "work.cycles-hub", route: "work.cycles-hub", by: "product" });
+    expect(compiled.removed).toContainEqual({ id: "projects.board", route: "projects.board", by: "pm" });
+    expect(compiled.hidden).toEqual([{ id: "projects.tasks", by: "product", reason: "hide" }]);
+    expect(compiled.provenance["projects.my-work"]).toEqual({ route: "projects", parent: "projects", sequence: "pm" });
+    expect(compiled.diagnostics).toEqual(['Addon "stray" declares menu item "elsewhere.page" outside its namespace ("stray" or "stray.…").']);
   });
 });

@@ -328,31 +328,36 @@ function addMenuRouteResource(
 }
 
 /**
- * Console routes made unavailable by removed menu nodes. A route is unavailable
- * when its `route.menu` anchor was removed, or when a removed node referenced it
- * and no surviving node does; route descendants (`route.parent`) follow. Routes
- * no menu ever referenced, and public routes, stay available.
+ * Console routes made unavailable by removed menu nodes, each with its reason. A
+ * route is unavailable when its `route.menu` anchor was removed, or when a removed
+ * node referenced it and no surviving node does; route descendants
+ * (`route.parent`) follow. Routes no menu ever referenced, and public routes, stay
+ * available.
  */
 export function unavailableRoutes(
   routes: readonly BaseAddonRoute[],
   menuTree: MenuTree,
   removed: readonly { id: string; route?: string }[],
-): Set<string> {
+): Map<string, string> {
   const removedIds = new Set(removed.map((node) => node.id));
   const routesByName = new Map(routes.map((route) => [route.name, route]));
-  const candidates = new Set(removed.flatMap((node) => (node.route ? [node.route] : [])));
-  for (const route of routes) if (route.menu && removedIds.has(route.menu)) candidates.add(route.name);
-  const unavailable = new Set<string>();
-  for (const name of candidates) {
+  const unavailable = new Map<string, string>();
+  const consider = (name: string, reason: string): void => {
     const route = routesByName.get(name);
-    if (!route || route.layout === "public") continue;
-    if ((route.menu && removedIds.has(route.menu)) || menuTree.itemsForRoute(name).length === 0) unavailable.add(name);
-  }
+    if (!route || route.layout === "public" || unavailable.has(name)) return;
+    if (route.menu && removedIds.has(route.menu)) {
+      unavailable.set(name, `its menu anchor "${route.menu}" was removed`);
+    } else if (menuTree.itemsForRoute(name).length === 0) {
+      unavailable.set(name, reason);
+    }
+  };
+  for (const node of removed) if (node.route) consider(node.route, `menu item "${node.id}" was removed`);
+  for (const route of routes) if (route.menu && removedIds.has(route.menu)) consider(route.name, "");
   for (let grew = true; grew;) {
     grew = false;
     for (const route of routes) {
       if (route.parent && unavailable.has(route.parent) && !unavailable.has(route.name) && route.layout !== "public") {
-        unavailable.add(route.name);
+        unavailable.set(route.name, `its parent route "${route.parent}" is unavailable`);
         grew = true;
       }
     }

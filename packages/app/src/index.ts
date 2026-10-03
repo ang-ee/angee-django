@@ -12,6 +12,7 @@ export * from "./boot-app";
 export * from "./define-addon";
 export type { PerspectiveDeclaration, ResolvedShell, ShellDeclaration } from "./shell";
 export type { MenuDeclarations, MenuEntry, MenuInclude } from "./menus";
+export type { CompositionExplanation } from "./explain";
 
 // The login/OAuth-callback auth surface — app-shell pages the host mounts as
 // routes (the only consumers are addon web + the host, never a package below).

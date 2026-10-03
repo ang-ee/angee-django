@@ -178,11 +178,8 @@ export interface ComposedAddons {
   routes: readonly AddonRoute[];
   /** The logical menu tree: owns routes, trails and the active app. */
   menus: readonly ComposedMenuItem[];
-  /** The navigation projection: hidden nodes dropped, flattened apps lifted. */
-  navigationMenus: CompiledMenus["navigation"];
-  /** Removed menu nodes and the routes they referenced. */
-  removedMenus: CompiledMenus["removed"];
-  menuProvenance: CompiledMenus["provenance"];
+  /** The compiled menu layers: navigation projection, removals, hidden nodes, provenance. */
+  menuComposition: CompiledMenus;
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: I18nResources;
@@ -441,9 +438,7 @@ export function composeAddons(
     brand: shell.brand,
     routes,
     menus: compiledMenus.logical,
-    navigationMenus: compiledMenus.navigation,
-    removedMenus: compiledMenus.removed,
-    menuProvenance: compiledMenus.provenance,
+    menuComposition: compiledMenus,
     widgets,
     statusTones,
     i18n,

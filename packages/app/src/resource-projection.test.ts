@@ -4,6 +4,8 @@ import { createRouteHref } from "@angee/ui/runtime";
 import { resourcePageRoutes, type BaseAddonRoute } from "./define-base-addon";
 import { AppRouteProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
 import { compileMenus, type MenuLayer } from "./menus";
+import { explainComposition } from "./explain";
+import { resolveShell } from "./shell";
 import { chatterRouteIndex } from "./chatter-routes";
 import { testDataResource } from "@angee/metadata/testing";
 import { resolveRoutePaths } from "./route-paths";
@@ -142,18 +144,21 @@ describe("menu alterations in the route projection", () => {
   const route = (name: string) => deskRoutes.find((candidate) => candidate.name === name)!;
 
   test("removal disables targeted routes, hub-anchored pages and their descendants; hide disables nothing", () => {
-    expect([...unavailable].sort()).toEqual(["desk.cycle", "desk.cycles", "desk.cycles-hub", "desk.review", "desk.review.record"]);
+    expect([...unavailable.keys()].sort()).toEqual(["desk.cycle", "desk.cycles", "desk.cycles-hub", "desk.review", "desk.review.record"]);
+    expect(unavailable.get("desk.cycles")).toBe('its menu anchor "desk.cycles-hub" was removed');
+    expect(unavailable.get("desk.cycle")).toBe('its parent route "desk.cycles" is unavailable');
+    expect(unavailable.get("desk.review")).toBe('menu item "desk.review" was removed');
   });
 
   test("the guard refuses unavailable routes, also without a perspective", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, undefined, { navigation, unavailable });
+    const projection = new AppRouteProjection(deskRoutes, logical, undefined, { navigation, unavailable: new Set(unavailable.keys()) });
     expect(projection.allows(route("desk.cycles"), "/desk/queues/q1/cycles")).toBe(false);
     expect(projection.allows(route("desk.cycle"), "/desk/queues/q1/cycles/c1")).toBe(false);
     expect(projection.allows(route("desk.incoming"), "/desk/incoming")).toBe(true);
   });
 
   test("claims and record destinations skip removed pages; hidden pages keep their claims", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, unavailable });
+    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, unavailable: new Set(unavailable.keys()) });
     expect(projection.rootFor(route("desk.incoming"))).toBe("suite");
     const selected = projection.resourceRoutes("suite");
     expect(selected["records.Record"]?.collection).toBe("desk.incoming");
@@ -162,11 +167,31 @@ describe("menu alterations in the route projection", () => {
   });
 
   test("navigation flattens the included app and drops hidden items; the logical tree keeps them", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, unavailable });
+    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, unavailable: new Set(unavailable.keys()) });
     expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["suite"]);
     expect(projection.navigationTree.byId.get("suite")?.children?.map((item) => item.id)).toEqual(["desk.home", "records"]);
     expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");
     expect(logical.trailFor("desk.incoming").map((item) => item.id)).toEqual(["suite", "desk", "desk.incoming"]);
     expect(projection.navigationTree.byId.has("desk.incoming")).toBe(false);
+  });
+});
+
+describe("composition explanation", () => {
+  test("collects shell provenance, menu removals, hidden nodes and unavailable routes with reasons", () => {
+    const layers: MenuLayer[] = [
+      { id: "desk", menus: [{ id: "desk", children: [{ id: "desk.home", route: "desk.home" }, { id: "desk.review", route: "desk.review" }] }] },
+      { id: "suite", dependsOn: ["desk"], menus: { "desk.review": { remove: true }, "desk.home": { hide: true } } },
+    ];
+    const compiled = compileMenus(layers);
+    const href = createRouteHref(routes);
+    const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
+    const explanation = explainComposition(resolveShell(layers), compiled, unavailableRoutes(routes, logical, compiled.removed));
+    expect(explanation.menus.removed).toEqual([{ id: "desk.review", route: "desk.review", by: "suite" }]);
+    expect(explanation.menus.hidden).toEqual([{ id: "desk.home", by: "suite", reason: "hide" }]);
+    expect(explanation.menus.unavailable).toEqual({
+      "desk.review": 'menu item "desk.review" was removed',
+      "desk.review.record": 'its parent route "desk.review" is unavailable',
+    });
+    expect(explanation.shell).toEqual({ brand: null, perspective: null, provenance: {}, diagnostics: [] });
   });
 });

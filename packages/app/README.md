@@ -43,7 +43,13 @@ children per layer, ignoring items the narrowing addon's dependents add.
 `sequence`, `before` and `after` order siblings; included apps follow the
 including node's own children in include order. Two unrelated addons setting
 one field of a node fail composition. The legacy array form remains a list of
-declarations.
+declarations; ids outside the addon's namespace are reported, not refused.
+
+`createApp(...).explain` reports how the composition came out: the layer that
+set each shell field and menu node field, removed nodes and who removed them,
+hidden nodes (by `hide` or a layer's `only`), unavailable routes with the
+reason, and diagnostics such as shell fallbacks (also logged as warnings) and
+out-of-namespace menu ids.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims

@@ -45,10 +45,14 @@ export interface CompiledMenus {
   logical: readonly CompiledMenuItem[];
   /** What the rail, Settings and palette show: hidden nodes dropped, flattened apps lifted. */
   navigation: readonly ChromeMenuItem[];
-  /** Removed nodes, subtrees included, with the routes they referenced. */
-  removed: readonly { id: string; route?: string }[];
-  /** The layer that set each altered node field. */
+  /** Removed nodes, subtrees included, with the routes they referenced and the removing layer. */
+  removed: readonly { id: string; route?: string; by: string }[];
+  /** Surviving nodes left out of the navigation, by a `hide` or by a layer's `only`. */
+  hidden: readonly { id: string; by: string; reason: "hide" | "only" }[];
+  /** The layer that set each node field, declarations included. */
   provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** Non-fatal findings, such as menu ids declared outside the addon's namespace. */
+  diagnostics: readonly string[];
 }
 
 const DECLARATION_FIELDS = [
@@ -79,6 +83,7 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
   const ancestors = layerAncestry(layers);
   const nodes = new Map<string, Node>();
   const alterations: { layer: string; id: string; entry: MenuEntry }[] = [];
+  const diagnostics: string[] = [];
 
   const declare = (layer: string, id: string, fields: Node["fields"]): void => {
     if (nodes.has(id)) throw new Error(`Addon "${layer}" redefines menu item id "${id}" already contributed by another addon.`);
@@ -88,7 +93,7 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
   for (const layer of layers) {
     if (!layer.menus) continue;
     if (Array.isArray(layer.menus)) {
-      for (const item of layer.menus as readonly BaseMenuItem[]) declareLegacy(declare, layer.id, item, undefined);
+      for (const item of layer.menus as readonly BaseMenuItem[]) declareLegacy(declare, diagnostics, layer.id, item, undefined);
       continue;
     }
     for (const [id, entry] of Object.entries(layer.menus as MenuDeclarations)) {
@@ -104,7 +109,9 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
     }
   }
 
-  const provenance: Record<string, Record<string, string>> = {};
+  const provenance: Record<string, Record<string, string>> = Object.fromEntries(
+    [...nodes.values()].map((node) => [node.id, { ...node.setBy } as Record<string, string>]),
+  );
   const set = (layer: string, id: string, field: Field, value: unknown): void => {
     const node = target(layer, id);
     const previous = node.setBy[field];
@@ -139,11 +146,12 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
       if (included.flatten) set(layer, included.id, "flatten", true);
     }
   }
-  return resolve(nodes, ancestors, provenance);
+  return resolve(nodes, ancestors, provenance, diagnostics);
 }
 
 function declareLegacy(
   declare: (layer: string, id: string, fields: Node["fields"]) => void,
+  diagnostics: string[],
   layer: string,
   item: BaseMenuItem,
   parent: string | undefined,
@@ -152,8 +160,11 @@ function declareLegacy(
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
   const { id: _id, children, parentId, badge: _badge, ...rest } = item;
   const owner = parent ?? parentId;
+  if (id !== layer && !id.startsWith(`${layer}.`)) {
+    diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);
+  }
   declare(layer, id, { ...rest, ...(owner ? { parent: owner } : {}) });
-  for (const child of children ?? []) declareLegacy(declare, layer, child, id);
+  for (const child of children ?? []) declareLegacy(declare, diagnostics, layer, child, id);
 }
 
 function pick(entry: MenuEntry): Node["fields"] {
@@ -166,6 +177,7 @@ function resolve(
   nodes: Map<string, Node>,
   ancestors: ReadonlyMap<string, ReadonlySet<string>>,
   provenance: Record<string, Record<string, string>>,
+  diagnostics: readonly string[],
 ): CompiledMenus {
   const parentOf = (node: Node): string | undefined => {
     const parent = node.fields.parent as string | null | undefined;
@@ -187,11 +199,13 @@ function resolve(
   }
 
   const removed: CompiledMenus["removed"][number][] = [];
-  const collectRemoved = (node: Node): void => {
-    removed.push({ id: node.id, ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}) });
-    for (const child of children.get(node.id) ?? []) collectRemoved(child);
+  const collectRemoved = (node: Node, by: string): void => {
+    removed.push({ id: node.id, ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}), by });
+    for (const child of children.get(node.id) ?? []) collectRemoved(child, by);
   };
-  for (const node of nodes.values()) if (node.fields.remove && !removed.some((entry) => entry.id === node.id)) collectRemoved(node);
+  for (const node of nodes.values()) {
+    if (node.fields.remove && !removed.some((entry) => entry.id === node.id)) collectRemoved(node, node.setBy.remove!);
+  }
   const gone = new Set(removed.map((entry) => entry.id));
 
   const ordered = (parent: string | undefined): Node[] => {
@@ -234,15 +248,22 @@ function resolve(
   // children lifted in its place, all ordered by sequence (stable otherwise). Each
   // layer's `only` admits listed ids, items of a listed flattened app, and items
   // declared by the `only` author or an addon depending on it.
+  const hidden = new Map<string, CompiledMenus["hidden"][number]>();
+  for (const node of nodes.values()) {
+    if (node.fields.hide === true && !gone.has(node.id)) hidden.set(node.id, { id: node.id, by: node.setBy.hide!, reason: "hide" });
+  }
   const navigationChildren = (node: Node): { child: Node; app?: Node }[] => {
     const shown = (child: Node): boolean => child.fields.hide !== true;
     const lifted: { child: Node; app?: Node }[] = ordered(node.id).filter(shown).flatMap((child) => child.fields.flatten
       ? ordered(child.id).filter(shown).map((grandchild) => ({ child: grandchild, app: child }))
       : [{ child }]);
     lifted.sort((left, right) => sequenceOf(left.child) - sequenceOf(right.child) || 0);
-    return lifted.filter(({ child, app }) => node.only.every(({ layer, ids }) =>
-      ids.has(child.id) || (app !== undefined && ids.has(app.id))
-      || child.owner === layer || Boolean(ancestors.get(child.owner)?.has(layer))));
+    return lifted.filter(({ child, app }) => {
+      const excluding = node.only.find(({ layer, ids }) => !(ids.has(child.id) || (app !== undefined && ids.has(app.id))
+        || child.owner === layer || Boolean(ancestors.get(child.owner)?.has(layer))));
+      if (excluding) hidden.set(child.id, { id: child.id, by: excluding.layer, reason: "only" });
+      return !excluding;
+    });
   };
   const navigationItem = (node: Node): ChromeMenuItem => {
     const { parent: _parent, sequence: _sequence, before: _before, after: _after, hide: _hide, remove: _remove, flatten: _flatten, ...fields } = node.fields;
@@ -251,11 +272,14 @@ function resolve(
     return { ...(fields as Omit<ChromeMenuItem, "id">), id: node.id, ...(nested.length ? { children: nested } : {}) };
   };
   const roots = ordered(undefined);
+  const navigation = roots.filter((node) => node.fields.hide !== true).map(navigationItem);
   return {
     logical: roots.map(logicalItem),
-    navigation: roots.filter((node) => node.fields.hide !== true).map(navigationItem),
+    navigation,
     removed,
+    hidden: [...hidden.values()],
     provenance,
+    diagnostics,
   };
 }
 
