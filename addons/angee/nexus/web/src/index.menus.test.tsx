@@ -40,17 +40,16 @@ describe("Nexus menu aggregation", () => {
     }
   });
 
-  test("lifts Messaging and Parties destinations and preserves the two leaf app links", () => {
+  test("keeps each included app as its own group under Nexus", () => {
     expect(navigation.roots.map(({ id }) => id)).toEqual(["nexus"]);
-    expect(navigation.byId.get("nexus")?.children?.map(({ id }) => id)).toEqual([
-      ...ownChildren,
+    expect(navigation.byId.get("nexus")?.children?.map(({ id }) => id)).toEqual([...ownChildren, ...included]);
+    for (const id of included) expect(navigation.byId.get(id)?.parentNode?.id).toBe("nexus");
+    expect(navigation.byId.get("messaging")?.children?.map(({ id }) => id)).toEqual([
       "messaging.messages", "messaging.threads",
-      "parties.people", "parties.organizations",
-      "spaces", "posts",
     ]);
-    for (const id of included) expect(logical.byId.get(id)?.parentNode?.id).toBe("nexus");
-    expect(navigation.byId.has("messaging")).toBe(false);
-    expect(navigation.byId.has("parties")).toBe(false);
+    expect(navigation.byId.get("parties")?.children?.map(({ id }) => id)).toEqual([
+      "parties.people", "parties.organizations",
+    ]);
     expect(navigation.byId.get("spaces")?.route).toBe("spaces.groups");
     expect(navigation.byId.get("posts")?.route).toBe("posts.feeds");
   });
@@ -72,8 +71,7 @@ describe("Nexus menu aggregation", () => {
     for (const id of [...ownChildren, ...included]) {
       expect(explain.menus.provenance[id]?.parent).toBe("nexus");
     }
-    expect(explain.menus.provenance.messaging?.flatten).toBe("nexus");
-    expect(explain.menus.provenance.parties?.flatten).toBe("nexus");
+    for (const id of included) expect(explain.menus.provenance[id]?.flatten).toBeUndefined();
     expect(explain.menus.provenance.spaces?.route).toBe("spaces");
     expect(explain.menus.provenance.posts?.route).toBe("posts");
   });

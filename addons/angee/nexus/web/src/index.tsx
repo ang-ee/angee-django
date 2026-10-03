@@ -26,13 +26,8 @@ const nexus = defineBaseAddon({
       label: "Nexus",
       route: "nexus.inbox",
       icon: "nexus-inbox",
-      include: [
-        { id: "messaging", flatten: true },
-        { id: "parties", flatten: true },
-        // These roots are destinations, with no children to lift into the rail.
-        "spaces",
-        "posts",
-      ],
+      // Each included app keeps its own group, so its pages stay a level down.
+      include: ["messaging", "parties", "spaces", "posts"],
     },
     "nexus.inbox": { parent: "nexus", label: "Inbox", route: "nexus.inbox", icon: "nexus-inbox", sequence: 10 },
     "nexus.graph": { parent: "nexus", label: "Graph", route: "nexus.graph", icon: "network", sequence: 20 },
