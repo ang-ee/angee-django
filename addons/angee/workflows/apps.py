@@ -39,7 +39,7 @@ class WorkflowsConfig(AppConfig):
     def ready(self) -> None:
         """Subscribe the waiter owner to the decisions lifecycle."""
         from angee.workflows.subjects import check_run_subject_models
-        from angee.workflows.triggers import check_record_changed_models
+        from angee.workflows.triggers import TriggerSource, check_record_changed_models
 
         checks.register(check_record_changed_models, checks.Tags.models)
         checks.register(check_run_subject_models, checks.Tags.models)
@@ -52,6 +52,4 @@ class WorkflowsConfig(AppConfig):
             revoke_deleted_trigger_grants, sender=apps.get_model("workflows", "Trigger"),
             dispatch_uid="workflows.trigger_grants.revoke",
         )
-        field = apps.get_model("workflows", "Trigger")._meta.get_field("source")
-        for key in field.registered_keys():
-            field.resolve_class(key).connect()
+        TriggerSource.connect_registered()

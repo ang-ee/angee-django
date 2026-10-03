@@ -35,6 +35,7 @@ from angee.workflows.testing.models import (
 )
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.mtidemo.models import MtiParent
+from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
 from tests.workflow_steps import Value, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
@@ -561,12 +562,7 @@ def test_enabled_configuration_edits_require_disable(
     workflow = load_workflow(document("entry"), key="source-stability", actor=actor)
     editor = create_user("trigger-co-editor")
     workflow.with_actor(actor).grant_record_access("editor", editor)
-    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
-        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
-        "other_changed": "tests.test_workflows_triggers.OtherChanged",
-    }
-    source_field = Trigger._meta.get_field("source")
-    monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(triggers.TriggerSource))
+    register_other_changed(settings, monkeypatch)
     with trigger_source(Page):
         with actor_context(actor):
             trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
@@ -591,9 +587,67 @@ def test_enabled_configuration_edits_require_disable(
 
 
 class OtherChanged(triggers.RecordChanged):
-    """An alternate native source used to verify activation invalidation."""
+    """A refinement of the native save source registered under its own key."""
 
     key = "other_changed"
+
+
+def register_other_changed(settings, monkeypatch):
+    """Add the refinement to the source registry and its field choices for one test."""
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
+        "other_changed": "tests.test_workflows_triggers.OtherChanged",
+    }
+    source_field = Trigger._meta.get_field("source")
+    monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(triggers.TriggerSource))
+
+
+def test_refined_source_shares_the_one_capture_of_its_bases_event(
+    execution, trigger_setup, register_step, settings, monkeypatch,
+):
+    """One native save locks the record and captures its watch once while feeding both keys."""
+    actor, workflow, record, trigger = trigger_setup
+    _, sent = execution
+    register_other_changed(settings, monkeypatch)
+    with actor_context(actor):
+        refined = Trigger.objects.create(workflow=workflow, source="other_changed", model_label="knowledge.vault")
+    for row in (trigger, refined):
+        Trigger.objects.enable(row, actor=actor)
+    register_step(Watch)
+    with actor_context(actor):
+        record.name = "Waiting"  # The watcher parks until the record is ready again.
+        record.save(update_fields=("name",))
+    run, _step = start_watcher(Watch, record, actor)
+    run_until(run)
+    assert system_queryset(StepWatch).count() == 1
+    locked = []
+    lock = triggers.lock_if_supported
+
+    def count_lock(rows, **kwargs):
+        locked.append(rows.model)
+        return lock(rows, **kwargs)
+
+    monkeypatch.setattr(triggers, "lock_if_supported", count_lock)
+    sent.clear()
+    with trigger_source(Vault, connect=True), actor_context(actor):
+        record.name = "Ready"
+        record.save(update_fields=("name",))
+    monkeypatch.setattr(triggers, "lock_if_supported", lock)
+    assert locked == [Vault]
+    assert len(record_deliveries(sent)) == 1
+    assert set(system_queryset(TriggerEvent).values_list("trigger_id", flat=True)) == {trigger.pk, refined.pk}
+    assert Trigger.objects.drain() == 2
+    assert not system_queryset(TriggerEvent).filter(admitted_at=None).exists()
+
+
+def test_registry_connects_a_refined_source_through_its_base_only(settings, monkeypatch):
+    """A refinement never subscribes again to the native event its registered base owns."""
+    register_other_changed(settings, monkeypatch)
+    connected = []
+    monkeypatch.setattr(triggers.RecordChanged, "connect", classmethod(connected.append))
+    assert OtherChanged in triggers.RecordChanged.registered()
+    triggers.TriggerSource.connect_registered()
+    assert connected == [triggers.RecordChanged]
 
 
 @pytest.mark.parametrize("bulk", [False, True])
