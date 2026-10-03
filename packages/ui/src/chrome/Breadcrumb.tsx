@@ -8,6 +8,7 @@ import type { ReactElement } from "react";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { useOptionalChromePlace } from "./refine-menu";
 
 export interface BreadcrumbItem {
   label: string;
@@ -16,7 +17,14 @@ export interface BreadcrumbItem {
 
 export interface BreadcrumbProps {
   className?: string;
+  /** `rail` renders on the top bar's dark surface. */
+  tone?: "sheet" | "rail";
 }
+
+const TRAIL_TONES = {
+  sheet: { trail: "text-fg-muted", separator: "text-fg-subtle", link: "hover:text-fg", current: "text-fg" },
+  rail: { trail: "text-on-rail-mut", separator: "text-on-rail-mut/60", link: "hover:text-on-rail-hi", current: "text-on-rail-hi" },
+} as const;
 
 const BreadcrumbLeafLabelContext = React.createContext<string | null>(null);
 const BreadcrumbLeafLabelSetterContext = React.createContext<
@@ -78,30 +86,43 @@ export function useBreadcrumbCollectionLink(to: string, href: string | null): vo
 
 export function Breadcrumb({
   className,
+  tone = "sheet",
 }: BreadcrumbProps): ReactElement {
-  return <BreadcrumbTrail className={className} items={useBreadcrumbItems()} />;
+  return <BreadcrumbTrail className={className} tone={tone} items={useBreadcrumbItems()} />;
 }
 
-/** The displayed trail, including the record's published label and return link. */
+/** The displayed trail, led by the selected app, with the record's published label and return link. */
 export function useBreadcrumbItems(): readonly BreadcrumbItem[] {
+  const t = useUiT();
+  const place = useOptionalChromePlace();
   const leafLabel = React.useContext(BreadcrumbLeafLabelContext);
   const collection = React.useContext(BreadcrumbCollectionContext)?.link;
-  return breadcrumbItemsFromRefine(useRefineBreadcrumb().breadcrumbs, leafLabel, collection);
+  const items = breadcrumbItemsFromRefine(useRefineBreadcrumb().breadcrumbs, leafLabel, collection);
+  // The top bar shows only the app's menus, so the trail names the app.
+  const match = place?.match;
+  const app: BreadcrumbItem | undefined = match?.trail[0]?.group === "platform"
+    ? { label: t("chrome.settings"), to: place?.tree.settingsEntry()?.target }
+    : match?.app ? { label: match.app.displayLabel, to: match.app.target } : undefined;
+  return app && !items.some((item) => item.label === app.label) ? [app, ...items] : items;
 }
 
 function BreadcrumbTrail({
   className,
+  tone,
   items,
 }: {
   className?: string;
+  tone: NonNullable<BreadcrumbProps["tone"]>;
   items: readonly BreadcrumbItem[];
 }): ReactElement {
   const t = useUiT();
+  const colors = TRAIL_TONES[tone];
   return (
     <nav
       aria-label={t("chrome.breadcrumb")}
       className={cn(
-        "flex min-w-0 items-center gap-1 overflow-hidden text-13 text-fg-muted",
+        "flex min-w-0 items-center gap-1 overflow-hidden text-13",
+        colors.trail,
         className,
       )}
     >
@@ -111,7 +132,7 @@ function BreadcrumbTrail({
         return (
           <span key={key} className="contents">
             {index > 0 ? (
-              <span aria-hidden className="shrink-0 text-fg-subtle">
+              <span aria-hidden className={cn("shrink-0", colors.separator)}>
                 /
               </span>
             ) : null}
@@ -119,14 +140,14 @@ function BreadcrumbTrail({
               <Link
                 to={item.to}
                 href={item.to}
-                className="min-w-0 truncate rounded-4 outline-none hover:text-fg focus-visible:focus-ring"
+                className={cn("min-w-0 truncate rounded-4 outline-none focus-visible:focus-ring", colors.link)}
               >
                 {item.label}
               </Link>
             ) : (
               <span
                 aria-current={current ? "page" : undefined}
-                className="min-w-0 truncate font-medium text-fg"
+                className={cn("min-w-0 truncate font-medium", colors.current)}
               >
                 {item.label}
               </span>

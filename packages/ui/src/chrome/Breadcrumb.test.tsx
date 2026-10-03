@@ -9,12 +9,15 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppRuntimeProvider } from "../runtime";
 import {
   Breadcrumb,
   BreadcrumbLabelProvider,
   useBreadcrumbLeafLabel,
   useBreadcrumbCollectionLink,
 } from "./Breadcrumb";
+import type { ChromeMenuItem } from "./menu-tree";
+import { ChromePlaceProvider } from "./refine-menu";
 
 const refineMocks = vi.hoisted(() => ({
   breadcrumbs: [] as { label: string; href?: string }[],
@@ -120,25 +123,61 @@ describe("Breadcrumb", () => {
   });
 });
 
+describe("Breadcrumb app lead", () => {
+  const desk: readonly ChromeMenuItem[] = [{ id: "desk", label: "Desk", to: "/desk", children: [
+    { id: "desk.notes", label: "Notes", to: "/desk/notes" },
+  ] }];
+
+  test("leads with the selected app when the trail does not name it", async () => {
+    refineMocks.breadcrumbs = [{ label: "Notes" }];
+    renderBreadcrumb({ menus: desk, path: "/desk/notes" });
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(breadcrumb.textContent).toBe("Desk/Notes");
+    expect(within(breadcrumb).getByRole("link", { name: "Desk" }).getAttribute("href")).toBe("/desk");
+  });
+
+  test("does not repeat an app the trail already names", async () => {
+    refineMocks.breadcrumbs = [{ label: "Desk", href: "/desk" }, { label: "Notes" }];
+    renderBreadcrumb({ menus: desk, path: "/desk/notes" });
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(within(breadcrumb).getAllByText("Desk")).toHaveLength(1);
+  });
+
+  test("leads Settings pages with the Settings place", async () => {
+    refineMocks.breadcrumbs = [{ label: "Tags", href: "/tags" }, { label: "Urgent" }];
+    renderBreadcrumb({ menus: [{ id: "tags", label: "Tags", group: "platform", to: "/tags" }], path: "/tags/urgent" });
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(breadcrumb.textContent).toBe("Settings/Tags/Urgent");
+    expect(within(breadcrumb).getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("/tags");
+  });
+});
+
 function renderBreadcrumb({
   leafLabel,
   collection,
+  menus,
+  path = "/notes/first",
 }: {
   leafLabel?: string;
   collection?: { to: string; href: string };
+  menus?: readonly ChromeMenuItem[];
+  path?: string;
 } = {}): void {
+  const trail = (
+    <BreadcrumbLabelProvider>
+      <Breadcrumb />
+      {leafLabel ? <BreadcrumbLeaf label={leafLabel} /> : null}
+      {collection ? <CollectionLink {...collection} /> : null}
+    </BreadcrumbLabelProvider>
+  );
   const rootRoute = createRootRoute({
-    component: () => (
-      <BreadcrumbLabelProvider>
-        <Breadcrumb />
-        {leafLabel ? <BreadcrumbLeaf label={leafLabel} /> : null}
-        {collection ? <CollectionLink {...collection} /> : null}
-      </BreadcrumbLabelProvider>
-    ),
+    component: () => menus
+      ? <AppRuntimeProvider runtime={{}}><ChromePlaceProvider menuItems={menus}>{trail}</ChromePlaceProvider></AppRuntimeProvider>
+      : trail,
   });
   const router = createRouter({
     routeTree: rootRoute,
-    history: createMemoryHistory({ initialEntries: ["/notes/first"] }),
+    history: createMemoryHistory({ initialEntries: [path] }),
   });
   render(<RouterProvider router={router} />);
 }

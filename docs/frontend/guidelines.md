@@ -1123,7 +1123,9 @@ Hard-won traps — the wise learn from others' mistakes
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
   bar; deeper items use the shared dropdown menu and labelled groups. The bar
-  never repeats the app's name: the rail and the breadcrumb strip carry it.
+  never repeats the app's name: the rail and the breadcrumb strip carry it. The
+  strip is a narrow row on the top bar's surface, and its trail leads with the
+  selected app (or Settings).
   The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
   measures the ordered menus followed by developer removed markers, and excess
   entries go into More. The current trail's menu keeps the last visible slot;
