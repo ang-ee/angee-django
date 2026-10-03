@@ -37,7 +37,7 @@ import { Tooltip } from "../ui/tooltip";
 import { AppBrand } from "./AppBrand";
 import { AppChooser } from "./AppChooser";
 import { AppRailTree, appRailTreeVariants } from "./AppRailTree";
-import { useDeveloperRail } from "./DeveloperMode";
+import { useDeveloperRail, type DeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuItem, ChromeMenuNode } from "./menu-tree";
 import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
@@ -75,12 +75,17 @@ const RAIL_BUTTON =
 const RAIL_BUTTON_ACTIVE =
   "bg-rail-hi text-on-rail-hi before:absolute before:-left-[7px] before:top-1/2 before:h-[18px] before:w-[3px] before:-translate-y-1/2 before:rounded-r-2 before:bg-brand before:content-['']";
 
+/** Icon names supplement accessible labels; developer descriptions follow them in either mode. */
+function railTooltip(expanded: boolean, label: string, description?: string): string | undefined {
+  return [!expanded ? label : undefined, description].filter(Boolean).join(" · ") || undefined;
+}
+
 /**
  * The global app rail: compact icons or one in-place accordion navigation
  * tree. Clicking the active app (or Settings) a second time toggles the
  * desktop expansion. At intermediate widths, roots with included apps request
- * the shell's temporary navigation drawer. The expansion toggle sits pinned at
- * the rail's foot, outside the scrolling list.
+ * the shell's temporary navigation drawer. Desktop expansion toggles sit at
+ * the expanded header's edge and the rail's foot, outside the scrolling list.
  */
 export function AppRail({ menuItems, ...props }: AppRailProps): ReactElement {
   return <ChromePlaceProvider menuItems={menuItems}><AppRailBody {...props} /></ChromePlaceProvider>;
@@ -165,14 +170,14 @@ function AppRailBody({
   }, [expanded, railPreferences, setRailPreferences]);
   const footerToggleRef = useRef<HTMLButtonElement | null>(null);
   const focusFooterToggle = useRef(false);
-  // A link-driven toggle unmounts the clicked link with the mode swap, so it
-  // hands focus to the footer toggle — the one control both modes share.
-  const toggleFromActiveLink = useCallback(() => {
+  // Collapsing can unmount the activated link or header toggle; focus the
+  // footer control shared by both modes.
+  const toggleAndFocusFooter = useCallback(() => {
     focusFooterToggle.current = true;
     toggleExpanded();
   }, [toggleExpanded]);
   const onActiveToggle = largeViewport && !drawerMode
-    ? toggleFromActiveLink
+    ? toggleAndFocusFooter
     : undefined;
   const width = drawerMode
     ? "100%"
@@ -213,7 +218,7 @@ function AppRailBody({
         )}
       >
         {singleApp ? (
-          <Tooltip label={rail.describe(singleApp.root) ?? (!expanded ? singleApp.brand.name : undefined)} side="right">
+          <Tooltip label={railTooltip(expanded, singleApp.brand.name, rail.describe(singleApp.root))} side="right">
             <AppBrand name={singleApp.brand.name} mark={<Glyph name={singleApp.brand.mark} size={16} />}
               to={singleApp.root.target} compact={!expanded} />
           </Tooltip>
@@ -224,7 +229,7 @@ function AppRailBody({
           </span>
         ) : null}
         {expanded && largeViewport && !drawerMode ? (
-          <RailExpansionToggle controls={navId} expanded={expanded} onToggle={toggleFromActiveLink} />
+          <RailExpansionToggle controls={navId} expanded={expanded} onToggle={toggleAndFocusFooter} className="ml-auto" />
         ) : null}
       </div>
       <nav
@@ -318,7 +323,7 @@ function AppRailBody({
             buttonRef={footerToggleRef}
             controls={navId}
             expanded={expanded}
-            onToggle={toggleFromActiveLink}
+            onToggle={toggleAndFocusFooter}
           />
         </div>
       ) : null}
@@ -347,7 +352,9 @@ function RuntimeShortcutItem({ expanded, icon, label, pathname, to }: {
       {expanded ? <span className="min-w-0 flex-1 truncate">{label}</span> : null}
     </Link>
   );
-  return <div className={cn("flex w-full", expanded ? "px-2" : "justify-center")}>{expanded ? link : <Tooltip label={label} side="right">{link}</Tooltip>}</div>;
+  return <div className={cn("flex w-full", expanded ? "px-2" : "justify-center")}>
+    <Tooltip label={railTooltip(expanded, label)} side="right">{link}</Tooltip>
+  </div>;
 }
 
 function RailExpansionToggle({
@@ -355,11 +362,13 @@ function RailExpansionToggle({
   controls,
   expanded,
   onToggle,
+  className,
 }: {
   buttonRef?: Ref<HTMLButtonElement>;
   controls: string;
   expanded: boolean;
   onToggle: () => void;
+  className?: string;
 }): ReactElement {
   const t = useUiT();
   const label = expanded
@@ -376,7 +385,7 @@ function RailExpansionToggle({
         aria-expanded={expanded}
         aria-controls={controls}
         onClick={onToggle}
-        className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
+        className={cn("text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi", className)}
       >
         <Glyph name="app-rail" />
       </Button>
@@ -429,7 +438,7 @@ function RailSettingsItem({
   );
   return (
     <div className={cn("flex w-full", expanded ? "px-2" : "justify-center")}>
-      <Tooltip label={description ?? (!expanded ? label : undefined)} side="right">{link}</Tooltip>
+      <Tooltip label={railTooltip(expanded, label, description)} side="right">{link}</Tooltip>
     </div>
   );
 }
@@ -447,7 +456,7 @@ function SortableRail({
   onItemLongPress,
   onOrderChange,
 }: {
-  rail: ReturnType<typeof useDeveloperRail>;
+  rail: DeveloperRail;
   activeRootId: string | undefined;
   pageId?: string;
   defaultItemId: string | null;
@@ -697,7 +706,7 @@ function RailItem({
   onLongPressEnd,
   onLongPressStart,
 }: {
-  rail: ReturnType<typeof useDeveloperRail>;
+  rail: DeveloperRail;
   active: boolean;
   currentPage: boolean;
   ariaExpanded?: boolean | undefined;
@@ -760,7 +769,7 @@ function RailItem({
           && "z-10 scale-[1.02] opacity-95 shadow-lg ring-1 ring-brand/50",
       )}
     >
-      <Tooltip label={rail.describe(item) ?? title} side="right">
+      <Tooltip label={railTooltip(false, title, rail.describe(item))} side="right">
         <a
           {...linkProps}
           aria-label={label}

@@ -1126,8 +1126,10 @@ Hard-won traps — the wise learn from others' mistakes
   The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
   measures the ordered menus followed by developer removed markers, and excess
   entries go into More. The current trail's menu keeps the last visible slot;
-  when no entries fit, the app name labels the dropdown. Icon-only rail links
-  show supplementary name tooltips; developer descriptions take precedence.
+  when no entries fit, the app name labels the dropdown, which leads with the
+  app's own page. A route-less menu with one child is the same link in the row
+  and in More. Icon-only rail links show supplementary name tooltips; developer
+  descriptions follow the name.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
   `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
   shared **Settings place** instead: the rail and chooser expose one synthetic

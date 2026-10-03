@@ -104,13 +104,23 @@ describe("AppRail intermediate navigation", () => {
     }
   });
 
-  test.each([false, true])("developer descriptions win over icon tooltips (confined: %s)", async (confined) => {
+  test.each([
+    ["Projects", "projects", false, false],
+    ["Projects", "projects", false, true],
+    ["Desk", "desk", true, false],
+    ["Projects", "projects", true, false],
+  ])("icon tooltips retain %s and hints before developer description %s (confined: %s, default: %s)", async (label, id, confined, defaultApp) => {
     media.large = false;
-    renderRail({ userPreferences: { available: true, preferences: { developerMode: true }, patchPreferences: async () => undefined } }, confined);
-    const link = await screen.findByRole("link", { name: confined ? "Desk" : "Projects" });
+    renderRail({ userPreferences: { available: true, preferences: {
+      developerMode: true, "chrome.rail": { defaultItemId: defaultApp ? "projects" : null },
+    }, patchPreferences: async () => undefined } }, confined);
+    const link = await screen.findByRole("link", { name: label });
     fireEvent.mouseEnter(link);
     fireEvent.mouseMove(link);
-    const tooltipLabel = confined ? "desk" : "projects";
+    const hint = !confined ? defaultApp
+      ? "Projects — default app; drag to reorder"
+      : "Projects — drag to reorder; long press to set as default" : label;
+    const tooltipLabel = `${hint} · ${id}`;
     expect((await screen.findByText(tooltipLabel)).closest("[data-base-ui-portal]")).toBeTruthy();
     expect(screen.getAllByText(tooltipLabel)).toHaveLength(1);
   });
@@ -184,6 +194,7 @@ describe("AppRail intermediate navigation", () => {
       history: createMemoryHistory({ initialEntries: ["/desk"] }) });
     render(<RouterProvider router={router} />);
     const [collapse] = await screen.findAllByRole("button", { name: "Collapse app navigation" });
+    expect(collapse!.classList.contains("ml-auto")).toBe(true);
     expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
     fireEvent.click(collapse!);
     await screen.findByRole("button", { name: "Expand app navigation" });

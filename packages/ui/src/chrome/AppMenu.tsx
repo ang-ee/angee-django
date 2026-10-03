@@ -46,23 +46,23 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
   const t = useUiT();
   const rail = useDeveloperRail();
   const { tree, match } = useChromePlace();
-  const settings = useMemo(() => match?.trail[0]?.group === "platform" ? tree.settingsEntry() : undefined, [tree, match]);
+  const settingsActive = match?.trail[0]?.group === "platform";
+  const settings = useMemo(() => settingsActive ? tree.settingsEntry() : undefined, [tree, settingsActive]);
   const app = match?.app;
   const entries = useMemo<readonly AppMenuEntry[]>(() => [
     ...(settings?.items ?? (app ? rail.menus(app) : [])).map((node) => ({ kind: "menu" as const, node })),
     // Removed included apps belong to the rail, as before.
-    ...(app ? rail.removedUnder(app.id).filter((node) => !node.app) : []).map((node) => ({ kind: "removed" as const, node })),
+    ...(app ? removedMenusUnder(app.id, rail) : []).map((node) => ({ kind: "removed" as const, node })),
   ], [settings, app, rail]);
   const currentIndex = entries.findIndex((entry) => entry.kind === "menu" && match?.trail.some((node) => node.id === entry.node.id));
-  const [containerRef, measurementRef, count] = useOverflowCount(entries, currentIndex);
+  const [containerRef, measurementRef, visible, overflow] = useOverflowCount(entries, currentIndex);
   if (!app && !settings) return null;
   const label = settings ? t("chrome.settings") : app!.displayLabel;
   const currentId = match?.item.id;
-  const visible = entries.slice(0, count);
-  if (count > 0 && currentIndex >= count) visible[count - 1] = entries[currentIndex]!;
-  const visibleIds = new Set(visible.map((entry) => entry.node.id));
-  const overflow = entries.filter((entry) => !visibleIds.has(entry.node.id));
-  const appLink = <AppMenuLink to={settings?.target ?? app?.target} href={settings?.target ?? app?.target}
+  const count = visible.length;
+  const overflowCurrent = count === 0 && (currentIndex >= 0 || app?.id === currentId);
+  const appTarget = settings?.target ?? app?.target;
+  const appLink = <AppMenuLink to={appTarget} href={appTarget}
     data-current={app?.id === currentId} className={cn(menuItemClass, "font-semibold")}>
     {label}
   </AppMenuLink>;
@@ -79,24 +79,24 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
       <span className={menuItemClass}>{t("chrome.more")}<Glyph name="chevron-down" size={12} aria-hidden="true" /></span>
     </div>
     {count > 0 || !overflow.length ? appLink : null}
-    {visible.map((entry) => <AppMenuEntryControl key={entry.node.id} entry={entry} currentId={currentId}
-      current={entry.node.id === entries[currentIndex]?.node.id} rail={rail} />)}
+    {visible.map((index) => <AppMenuEntryControl key={entries[index]!.node.id} entry={entries[index]!} currentId={currentId}
+      current={index === currentIndex} rail={rail} />)}
     {overflow.length ? <DropdownMenu.Root modal={false}>
-      <DropdownMenu.Trigger className={cn(menuItemClass, "min-w-0 shrink", count === 0 && "font-semibold")}>
+      <DropdownMenu.Trigger data-current={overflowCurrent} aria-current={overflowCurrent ? "true" : undefined}
+        className={cn(menuItemClass, "min-w-0 shrink", count === 0 && "font-semibold")}>
         <span className="truncate">{count === 0 ? label : t("chrome.more")}</span>
         <Glyph name="chevron-down" size={12} aria-hidden="true" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Positioner side="bottom" align="start" sideOffset={4}>
           <DropdownMenu.Content>
-            {overflow.map((entry) => entry.kind === "removed"
-              ? <RemovedMenus key={entry.node.id} removed={[entry.node]} inMenu />
-              : rail.menus(entry.node).length || rail.removedUnder(entry.node.id).some((node) => !node.app)
-                ? <DropdownMenu.Group key={entry.node.id}>
-                  <DropdownMenu.Label>{rail.label(entry.node)}</DropdownMenu.Label>
-                  <MenuEntries item={entry.node} currentId={currentId} rail={rail} />
-                </DropdownMenu.Group>
-                : <MenuPage key={entry.node.id} item={entry.node} currentId={currentId} rail={rail} />)}
+            {count === 0 ? <MenuPage target={appTarget} label={label} current={app?.id === currentId} /> : null}
+            {overflow.map((index) => {
+              const entry = entries[index]!;
+              return entry.kind === "removed"
+                ? <RemovedMenus key={entry.node.id} removed={[entry.node]} inMenu />
+                : <MenuEntry key={entry.node.id} item={entry.node} currentId={currentId} rail={rail} />;
+            })}
           </DropdownMenu.Content>
         </DropdownMenu.Positioner>
       </DropdownMenu.Portal>
@@ -107,18 +107,29 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
 type RemovedMenu = ReturnType<DeveloperRail["removedUnder"]>[number];
 type AppMenuEntry = { kind: "menu"; node: ChromeMenuNode } | { kind: "removed"; node: RemovedMenu };
 
+function removedMenusUnder(parentId: string, rail: DeveloperRail): readonly RemovedMenu[] {
+  return rail.removedUnder(parentId).filter((node) => !node.app);
+}
+
+/** A route-less menu with one child borrows its destination and keeps its own label. */
+function menuShape(item: ChromeMenuNode, rail: DeveloperRail) {
+  const children = rail.menus(item);
+  const removed = removedMenusUnder(item.id, rail);
+  const destination = !removed.length && (!children.length || (!item.to && children.length === 1))
+    ? children[0] ?? item : undefined;
+  return { children, removed, destination };
+}
+
 function AppMenuEntryControl({ entry, currentId, current, rail, measuring = false }: {
   entry: AppMenuEntry; currentId?: string; current: boolean; rail: DeveloperRail; measuring?: boolean;
 }): ReactElement {
   if (entry.kind === "removed") return <RemovedMenus removed={[entry.node]} measuring={measuring} />;
   const item = entry.node;
-  const children = rail.menus(item);
-  const removed = rail.removedUnder(item.id).filter((node) => !node.app);
-  const isLink = (!children.length && !removed.length) || (!item.to && children.length === 1 && !removed.length);
-  const content = <>{rail.label(item)}{!isLink ? <Glyph name="chevron-down" size={12} aria-hidden="true" /> : null}</>;
+  const shape = menuShape(item, rail);
+  const content = <>{rail.label(item)}{!shape.destination ? <Glyph name="chevron-down" size={12} aria-hidden="true" /> : null}</>;
   if (measuring) return <span className={menuItemClass}>{content}</span>;
-  if (isLink) {
-    const destination = children[0] ?? item;
+  if (shape.destination) {
+    const destination = shape.destination;
     return <Tooltip label={rail.describe(destination)} side="bottom">
       <AppMenuLink to={destination.target} href={destination.target}
         data-current={destination.id === currentId} className={menuItemClass}>
@@ -134,7 +145,7 @@ function AppMenuEntryControl({ entry, currentId, current, rail, measuring = fals
     <DropdownMenu.Portal>
       <DropdownMenu.Positioner side="bottom" align="start" sideOffset={4}>
         <DropdownMenu.Content>
-          <MenuEntries item={item} currentId={currentId} rail={rail} />
+          <MenuEntries item={item} shape={shape} currentId={currentId} rail={rail} />
         </DropdownMenu.Content>
       </DropdownMenu.Positioner>
     </DropdownMenu.Portal>
@@ -157,27 +168,44 @@ function RemovedMenus({ removed, inMenu = false, measuring = false }: {
   })}</>;
 }
 
+/** A level-2 menu inside More: the row's link by the shared shape rule, otherwise a labelled group. */
+function MenuEntry({ item, currentId, rail }: {
+  item: ChromeMenuNode; currentId?: string; rail: DeveloperRail;
+}): ReactElement {
+  const shape = menuShape(item, rail);
+  if (shape.destination) return <MenuPage target={shape.destination.target} label={rail.label(item)}
+    current={shape.destination.id === currentId} description={rail.describe(shape.destination)} />;
+  return <DropdownMenu.Group>
+    <DropdownMenu.Label>{rail.label(item)}</DropdownMenu.Label>
+    <MenuEntries item={item} shape={shape} currentId={currentId} rail={rail} />
+  </DropdownMenu.Group>;
+}
+
 /** Deeper levels are labelled groups in the same native dropdown. */
-function MenuEntries({ item, currentId, rail }: { item: ChromeMenuNode; currentId?: string; rail: DeveloperRail }): ReactElement {
-  const children = rail.menus(item);
+function MenuEntries({ item, shape: { children, removed }, currentId, rail }: {
+  item: ChromeMenuNode; shape: ReturnType<typeof menuShape>; currentId?: string; rail: DeveloperRail;
+}): ReactElement {
   const ownPage = item.to && !children.some((child) => child.targetPath === item.path);
   return <>
-    {ownPage ? <MenuPage item={item} currentId={currentId} rail={rail} /> : null}
-    {children.map((child) => rail.menus(child).length ? (
-      <DropdownMenu.Group key={child.id}>
+    {ownPage ? <MenuPage target={item.target} label={rail.label(item)} current={item.id === currentId} description={rail.describe(item)} /> : null}
+    {children.map((child) => {
+      const shape = menuShape(child, rail);
+      return shape.children.length || shape.removed.length ? <DropdownMenu.Group key={child.id}>
         {child.displayLabel !== item.displayLabel ? <DropdownMenu.Label>{rail.label(child)}</DropdownMenu.Label> : null}
-        <MenuEntries item={child} currentId={currentId} rail={rail} />
-      </DropdownMenu.Group>
-    ) : <MenuPage key={child.id} item={child} currentId={currentId} rail={rail} />)}
-    <RemovedMenus removed={rail.removedUnder(item.id).filter((node) => !node.app)} inMenu />
+        <MenuEntries item={child} shape={shape} currentId={currentId} rail={rail} />
+      </DropdownMenu.Group> : <MenuPage key={child.id} target={child.target} label={rail.label(child)}
+        current={child.id === currentId} description={rail.describe(child)} />;
+    })}
+    <RemovedMenus removed={removed} inMenu />
   </>;
 }
 
-function MenuPage({ item, currentId, rail }: { item: ChromeMenuNode; currentId?: string; rail: DeveloperRail }): ReactElement | null {
-  if (!item.target) return null;
-  const description = rail.describe(item);
-  return <DropdownMenu.LinkItem href={item.target} closeOnClick
-    render={<AppMenuLink to={item.target} href={item.target} data-current={item.id === currentId} title={description} />}>
-    {rail.label(item)}
+function MenuPage({ target, label, current = false, description }: {
+  target?: string; label: string; current?: boolean; description?: string;
+}): ReactElement | null {
+  if (!target) return null;
+  return <DropdownMenu.LinkItem href={target} closeOnClick
+    render={<AppMenuLink to={target} href={target} data-current={current} title={description} />}>
+    {label}
   </DropdownMenu.LinkItem>;
 }

@@ -86,14 +86,24 @@ describe("AppMenu", () => {
     expect(entries.every((item) => item.getAttribute("aria-disabled") === "true")).toBe(true);
   });
 
-  test("with no room the app name labels the only dropdown", async () => {
+  test.each(["/desk", "/desk/notes"])("with no room the app dropdown stays current and links to the app page first (%s)", async (path) => {
     mockOverflow(190);
-    renderMenu("/desk");
+    const router = renderMenu(path);
     const nav = await screen.findByRole("navigation", { name: "Desk menu" });
     expect(within(nav).queryByRole("link")).toBeNull();
-    fireEvent.click(within(nav).getByRole("button", { name: "Desk" }));
-    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent))
-      .toEqual(["Notes", "Open notes", "Reports", "Daily", "Year"]);
+    const trigger = within(nav).getByRole("button", { name: "Desk" });
+    expect(trigger.getAttribute("data-current")).toBe("true");
+    expect(trigger.getAttribute("aria-current")).toBe("true");
+    fireEvent.click(trigger);
+    const popup = await screen.findByRole("menu");
+    expect(within(popup).getAllByRole("menuitem").map((item) => item.textContent))
+      .toEqual(["Desk", "Notes", "Open notes", "Reports", "Daily", "Year"]);
+    const appPage = within(popup).getByRole("menuitem", { name: "Desk" });
+    expect(appPage.getAttribute("href")).toBe("/desk");
+    if (path === "/desk/notes") {
+      fireEvent.click(appPage);
+      await waitFor(() => expect(router.state.location.pathname).toBe("/desk"));
+    }
   });
 
   test("selects the nearest included app and renders its links with aria-current", async () => {
@@ -161,6 +171,39 @@ describe("AppMenu", () => {
     expect(within(nav).queryByText("All tags")).toBeNull();
   });
 
+  test("More preserves the parent label and single-child destination of a route-less Settings item", async () => {
+    mockOverflow(300);
+    renderMenu("/operator", [
+      { id: "operator", label: "Operator", group: "platform", to: "/operator" },
+      { id: "tags", label: "Tags", group: "platform", children: [
+        { id: "tags.hidden", label: "Hidden", hidden: true, to: "/hidden" },
+        { id: "tags.all", label: "All tags", to: "/tags" },
+      ] },
+      { id: "audit", label: "Audit", group: "platform", to: "/audit" },
+    ]);
+    const nav = await screen.findByRole("navigation", { name: "Settings menu" });
+    fireEvent.click(within(nav).getByRole("button", { name: "More" }));
+    const popup = await screen.findByRole("menu");
+    const tags = within(popup).getByRole("menuitem", { name: "Tags" });
+    expect(tags.getAttribute("href")).toBe("/tags");
+    expect(within(popup).queryByRole("group", { name: "Tags" })).toBeNull();
+    expect(within(popup).queryByText("All tags")).toBeNull();
+    expect(within(popup).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Tags", "Audit"]);
+  });
+
+  test("navigation within Settings keeps its entries and ResizeObserver connected", async () => {
+    const resize = mockOverflow(1000);
+    const router = renderMenu("/operator", [{ id: "operator", label: "Operator", group: "platform", to: "/operator", children: [
+      { id: "operator.overview", label: "Overview", to: "/operator" },
+      { id: "operator.services", label: "Services", to: "/operator/services" },
+    ] }]);
+    await screen.findByRole("navigation", { name: "Settings menu" });
+    resize.disconnect.mockClear();
+    await act(() => router.navigate({ to: "/operator/services" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/operator/services"));
+    expect(resize.disconnect).not.toHaveBeenCalled();
+  });
+
   test("route-less items with several children remain dropdowns without an own-page entry", async () => {
     renderMenu("/tags", [{ id: "tags", label: "Tags", group: "platform", children: [
       { id: "tags.all", label: "All tags", to: "/tags" },
@@ -206,6 +249,7 @@ function renderMenu(initial: string, items: readonly ChromeMenuItem[] = menus, r
 function mockOverflow(initialWidth: number) {
   let width = initialWidth;
   const observers = new Map<ResizeObserverCallback, Set<Element>>();
+  const disconnect = vi.fn();
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     return { width: this.matches("nav") ? width : this.closest("[inert]") ? 100 : 0 } as DOMRect;
   });
@@ -214,9 +258,9 @@ function mockOverflow(initialWidth: number) {
     constructor(readonly callback: ResizeObserverCallback) { observers.set(callback, this.targets); }
     observe(target: Element) { this.targets.add(target); }
     unobserve(target: Element) { this.targets.delete(target); }
-    disconnect() { observers.delete(this.callback); }
+    disconnect() { disconnect(); observers.delete(this.callback); }
   });
-  return (next: number) => act(() => {
+  return Object.assign((next: number) => act(() => {
     width = next;
     for (const [callback, targets] of observers) {
       callback([...targets].filter((target) => target.matches("nav")).map((target) => ({
@@ -224,5 +268,5 @@ function mockOverflow(initialWidth: number) {
         borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [],
       })), {} as ResizeObserver);
     }
-  });
+  }), { disconnect });
 }

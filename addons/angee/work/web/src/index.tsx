@@ -17,7 +17,6 @@ import {
   Inbox,
   Kanban,
   LampDesk,
-  ListTodo,
   Play,
   XCircle,
 } from "lucide-react";
@@ -118,7 +117,7 @@ const workMenu: readonly BaseMenuItem[] = [
       {
         id: "work.queues",
         label: "Queues",
-        icon: "work-queue",
+        icon: "list-ordered",
         route: "work.queues",
       },
       {
@@ -167,8 +166,7 @@ const work = defineBaseAddon({
     },
   },
   icons: {
-    work: ListTodo,
-    "work-queue": LampDesk,
+    work: LampDesk,
     "work-board": Kanban,
     "work-cycle": CalendarClock,
     "work-triage": Inbox,

@@ -79,7 +79,6 @@ describe("work addon manifest", () => {
       "work-cycle-close",
       "work-decline",
       "work-duplicate",
-      "work-queue",
       "work-snooze",
       "work-start",
       "work-triage",
