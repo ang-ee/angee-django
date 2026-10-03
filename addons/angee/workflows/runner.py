@@ -226,6 +226,7 @@ class Runner:
                         # The run lock owns this claim transaction. Leave it before
                         # any IO body executes.
                         settlement = None
+                        publish_change(run, action="update", update_fields=None)
                 except Superseded:
                     raise
                 except Exception as failure:

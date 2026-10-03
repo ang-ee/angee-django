@@ -30,6 +30,34 @@ def step_row(run):
     return system_queryset(StepRun).get(run=run)
 
 
+@pytest.mark.parametrize("mode, expected", [(StepMode.IO, ["running", "succeeded"]),
+                                           (StepMode.DATABASE, ["succeeded"])])
+def test_io_claim_publishes_running_before_body_and_database_only_publishes_advance(
+    execution, register_step, monkeypatch, mode, expected,
+):
+    """A committed IO claim is observable while its external body is still running."""
+    actor, _ = execution
+    publications = []
+    original = runner_module.publish_change
+
+    def publish(run, **kwargs):
+        transaction.on_commit(lambda: publications.append(step_row(run).status))
+        return original(run, **kwargs)
+
+    class Observed(Echo):
+        def run(self, ctx):
+            assert publications == (["running"] if mode == StepMode.IO else [])
+            return ctx.done(ctx.input)
+
+    Observed.mode = mode
+    register_step(Observed)
+    workflow = load_workflow(document("entry"), actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    monkeypatch.setattr(runner_module, "publish_change", publish)
+    assert runner.execute(step_row(run).pk)
+    assert publications == expected
+
+
 def test_io_body_is_outside_transactions_and_scoped_to_its_actor(execution, register_step):
     """The committed claim supplies a non-admin principal to ordinary ORM reads."""
     admin, _ = execution
