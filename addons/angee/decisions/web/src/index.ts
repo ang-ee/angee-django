@@ -6,7 +6,7 @@ import { DECISION_MODEL } from "./documents.console";
 
 export { DECISION_MODEL } from "./documents.console";
 export { decisionContent, useDecisionContent, type DecisionContentProps } from "./content";
-export { decisionRecordTab } from "./RecordDecisions";
+export { DecisionsList, decisionRecordTab } from "./RecordDecisions";
 
 export default defineBaseAddon({
   id: "decisions",
