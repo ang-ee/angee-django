@@ -19,12 +19,12 @@ export interface ContainerLayer extends Layer {
 }
 
 const FRAMEWORK = "framework";
-const ENTRY_KEYS: ReadonlySet<string> = new Set(["only", "except", "when", "unique", "models"]);
+const ENTRY_KEYS: ReadonlySet<string> = new Set(["only", "except", "force", "when", "unique", "models"]);
 const CHILD_KEYS: ReadonlySet<string> = new Set(["content", "sequence", "before", "after", "permission", "requiredFields", "impl", "variant", "key"]);
 const ALTERATION_KEYS: ReadonlySet<string> = new Set(["sequence", "before", "after", "remove", "hide"]);
 const CONDITION_KEYS: ReadonlySet<string> = new Set(["app", "route", "perspective"]);
 
-type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; when?: ContainerCondition; unique?: "key"; models?: true };
+type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; force?: true; when?: ContainerCondition; unique?: "key"; models?: true };
 
 interface Child extends ComposedContainerChild {
   setBy: Record<string, string>;
@@ -160,6 +160,10 @@ export function compileContainers(
       if ((entry.unique !== undefined || entry.models !== undefined) && declared[address]?.owner !== layer.id) {
         throw new Error(`Addon "${layer.id}" sets unique or models on container "${rawAddress}" it does not own.`);
       }
+      // Addons only narrow (G-14); the deployment may force an `only`, and says so.
+      if (entry.force !== undefined && (layer.id !== DEPLOYMENT_LAYER_ID || entry.force !== true || !entry.only)) {
+        throw new Error(`Container entry "${rawAddress}" of "${layer.id}": only the deployment forces, with force: true beside an only.`);
+      }
       if (entry.only || entry.except) pendingRules.push({ layer: layer.id, address, entry });
       for (const [id, value] of Object.entries(entry)) {
         if (ENTRY_KEYS.has(id)) continue;
@@ -267,6 +271,8 @@ export function compileContainers(
       ...(entry.only ? { only: entry.only } : {}),
       ...(entry.except ? { except: entry.except } : {}),
       exempt: dependentsOf(layer),
+      // Narrow-only binds the addons; the deployment may force its `only` (G-14).
+      ...(entry.force ? { force: true as const } : {}),
     });
   }
 

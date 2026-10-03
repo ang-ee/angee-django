@@ -1778,6 +1778,30 @@ test("a container condition naming an unknown route, app or perspective fails at
   expect(() => createApp(input({ perspective: "facus" }))).toThrow(/narrows "form#chrome" in unknown perspective "facus"/);
 });
 
+test("a container's when.app matches every app on the page's trail, flattened ones too; a page is no app", async () => {
+  const seen: { apps?: readonly string[] } = {};
+  function Probe(): ReactNode {
+    seen.apps = useAppRuntime().containerScope?.apps;
+    return null;
+  }
+  const addons = (when: Record<string, string>) => [
+    { id: "projects", routes: [{ name: "projects.tasks", path: "/projects/tasks", component: Probe }],
+      menus: [{ id: "projects", children: [{ id: "projects.tasks", route: "projects.tasks" }] }] },
+    { id: "pm", dependsOn: ["projects"], menus: { pm: { include: [{ id: "projects", flatten: true }] } },
+      containers: { "form#chrome": [{ only: [], when }] } },
+  ];
+  expect(() => createApp(testAppInput(addons({ app: "projects" })))).not.toThrow();
+  expect(() => createApp(testAppInput(addons({ app: "projects.tasks" })))).toThrow(/in unknown app "projects.tasks"/);
+  const app = createApp({ ...testAppInput(addons({ app: "pm" })), home: "projects.tasks" });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await app.router.navigate({ to: "/projects/tasks" });
+    await waitFor(() => expect(seen.apps).toEqual(["pm", "projects"]));
+  } finally { root.unmount(); host.remove(); }
+});
+
 test("a preset opening on a contributed view kind needs a resource#views child offering it", () => {
   const preset = { id: "desk.graph", label: "Graph", resource: "notes.Note", view: "nexus.graph" as const };
   const graph = { label: "Graph", icon: "network", capabilities: { grouping: false, pagination: false, columns: false, filter: true } };
