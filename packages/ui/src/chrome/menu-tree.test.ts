@@ -116,6 +116,16 @@ test("confinement selects one root for the rail and palette without mutating com
   expect(() => tree.confineTo("notes.all")).toThrow(/Unknown menu root/);
 });
 
+test("confinement keeps personal Settings roots, such as appearance, beside the root's own", () => {
+  const tree = MenuTree.from([...MENU,
+    { id: "appearance", label: "Appearance", group: "platform", personal: true, to: "/settings/appearance" },
+    { id: "platform", label: "Platform", group: "platform", to: "/settings/platform" },
+    { id: "notes.settings", parentId: "notes", label: "Notes settings", group: "platform", to: "/notes/settings" }]);
+  const confined = tree.confineTo("notes");
+  expect(confined.settingsMenuItems().map((node) => node.id)).toEqual(["notes.settings", "appearance"]);
+  expect(confined.railMenuItems().map((node) => node.id)).toEqual(["notes"]);
+});
+
 describe("resolveMenuRouteTargets", () => {
   const routeHref = createRouteHref([
     { name: "dashboards.addon", path: "/dashboards/addon/$key" },

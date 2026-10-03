@@ -69,7 +69,7 @@ export interface CompiledMenus {
 
 const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon",
-  "appRoot", "description", "group", "status", "tone", "parent", "sequence", "before", "after",
+  "appRoot", "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after",
 ] as const satisfies readonly (keyof MenuEntry)[];
 const OPERATION_FIELDS = ["include", "remove", "hide", "only"] as const satisfies readonly (keyof MenuEntry)[];
 type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[number];
@@ -181,7 +181,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "appRoot"] as const) {
+  for (const key of ["remove", "hide", "appRoot", "personal"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
   }
   for (const key of ["sequence"] as const) {
@@ -242,6 +242,9 @@ function resolve(
     }
     if (node.fields.before !== undefined && node.fields.after !== undefined) {
       throw new Error(`Menu item "${node.id}" sets both before and after.`);
+    }
+    if (node.fields.personal && (parent !== undefined || node.fields.group !== "platform")) {
+      throw new Error(`Menu item "${node.id}" is personal, which only a Settings root (group "platform", no parent) may be.`);
     }
   }
   for (const node of nodes.values()) {

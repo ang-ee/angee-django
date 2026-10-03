@@ -19,6 +19,8 @@ const routes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes("desk.incoming", "/desk/incoming", Page, "records.Record"),
   ...resourcePageRoutes("desk.review", "/desk/review", Page, undefined, { recordModel: "records.Record", param: "recordId", recordMatch: { field: "queue.id", equals: "queue-a" } }),
   { name: "desk.home", path: "/desk" },
+  { name: "appearance", path: "/settings/appearance" },
+  { name: "platform", path: "/settings/platform" },
   { name: "account", path: "/account" },
 ];
 const menus: readonly ChromeMenuItem[] = [
@@ -32,6 +34,8 @@ const menus: readonly ChromeMenuItem[] = [
       { id: "desk.team", route: "teams.all.record", params: { id: "team-1" } },
     ] },
   ] },
+  { id: "appearance", group: "platform", personal: true, route: "appearance" },
+  { id: "platform", group: "platform", route: "platform" },
 ];
 const menuTree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref(routes)) as readonly ChromeMenuItem[]);
 
@@ -117,6 +121,10 @@ describe("app resource projection", () => {
     expect(projection.allows(routes[0]!, "/records/r1")).toBe(false);
     expect(projection.allows(routes.at(-1)!, "/account")).toBe(true);
     expect(projection.navigationTree.activeItem("/desk/review/r1")?.id).toBe("desk.review");
+    // A personal Settings root stays reachable under the confinement; other Settings roots do not.
+    expect(projection.navigationTree.settingsMenuItems().map((item) => item.id)).toEqual(["desk.settings", "appearance"]);
+    expect(projection.allows(routes.find((route) => route.name === "appearance")!, "/settings/appearance")).toBe(true);
+    expect(projection.allows(routes.find((route) => route.name === "platform")!, "/settings/platform")).toBe(false);
   });
 
   test("confineTo supplies the app scope even without an explicit appRoot marker", () => {
