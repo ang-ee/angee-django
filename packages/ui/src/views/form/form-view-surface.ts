@@ -486,6 +486,11 @@ export function useFormViewSurface({
       const resolved = modelMetadata ? modelFieldForPath(field.name, modelMetadata, schemaMetadata) : null;
       const fieldMetadata = resolved?.field;
       if (modelMetadata && (!fieldMetadata || fieldMetadata.readable === false)) continue;
+      // A field that names its own leaf paths reads exactly those, like a column that does.
+      if (field.selectionPaths) {
+        for (const path of field.selectionPaths) paths.add(path);
+        continue;
+      }
       // A to-many relation selects its records' identity and representation,
       // the same selection a list column of that relation makes.
       const relationList = modelMetadata && fieldMetadata?.kind === "list"

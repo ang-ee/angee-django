@@ -26,6 +26,8 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Server-side filters narrowing the rows offered by a relation picker. */
   filters?: readonly CrudFilter[];
   widget?: string;
+  /** Concrete GraphQL leaf paths selected when `name` is an object or list its widget renders itself. */
+  selectionPaths?: readonly string[];
   /** Adapt a stored value to a widget's control type without changing form values. */
   valueCodec?: {
     toControl: (value: unknown) => unknown;

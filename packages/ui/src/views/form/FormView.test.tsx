@@ -1148,6 +1148,23 @@ describe("FormView", () => {
     expect(sdkMocks.recordSelection).not.toContain("workflows");
   });
 
+  test("a field naming its own leaf paths selects those, even when its list has no resource to represent it", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "run-1", stages: [{ step: { id: "step-1", name: "Collect" } }] };
+    const metadata = workflowRelationMetadata();
+    const run = metadata.types.RunType!;
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" fields={[
+      { name: "stages", hidden: true, selectionPaths: ["stages.step.id", "stages.step.name"] },
+    ]} />, { types: { ...metadata.types,
+      RunType: { ...run, fields: { ...run.fields,
+        stages: { name: "stages", kind: "list", relationModelLabel: "workflows.RunStage" } } },
+    } });
+    await waitFor(() => expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "stages.step.id", "stages.step.name",
+    ])));
+    expect(sdkMocks.recordSelection).not.toContain("stages");
+  });
+
   test("falls back from a missing relation label to identity, then Untitled", async () => {
     sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1" } };
     const metadata = workflowRelationMetadata();
