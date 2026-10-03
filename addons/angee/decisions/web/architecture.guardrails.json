@@ -2,6 +2,7 @@
   "criticalExports": [
     { "name": "DECISION_MODEL", "ownerFile": "src/documents.console.ts" },
     { "name": "decisionContent", "ownerFile": "src/content.tsx" },
-    { "name": "decisionRecordTab", "ownerFile": "src/RecordDecisions.tsx" }
+    { "name": "decisionRecordTab", "ownerFile": "src/RecordDecisions.tsx" },
+    { "name": "DecisionsList", "ownerFile": "src/RecordDecisions.tsx" }
   ]
 }

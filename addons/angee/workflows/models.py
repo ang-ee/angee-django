@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
+from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, Now
 from django.utils.functional import cached_property
 from rebac import system_context, to_subject_ref
@@ -25,7 +27,7 @@ from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.service_users import sync_service_user
 from angee.resources.mixins import ResourceLoadMixin
-from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
+from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
     StepAttemptQuerySet,
     StepRunManager,
@@ -47,6 +49,62 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerEventManager, TriggerManager, TriggerSource
+
+
+@dataclass(frozen=True)
+class StepRunStatusCount:
+    """An exact count of a node's admitted items in one execution state."""
+
+    status: StepRunStatus
+    count: int
+
+
+@dataclass(frozen=True)
+class RunGraphNode:
+    """Published topology composed with actor-readable execution progress."""
+
+    node: GraphNode
+    step_run: StepRun | None
+    item_counts: tuple[StepRunStatusCount, ...]
+    item_attempts: int
+
+
+@dataclass(frozen=True)
+class RunGraphEdge(GraphEdge):
+    """A routed edge and whether its source retained that outcome."""
+
+    taken: bool
+
+
+@dataclass(frozen=True)
+class RunGraph:
+    """One run's pinned structure and bounded node summaries."""
+
+    nodes: tuple[RunGraphNode, ...]
+    edges: tuple[RunGraphEdge, ...]
+
+
+class _JSONArrayLength(models.Func):
+    """Length of a JSON array; other JSON values have no admitted items."""
+
+    output_field = models.IntegerField()
+
+    def as_sqlite(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
+        sql, params = super().as_sql(
+            compiler, connection, function="json_array_length",
+            template="CASE WHEN json_valid(%(expressions)s) THEN %(function)s(%(expressions)s) ELSE 0 END",
+            **extra_context,
+        )
+        return sql, params * 2
+
+    def as_postgresql(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
+        sql, params = super().as_sql(
+            compiler, connection, function="jsonb_array_length",
+            template="%(function)s(CASE WHEN jsonb_typeof(%(expressions)s) = 'array' "
+                     "THEN %(expressions)s ELSE '[]'::jsonb END)",
+            **extra_context,
+        )
+        return sql, params * 2
 
 
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
@@ -238,12 +296,39 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
             return self.output["error"]
         with system_context(reason="workflows.failure_reason"):
-            outputs = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
+            rows = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
                 "rank", "map_index", "pk",
-            ).values_list("output", flat=True)
-            return next((output["error"] for output in outputs
-                         if isinstance(output, dict) and isinstance(output.get("error"), str)
-                         and output["error"]), None)
+            ).only("status", "output")
+            return next((reason for row in rows if (reason := row.failure_reason)), None)
+
+    def graph(self, actor: Any) -> RunGraph:
+        """Read this run's frozen topology with two actor-scoped execution queries."""
+        if actor is None:
+            raise PermissionDenied("A run graph requires a reader.")
+        self.require_access("read", actor)
+        definition = self.policy_version.definition
+        topology = definition.topology()
+        steps = cast(Any, read_scoped_queryset(self.step_runs.model, actor)).filter(run_id=self.pk)
+        rows = {row.node_key: row for row in steps.nodes()}
+        for row in rows.values():
+            row.run = self
+        counts: dict[str, list[StepRunStatusCount]] = {}
+        attempts: dict[str, int] = {}
+        for item in steps.item_counts():
+            key = item["node_key"]
+            counts.setdefault(key, []).append(StepRunStatusCount(StepRunStatus(item["status"]), item["count"]))
+            attempts[key] = attempts.get(key, 0) + item["attempts"]
+        return RunGraph(
+            nodes=tuple(RunGraphNode(
+                node=node, step_run=rows.get(node.key),
+                item_counts=tuple(counts.get(node.body_key, ())) if node.body_key else (),
+                item_attempts=attempts.get(node.body_key, 0) if node.body_key else 0,
+            ) for node in topology.nodes),
+            edges=tuple(RunGraphEdge(
+                source=edge.source, outcome=edge.outcome, target=edge.target,
+                taken=edge.source in rows and definition.edge_live(rows[edge.source], {edge.outcome}),
+            ) for edge in topology.edges),
+        )
 
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
@@ -391,6 +476,25 @@ class StepRun(AngeeDataModel):
                 if self.outcome else "")
 
     @property
+    def failure_reason(self) -> str | None:
+        """Return only a failed row's retained reader-facing error."""
+        if "_failure_reason" in self.__dict__:
+            reason = self.__dict__["_failure_reason"]
+            return reason if isinstance(reason, str) and reason else None
+        if (self.status == StepRunStatus.FAILED and isinstance(self.output, dict)
+                and isinstance(self.output.get("error"), str) and self.output["error"]):
+            return self.output["error"]
+        return None
+
+    @classmethod
+    def failure_reason_expression(cls) -> models.Case:
+        """Read a failed row's retained error without selecting its payload."""
+        return models.Case(
+            models.When(status=StepRunStatus.FAILED, then=KeyTextTransform("error", "output")),
+            default=None, output_field=models.TextField(),
+        )
+
+    @property
     def is_mapped(self) -> bool:
         """Identify a map body row by its node identity, including item index zero."""
         return self.node_key.endswith(MAP_BODY_SUFFIX)
@@ -407,7 +511,16 @@ class StepRun(AngeeDataModel):
     @property
     def map_total(self) -> int:
         """Count admitted items for a map, including after its wait has ended."""
-        return len(self.input["items"]) if self.input and self.is_map else 0
+        if not self.is_map:
+            return 0
+        if "_map_total" in self.__dict__:
+            return int(self.__dict__["_map_total"])
+        return len(self.input["items"]) if self.input else 0
+
+    @classmethod
+    def map_total_expression(cls) -> Coalesce:
+        """Count admitted input items in one portable expression for bulk reads."""
+        return Coalesce(_JSONArrayLength(KeyTransform("items", "input")), 0, output_field=models.IntegerField())
 
     @classmethod
     def map_settled_expression(cls) -> Coalesce:

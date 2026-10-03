@@ -11,15 +11,13 @@ export const DEFAULT_GRAPH_LAYOUT: Required<GraphViewLayout> = {
   marginy: 24,
 };
 
-export function layoutGraph<
-  TEdgeKind extends string,
->({
+export function layoutGraph({
   nodes,
   edges,
   layout,
 }: {
   nodes: readonly { id: string; position?: GraphViewPosition; width: number; height: number }[];
-  edges: readonly { id: string; source: string; target: string; kind: TEdgeKind }[];
+  edges: readonly { id: string; source: string; target: string }[];
   layout?: GraphViewLayout;
 }): {
   positions: ReadonlyMap<string, GraphViewPosition>;

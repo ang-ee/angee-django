@@ -470,14 +470,14 @@ function buildSchemaGraph(
   for (const resource of resources) {
     const resource_id = resourceNodeId(resource.resource_type);
     const relationIds = new Map<string, string>();
-    const highlighted = resource.resource_type === selectedResourceType;
+    const selected = resource.resource_type === selectedResourceType;
 
     nodes.push(
       schemaNode({
         id: resource_id,
         kind: "resource",
         resource_type: resource.resource_type,
-        highlighted,
+        selected,
         title: resourceLabel(resource.resource_type),
         code: resource.resource_type,
         detail: t("schema.resourceDetail", {
@@ -495,7 +495,7 @@ function buildSchemaGraph(
           id: relationId,
           kind: "relation",
           resource_type: resource.resource_type,
-          highlighted,
+          selected,
           title: titleCase(relation.name),
           code: relation.name,
           detail: t("schema.subjectCount", {
@@ -522,7 +522,7 @@ function buildSchemaGraph(
           id: permissionId,
           kind: "permission",
           resource_type: resource.resource_type,
-          highlighted,
+          selected,
           title: titleCase(permission.name),
           code: permission.name,
           detail: t("schema.conditionCount", {
@@ -569,7 +569,7 @@ function schemaNode({
   id,
   kind,
   resource_type,
-  highlighted,
+  selected,
   title,
   code,
   detail,
@@ -577,7 +577,7 @@ function schemaNode({
   id: string;
   kind: SchemaNodeKind;
   resource_type: string;
-  highlighted: boolean;
+  selected: boolean;
   title: string;
   code: string;
   detail: ReactNode;
@@ -588,7 +588,7 @@ function schemaNode({
     title,
     code,
     detail,
-    highlighted,
+    selected,
     meta: {
       resource_type,
     },

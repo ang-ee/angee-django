@@ -43,7 +43,7 @@ export type {
   WidgetRenderProps,
   WidgetFocusTarget,
 } from "./types";
-export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionLabel, optionTextLabel, optionToken, relationValueId } from "./types";
 export { StatusbarSteps, StatusbarSkeleton, type StatusbarStep, type StatusbarStepsProps } from "./statusbar";
 export { VisibilityControl } from "./visibility";
 export type { VisibilityControlProps } from "./visibility";

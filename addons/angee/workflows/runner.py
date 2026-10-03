@@ -230,6 +230,9 @@ class Runner:
                     raise
                 except Exception as failure:
                     settlement = self._failure(failure)
+                if settlement is None:
+                    with _record_failure("run change publication"):
+                        publish_change(run, action="update", update_fields=None)
                 if settlement is not None:
                     self.advance(
                         run, step_run, settlement, artifacts=ctx.pending_artifacts if ctx is not None else None,

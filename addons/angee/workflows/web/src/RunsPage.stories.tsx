@@ -1,14 +1,18 @@
-import { useMemo } from "react";
+import { useMemo, type ComponentProps, type ReactNode } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
+import { decisionGroupFixture } from "@angee/decisions/testing";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
-import { createRouteHref, JsonValueSchema } from "@angee/ui";
+import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
+import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
+import { runFixture, runGraphFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture, stepDecisionResourceFixture } from "./testing";
+import type { RunGraphData } from "./run-graph";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
+import { WORKFLOW_STATUS_TONES } from "./status-tones";
 
 export default { title: "Workflows/Run page", parameters: { layout: "fullscreen" }, excludeStories: ["RunStory"] };
 export const Recovery = { render: () => <RunStory /> };
@@ -34,6 +38,7 @@ const mappedSteps = Array.from({ length: 11 }, (_, index) => stepRunFixture({
 }));
 const documents = { console: operationDocuments };
 const runtime = {
+  statusTones: WORKFLOW_STATUS_TONES,
   routeHref: createRouteHref([
     { name: "workflows.runs", path: "/workflows/runs" },
     { name: "workflows.runs.record", path: "/workflows/runs/$id" },
@@ -54,11 +59,16 @@ const runtime = {
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
 export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
-  run, steps, children, evidence = [], onRequest }: {
+  run, steps, children, evidence = [], onRequest, content, graph, initialEntry, liveProvider, queryClient }: {
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
   onRequest?: (request: RunRequest) => void;
+  content?: ReactNode;
+  graph?: RunGraphData;
+  initialEntry?: string;
+  liveProvider?: ComponentProps<typeof RoutedRuntimeFixture>["liveProvider"];
+  queryClient?: ComponentProps<typeof RoutedRuntimeFixture>["queryClient"];
 }) {
   const schemas = useMemo(() => {
     let current = run ?? runFixture();
@@ -95,7 +105,8 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       }
       if (query.includes("workflowrun_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "The run could not be loaded." }] })
-        : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id } } });
+        : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id,
+          ...(query.includes("WorkflowRunGraph") ? { graph: graph ?? runGraphFixture(currentSteps[0]) } : {}) } } });
       if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.version?.workflow } });
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
@@ -114,6 +125,10 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
         return jsonResponse({ data: { steprun: currentSteps.slice(offset, offset + limit), steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
       }
       if (query.includes("steprun_aggregate")) return jsonResponse({ data: { steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
+      if (/\bdecisions(?:\s*\(|\s*\{)/.test(query)) return jsonResponse({ data: {
+        decisions: [{ id: "dcn_review", kind: "review", verdict: "PENDING", resolved_at: null }],
+        decisions_aggregate: { aggregate: { count: 1 } },
+      } });
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [{
         key: { status: current.status, origin: current.origin, version__workflow_id: current.version?.workflow?.id,
           version__workflow__name: current.version?.workflow?.name },
@@ -126,12 +141,15 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, runEvidenceResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
-      triggerEventResourceFixture, watchResourceFixture,
+      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture, decisionGroupFixture,
     ] } } } };
-  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest]);
+  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
-    initialEntry={list ? "/workflows/runs" : "/workflows/runs/wfr_review"} runtime={runtime}
+    initialEntry={initialEntry ?? (list ? "/workflows/runs" : "/workflows/runs/wfr_review")} runtime={runtime}
+    liveProvider={liveProvider} queryClient={queryClient}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>
-    <RunsPage />
+    <ShellPageTestProviders runtime={{ ...runtime, widgets: defaultWidgets }}>
+      {content ?? <div className="grid min-h-0 flex-1 grid-cols-[1fr_24rem] gap-4"><RunsPage /><ChatterTabsTestHost /></div>}
+    </ShellPageTestProviders>
   </RoutedRuntimeFixture>;
 }
