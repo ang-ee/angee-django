@@ -96,6 +96,25 @@ describe("sessionAuth CSRF rotation", () => {
 });
 
 
+test("concurrent providers share one bootstrap and send the cookie's surviving secret", async () => {
+  // Each bootstrap mints a new secret, and the last Set-Cookie wins in the browser.
+  let cookie = "";
+  let minted = 0;
+  vi.stubGlobal("document", { get cookie() { return cookie; } });
+  const fetchToken = vi.fn(async () => {
+    minted += 1;
+    cookie = `angee_local_csrf=secret-${minted}`;
+    return Response.json({ token: `masked-${minted}`, cookieName: "angee_local_csrf" });
+  });
+  try {
+    // Two GraphQL clients (the identity check and a public page query) on a cold, signed-out load.
+    const identity = createCsrfTokenProvider({ fetch: fetchToken });
+    const page = createCsrfTokenProvider({ fetch: fetchToken });
+    expect(await Promise.all([identity.token(), page.token()])).toEqual(["secret-1", "secret-1"]);
+    expect(fetchToken).toHaveBeenCalledTimes(1);
+  } finally { vi.unstubAllGlobals(); }
+});
+
 test("unreadable CSRF cookies require a fresh token after a session rotates", async () => {
   vi.stubGlobal("document", { cookie: "" });
   const fetchToken = vi.fn()
