@@ -4,6 +4,7 @@ import type { Virtualizer } from "@tanstack/react-virtual";
 import type { AggregateBucket } from "@angee/refine";
 import type { Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
+import { useDeveloperFieldTitle } from "../../../chrome/DeveloperMode";
 import { useUiT } from "../../../i18n";
 import { type DndPayload } from "../../../lib/dnd";
 import { Button } from "../../../ui/button";
@@ -316,6 +317,7 @@ export function RowActionsHeader(): React.ReactElement {
 
 export function ListHeaderCell<TRow extends Row>({
   header,
+  resourceView,
   visibleFields = [],
   onVisibleFieldToggle,
   withVisibleFields = false,
@@ -330,9 +332,11 @@ export function ListHeaderCell<TRow extends Row>({
     ? null
     : flexRender(header.column.columnDef.header, header.getContext());
   const showVisibleFields = withVisibleFields && visibleFields.length > 0;
+  const developerTitle = useDeveloperFieldTitle();
   return (
     <TableHead
       sticky
+      title={header.isPlaceholder ? undefined : developerTitle(header.column.id, resourceView.resource)}
       className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
       aria-sort={ariaSortForColumn(header.column)}
     >

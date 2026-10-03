@@ -1,0 +1,14 @@
+# Fictional demo manager; its demo password matches its username.
+_meta:
+  model: iam.User
+rows:
+  - xref: manager
+    fields:
+      username: pm-manager
+      email: pm-manager@example.test
+      password: "pbkdf2_sha256$1200000$angeeDemoPmManagerSalt26$6LqV1IXBj1bY8OGSveoewMO5zc5JvjeM0rIWNPeKl8c="
+      first_name: Demo
+      last_name: Manager
+      is_active: true
+      is_staff: false
+      is_superuser: false

@@ -16,7 +16,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { DialogForm } from "../../fragments/DialogForm";
 import { RecordActionBar } from "./RecordActionBar";
-import { RecordActionTrigger } from "./RecordActionMenu";
+import { ActionMenu, ActionTrigger } from "../../toolbars/ActionMenu";
 import { createUiTestProviders } from "../../testing";
 import { RecordChromeProvider } from "../resource/record-chrome-context";
 import { AppRuntimeProvider } from "../../runtime";
@@ -31,6 +31,38 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test.each([false, true])("all verbs and Delete are native blocked menu buttons (parent menu: %s)", async (inParent) => {
+    const run = vi.fn();
+    const onDelete = vi.fn();
+    const bar = <RecordActionBar record={record} blocked={!inParent}
+      actions={[{ id: "inspect", label: "Inspect", run }]}
+      deleteAction={{ canDelete: true, isPending: false, onDelete }} />;
+    renderActionBar(inParent ? <ActionMenu blocked>{bar}</ActionMenu> : bar);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    for (const name of ["Inspect", "Delete"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.tagName).toBe("BUTTON");
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+    }
+    expect(run).not.toHaveBeenCalled();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  test("Escape from a menu-originated args dialog restores focus to Actions", async () => {
+    renderActionBar(<RecordActionBar record={record} actions={[
+      { id: "review", label: "Review", args: [{ name: "reason", label: "Reason" }], submit: vi.fn() },
+    ]} />);
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Review" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
   test("omits verbs whose declared permission the record lacks", async () => {
     const run = vi.fn();
     renderActionBar(<RecordActionBar record={{ ...record, permissions: ["read"] }} actions={[
@@ -356,9 +388,9 @@ function DialogActionProbe({
       onOpenChange={setOpen}
       title="Credential form"
       trigger={
-        <RecordActionTrigger ref={onTriggerRef} data-testid="credential-trigger">
+        <ActionTrigger ref={onTriggerRef} data-testid="credential-trigger">
           Update credential
-        </RecordActionTrigger>
+        </ActionTrigger>
       }
     >
       <label htmlFor="username">Username</label>

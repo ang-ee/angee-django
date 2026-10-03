@@ -8,15 +8,70 @@ The rendered host calls `bootApp({ target, loadSchemas, create })` to load
 generated metadata before composition. `create` receives the loaded schemas and
 returns the app to mount. See the [frontend guidelines](../../docs/frontend/guidelines.md).
 
-An addon may declare `brand: { name, mark }` once, with a registered glyph as its
-mark. The host owns `home` and `confineTo`: `createApp({ ..., home: "requests.all",
-confineTo: "requests" })` projects that menu root into the rail and command
-palette and redirects console routes owned by other roots to home with replacement.
-Unowned console routes (account, profile, preferences) remain reachable. Unknown
-roots and homes outside the selected root fail composition. Public layouts remain
-available; the server still owns access. The project template exposes `home`,
-`confine_to` answers. Addons cannot claim the `ui` translation
-namespace, which belongs to the rendered package.
+Products declare the shell. An addon's `shell: { home, brand, perspective }`
+names where `/` lands, its `{ name, mark }` identity (the mark a registered
+glyph) and the selected perspective; `perspectives: { id: { root, home? } }`
+declares named confinements. A perspective projects its menu root into the rail
+and command palette and redirects console routes owned by other roots to home
+with replacement. Unowned console routes (account, profile, preferences) remain
+reachable, public layouts remain available, and the server still owns access.
+Unknown perspectives or roots, and homes outside the selected root, fail
+composition.
+
+Shell facts layer along `dependsOn`, which the composed runtime fills from
+`addon.toml`: among the addons declaring a shell, the one no other declarer
+depends on is the product, and its own fields override its dependencies' field
+by field. Unrelated products, or unrelated ancestors setting one field, fall
+back to the framework default (no brand, no perspective, the first console
+route) and record why in `composed.shell.diagnostics`. The deployment's
+`ANGEE_UI` setting (`{ shell, perspectives }`) applies last; `perspective: null`
+keeps the full console. `createApp`'s `home` and `confineTo` inputs and the
+top-level `brand` field remain as deprecated overrides. Addons cannot claim the
+`ui` translation namespace, which belongs to the rendered package.
+
+Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
+the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
+alters a node of an addon it depends on, and the deployment's `ANGEE_UI.menus`
+may alter any node last. `include: [id | { id, flatten }]` places other apps
+under a node (an aggregator); a flattened app keeps its routes and trail but
+shows its items as the aggregator's own. `remove: true` takes a node and its
+subtree out and makes the pages only it reached unavailable: they stay
+registered, redirect home, and drop out of record links and claims (a
+`route.menu` anchor counts as a reference; a surviving reference keeps a page
+available, and `routeHref.maybe` returns nothing for unavailable pages).
+`hide: true` only leaves the rail: the page stays reachable by URL, link and the
+command palette; `hide: false` shows it again. `only: [ids]` narrows the visible
+children per layer, ignoring items the narrowing addon's dependents add.
+`sequence`, `before` and `after` order siblings; included apps follow the
+including node's own children in include order. Two unrelated addons setting
+one field of a node fail composition. The legacy array form remains a list of
+declarations; ids outside the addon's namespace are reported, not refused.
+
+Menu entries are checked: unknown keys and malformed values fail composition,
+and the deployment layer must be a mapping.
+
+**Developer mode** shows how the app was composed, like Odoo's debug mode. Any
+signed-in user turns it on from the user menu, which stores it in their
+preferences, or for the browser session with `?debug=1` on any URL (`?debug=0`
+turns it off). The session choice, from the URL or the menu, wins over the
+stored preference until the tab closes. A debug button then sits beside the
+avatar: hovering it gives the page's route, app, perspective and home, and
+clicking it opens the composition (shell provenance, removed and hidden menu
+items, unavailable routes, findings, the layers behind each menu item, container
+narrowing, removed container children, and the layers behind each child). The
+expanded rail lists hidden items, marked "(hidden)", and removed items, struck
+through under the item they showed in, each with its id and layers on hover;
+form field labels and list column headers show their technical field name. It
+reveals composition facts only, never records, and changes nothing the server
+allows.
+
+`createApp(...).explain` reports how the composition came out: the resolved
+shell with the layer behind each field, the effective home and confinement, the
+layer that set each menu node field, removed nodes and who removed them, hidden
+nodes (by `hide` or a layer's `only`), unavailable routes with the reason,
+diagnostics such as shell fallbacks and out-of-namespace menu ids (warned in
+development), and under `containers` each layer's narrowing per address, the
+removed children with who removed them, and the layer behind each child field.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
@@ -77,42 +132,50 @@ Shipped views and user favorites appear
 together in the view switcher. Saved favorites retain their selected preset and
 native column visibility; legacy favorites retain the currently selected preset.
 
-## App surface
+## Containers
 
-An addon declares `surface` scopes keyed by menu root and, optionally, route,
-just like vocabulary. An app may scope a route owned by another addon. Each
-named slot shows only its listed ids; an empty list shows none. An omitted slot,
-aside or drawer list keeps its current contributions, whether the host is
-confined or not. Public and sign-in routes are never filtered. A route's
-admission intersects with an inherited list when both name the same address.
+Addons extend each other's pages through containers: named lists on a node,
+addressed `node#name` (`form#sections`, `projects.Task#actions`,
+`record#aside`, `shell#user-menu`), whose entries are children. The `containers`
+dict is keyed by address and layered along `dependsOn` like menus. A key in the
+addon's own namespace declares a child; any other key alters a child of an
+addon it depends on (`sequence`, `before`, `after`, `remove: true`, `hide`); the
+framework's own children are open to every addon. `only`, `except` and `when`
+narrow what renders:
 
 ```ts
-surface: [{
-  app: "desk",
-  admit: {
-    slots: {
-      "form-view.record-chrome": ["iam.share"],
-    },
-    aside: ["comments", "activity"],
+containers: {
+  "projects.Task#sections": {
+    "desk.review": { sequence: 40, content: reviewSection },
   },
-  chatter: { tabs: ["comments", "activity"] },
-  shell: { breadcrumb: true, commandSearch: true, asideOpen: false },
-}, {
-  app: "desk", route: "notes.detail", // may be owned by another addon
-  admit: { slots: { "form-view.record-chrome": [] } },
-  chatter: "hidden",
-}],
+  "form#chrome": { only: ["iam.share-record"] },
+  "record#aside": [
+    { "chatter.comments": { remove: true } },
+    { only: [], when: { route: "notes.detail" } }, // may be owned by another addon
+  ],
+},
 ```
 
-`chatter: "hidden"` hides the aside. A route's tab list replaces its inherited
-order within the admitted ids. Published tab ids can appear in either list;
-Chatter validates them at runtime. Unscoped contributed tabs appear only on
-record routes. The route policy projects model slots, record chrome, list
-utilities, notices, user-menu items and drawers before their render owners read
-them. `useSurfaceAdmission()` exposes the active policy;
-`isSurfaceSlotAdmitted(admission, slot, id)` answers whether a particular slot
-contribution is available. Unknown static ids and duplicate scopes fail
-composition. See [`route-policy.ts`](src/route-policy.ts).
+A child on a kind address (`form#sections`) shows on every model; one on a
+model address also shows on that model's MTI children. The name after `#` types
+the child through `ContainerKinds`. `when: { app, route, perspective }` applies
+`only`, `except` and `hide` on matching pages; children are declared and moved
+unconditionally. Each layer's `only` intersects with what it inherits and never
+filters children its dependents add; `only: []` keeps none, and `hide: false`
+undoes a `hide`, never an `only`. A child may carry `permission`,
+`requiredFields`, `impl` (shown only on rows of that implementation) or
+`variant: { of, impl }` (stands in for `of` on those rows). An addon declares a
+container of its own on its own node, model-scoped with `models: true` or one
+child per key with `unique: "key"`. The deployment's `ANGEE_UI.containers`
+alters and narrows last. Unknown addresses or children, duplicate ids and
+foreign-namespace declarations fail composition. The framework's containers
+are `CORE_CONTAINERS` in [`core-containers.ts`](src/core-containers.ts); the
+login page's are `LOGIN_CONTAINERS`. See the
+[frontend guidelines](../../docs/frontend/guidelines.md#containers) and
+[`containers.ts`](src/containers.ts).
+
+Saved dashboards persist through the `dashboardStore` manifest key; at most one
+installed addon provides it.
 
 Resource mutation argument names and GraphQL types are projected from generated metadata at
 [`resourceMutationsForSchema`](src/resource-projection.ts) into the metadata-free

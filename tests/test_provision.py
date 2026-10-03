@@ -162,6 +162,63 @@ call_command("migrate", verbosity=0, interactive=False, skip_checks=True)
         ).fetchone() == ("native_app_entry",)
 
 
+def test_makemigrations_writes_a_column_drop_only_after_its_data_is_gone(tmp_path: Path) -> None:
+    """The composer's makemigrations refuses a populated drop before writing any file."""
+
+    app = tmp_path / "native_app"
+    app.mkdir()
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    model = "from django.db import models\n\nclass Entry(models.Model):\n    value = models.CharField(max_length=20)\n"
+    legacy = '    legacy = models.CharField(max_length=20, default="")\n'
+    (app / "models.py").write_text(model + legacy, encoding="utf-8")
+    database = tmp_path / "native.sqlite3"
+    (tmp_path / "drop_guard_settings.py").write_text(
+        f"""from django.apps import AppConfig
+class BareComposeConfig(AppConfig):
+    name = "angee.compose"
+    label = "compose"
+SECRET_KEY = "drop-guard-probe"
+INSTALLED_APPS = ["django.contrib.contenttypes", "drop_guard_settings.BareComposeConfig", "native_app"]
+DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(database)!r}}}}}
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+""",
+        encoding="utf-8",
+    )
+    environment = {**_environment(tmp_path), "DJANGO_SETTINGS_MODULE": "drop_guard_settings"}
+
+    def django_admin(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "django", *arguments, "--noinput"],
+            cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+        )
+
+    for arguments in (("makemigrations", "native_app"), ("migrate",)):
+        result = django_admin(*arguments)
+        assert result.returncode == 0, f"{arguments} failed:\n{result.stdout}\n{result.stderr}"
+    with sqlite3.connect(database) as connection:
+        connection.execute("insert into native_app_entry (value, legacy) values ('a', ''), ('b', 'kept')")
+    (app / "models.py").write_text(model, encoding="utf-8")
+
+    refused = django_admin("makemigrations")
+    assert refused.returncode == 1, refused.stdout
+    assert (
+        "unsafe autodetected column drop: native_app.entry.legacy: column native_app_entry.legacy "
+        "holds data in 1 row(s) on database 'default'."
+    ) in refused.stderr
+    assert sorted(path.name for path in (app / "migrations").glob("0*.py")) == ["0001_initial.py"]
+    pending = django_admin("migrate")
+    assert pending.returncode == 1 and "unsafe autodetected column drop" in pending.stderr
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("update native_app_entry set legacy = ''")
+    allowed = django_admin("makemigrations")
+    assert allowed.returncode == 0, allowed.stderr
+    assert "Remove field legacy from entry" in allowed.stdout
+    assert sorted(path.name for path in (app / "migrations").glob("0*.py")) == [
+        "0001_initial.py", "0002_remove_entry_legacy.py",
+    ]
+
+
 @pytest.mark.django_db
 def test_rebac_sync_invalidates_the_native_backend_cache() -> None:
     """The native sync command discards the process-cached REBAC backend."""

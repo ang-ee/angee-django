@@ -1,31 +1,10 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Avatar,
-  EmptyState,
-  ErrorBanner,
-  Glyph,
-  ListView,
-  LoadingPanel,
-  Page,
-  PageBody,
-  PageHeader,
-  RailPanel,
-  SlotOutlet,
-  Tag,
-  TextLink,
-  avatarInitials,
-  type ListColumn,
-  type StringIdRow,
-  useRouteHref,
-  useResourceRecordHrefLookup,
-  useSlot,
-} from "@angee/ui";
+import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, Page, PageBody, PageHeader, RailPanel, Tag, TextLink, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
 import { Link } from "@tanstack/react-router";
 import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
 import { usePartyHandleRowActions } from "./party-handle-row-actions";
-import { PARTIES_REVIEW_TOOLBAR_SLOT } from "./slots";
 
 type SuggestionRow = StringIdRow & {
   source?: string;
@@ -83,7 +62,6 @@ export function ReviewPage(): React.ReactElement {
       <PageHeader
         title={t("review.title")}
         description={t("review.description")}
-        actions={<SlotOutlet entries={useSlot(PARTIES_REVIEW_TOOLBAR_SLOT)} />}
       />
       <PageBody>
         <div className="grid gap-5">

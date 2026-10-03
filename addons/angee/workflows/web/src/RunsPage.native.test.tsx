@@ -205,7 +205,7 @@ test("run list groups and filters status, workflow and origin through shared met
   render(<RunStory list onRequest={(request) => requests.push(request)} />);
   await screen.findByText("Failed");
   expect(requests.some(({ variables }) => JSON.stringify(variables.group_by) === '[{"field":"STATUS"}]')).toBe(true);
-  fireEvent.click(await screen.findByRole("button", { name: "Filter" }));
+  fireEvent.click(await screen.findByLabelText(/^Filter( and favorites)?$/));
   fireEvent.click((await screen.findAllByRole("button", { name: "Failed" })).at(-1)!);
   fireEvent.click(screen.getByRole("button", { name: "Manual" }));
   await waitFor(() => expect(requests.some(({ variables }) => {
@@ -214,10 +214,12 @@ test("run list groups and filters status, workflow and origin through shared met
   })).toBe(true));
   fireEvent.click(await screen.findByRole("button", { name: "Record review" }));
   await waitFor(() => expect(requests.some(({ variables }) => (JSON.stringify(variables.where) ?? "").includes('"version__workflow":{"_eq":"wfl_review"}'))).toBe(true));
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-  fireEvent.click(screen.getByRole("button", { name: "Group by" }));
+  // Grouping has its own picker beside the filter.
+  fireEvent.click(screen.getByLabelText(/^Filter( and favorites)?$/));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Manual" })).toBeNull());
+  fireEvent.click(screen.getByLabelText("Group by"));
   const beforeWorkflowGroup = requests.length;
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add custom group" }));
   fireEvent.click(screen.getByRole("combobox", { name: "Group field" }));
   const workflow = await screen.findByRole("option", { name: "Workflow" });
   fireEvent.pointerDown(workflow, { pointerType: "mouse" });
@@ -233,7 +235,7 @@ test("run list groups and filters status, workflow and origin through shared met
   fireEvent.click(origin);
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Group field" }).textContent).toContain("Origin"));
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  fireEvent.click(screen.getByRole("button", { name: "Group by" }));
+  fireEvent.click(screen.getByLabelText("Group by"));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Add custom group" })).toBeNull());
   fireEvent.click(await screen.findByRole("button", { name: "Record review" }));
   await waitFor(() => expect(requests.slice(beforeOriginGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("ORIGIN"))).toBe(true));

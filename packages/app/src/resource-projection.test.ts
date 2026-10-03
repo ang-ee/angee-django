@@ -2,7 +2,12 @@ import { describe, expect, test } from "vitest";
 import { MenuTree, resolveMenuRouteTargets, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { createRouteHref } from "@angee/ui/runtime";
 import { resourcePageRoutes, type BaseAddonRoute } from "./define-base-addon";
-import { AppRouteProjection, resourceRouteIndex } from "./resource-projection";
+import { AppRouteProjection, menuNodeForRoute, refineRouteResourceProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
+import { chromeMenuItemsFromRefine } from "@angee/ui/chrome/refine-menu";
+import type { TreeMenuItem } from "@refinedev/core";
+import { compileMenus, type MenuLayer } from "./menus";
+import { explainComposition } from "./explain";
+import { resolveShell } from "./shell";
 import { chatterRouteIndex } from "./chatter-routes";
 import { testDataResource } from "@angee/metadata/testing";
 import { resolveRoutePaths } from "./route-paths";
@@ -14,6 +19,8 @@ const routes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes("desk.incoming", "/desk/incoming", Page, "records.Record"),
   ...resourcePageRoutes("desk.review", "/desk/review", Page, undefined, { recordModel: "records.Record", param: "recordId", recordMatch: { field: "queue.id", equals: "queue-a" } }),
   { name: "desk.home", path: "/desk" },
+  { name: "appearance", path: "/settings/appearance" },
+  { name: "platform", path: "/settings/platform" },
   { name: "account", path: "/account" },
 ];
 const menus: readonly ChromeMenuItem[] = [
@@ -27,10 +34,56 @@ const menus: readonly ChromeMenuItem[] = [
       { id: "desk.team", route: "teams.all.record", params: { id: "team-1" } },
     ] },
   ] },
+  { id: "appearance", group: "platform", personal: true, route: "appearance" },
+  { id: "platform", group: "platform", route: "platform" },
 ];
 const menuTree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref(routes)) as readonly ChromeMenuItem[]);
 
 describe("app resource projection", () => {
+  test("the refine bridge preserves a route-less Settings group and its single child's own target", () => {
+    const route = { name: "tags.all", path: "/tags" };
+    const menus: readonly ChromeMenuItem[] = [{ id: "tags", label: "Tags", group: "platform", children: [
+      { id: "tags.all", label: "All tags", route: "tags.all" },
+    ] }];
+    const tree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref([route])));
+    const resources = refineRouteResourceProjection([route], tree, tree).resources;
+    const group = resources.find((item) => item.meta?.menuId === "tags")!;
+    const page = resources.find((item) => item.meta?.menuId === "tags.all")!;
+    expect(group.list).toBe("/tags");
+    expect(group.meta?.menuTarget).toBeNull();
+    expect(page.meta?.menuTarget).toBe("/tags");
+    const chrome = MenuTree.from(chromeMenuItemsFromRefine([{
+      key: "menu:tags", name: "menu:tags", route: group.list as string, meta: group.meta,
+      children: [{ key: "menu:tags.all", name: "menu:tags.all", route: page.list as string, meta: page.meta, children: [] }],
+    }]));
+    expect(chrome.roots[0]?.to).toBeUndefined();
+    expect(chrome.roots[0]?.target).toBe("/tags");
+    expect(chrome.match("/tags")?.item.id).toBe("tags.all");
+  });
+
+  test("included app identity survives navigation projection and the refine chrome bridge", () => {
+    const compiled = compileMenus([
+      { id: "desk", menus: { desk: { route: "desk.home" }, "desk.incoming": { parent: "desk", route: "desk.incoming" } } },
+      { id: "suite", dependsOn: ["desk"], menus: { suite: { include: ["desk"] } } },
+    ]);
+    const href = createRouteHref(routes);
+    const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href));
+    const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href));
+    const projected = refineRouteResourceProjection(routes, logical, navigation).resources;
+    const desk = projected.find((item) => item.meta?.menuId === "desk")!;
+    const incoming = projected.find((item) => item.meta?.menuId === "desk.incoming")!;
+    expect(desk.meta).toMatchObject({ app: true, parent: "menu:suite" });
+    expect(desk.meta?.appRoot).toBeUndefined();
+    expect(incoming.meta?.app).toBeUndefined();
+    const refineNode = (resource: typeof desk, children: TreeMenuItem[] = []): TreeMenuItem => ({
+      name: resource.name, key: resource.identifier ?? resource.name,
+      label: resource.meta?.label, route: resource.list as string, meta: resource.meta, children,
+    });
+    const suite = projected.find((item) => item.meta?.menuId === "suite")!;
+    const chrome = MenuTree.from(chromeMenuItemsFromRefine([refineNode(suite, [refineNode(desk, [refineNode(incoming)])])]));
+    expect(chrome.byId.get("desk")?.isApp).toBe(true);
+    expect(chrome.match("/desk/incoming")?.app?.id).toBe("desk");
+  });
   test("normalizes relative record paths before href and chatter projection", () => {
     const normalized = resolveRoutePaths([
       { name: "desk", path: "/desk" },
@@ -68,6 +121,10 @@ describe("app resource projection", () => {
     expect(projection.allows(routes[0]!, "/records/r1")).toBe(false);
     expect(projection.allows(routes.at(-1)!, "/account")).toBe(true);
     expect(projection.navigationTree.activeItem("/desk/review/r1")?.id).toBe("desk.review");
+    // A personal Settings root stays reachable under the confinement; other Settings roots do not.
+    expect(projection.navigationTree.settingsMenuItems().map((item) => item.id)).toEqual(["desk.settings", "appearance"]);
+    expect(projection.allows(routes.find((route) => route.name === "appearance")!, "/settings/appearance")).toBe(true);
+    expect(projection.allows(routes.find((route) => route.name === "platform")!, "/settings/platform")).toBe(false);
   });
 
   test("confineTo supplies the app scope even without an explicit appRoot marker", () => {
@@ -106,5 +163,117 @@ describe("app resource projection", () => {
     expect(index.find((route) => route.name === "desk.review.record")).toMatchObject({
       modelLabel: "records.Record", recordParam: "recordId", viewType: "records/record",
     });
+  });
+});
+
+describe("menu alterations in the route projection", () => {
+  const deskRoutes: readonly BaseAddonRoute[] = [
+    ...routes,
+    { name: "desk.cycles-hub", path: "/desk/cycles" },
+    { name: "desk.cycles", path: "/desk/queues/$queueId/cycles", menu: "desk.cycles-hub" },
+    { name: "desk.cycle", path: "$cycleId", parent: "desk.cycles" },
+  ];
+  const layers: MenuLayer[] = [
+    { id: "records", menus: [{ id: "records", route: "records.all" }] },
+    { id: "teams", menus: [{ id: "teams", route: "teams.all" }] },
+    { id: "desk", dependsOn: ["records", "teams"], menus: [{ id: "desk", children: [
+      { id: "desk.home", route: "desk.home" },
+      { id: "desk.incoming", route: "desk.incoming" },
+      { id: "desk.review", route: "desk.review" },
+      { id: "desk.cycles-hub", route: "desk.cycles-hub" },
+      { id: "desk.settings", group: "platform", children: [{ id: "desk.team", route: "teams.all.record", params: { id: "team-1" } }] },
+    ] }] },
+    { id: "suite", dependsOn: ["desk", "records", "teams"], menus: {
+      suite: { label: "Suite", appRoot: true, include: [{ id: "desk", flatten: true }, "records"] },
+      "desk.review": { remove: true },
+      "desk.cycles-hub": { remove: true },
+      "desk.incoming": { hide: true },
+    } },
+  ];
+  const compiled = compileMenus(layers);
+  const href = createRouteHref(deskRoutes);
+  const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
+  const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href) as readonly ChromeMenuItem[]);
+  const unavailable = unavailableRoutes(deskRoutes, logical, compiled.removed);
+  const route = (name: string) => deskRoutes.find((candidate) => candidate.name === name)!;
+
+  test("removal disables targeted routes, hub-anchored pages and their descendants; hide disables nothing", () => {
+    expect([...unavailable.keys()].sort()).toEqual(["desk.cycle", "desk.cycles", "desk.cycles-hub", "desk.review", "desk.review.record"]);
+    expect(unavailable.get("desk.cycles")).toBe('its menu anchor "desk.cycles-hub" was removed');
+    expect(unavailable.get("desk.cycle")).toBe('its parent route "desk.cycles" is unavailable');
+    expect(unavailable.get("desk.review")).toBe('menu item "desk.review" was removed');
+  });
+
+  test("the guard refuses unavailable routes, also without a perspective", () => {
+    const projection = new AppRouteProjection(deskRoutes, logical, undefined, { navigation, removed: compiled.removed });
+    expect(projection.allows(route("desk.cycles"), "/desk/queues/q1/cycles")).toBe(false);
+    expect(projection.allows(route("desk.cycle"), "/desk/queues/q1/cycles/c1")).toBe(false);
+    expect(projection.allows(route("desk.incoming"), "/desk/incoming")).toBe(true);
+  });
+
+  test("claims and record destinations skip removed pages; hidden pages keep their claims", () => {
+    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, removed: compiled.removed });
+    expect(projection.rootFor(route("desk.incoming"))).toBe("suite");
+    const selected = projection.resourceRoutes("suite");
+    expect(selected["records.Record"]?.collection).toBe("desk.incoming");
+    expect(selected["records.Record"]?.recordDestinations).toBeUndefined();
+    expect(selected["records.Record"]?.record?.name).toBe("desk.incoming.record");
+  });
+
+  test("navigation flattens the included app and drops hidden items; the logical tree keeps them", () => {
+    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, removed: compiled.removed });
+    expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["suite"]);
+    expect(projection.navigationTree.byId.get("suite")?.targetedChildren.map((item) => item.id)).toEqual(["desk.home", "records"]);
+    expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");
+    expect(logical.trailFor("desk.incoming").map((item) => item.id)).toEqual(["suite", "desk", "desk.incoming"]);
+    // Hidden: out of the rail, still in the navigation tree for the palette and admission.
+    expect(projection.navigationTree.byId.get("desk.incoming")?.hidden).toBe(true);
+  });
+});
+
+describe("composition explanation", () => {
+  test("collects shell provenance, menu removals, hidden nodes and unavailable routes with reasons", () => {
+    const layers: MenuLayer[] = [
+      { id: "desk", menus: [{ id: "desk", children: [{ id: "desk.home", route: "desk.home" }, { id: "desk.review", route: "desk.review" }] }] },
+      { id: "suite", dependsOn: ["desk"], menus: { "desk.review": { remove: true }, "desk.home": { hide: true } } },
+    ];
+    const compiled = compileMenus(layers);
+    const href = createRouteHref(routes);
+    const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
+    const explanation = explainComposition(resolveShell(layers), compiled, unavailableRoutes(routes, logical, compiled.removed), { home: "/desk", confineTo: null });
+    expect(explanation.menus.removed).toEqual([{ id: "desk.review", route: "desk.review", by: "suite", parent: "desk" }]);
+    expect(explanation.menus.hidden).toEqual([{ id: "desk.home", by: "suite", reason: "hide" }]);
+    expect(explanation.menus.unavailable).toEqual({
+      "desk.review": 'menu item "desk.review" was removed',
+      "desk.review.record": 'its parent route "desk.review" is unavailable',
+    });
+    expect(explanation.shell).toEqual({ brand: null, perspective: null, provenance: {}, diagnostics: [] });
+    expect(explanation.effective).toEqual({ home: "/desk", confineTo: null });
+  });
+});
+
+describe("availability edge cases", () => {
+  const anchored: readonly BaseAddonRoute[] = [
+    { name: "inbox", path: "/inbox", menu: "decisions" },
+    { name: "pageant", path: "/pageant", layout: "fullscreen" },
+  ];
+  test("a surviving reference keeps a route whose anchor was removed available", () => {
+    const tree = MenuTree.from(resolveMenuRouteTargets([{ id: "pm.inbox", route: "inbox" }], createRouteHref(anchored)) as readonly ChromeMenuItem[]);
+    const projection = new AppRouteProjection(anchored, tree, undefined, { removed: [{ id: "decisions", route: "inbox" }] });
+    expect(projection.unavailable.size).toBe(0);
+    expect(projection.allows(anchored[0]!, "/inbox")).toBe(true);
+  });
+  test("a removed anchor does not hand a parameterized route to one of its destinations", () => {
+    const boards: readonly BaseAddonRoute[] = [{ name: "boards.board", path: "/boards/$key", menu: "boards" }];
+    const tree = MenuTree.from(resolveMenuRouteTargets(
+      [{ id: "boards.main", route: "boards.board", params: { key: "main" } }], createRouteHref(boards),
+    ) as readonly ChromeMenuItem[]);
+    expect(menuNodeForRoute(boards[0]!, tree)).toBeUndefined();
+  });
+  test("only console routes become unavailable; an anchor naming nothing is a wiring error", () => {
+    const tree = MenuTree.from([]);
+    expect(unavailableRoutes(anchored.slice(1), tree, [{ id: "x", route: "pageant" }]).size).toBe(0);
+    expect(() => unavailableRoutes([{ name: "lost", path: "/lost", menu: "typo" }], tree, []))
+      .toThrow(/references unknown menu item "typo"/);
   });
 });

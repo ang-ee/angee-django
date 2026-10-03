@@ -4,10 +4,7 @@ import {
   type BaseAddonRoute,
 } from "@angee/app";
 import {
-  formViewRecordActionsSlot,
-  formViewSectionsSlot,
   Field,
-  FormView,
   Group,
   type BaseMenuItem,
 } from "@angee/ui";
@@ -151,29 +148,23 @@ const work = defineBaseAddon({
   menus: workMenu,
   i18n: { work: enWorkMessages },
   widgets: { "work.stage": { read: StageStatusbar, edit: StageStatusbar } },
-  slots: [
-    { slot: "access.roles", model: PROJECT_MODEL, id: "work.manager", content: ProjectManagerAccessRole },
-    { ...FormView.railSlot(PROJECT_MODEL), id: "work.people-rail", sequence: 40,
-      content: ShareAccessRailGroup },
-    {
-      ...formViewSectionsSlot(PROJECT_MODEL),
-      id: "work.project-team",
-      sequence: 40,
-      content: <Group><Field name="team" /></Group>,
+  containers: {
+    [`${PROJECT_MODEL}#access-roles`]: {
+      "work.manager": { content: ProjectManagerAccessRole },
     },
-    {
-      ...formViewSectionsSlot(TASK_MODEL),
-      id: "work.task-fields",
-      sequence: 40,
-      content: taskWorkFormSection,
+    [`${PROJECT_MODEL}#rail`]: {
+      "work.people-rail": { sequence: 40, content: ShareAccessRailGroup },
     },
-    {
-      ...formViewRecordActionsSlot(TASK_MODEL),
-      id: "work.task-triage-actions",
-      sequence: 40,
-      content: <TriageRecordActions />,
+    [`${PROJECT_MODEL}#sections`]: {
+      "work.project-team": { sequence: 40, content: <Group><Field name="team" /></Group> },
     },
-  ],
+    [`${TASK_MODEL}#sections`]: {
+      "work.task-fields": { sequence: 40, content: taskWorkFormSection },
+    },
+    [`${TASK_MODEL}#actions`]: {
+      "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
+    },
+  },
   icons: {
     "work-queue": Briefcase,
     "work-board": Kanban,

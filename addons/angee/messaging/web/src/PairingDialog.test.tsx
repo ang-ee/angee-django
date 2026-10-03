@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { RecordChromeContext } from "@angee/ui";
+import { ActionMenu } from "@angee/ui";
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -36,7 +37,8 @@ const mocks = vi.hoisted(() => ({
   recordActions: new Map<string, ReturnType<typeof vi.fn>>(),
 }));
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: (
     _document: unknown,
     variables: Record<string, unknown>,
@@ -55,7 +57,8 @@ vi.mock("@angee/refine", () => ({
   },
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   createNamespaceT:
     (_namespace: string, messages: Record<string, string>) => () =>
       (key: string) =>
@@ -431,6 +434,20 @@ describe("ChannelPairingAction", () => {
       ),
     );
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  test("composes a menu item and inherits the menu's blocked gate", async () => {
+    render(<ActionMenu blocked>
+      <ChannelPairingAction labelKey="channel.pairing.connect" resumeOnOpen
+        when={lifecycleIs("disconnected")} />
+    </ActionMenu>);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    const item = await screen.findByRole("menuitem", { name: "Connect" });
+    expect(item.tagName).toBe("BUTTON");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(mocks.recordActions.get("resume_channel_pairing")).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   test("resolves the vendor instruction through the messaging namespace", () => {

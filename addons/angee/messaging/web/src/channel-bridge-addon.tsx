@@ -1,4 +1,4 @@
-import { defineBaseAddon, type BaseAddon } from "@angee/app";
+import { defineBaseAddon } from "@angee/app";
 import {
   ConditionalMutationButton,
   INTEGRATION_DISCONNECT_ACTION_ID,
@@ -7,22 +7,21 @@ import {
   isConnectedOrPaused,
   type IntegrationLifecycleToken,
 } from "@angee/integrate";
-import { formViewRecordActionsSlot } from "@angee/ui";
+import type { ContainersDeclaration } from "@angee/ui/runtime";
 import type { ReactNode } from "react";
 
 import { CHANNEL_MODEL } from "./documents";
 import { useMessagingT } from "./i18n";
 import { ChannelPairingAction } from "./PairingDialog";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 /**
- * One vendor-owned record verb on the channel form, scoped by the addon to the
- * vendor's own rows (the impl-keyed record-actions slot). The vendor renders the
- * verb itself — typically `ConditionalMutationButton` over its own generated
- * action, with `args` when the verb collects input (re-entering a login).
+ * One vendor-owned record verb in the channel form's overflow menu, shown only
+ * on the vendor's own rows (`impl`). The vendor renders the verb itself —
+ * typically `ConditionalMutationButton` over its own generated action, with
+ * `args` when the verb collects input (re-entering a login).
  */
 export interface ChannelRecordAction {
-  /** Stable contribution id, unique across the channel record-actions slot. */
+  /** Child id in the vendor addon's namespace (`<addon id>.<verb>`). */
   id: string;
   /** Order among the record verbs; messaging's shared lifecycle verbs sit at 10–14. */
   sequence: number;
@@ -38,7 +37,7 @@ export interface ChannelPollBridgeAddonOptions {
   sequence: number;
   /** Vendor-owned channel creation action. */
   connectAction: ReactNode;
-  /** Explicit messaging-namespace contribution, including vendor menu copy. */
+  /** Explicit messaging-namespace contribution. */
   i18n: { messaging: Record<string, string> };
   /** Vendor-owned record verbs, rendered only on this backend's channel rows. */
   recordActions?: readonly ChannelRecordAction[];
@@ -68,10 +67,7 @@ export function defineChannelBridgeAddon({
   instructionKey,
   disconnectAction = <ChannelDisconnectAction />,
   recordActions = [],
-}: ChannelBridgeAddonOptions): BaseAddon {
-  const connectActionId = `${id}.connect`;
-  const pairingActionId = `${id}.pairing`;
-  const channelActions = formViewRecordActionsSlot(CHANNEL_MODEL, key);
+}: ChannelBridgeAddonOptions) {
   const pairingAction = (
     lifecycle: IntegrationLifecycleToken,
     labelKey: string,
@@ -88,39 +84,22 @@ export function defineChannelBridgeAddon({
   return defineBaseAddon({
     id,
     i18n,
-    menus: [channelBridgeMenu(i18n.messaging, key)],
-    slots: [
-      channelBridgeConnectSlot(id, sequence, connectAction),
-      {
-        ...channelActions,
-        id: connectActionId,
-        sequence: 10,
-        content: pairingAction("disconnected", "channel.pairing.connect", true),
-      },
-      {
-        ...channelActions,
-        id: pairingActionId,
-        sequence: 10,
-        content: pairingAction("connected", "channel.pairing.status"),
-      },
-      {
-        ...channelActions,
-        id: INTEGRATION_RESUME_ACTION_ID,
+    containers: channelContainers(id, sequence, connectAction, key, recordActions, {
+      // Pairing replaces Integration's resume and disconnect on this vendor's rows only.
+      [`${id}.connect`]: { impl: key, sequence: 10, content: pairingAction("disconnected", "channel.pairing.connect", true) },
+      [`${id}.pairing`]: { impl: key, sequence: 10, content: pairingAction("connected", "channel.pairing.status") },
+      [`${id}.resume`]: {
+        variant: { of: INTEGRATION_RESUME_ACTION_ID, impl: key },
         sequence: 12,
         content: pairingAction("paused", "channel.pairing.resume", true),
       },
-      {
-        ...channelActions,
-        id: INTEGRATION_DISCONNECT_ACTION_ID,
-        sequence: 13,
-        content: disconnectAction,
-      },
-      ...channelRecordActionSlots(key, recordActions),
-    ],
+    }, {
+      [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, content: disconnectAction },
+    }),
   });
 }
 
-/** Declare one poll channel vendor's navigation and connect contribution. */
+/** Declare one poll channel vendor's connect and record-action contributions. */
 export function defineChannelPollBridgeAddon({
   id,
   key,
@@ -128,48 +107,35 @@ export function defineChannelPollBridgeAddon({
   connectAction,
   i18n,
   recordActions = [],
-}: ChannelPollBridgeAddonOptions): BaseAddon {
+}: ChannelPollBridgeAddonOptions) {
   return defineBaseAddon({
     id,
     i18n,
-    menus: [channelBridgeMenu(i18n.messaging, key)],
-    slots: [
-      channelBridgeConnectSlot(id, sequence, connectAction),
-      ...channelRecordActionSlots(key, recordActions),
-    ],
+    containers: channelContainers(id, sequence, connectAction, key, recordActions),
   });
 }
 
-/** Scope each vendor record verb to the vendor's own channel rows. */
-function channelRecordActionSlots(key: string, recordActions: readonly ChannelRecordAction[]) {
-  const target = formViewRecordActionsSlot(CHANNEL_MODEL, key);
-  return recordActions.map((action) => ({
-    ...target,
-    ...action,
-    recordActionPlacement: "menu" as const,
-  }));
-}
+type ChannelActionChildren = Record<`${string}.${string}`, { content: ReactNode; sequence: number; impl?: string; variant?: { of: string; impl: string } }>;
 
-/** Emit one vendor entry under Messaging. */
-function channelBridgeMenu(i18n: Record<string, string>, key: string) {
+/**
+ * One vendor's channel children: its connect verb on the Channels toolbar, its
+ * own form verbs, and its menu verbs scoped to its rows.
+ */
+function channelContainers(
+  id: string,
+  sequence: number,
+  connectAction: ReactNode,
+  key: string,
+  recordActions: readonly ChannelRecordAction[],
+  toolbar: ChannelActionChildren = {},
+  menu: ChannelActionChildren = {},
+): ContainersDeclaration {
+  const vendorVerbs = Object.fromEntries(recordActions.map(({ id: verb, sequence: order, content }) => [verb, { impl: key, sequence: order, content }]));
   return {
-    id: `messaging.${key}`,
-    label: vendorMenuMessage(i18n, key, "label"),
-    route: "messaging.channels",
-    parentId: "messaging",
-    icon: "channel",
-    description: vendorMenuMessage(i18n, key, "description"),
-  };
-}
-
-/** Emit one vendor connect action in the shared channel toolbar. */
-function channelBridgeConnectSlot(id: string, sequence: number, connectAction: ReactNode) {
-  return {
-    slot: MESSAGING_CHANNEL_TOOLBAR_SLOT,
-    id: `${id}.connect`,
-    sequence,
-    content: connectAction,
-  };
+    "messaging.channels#toolbar": { [`${id}.connect`]: { sequence, content: connectAction } },
+    ...(Object.keys(toolbar).length ? { [`${CHANNEL_MODEL}#actions`]: toolbar } : {}),
+    [`${CHANNEL_MODEL}#actions-menu`]: { ...menu, ...vendorVerbs },
+  } as ContainersDeclaration;
 }
 
 /** Default disconnect for live channels whose reusable pairing material remains. */
@@ -189,18 +155,4 @@ function ChannelDisconnectAction() {
       }}
     />
   );
-}
-
-/** Read required vendor menu copy from the vendor's messaging bundle. */
-function vendorMenuMessage(
-  i18n: Record<string, string>,
-  key: string,
-  field: "label" | "description",
-): string {
-  const messageKey = `channel.${key}.menu.${field}`;
-  const message = i18n[messageKey];
-  if (!message) {
-    throw new Error(`Channel bridge ${key} is missing i18n message ${messageKey}.`);
-  }
-  return message;
 }

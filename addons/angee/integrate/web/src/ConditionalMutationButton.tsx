@@ -2,7 +2,7 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { type Row } from "@angee/metadata";
 import {
   ActionFormDialog,
-  RecordActionTrigger,
+  ActionTrigger,
   useConfirm,
   useRecordChromeActionMutation,
   useRecordChromeActionOutcome,
@@ -120,7 +120,7 @@ export function ConditionalMutationButton<
 
   return (
     <>
-      <RecordActionTrigger
+      <ActionTrigger
         variant={variant}
         loading={mutation.fetching}
         glyph={glyph}
@@ -129,7 +129,7 @@ export function ConditionalMutationButton<
         }}
       >
         {label}
-      </RecordActionTrigger>
+      </ActionTrigger>
       {args ? (
         <ActionFormDialog
           action={{

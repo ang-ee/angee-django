@@ -1,4 +1,4 @@
-import { Field, type FieldDescriptor } from "@angee/ui";
+import { Field, type ContainerChild, type ContainerEntry, type FieldDescriptor } from "@angee/ui";
 import { Children, isValidElement, type ReactNode } from "react";
 import { expect, test } from "vitest";
 
@@ -14,7 +14,8 @@ test.each([
   { permissions: ["write"], readOnly: false },
   { permissions: ["manage", "write"], readOnly: false },
 ])("queue picker readOnly=$readOnly for $permissions", ({ permissions, readOnly }) => {
-  const section = proposalsWork.slots?.find((slot) => slot.id === "proposals-work.questions");
+  const entry = proposalsWork.containers?.["proposals.Round#sections"] as ContainerEntry<ReactNode> | undefined;
+  const section = entry?.["proposals-work.questions"] as ContainerChild<ReactNode> | undefined;
   expect(section).toBeDefined();
   const content = section?.content;
   if (!isValidElement<{ children?: ReactNode }>(content)) throw new Error("Expected the native form group");

@@ -4,7 +4,6 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { ConnectLocalFolderAction } from "./ConnectLocalFolderAction";
 import { MOUNT_MODEL } from "./documents";
 import { enStorageIntegrateMessages } from "./i18n";
-import { STORAGE_MOUNT_TOOLBAR_SLOT } from "./slots";
 import { mountForm } from "./views/MountForm";
 
 const storageIntegrate = defineBaseAddon({
@@ -27,14 +26,12 @@ const storageIntegrate = defineBaseAddon({
   ],
   i18n: { storage: enStorageIntegrateMessages },
   forms: { [MOUNT_MODEL]: mountForm },
-  slots: [
-    {
-      slot: STORAGE_MOUNT_TOOLBAR_SLOT,
-      id: "storage-integrate.connect-local-folder",
-      sequence: 10,
-      content: <ConnectLocalFolderAction />,
+  containers: {
+    // Connect verbs for each storage backend, on the Mount list's toolbar.
+    "storage-integrate.mounts#toolbar": {
+      "storage-integrate.connect-local-folder": { sequence: 10, content: <ConnectLocalFolderAction /> },
     },
-  ],
+  },
 });
 
 export { ConnectLocalFolderAction } from "./ConnectLocalFolderAction";
@@ -43,5 +40,4 @@ export type { ConnectMountActionProps } from "./ConnectMountAction";
 export { MountSourceBrowser } from "./MountSourceBrowser";
 export type { MountSourceBrowserProps } from "./MountSourceBrowser";
 export { MOUNT_MODEL } from "./documents";
-export { STORAGE_MOUNT_TOOLBAR_SLOT } from "./slots";
 export default storageIntegrate;

@@ -1,15 +1,76 @@
 {
   "criticalExports": [
-    {"name": "AGENT_CHAT_SLOT", "ownerFile": "src/chat-slot.ts"},
-    {"name": "useAgentChatContext", "ownerFile": "src/chat-slot.ts"}
+    {
+      "name": "useAgentChatContext",
+      "ownerFile": "src/chat-context.ts"
+    }
   ],
   "dynamicI18nKeyFamilies": [
-    {"namespace": "agents", "owner": "AcpStatus", "prefix": "chat.status.", "values": ["idle", "connecting", "ready", "error", "closed"]},
-    {"namespace": "agents", "owner": "AgentInstanceKind", "prefix": "provisioning.adoptTitle.", "values": ["workspace", "service"]},
-    {"namespace": "agents", "owner": "AgentInstanceKind", "prefix": "provisioning.adoptBody.", "values": ["workspace", "service"]},
-    {"namespace": "agents", "owner": "AgentInstanceKind", "prefix": "provisioning.replaceTitle.", "values": ["workspace", "service"]},
-    {"namespace": "agents", "owner": "AgentInstanceKind", "prefix": "provisioning.replaceBody.", "values": ["workspace", "service"]},
-    {"namespace": "agents", "owner": "AgentInstanceKind", "prefix": "provisioning.deprovisionBody.", "values": ["workspace", "service"]},
-    {"namespace": "agents", "owner": "AgentInstanceKind", "prefix": "provisioning.conflict.", "values": ["workspace", "service"]}
+    {
+      "namespace": "agents",
+      "owner": "AcpStatus",
+      "prefix": "chat.status.",
+      "values": [
+        "idle",
+        "connecting",
+        "ready",
+        "error",
+        "closed"
+      ]
+    },
+    {
+      "namespace": "agents",
+      "owner": "AgentInstanceKind",
+      "prefix": "provisioning.adoptTitle.",
+      "values": [
+        "workspace",
+        "service"
+      ]
+    },
+    {
+      "namespace": "agents",
+      "owner": "AgentInstanceKind",
+      "prefix": "provisioning.adoptBody.",
+      "values": [
+        "workspace",
+        "service"
+      ]
+    },
+    {
+      "namespace": "agents",
+      "owner": "AgentInstanceKind",
+      "prefix": "provisioning.replaceTitle.",
+      "values": [
+        "workspace",
+        "service"
+      ]
+    },
+    {
+      "namespace": "agents",
+      "owner": "AgentInstanceKind",
+      "prefix": "provisioning.replaceBody.",
+      "values": [
+        "workspace",
+        "service"
+      ]
+    },
+    {
+      "namespace": "agents",
+      "owner": "AgentInstanceKind",
+      "prefix": "provisioning.deprovisionBody.",
+      "values": [
+        "workspace",
+        "service"
+      ]
+    },
+    {
+      "namespace": "agents",
+      "owner": "AgentInstanceKind",
+      "prefix": "provisioning.conflict.",
+      "values": [
+        "workspace",
+        "service"
+      ]
+    }
   ]
 }

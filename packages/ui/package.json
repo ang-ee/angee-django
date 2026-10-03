@@ -65,9 +65,9 @@
       "types": "./src/lib/index.ts",
       "import": "./src/lib/index.ts"
     },
-    "./lib/slot-outlet": {
-      "types": "./src/lib/slot-outlet.tsx",
-      "import": "./src/lib/slot-outlet.tsx"
+    "./lib/container-outlet": {
+      "types": "./src/lib/container-outlet.tsx",
+      "import": "./src/lib/container-outlet.tsx"
     },
     "./lib/variant-context": {
       "types": "./src/lib/variant-context.tsx",
@@ -436,9 +436,9 @@
         "types": "./dist/lib/index.d.ts",
         "default": "./dist/lib/index.js"
       },
-      "./lib/slot-outlet": {
-        "types": "./dist/lib/slot-outlet.d.ts",
-        "default": "./dist/lib/slot-outlet.js"
+      "./lib/container-outlet": {
+        "types": "./dist/lib/container-outlet.d.ts",
+        "default": "./dist/lib/container-outlet.js"
       },
       "./lib/variant-context": {
         "types": "./dist/lib/variant-context.d.ts",

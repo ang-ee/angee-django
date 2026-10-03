@@ -25,8 +25,10 @@ import {
   } from "@tanstack/react-router";
 import {
   AppRuntimeProvider,
+  containersFromChildren,
   createRouteHref,
   type AppRuntime,
+  type ContainerChild,
   type FormOverrideMap,
   } from "../../runtime";
 import { modelLabelSegment } from "@angee/metadata";
@@ -51,12 +53,11 @@ import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
 import {
   FormView,
-  FORM_VIEW_RECORD_CHROME_SLOT,
-  formViewRecordActionsSlot,
-  formViewSectionsSlot,
+  FORM_CONTAINERS,
   type FormField,
   type FormSubmitContext,
 } from "./FormView";
+import { ActionTrigger } from "../../toolbars/ActionMenu";
 import { useRecordChromeContext } from "../resource/record-chrome-context";
 import {
   Action,
@@ -226,12 +227,12 @@ describe("FormView", () => {
         title: { name: "title", kind: "scalar", scalar: "String" },
         reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
       },
-    } } }, undefined, { slots: [
-      { ...formViewSectionsSlot("notes.Note"), id: "notes.private", permission: "write", content: <>
+    } } }, undefined, formChildren({ "notes.Note#sections": {
+      "notes.private": { permission: "write", content: <>
         <Group label="Private"><Field name="reminderAt" label="Reminder" /></Group>
         <Tab id="private-tab" label="Private tab">Private panel</Tab>
       </> },
-    ] });
+    } }));
     renderSections();
     await screen.findByRole("heading", { name: "First" });
     expect(screen.queryByText("Private")).toBeNull();
@@ -245,15 +246,14 @@ describe("FormView", () => {
     expect(screen.getByRole("tab", { name: "Private tab" })).toBeTruthy();
   });
 
-  test("Action and record-action slots require their declared permission", async () => {
+  test("Action declarations and record-verb children require their declared permission", async () => {
     sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
     const renderActions = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
       <Field name="title" title />
       <Action id="archive" label="Archive" permission="write" run={vi.fn()} />
-    </FormView>, undefined, undefined, { slots: [{
-      ...formViewRecordActionsSlot("notes.Note"), id: "notes.reopen", permission: "write",
-      content: <button type="button">Reopen</button>,
-    }] });
+    </FormView>, undefined, undefined, formChildren({ "notes.Note#actions": {
+      "notes.reopen": { permission: "write", content: <button type="button">Reopen</button> },
+    } }));
     renderActions();
     await screen.findByRole("heading", { name: "First" });
     expect(screen.queryByRole("button", { name: "Reopen" })).toBeNull();
@@ -511,7 +511,7 @@ describe("FormView", () => {
     expect(editor.className).not.toContain("field-sizing");
   });
 
-  test("renders slot-contributed rail fields through the form's editable widgets", async () => {
+  test("renders rail-contributed fields through the form's editable widgets", async () => {
     const priority = { name: "priority", kind: "scalar" as const, scalar: "String", readable: true,
       aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false };
     const resource = testDataResource("notes.Note", { fields: [priority] });
@@ -521,9 +521,9 @@ describe("FormView", () => {
       recordTabs={[{ id: "activity", label: "Activity", keepMounted: true, render: () => <p>Recent activity</p> }]}
       acknowledgedSource={{ record, values: record }} />,
     { types: { NoteType: { resource, fields: { priority } } } }, undefined,
-    { slots: [{ id: "properties", ...FormView.railSlot("notes.Note"),
+    formChildren({ "notes.Note#rail": { "notes.properties": {
       content: <FormView.RailGroup id="properties" label="Properties"
-        fields={[{ field: { name: "priority" } }]} /> }] });
+        fields={[{ field: { name: "priority" } }]} /> } } }));
     const rail = await screen.findByRole("complementary");
     expect(within(rail).getByText("Properties")).toBeTruthy();
     const input = within(rail).getByRole("textbox", { name: "Priority" });
@@ -534,6 +534,27 @@ describe("FormView", () => {
     expect(screen.getByText("Recent activity")).toBeTruthy();
     expect(within(screen.getByRole("complementary")).getByText("Properties")).toBeTruthy();
     expect(document.querySelectorAll("aside")).toHaveLength(1);
+  });
+
+  test("a rail child's permission gates the groups it declares", async () => {
+    const renderRail = (permissions: string[]) => {
+      const record = { id: "note-1", title: "First", permissions };
+      renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]}
+        acknowledgedSource={{ record, values: record }} />, undefined, undefined,
+      formChildren({ "notes.Note#rail": {
+        "notes.private": { permission: "manage",
+          content: <FormView.RailGroup id="private" label="Private" content={<p>Private summary</p>} /> },
+        "notes.public": { content: <FormView.RailGroup id="public" label="Public" content={<p>Public summary</p>} /> },
+      } }));
+    };
+    renderRail(["read", "write"]);
+    const rail = await screen.findByRole("complementary");
+    expect(within(rail).getByText("Public summary")).toBeTruthy();
+    expect(within(rail).queryByText("Private summary")).toBeNull();
+
+    cleanup();
+    renderRail(["read", "manage"]);
+    expect(within(await screen.findByRole("complementary")).getByText("Private summary")).toBeTruthy();
   });
 
   test("derives a slug from the header title field while creating", async () => {
@@ -1745,7 +1766,7 @@ describe("FormView", () => {
     });
   });
 
-  test("provides the resource and record id to a record-chrome slot contribution", async () => {
+  test("provides the resource and record id to a record-chrome child", async () => {
     function ChromeProbe(): ReactElement {
       const chrome = useRecordChromeContext();
       return (
@@ -1761,22 +1782,14 @@ describe("FormView", () => {
       </FormView>,
       undefined,
       undefined,
-      {
-        slots: [
-          {
-            slot: FORM_VIEW_RECORD_CHROME_SLOT,
-            id: "notes.chrome",
-            content: <ChromeProbe />,
-          },
-        ],
-      },
+      formChildren({ "form#chrome": { "notes.chrome": { content: <ChromeProbe /> } } }),
     );
 
     const probe = await screen.findByTestId("chrome-probe");
     expect(probe.textContent).toBe("notes.Note:note-1");
   });
 
-  test("renders record-action slot contributions beside the Actions menu", async () => {
+  test("renders toolbar record verbs beside the Actions menu", async () => {
     function ActionProbe(): ReactElement {
       const chrome = useRecordChromeContext();
       return (
@@ -1794,15 +1807,7 @@ describe("FormView", () => {
       </FormView>,
       undefined,
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("notes.Note"),
-            id: "notes.pause",
-            content: <ActionProbe />,
-          },
-        ],
-      },
+      formChildren({ "notes.Note#actions": { "notes.pause": { content: <ActionProbe /> } } }),
     );
 
     const actions = await screen.findByRole("button", { name: "Actions" });
@@ -1812,138 +1817,126 @@ describe("FormView", () => {
     expect(pause.parentElement).toBe(actions.parentElement);
   });
 
-  test("inherits record-action contributions from the model's canonical MTI parent", async () => {
-    // The addon that owns a parent model contributes its verbs against it once
-    // and reaches every subtype's form, instead of contributing globally and
-    // re-deriving the MTI mapping in a predicate on every form in the app.
+  test("places #actions children in the toolbar and #actions-menu children in the Actions menu", async () => {
+    // One verb component, two containers: the container decides the placement.
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      formChildren({
+        "notes.Note#actions": { "notes.pause": { content: <ActionTrigger>Pause</ActionTrigger> } },
+        "notes.Note#actions-menu": { "notes.export": { content: <ActionTrigger>Export</ActionTrigger> } },
+      }),
+    );
+
+    const pause = await screen.findByRole("button", { name: "Pause" });
+    const actions = screen.getByRole("button", { name: "Actions" });
+    expect(pause.parentElement).toBe(actions.parentElement);
+    expect(screen.queryByRole("button", { name: "Export" })).toBeNull();
+    fireEvent.click(actions);
+    expect(await screen.findByRole("menuitem", { name: "Export" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull();
+  });
+
+  test("shows the kind's, the canonical parent's and the concrete model's record verbs on a subtype form", async () => {
+    // A verb declared once against the MTI parent reaches every subtype's form,
+    // and a kind-level child reaches every form; all merge by sequence.
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
       </FormView>,
       mtiMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "parties.pause",
-            content: <button type="button">Inherited pause</button>,
-          },
-        ],
-      },
+      formChildren({
+        "form#actions": { "audit.history": { sequence: 30, content: <button type="button">History</button> } },
+        "parties.Party#actions": { "parties.pause": { sequence: 20, content: <button type="button">Inherited pause</button> } },
+        "notes.Note#actions": { "notes.publish": { sequence: 10, content: <button type="button">Publish</button> } },
+      }),
     );
 
-    expect(await screen.findByRole("button", { name: "Inherited pause" })).toBeTruthy();
+    await screen.findByRole("button", { name: "Inherited pause" });
+    expect(buttonLabels(["History", "Inherited pause", "Publish"])).toEqual(["Publish", "Inherited pause", "History"]);
   });
 
-  test("lets an own-model contribution override the canonical entry of the same id", async () => {
-    // A subtype specializing an inherited verb: decided by declared model
-    // specificity, never by addon array order.
-    renderWithProviders(
-      <FormView resource="notes.Note" id="note-1">
-        <Field name="title" label="Title" title />
-      </FormView>,
-      mtiMetadata(),
-      undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.pause",
-            content: <button type="button">Generic pause</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">Generic disconnect</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("notes.Note"),
-            id: "lifecycle.pause",
-            content: <button type="button">Note pause</button>,
-          },
-        ],
-      },
-    );
-
-    // Same id against the more specific model wins…
-    expect(await screen.findByRole("button", { name: "Note pause" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Generic pause" })).toBeNull();
-    // …and an inherited verb the subtype did not specialize is untouched.
-    expect(screen.getByRole("button", { name: "Generic disconnect" })).toBeTruthy();
-  });
-
-  test("keeps the canonical parent's own form on its own entry", async () => {
-    // The override is scoped to the subtype: the parent's form still renders the
-    // parent's verb, so a subtype cannot reach up and replace it.
+  test("keeps a subtype's record verbs off its canonical parent's form", async () => {
     renderWithProviders(
       <FormView resource="parties.Party" id="party-1">
         <Field name="title" label="Title" title />
       </FormView>,
       mtiMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.pause",
-            content: <button type="button">Generic pause</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("notes.Note"),
-            id: "lifecycle.pause",
-            content: <button type="button">Note pause</button>,
-          },
-        ],
-      },
+      formChildren({
+        "parties.Party#actions": { "parties.pause": { content: <button type="button">Generic pause</button> } },
+        "notes.Note#actions": { "notes.publish": { content: <button type="button">Publish</button> } },
+      }),
     );
 
     expect(await screen.findByRole("button", { name: "Generic pause" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Note pause" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
   });
 
-  test("lets an impl entry beat the own-model entry, which beats the canonical one", async () => {
-    // The three tiers of the record-verb key, resolved by declared specificity:
-    // canonical MTI parent → own model → own model + the row's impl key. This is
-    // what lets one backend's addon specialize a verb for its own rows without
-    // naming — or displacing it on — a model it does not own.
-    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
+  test.each([
+    ["WHATSAPP", "WhatsApp disconnect", "Generic disconnect"],
+    ["IMAP", "Generic disconnect", "WhatsApp disconnect"],
+  ] as const)("a variant stands in for its original only on rows of its impl (%s)", async (kind, shown, absent) => {
+    // The row reads its impl as the GraphQL enum member (`WHATSAPP`) while the
+    // variant names the registry key (`whatsapp`); both land on one token.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind };
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
       </FormView>,
       implMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">Generic disconnect</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("notes.Note"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">Note disconnect</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "lifecycle.disconnect",
+      formChildren({
+        "parties.Party#actions": {
+          "parties.pause": { sequence: 11, content: <button type="button">Pause</button> },
+          "parties.disconnect": { sequence: 13, content: <button type="button">Generic disconnect</button> },
+        },
+        "notes.Note#actions": {
+          "whatsapp.disconnect": {
+            variant: { of: "parties.disconnect", impl: "whatsapp" },
+            sequence: 13,
             content: <button type="button">WhatsApp disconnect</button>,
           },
-        ],
-      },
+        },
+      }),
     );
 
-    expect(
-      await screen.findByRole("button", { name: "WhatsApp disconnect" }),
-    ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Note disconnect" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Generic disconnect" })).toBeNull();
+    expect(await screen.findByRole("button", { name: shown })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: absent })).toBeNull();
+    // A verb the variant does not specialize stays on every row.
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
   });
 
-  test("selects the impl column it resolves the verb key from", async () => {
-    // The regression this guards: the impl key is built from
+  test("an impl child shows only on rows of its impl, beside another impl's child", async () => {
+    // Two backends contribute a connect verb on one model as siblings; each row
+    // resolves only its own, and neither displaces a model-level verb.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      formChildren({
+        "notes.Note#actions": {
+          "whatsapp.connect": { impl: "whatsapp", content: <button type="button">Pair WhatsApp</button> },
+          "imap.connect": { impl: "imap", content: <button type="button">Connect IMAP</button> },
+          "notes.pause": { content: <button type="button">Pause</button> },
+        },
+      }),
+    );
+
+    expect(await screen.findByRole("button", { name: "Connect IMAP" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pair WhatsApp" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+  });
+
+  test("selects the impl column it resolves variants and impl children from", async () => {
+    // The regression this guards: the row's impl is read from
     // `displayRecord[implField]`, but the selection is built from the form's
     // *declared* fields — and this form declares only `title`. `_impl_fields`
     // intersects with the **resource's** readable columns, which is not the
@@ -1960,27 +1953,21 @@ describe("FormView", () => {
       </FormView>,
       implMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">WhatsApp disconnect</button>,
-          },
-        ],
-      },
+      formChildren({
+        "notes.Note#actions": {
+          "whatsapp.connect": { impl: "whatsapp", content: <button type="button">Pair WhatsApp</button> },
+        },
+      }),
     );
 
-    expect(
-      await screen.findByRole("button", { name: "WhatsApp disconnect" }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Pair WhatsApp" })).toBeTruthy();
     expect(sdkMocks.recordSelection).toContain("kind");
   });
 
   test("selects no impl column the resource does not name", async () => {
-    // The control for the test above. Same form, same row, same contribution —
-    // only `implFields` is gone from the resource, so the view has no column to
-    // select, the row arrives without `kind`, and the impl key never resolves.
+    // The control for the test above. Same form, same row, same child — only
+    // `implFields` is gone from the resource, so the view has no column to
+    // select, the row arrives without `kind`, and the impl never resolves.
     // That is what proves the verb above rendered because the *view selected* the
     // column, rather than because the harness handed it a whole stubbed row.
     sdkMocks.projectToSelection = true;
@@ -1991,58 +1978,61 @@ describe("FormView", () => {
       </FormView>,
       mtiMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">WhatsApp disconnect</button>,
-          },
-        ],
-      },
+      formChildren({
+        "notes.Note#actions": {
+          "whatsapp.connect": { impl: "whatsapp", content: <button type="button">Pair WhatsApp</button> },
+        },
+      }),
     );
 
     await screen.findByDisplayValue("Note");
     expect(sdkMocks.recordSelection).not.toContain("kind");
-    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pair WhatsApp" })).toBeNull();
   });
 
-  test("keeps the inherited verbs on a row of another impl", async () => {
-    // The IMAP case: WhatsApp's entries are keyed on its own impl, so a channel it
-    // does not own is untouched by them and keeps integrate's canonical verbs.
-    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP" };
-    renderWithProviders(
+  test("checks record-verb permission against the row in the toolbar and the menu, variants included", async () => {
+    const renderVerbs = () => renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
       </FormView>,
       implMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">Generic disconnect</button>,
+      formChildren({
+        "parties.Party#actions": {
+          "parties.pause": { permission: "write", content: <ActionTrigger>Pause</ActionTrigger> },
+        },
+        "parties.Party#actions-menu": {
+          "parties.disconnect": { permission: "write", content: <ActionTrigger>Generic disconnect</ActionTrigger> },
+        },
+        "notes.Note#actions-menu": {
+          "whatsapp.disconnect": {
+            variant: { of: "parties.disconnect", impl: "whatsapp" },
+            permission: "write",
+            content: <ActionTrigger>WhatsApp disconnect</ActionTrigger>,
           },
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">WhatsApp disconnect</button>,
-          },
-        ],
-      },
+        },
+      }),
     );
+    sdkMocks.record = { ...sdkMocks.record, kind: "WHATSAPP", permissions: ["read"] };
+    renderVerbs();
+    await screen.findByRole("heading", { name: "First" });
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+    // Nothing is left for the overflow menu, so there is none.
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 
-    expect(
-      await screen.findByRole("button", { name: "Generic disconnect" }),
-    ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+    cleanup();
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    renderVerbs();
+    expect(await screen.findByRole("button", { name: "Pause" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "WhatsApp disconnect" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Generic disconnect" })).toBeNull();
   });
 
-  test("resolves the impl key case-insensitively against the row's enum read", async () => {
-    // The row reads its impl as the GraphQL enum member name (`WHATSAPP`) while an
-    // addon spells the registry key (`whatsapp`); `formViewRecordActionsSlot` owns
-    // that rule, so both sides land on one key.
+  test("orders record verbs by sequence across model and impl children", async () => {
+    // `sequence` stays the ordering contract across the merged addresses: a
+    // backend's Connect(10) on the concrete model lands before the inherited
+    // Pause(11), not after every canonical verb.
     sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
@@ -2050,95 +2040,63 @@ describe("FormView", () => {
       </FormView>,
       implMetadata(),
       undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "whatsapp.connect",
-            content: <button type="button">Pair WhatsApp</button>,
-          },
-        ],
-      },
-    );
-
-    expect(await screen.findByRole("button", { name: "Pair WhatsApp" })).toBeTruthy();
-  });
-
-  test("composes two backends' entries on one model without a collision", async () => {
-    // The cap the model-scoped key imposed: a second backend contributing the same
-    // verb id for the same model hit the `uniqueKind` throw at boot. Distinct impl
-    // keys make them siblings, and each row resolves only its own.
-    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP" };
-    renderWithProviders(
-      <FormView resource="notes.Note" id="note-1">
-        <Field name="title" label="Title" title />
-      </FormView>,
-      implMetadata(),
-      undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">WhatsApp disconnect</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("notes.Note", "imap"),
-            id: "lifecycle.disconnect",
-            content: <button type="button">IMAP disconnect</button>,
-          },
-        ],
-      },
-    );
-
-    expect(await screen.findByRole("button", { name: "IMAP disconnect" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
-  });
-
-  test("orders the merged record verbs by sequence across specificity tiers", async () => {
-    // `sequence` stays the ordering contract once a subtype specializes: merging
-    // two already-sorted groups by concatenation put the specialized verb's whole
-    // group last, so a backend's Connect(10) landed after the inherited Pause(11).
-    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
-    renderWithProviders(
-      <FormView resource="notes.Note" id="note-1">
-        <Field name="title" label="Title" title />
-      </FormView>,
-      implMetadata(),
-      undefined,
-      {
-        slots: [
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.pause",
-            sequence: 11,
-            content: <button type="button">Pause</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("parties.Party"),
-            id: "lifecycle.disconnect",
-            sequence: 13,
-            content: <button type="button">Disconnect</button>,
-          },
-          {
-            ...formViewRecordActionsSlot("notes.Note", "whatsapp"),
-            id: "whatsapp.connect",
-            sequence: 10,
-            content: <button type="button">Connect</button>,
-          },
-        ],
-      },
+      formChildren({
+        "parties.Party#actions": {
+          "parties.pause": { sequence: 11, content: <button type="button">Pause</button> },
+          "parties.disconnect": { sequence: 13, content: <button type="button">Disconnect</button> },
+        },
+        "notes.Note#actions": {
+          "whatsapp.connect": { impl: "whatsapp", sequence: 10, content: <button type="button">Connect</button> },
+        },
+      }),
     );
 
     await screen.findByRole("button", { name: "Connect" });
-    const rendered = screen
-      .getAllByRole("button")
-      .map((button) => button.textContent)
-      .filter((label) => ["Connect", "Pause", "Disconnect"].includes(label ?? ""));
-    expect(rendered).toEqual(["Connect", "Pause", "Disconnect"]);
+    expect(buttonLabels(["Connect", "Pause", "Disconnect"])).toEqual(["Connect", "Pause", "Disconnect"]);
   });
 
-  test("merges FORM_VIEW_SECTIONS_SLOT fields into the submit payload", async () => {
+  test("two variants of one verb for the row's impl throw; a row of another impl renders the original", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const renderRow = (kind: string) => {
+      const record = { id: "note-1", title: "First", kind };
+      renderWithProviders(
+        <FormView resource="notes.Note" id="note-1" acknowledgedSource={{ record, values: record }}>
+          <Field name="title" label="Title" title />
+        </FormView>,
+        implMetadata(),
+        undefined,
+        formChildren({
+          "parties.Party#actions": {
+            "parties.disconnect": { content: <button type="button">Generic disconnect</button> },
+          },
+          "notes.Note#actions": {
+            "whatsapp.disconnect": {
+              variant: { of: "parties.disconnect", impl: "whatsapp" },
+              content: <button type="button">WhatsApp disconnect</button>,
+            },
+            "chatbridge.disconnect": {
+              variant: { of: "parties.disconnect", impl: "whatsapp" },
+              content: <button type="button">Bridge disconnect</button>,
+            },
+          },
+        }),
+      );
+    };
+    try {
+      expect(() => renderRow("WHATSAPP")).toThrow(
+        // Siblings resolve in id order, so the clash names them that way.
+        /"chatbridge.disconnect" and "whatsapp.disconnect" of "form#actions" are both variants of "parties.disconnect" for this row/,
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    cleanup();
+    renderRow("IMAP");
+    expect(await screen.findByRole("button", { name: "Generic disconnect" })).toBeTruthy();
+  });
+
+  test("merges #sections group fields into the submit payload", async () => {
     sdkMocks.record = null;
     renderWithProviders(
       <FormView resource="notes.Note">
@@ -2146,33 +2104,31 @@ describe("FormView", () => {
       </FormView>,
       undefined,
       undefined,
-      {
-        slots: [
-          {
-            ...formViewSectionsSlot("notes.Note"),
-            id: "notes.extra",
+      formChildren({
+        "notes.Note#sections": {
+          "notes.extra": {
             content: (
               <Group label="Extra">
-                <Field name="slotCode" label="Slot Code" />
+                <Field name="extraCode" label="Extra Code" />
               </Group>
             ),
           },
-        ],
-      },
+        },
+      }),
     );
 
     expect(screen.getByText("Extra")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Title"), {
-      target: { value: "Slot Title" },
+      target: { value: "Extra Title" },
     });
-    fireEvent.change(screen.getByLabelText("Slot Code"), {
-      target: { value: "slot-1" },
+    fireEvent.change(screen.getByLabelText("Extra Code"), {
+      target: { value: "extra-1" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { title: "Slot Title", slotCode: "slot-1" },
+      data: { title: "Extra Title", extraCode: "extra-1" },
     });
   });
 
@@ -2185,10 +2141,9 @@ describe("FormView", () => {
         title: { name: "title", kind: "scalar", scalar: "String" },
         reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
       },
-    } } }, undefined, { slots: [
-      { ...formViewSectionsSlot("notes.Note"), id: "notes.extra", content:
-        <Group label="Extra"><Field name="reminderAt" label="Reminder" /></Group> },
-    ] });
+    } } }, undefined, formChildren({ "notes.Note#sections": {
+      "notes.extra": { content: <Group label="Extra"><Field name="reminderAt" label="Reminder" /></Group> },
+    } }));
     await screen.findByDisplayValue("First");
     expect(screen.getByText("Extra")).toBeTruthy();
     expect(sdkMocks.recordSelection).toContain("reminderAt");
@@ -2220,27 +2175,103 @@ describe("FormView", () => {
       <FormView resource={resource} id="record-1" fields={[]} />,
       mtiMetadata(),
       undefined,
-      {
-        slots: [{
-          ...formViewSectionsSlot("parties.Party"),
-          id: "party.related",
-          content: (
-            <Tab id="related" label="Related" requiredFields={["title"]} visibleWhen={visibleWhen}>
-              <p>Related records</p>
-            </Tab>
-          ),
-        }],
-      },
+      formChildren({
+        "parties.Party#sections": {
+          "parties.related": {
+            content: (
+              <Tab id="related" label="Related" requiredFields={["title"]} visibleWhen={visibleWhen}>
+                <p>Related records</p>
+              </Tab>
+            ),
+          },
+        },
+      }),
     );
     await waitFor(() => expect(visibleWhen).toHaveBeenCalledWith(expect.objectContaining({ title })));
     expect(sdkMocks.recordSelection).toContain("title");
     expect(screen.queryAllByRole("tab", { name: "Related" })).toHaveLength(visible ? 1 : 0);
   });
 
-  test("composes FORM_VIEW_SECTIONS_SLOT tabs through the saved-record tab owner", async () => {
-    sdkMocks.record = { id: "note-1", title: "Slot note" };
+  test("contributed #sections keep their container order, before/after anchors included", async () => {
+    // The kind-level and model-level children position as one list; an anchored
+    // child sits beside its anchor rather than sorting last for lacking a sequence.
+    sdkMocks.record = { id: "note-1", title: "Ordered note" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      formChildren({
+        "form#sections": {
+          "audit.trail": { sequence: 30, content: <Tab id="audit" label="Audit"><p>Audit trail</p></Tab> },
+        },
+        "notes.Note#sections": {
+          "notes.extra": { sequence: 10, content: <Tab id="extra" label="Extra"><p>Extra</p></Tab> },
+          "notes.before-audit": { before: "audit.trail", content: <Tab id="before" label="Before audit"><p>Before</p></Tab> },
+          "notes.after-extra": { after: "notes.extra", content: <Tab id="after" label="After extra"><p>After</p></Tab> },
+        },
+      }),
+    );
 
-    function SlotRecordPane(): ReactElement {
+    await screen.findByRole("tab", { name: "Audit" });
+    const contributed = screen.getAllByRole("tab").map((tab) => tab.textContent)
+      .filter((label) => ["Extra", "After extra", "Before audit", "Audit"].includes(label ?? ""));
+    expect(contributed).toEqual(["Extra", "After extra", "Before audit", "Audit"]);
+  });
+
+  test("projects the requiredFields of every admitted child, impl children and variants included, whatever the row", async () => {
+    // The row's impl is unknown until it loads, so the read selects what any
+    // impl's children and any variant need; permissions do not narrow it either.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP", permissions: [] };
+    const scalar = (name: string) => ({ name, kind: "scalar" as const, scalar: "String" });
+    const note = mtiModel("NoteType", "notes.Note", "parties.Party", ["kind"]);
+    const metadata = withTestResourceInventory({ types: {
+      NoteType: { ...note, fields: { ...note.fields, ...Object.fromEntries(
+        ["kind", "pairedAt", "bridgeId", "menuFlag", "chromeFlag", "sectionFlag"].map((name) => [name, scalar(name)]),
+      ) } },
+      PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
+    } });
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      metadata,
+      undefined,
+      formChildren({
+        "parties.Party#actions": {
+          "parties.disconnect": { content: <button type="button">Generic disconnect</button> },
+        },
+        "notes.Note#actions": {
+          "whatsapp.connect": { impl: "whatsapp", requiredFields: ["pairedAt"], content: <button type="button">Pair WhatsApp</button> },
+          "whatsapp.disconnect": {
+            variant: { of: "parties.disconnect", impl: "whatsapp" },
+            requiredFields: ["bridgeId"],
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+        },
+        "notes.Note#actions-menu": {
+          "whatsapp.repair": { impl: "whatsapp", requiredFields: ["menuFlag"], content: <button type="button">Repair</button> },
+        },
+        "form#chrome": {
+          "audit.badge": { permission: "manage", requiredFields: ["chromeFlag"], content: <span>Audit badge</span> },
+        },
+        "notes.Note#sections": {
+          "notes.extra": { requiredFields: ["sectionFlag"], content: <Tab id="extra" label="Extra"><p>Extra</p></Tab> },
+        },
+      }),
+    );
+
+    expect(await screen.findByRole("button", { name: "Generic disconnect" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pair WhatsApp" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining(["kind", "pairedAt", "bridgeId", "menuFlag", "chromeFlag", "sectionFlag"]));
+  });
+
+  test("composes #sections tabs through the saved-record tab owner", async () => {
+    sdkMocks.record = { id: "note-1", title: "Contributed note" };
+
+    function ContributedRecordPane(): ReactElement {
       const context = useRecordChromeContext();
       return <p>Pane for {context.recordId}</p>;
     }
@@ -2251,19 +2282,17 @@ describe("FormView", () => {
       </FormView>,
       undefined,
       undefined,
-      {
-        slots: [
-          {
-            ...formViewSectionsSlot("notes.Note"),
-            id: "notes.pane",
+      formChildren({
+        "notes.Note#sections": {
+          "notes.pane": {
             content: (
               <Tab id="pane" label="Pane" badge={7}>
-                <SlotRecordPane />
+                <ContributedRecordPane />
               </Tab>
             ),
           },
-        ],
-      },
+        },
+      }),
     );
 
     const paneTab = await screen.findByRole("tab", { name: /Pane/ });
@@ -2272,8 +2301,8 @@ describe("FormView", () => {
     expect(await screen.findByText("Pane for note-1")).toBeTruthy();
   });
 
-  test("rejects a slot record tab that claims the reserved overview id", async () => {
-    sdkMocks.record = { id: "note-1", title: "Slot note" };
+  test("rejects a contributed record tab that claims the reserved overview id", async () => {
+    sdkMocks.record = { id: "note-1", title: "Contributed note" };
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() =>
@@ -2283,19 +2312,17 @@ describe("FormView", () => {
           </FormView>,
           undefined,
           undefined,
-          {
-            slots: [
-              {
-                ...formViewSectionsSlot("notes.Note"),
-                id: "notes.overview",
+          formChildren({
+            "notes.Note#sections": {
+              "notes.overview": {
                 content: (
                   <Tab id="overview" label="Shadow overview">
                     <p>contributed</p>
                   </Tab>
                 ),
               },
-            ],
-          },
+            },
+          }),
         ),
       ).toThrow(/duplicate record tab id "overview"/);
     } finally {
@@ -2303,8 +2330,8 @@ describe("FormView", () => {
     }
   });
 
-  test("rejects a slot record tab whose id collides with a declared one", async () => {
-    sdkMocks.record = { id: "note-1", title: "Slot note" };
+  test("rejects a contributed record tab whose id collides with a declared one", async () => {
+    sdkMocks.record = { id: "note-1", title: "Contributed note" };
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() =>
@@ -2320,19 +2347,17 @@ describe("FormView", () => {
           </FormView>,
           undefined,
           undefined,
-          {
-            slots: [
-              {
-                ...formViewSectionsSlot("notes.Note"),
-                id: "notes.pane",
+          formChildren({
+            "notes.Note#sections": {
+              "notes.pane": {
                 content: (
                   <Tab id="pane" label="Pane">
                     <p>contributed</p>
                   </Tab>
                 ),
               },
-            ],
-          },
+            },
+          }),
         ),
       ).toThrow(/duplicate record tab id "pane"/);
     } finally {
@@ -2709,9 +2734,9 @@ describe("FormView", () => {
       recordPresentation="workspace" defaultRecordTab="editor"
       recordTabs={[{ id: "editor", label: "Editor", keepMounted: true,
         render: () => <div data-testid="workspace-canvas" className="h-full">Canvas</div> }]}
-    />, undefined, undefined, { slots: [{ id: "properties", ...FormView.railSlot("notes.Note"),
+    />, undefined, undefined, formChildren({ "notes.Note#rail": { "notes.properties": {
       content: <FormView.RailGroup id="properties" label="Properties" content={<p>Summary</p>} />,
-    }] });
+    } } }));
 
     const panel = await screen.findByRole("tabpanel", { name: "Editor" });
     expect(within(panel).getByTestId("workspace-canvas")).toBeTruthy();
@@ -3282,6 +3307,16 @@ describe("FormView", () => {
   });
 });
 
+/** The form's containers with no children, as a composed app declares them. */
+const NO_FORM_CHILDREN = containersFromChildren(FORM_CONTAINERS, {});
+
+/** The runtime override placing children straight into the form's containers. */
+function formChildren(
+  children: Readonly<Record<string, Readonly<Record<string, ContainerChild>>>>,
+): Partial<AppRuntime> {
+  return { containers: containersFromChildren(FORM_CONTAINERS, children) };
+}
+
 function renderForm(id: string | null): void {
   renderWithProviders(<FormView resource="notes.Note" id={id} fields={fields} />);
 }
@@ -3347,7 +3382,7 @@ function TestProviders({ children, metadata, forms, runtime }: {
     >
       <ModalsHost>
         <ToastProvider>
-          <AppRuntimeProvider runtime={{ widgets: defaultWidgets, ...(forms ? { forms } : {}), ...runtime }}>
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets, containers: NO_FORM_CHILDREN, ...(forms ? { forms } : {}), ...runtime }}>
             {children}
           </AppRuntimeProvider>
         </ToastProvider>
@@ -3510,6 +3545,14 @@ function modelLabelForType(typeName: string): string {
 
 function cloneFields(source: readonly FormField[]): FormField[] {
   return source.map((field) => ({ ...field }));
+}
+
+/** The rendered buttons among `labels`, in document order. */
+function buttonLabels(labels: readonly string[]): string[] {
+  return screen
+    .getAllByRole("button")
+    .map((button) => button.textContent ?? "")
+    .filter((label) => labels.includes(label));
 }
 
 function nextTask(): Promise<void> {

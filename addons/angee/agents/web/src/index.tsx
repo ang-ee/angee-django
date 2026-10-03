@@ -101,15 +101,14 @@ const agents = defineBaseAddon({
     "inference-provider": Cpu,
     "inference-model": Box,
   },
-  chatter: [
-    {
-      id: "agents",
-      sequence: 0,
-      label: "Agents",
-      icon: "agent",
-      render: ({ view }) => <AgentChatterPane view={view} />,
+  containers: {
+    "record#aside": {
+      "agents.chat": {
+        sequence: 0,
+        content: { label: "Agents", icon: "agent", aliases: ["agents"], render: ({ view }) => <AgentChatterPane view={view} /> },
+      },
     },
-  ],
+  },
 });
 
 export default agents;

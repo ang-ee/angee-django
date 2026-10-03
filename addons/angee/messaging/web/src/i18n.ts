@@ -163,6 +163,7 @@ export const enMessagingMessages: Record<string, string> = {
   "webform.submitFailed": "Could not submit this form.",
   "webform.successTitle": "Thank you",
   "webform.successBody": "Your response was received. Your receipt is:",
+  "channel.connect.menu": "Connect",
   "channel.connect.name": "Name",
   "channel.connect.submit": "Connect",
   "channel.connect.submitting": "Connecting…",

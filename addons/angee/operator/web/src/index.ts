@@ -145,16 +145,14 @@ const operator = defineBaseAddon({
   // The first console-shell drawer adopter: a non-modal bottom drawer streaming
   // a chosen service/workspace's logs. Sticky across navigation (mounted once
   // above the router outlet) and not route-scoped — it picks its own target.
-  drawers: [
-    {
-      id: "logs",
-      edge: "bottom",
-      title: operatorLogsDrawerTitle,
-      icon: "operator-logs",
-      sequence: 10,
-      render: () => createElement(OperatorLogsDrawer),
+  containers: {
+    "shell#drawers-bottom": {
+      "operator.logs": {
+        sequence: 10,
+        content: { title: operatorLogsDrawerTitle, icon: "operator-logs", render: () => createElement(OperatorLogsDrawer) },
+      },
     },
-  ],
+  },
   // The daemon's GraphQL surface as a refine data provider, authed by the live
   // bearer the token gate mints. `createApp` registers it alongside the
   // schema-named providers, so panes read/write it via `dataProviderName`.

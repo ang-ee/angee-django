@@ -54,9 +54,10 @@ const platform = defineBaseAddon({
   routes: platformRoutes,
   menus: platformMenu,
   i18n: { platform: enPlatformMessages },
+  // Verbs on the addon board's toolbar, such as the VCS marketplace's sources.
+  containers: { "platform.addons#toolbar": {} },
 });
 
 export default platform;
 
-export { PLATFORM_ADDON_TOOLBAR_SLOT } from "./slots";
 export { PendingAddonChanges, PLATFORM_ADDON_MUTATION_INVALIDATES, PlatformExplorer } from "./documents";

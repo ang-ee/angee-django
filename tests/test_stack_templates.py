@@ -21,6 +21,9 @@ from typing import Any
 
 import pytest
 import yaml
+from django.apps import AppConfig
+
+from angee.addons import addon_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_GITIGNORE = ROOT / ".gitignore"
@@ -775,25 +778,16 @@ def test_project_template_defaults_to_local_addon_installer() -> None:
     assert "ANGEE_ADDON_INSTALLER_BACKEND" not in settings
 
 
-def test_project_web_confinement_answer_renders_only_when_set() -> None:
+def test_project_web_host_leaves_home_and_confinement_to_the_composed_shell() -> None:
+    """Products declare home and perspective; the rendered host passes neither."""
+
     project = ROOT / "templates" / "projects" / "web"
     answers = yaml.safe_load((project / "copier.yml").read_text())
     template = (project / "template" / "{{ web_path }}" / "src" / "main.tsx.jinja").read_text()
-    inputs = {name: answers[name]["default"] for name in ("home", "confine_to")}
-    for confine_to in (inputs["confine_to"], "requests", 'requests"\\draft'):
-        values = {**inputs, "confine_to": confine_to}
-        rendered = _render_conditionals(template, values)
-        rendered = re.sub(
-            r"\{\{\s*(\w+)\s*\|\s*tojson\s*\}\}",
-            lambda match: json.dumps(values[match.group(1)]),
-            rendered,
-        )
-        assert "{{" not in rendered
-        assert "{%" not in rendered
-        if confine_to:
-            assert f"confineTo: {json.dumps(confine_to)}," in rendered
-        else:
-            assert "confineTo:" not in rendered
+
+    assert not {"home", "confine_to"} & answers.keys()
+    assert "home:" not in template
+    assert "confineTo" not in template
 
 
 def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> None:
@@ -847,6 +841,9 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
     full = _render_project_settings(addons_profile="full", framework_workspace=True)
+    nexus = addon_manifest(AppConfig.create("angee.nexus"))
+    assert nexus is not None
+    assert set(nexus.depends_on) <= set(full["INSTALLED_APPS"])
     for app in (
         "angee.nexus",
         "angee.spaces",
@@ -1694,7 +1691,10 @@ def test_python_nodes_share_runtime_environment_and_restart_entry() -> None:
 def test_stack_agent_instructions_name_the_rendered_restart_job() -> None:
     """The root AGENTS.md restart command runs the job the manifest declares as the restart entry."""
 
-    for agents_template, stack in ((DEV_AGENTS_TEMPLATE, _render_dev_stack()), (LOCAL_AGENTS_TEMPLATE, _render_local_stack())):
+    for agents_template, stack in (
+        (DEV_AGENTS_TEMPLATE, _render_dev_stack()),
+        (LOCAL_AGENTS_TEMPLATE, _render_local_stack()),
+    ):
         match = re.search(r'with restart_job="([^"]+)"', agents_template.read_text(encoding="utf-8"))
         assert match is not None, agents_template
         restart_job = match.group(1)

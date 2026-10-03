@@ -2,6 +2,7 @@ import type { DocumentType } from "@angee/gql/console";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
+  ActionTrigger,
   Button,
   DialogBackdrop,
   DialogBody,
@@ -14,7 +15,6 @@ import {
   FieldControl,
   FieldLabel,
   FieldRoot,
-  Glyph,
   useActionResultMutation,
   useRecordChromeActionMutation,
   useRecordChromeContext,
@@ -143,14 +143,13 @@ export function ChannelPairingAction({
   return (
     <>
       {showButton ? (
-        <Button
+        <ActionTrigger
           variant={resumeOnOpen ? "primary" : "secondary"}
-          size="sm"
+          glyph="link"
           onClick={openConnection}
         >
-          <Glyph decorative name="link" />
           {t(labelKey)}
-        </Button>
+        </ActionTrigger>
       ) : null}
       <PairingDialog
         channelId={dialogId}

@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { enProposalsMessages } from "./i18n";
-import { roundRecordSlots } from "./record-rounds";
+import { roundRecordContainers } from "./record-rounds";
 import { PROPOSAL_MODEL, ROUND_MODEL } from "./resources";
 
 const proposalsRoutes: readonly BaseAddonRoute[] = [
@@ -75,7 +75,7 @@ const proposals = defineBaseAddon({
   routes: proposalsRoutes,
   menus: proposalsMenu,
   i18n: { proposals: enProposalsMessages },
-  slots: roundRecordSlots,
+  containers: roundRecordContainers,
   icons: {
     "proposals-round": GitCompareArrows,
     "proposals-response": MessageSquareText,

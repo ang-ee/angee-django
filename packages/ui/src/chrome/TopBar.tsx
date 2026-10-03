@@ -7,10 +7,12 @@ import { barVariants } from "../layouts/bar";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
 import { CommandPalette } from "./CommandPalette";
-import { Breadcrumb } from "./Breadcrumb";
+import { AppMenu } from "./AppMenu";
+import { useShellRegion } from "./shell-containers";
 import { Glyph } from "./Glyph";
 import { Systray } from "./Systray";
 import { UserMenu } from "./UserMenu";
+import { DeveloperMenu } from "./DeveloperMode";
 
 export interface TopBarProps {
   /** Optional leading brand/lockup. Omit inside ConsoleLayout — the rail's
@@ -18,7 +20,6 @@ export interface TopBarProps {
    * the menu (matching the console layout). */
   brand?: ReactNode;
   hideSearch?: boolean;
-  showBreadcrumb?: boolean;
   onHelp?: () => void;
   onNotifications?: () => void;
   navigation?: {
@@ -44,7 +45,6 @@ export interface TopBarProps {
 export function TopBar({
   brand,
   hideSearch = false,
-  showBreadcrumb = true,
   onHelp,
   onNotifications,
   navigation,
@@ -58,6 +58,7 @@ export function TopBar({
   children,
 }: TopBarProps): ReactElement {
   const t = useUiT();
+  const showAppMenu = useShellRegion("chrome.app-menu");
   return (
     <header
       aria-label={t("chrome.topBar")}
@@ -71,13 +72,14 @@ export function TopBar({
       {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
       {brand}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
-      {showBreadcrumb ? <Breadcrumb className="ml-1 max-sm:hidden" /> : null}
+      {showAppMenu ? <AppMenu /> : null}
       <div className="min-w-2 flex-1" />
       {children}
       {hideSearch ? null : (
         <CommandPalette triggerPlaceholder={searchPlaceholder} />
       )}
       <Systray onHelp={onHelp} onNotifications={onNotifications} />
+      <DeveloperMenu />
       {showUserMenu ? (
         <UserMenu
           className="size-icon-btn-md rounded-6 border-0"

@@ -7,7 +7,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import type { Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
-import { parseFlatSearch, stringifyFlatSearch } from "@angee/app";
+import { composeAddons, parseFlatSearch, stringifyFlatSearch } from "@angee/app";
 import { installTestLocalStorage } from "@angee/app/testing";
 import { AppRuntimeProvider, ConsoleLayout, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets, recordNavigationSearch } from "@angee/ui";
 import { afterEach, expect, test, vi } from "vitest";
@@ -89,7 +89,9 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
   const view = render(
     <Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
       <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.File": "mutation DeleteFiles($id: ID!) { delete_files_preview(id: $id) { deleted } }", "storage.Folder": "mutation DeleteFolders($id: ID!) { delete_folders_preview(id: $id) { deleted } }" } } }}>
-      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []),
+        // The composed containers: the chatter aside the page publishes its Details tab into.
+        containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers }}>
         <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
       </AppRuntimeProvider>
       </OperationDocumentsProvider>

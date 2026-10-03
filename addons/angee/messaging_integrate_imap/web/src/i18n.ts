@@ -1,6 +1,4 @@
 export const enMessagingImapMessages: Record<string, string> = {
-  "channel.imap.menu.label": "IMAP",
-  "channel.imap.menu.description": "Connect IMAP mailbox channels",
   "channel.imap.button": "Connect IMAP",
   "channel.imap.title": "Connect IMAP",
   "channel.imap.description": "Create a message channel from an IMAP account.",

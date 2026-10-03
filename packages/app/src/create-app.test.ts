@@ -8,13 +8,13 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   useAppRuntime,
   useChatterRoutes,
+  useContainer,
   useT,
   useResourceRecordHrefLookup,
   useResourceRoute,
   useRouteHref,
 } from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
-import { useSurfacePresentation } from "@angee/ui/chrome/surface-policy";
 import { resourcePageRoutes } from "./define-base-addon";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -157,6 +157,37 @@ describe("createApp confinement", () => {
     } finally {
       root.unmount();
       host.remove();
+    }
+  });
+});
+
+describe("createApp developer mode", () => {
+  test("?debug=1 on / turns it on through the home redirect; pages read the composition and route name", async () => {
+    window.sessionStorage.clear();
+    history.replaceState(null, "", "/?debug=1");
+    const seen: { route?: string | null; home?: string } = {};
+    function Probe(): ReactNode {
+      const runtime = useAppRuntime();
+      seen.route = runtime.activeRouteName;
+      seen.home = runtime.composition?.effective.home;
+      return null;
+    }
+    const app = createApp({
+      ...testAppInput([{ id: "desk", routes: [{ name: "desk.home", path: "/desk", component: Probe }], menus: [{ id: "desk", route: "desk.home" }] }]),
+      home: "desk.home",
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(window.location.pathname).toBe("/desk"));
+      expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");
+      await waitFor(() => expect(seen).toEqual({ route: "desk.home", home: "/desk" }));
+      expect(app.explain.effective.home).toBe("/desk");
+    } finally {
+      root.unmount();
+      host.remove();
+      window.sessionStorage.clear();
     }
   });
 });
@@ -1235,11 +1266,11 @@ describe("createApp resource route index", () => {
 
     function ChatterRouteProbe(): ReactNode {
       const route = useChatterRoutes().find((item) => item.name === "notes.record");
-      const surface = useSurfacePresentation();
+      const tabs = useContainer("record#aside").map((child) => child.id);
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${surface.chatter === "hidden" ? "hidden" : surface.chatter?.tabs?.join(",") ?? "all"}`,
+        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
       );
     }
 
@@ -1247,7 +1278,7 @@ describe("createApp resource route index", () => {
       {
         id: "notes",
         menus: [{ id: "notes", route: "notes.home" }],
-        surface: [{ app: "notes", route: "notes.home", chatter: { tabs: ["comments"] } }],
+        containers: { "record#aside": [{ only: ["chatter.comments"], when: { route: "notes.home" } }] },
         routes: [
           {
             name: "notes.home",
@@ -1273,7 +1304,7 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note parties.Party id comments");
+        expect(host.textContent).toContain("notes.Note parties.Party id chatter.comments");
       });
     } finally {
       root.unmount();
@@ -1760,4 +1791,39 @@ test("confined app links, vocabulary and Settings follow one projection across n
     await app.router.navigate({ to: "/records/r1" });
     expect(window.location.pathname).toBe("/desk/incoming");
   } finally { root.unmount(); host.remove(); }
+});
+
+test("a container condition naming an unknown route, app or perspective fails at boot", () => {
+  const input = (when: Record<string, string>): CreateAppInput => testAppInput([{
+    id: "desk",
+    routes: [{ name: "desk.home", path: "/desk", component: EmptyPage }],
+    menus: [{ id: "desk", route: "desk.home" }],
+    perspectives: { focus: { root: "desk", home: "desk.home" } },
+    containers: { "form#chrome": [
+      { "desk.share": { content: createElement("span", null, "Share") } },
+      { only: [], when },
+    ] },
+  }]);
+  expect(() => createApp(input({ route: "desk.home" }))).not.toThrow();
+  expect(() => createApp(input({ app: "desk", perspective: "focus" }))).not.toThrow();
+  expect(() => createApp(input({ route: "desk.hmoe" }))).toThrow(/Addon "desk" narrows "form#chrome" on unknown route "desk.hmoe"/);
+  expect(() => createApp(input({ app: "dsk" }))).toThrow(/narrows "form#chrome" in unknown app "dsk"/);
+  expect(() => createApp(input({ perspective: "facus" }))).toThrow(/narrows "form#chrome" in unknown perspective "facus"/);
+});
+
+test("a preset opening on a contributed view kind needs a resource#views child offering it", () => {
+  const preset = { id: "desk.graph", label: "Graph", resource: "notes.Note", view: "nexus.graph" as const };
+  const graph = { label: "Graph", icon: "network", capabilities: { grouping: false, pagination: false, columns: false, filter: true } };
+  const input = (containers: BaseAddon["containers"]): CreateAppInput => ({
+    ...testAppInput([{
+      id: "desk", resourceViews: [preset],
+      routes: resourcePageRoutes("desk.all", "/desk", EmptyPage, "notes.Note"),
+      menus: [{ id: "desk", route: "desk.all" }],
+    }, { id: "nexus", containers }]),
+    schemas: testSchemasWithConsoleResources([testDataResource("notes.Note"), testDataResource("tasks.Task")]),
+  });
+  expect(() => createApp(input({ "notes.Note#views": { "nexus.graph": { content: graph } } }))).not.toThrow();
+  expect(() => createApp(input({ "resource#views": { "nexus.graph": { content: graph } } }))).not.toThrow();
+  expect(() => createApp(input({ "tasks.Task#views": { "nexus.graph": { content: graph } } })))
+    .toThrow(/Resource view "desk.graph" opens on view kind "nexus.graph", which no addon contributes to "notes.Note#views"/);
 });

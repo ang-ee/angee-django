@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ProjectPhaseControl } from "./project-phase";
 
@@ -45,7 +45,9 @@ vi.mock("./i18n", () => ({
     key === "project.phase.confirm" ? `Change from ${values?.previous} to ${values?.selected}?` : key,
 }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
+// happy-dom lays nothing out: give the filled bar room so its steps stay expanded rather than collapsing to a menu.
+beforeEach(() => { vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 test("only selectable milestones ask for confirmation, and a declined confirmation never writes", async () => {
   mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);

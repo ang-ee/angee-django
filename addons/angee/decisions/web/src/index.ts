@@ -4,7 +4,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { enDecisionsMessages } from "./i18n";
 
 export { DECISION_MODEL } from "./documents.console";
-export { DECISION_ORIGIN_SLOT, decisionContent, useDecisionContent, type DecisionContentProps } from "./slots";
+export { decisionContent, useDecisionContent, type DecisionContentProps } from "./content";
 export { decisionRecordTab } from "./RecordDecisions";
 
 export default defineBaseAddon({
@@ -15,5 +15,7 @@ export default defineBaseAddon({
     "decisions.Decision",
   ),
   menus: [{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.inbox" }],
+  // Consumers present a decision kind (one per kind); waiting owners link back from it.
+  containers: { "decisions#content": { unique: "key" }, "decisions#origin": {} },
   i18n: { decisions: enDecisionsMessages },
 });

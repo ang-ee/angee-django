@@ -6,7 +6,10 @@ import messagingIntegrateSlack from "./index";
 describe("messaging_integrate_slack addon manifest", () => {
   test("declares one poll connect contribution with no pairing verbs", () => {
     expect(() => expectValidChannelBridgeAddon(messagingIntegrateSlack)).not.toThrow();
-    expect(messagingIntegrateSlack.slots).toHaveLength(1);
+    expect(messagingIntegrateSlack.containers?.["messaging.channels#toolbar"])
+      .toMatchObject({ "messaging-integrate-slack.connect": { sequence: 24 } });
+    // A poll bridge adds no pairing verbs to the channel form's toolbar.
+    expect(messagingIntegrateSlack.containers?.["messaging.Channel#actions"]).toBeUndefined();
   });
 
   test("contributes Slack-specific manifest instructions", () => {

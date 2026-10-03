@@ -114,9 +114,9 @@ class Command(BaseCommand):
         2. ``angee build`` — emit the concrete runtime and materialize applicable
            addon-owned migrations onto each downstream app's current leaf.
         3. ``makemigrations --noinput --skip-checks`` — required migration defaults
-           fail without prompting. Every provision defers system checks until
-           migrations and permission sync reconcile persisted state with the
-           newly emitted model graph.
+           and populated column drops fail without prompting or writing. Every
+           provision defers system checks until migrations and permission sync
+           reconcile persisted state with the newly emitted model graph.
         4. ``migrate --noinput --skip-checks`` with checks deferred on every provision.
         5. ``reconcile_permissions`` — prune stale package-managed REBAC schema
            only after identity migrations have preserved moved rows.

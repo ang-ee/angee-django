@@ -18,7 +18,7 @@ import {
   parsePageGroups,
 } from "./index";
 import type { ColumnDescriptor } from "./Column";
-import { slotContents } from "../../lib/slot-outlet";
+import { containerContents } from "../../lib/container-outlet";
 
 interface TestRow {
   title: string;
@@ -189,11 +189,10 @@ describe("page element markers", () => {
       .toBe(false);
   });
 
-  test("parse raw slot contents wrapped in keyed fragments", () => {
-    const nodes = slotContents([
+  test("parse raw container contents wrapped in keyed fragments", () => {
+    const nodes = containerContents([
       {
-        slot: "tags.scope",
-        id: "scope",
+        id: "tags.scope",
         content: [
           <>
             <Facet field="scope" label="Scope" />

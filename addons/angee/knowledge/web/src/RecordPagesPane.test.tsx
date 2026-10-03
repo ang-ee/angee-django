@@ -25,7 +25,7 @@ vi.mock("@angee/ui", async (original) => ({
 }));
 vi.mock("./KnowledgePageView", () => ({ KnowledgePageView: ({ pageId }: { pageId: string }) => <p>Page {pageId}</p> }));
 
-import { RecordPagesPane, recordPagesContribution, recordPagesTarget } from "./RecordPagesPane";
+import { RecordPagesPane, recordPagesTab, recordPagesTarget } from "./RecordPagesPane";
 import { KnowledgeBindRecord, KnowledgePages, KnowledgeRecordPages } from "./data/documents";
 import type { ChatterViewContext } from "@angee/ui";
 
@@ -47,7 +47,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 test("role configuration filters one shared query and opens the bound page inline", () => {
-  const contribution = recordPagesContribution({ id: "references", role: "reference", when: () => true });
+  const tab = recordPagesTab({ label: "References", role: "reference", sequence: 45, when: () => true, aliases: ["references"] });
+  expect(tab).toMatchObject({ sequence: 45, content: { label: "References", icon: "knowledge", aliases: ["references"] } });
+  const contribution = tab.content;
   expect(contribution.when?.(context)).toBe(true);
   function Count() { return <span>Count {contribution.useCount?.(context)}</span>; }
   render(<Count />);

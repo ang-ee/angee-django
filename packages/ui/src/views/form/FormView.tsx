@@ -7,7 +7,7 @@ import { useBreadcrumbLeafLabel } from "../../chrome/Breadcrumb";
 import { renderGlyph } from "../../chrome/Glyph";
 import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
-import { SlotOutlet } from "../../lib/slot-outlet";
+import { ContainerOutlet } from "../../lib/container-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
@@ -45,7 +45,6 @@ import { useAppRuntime } from "../../runtime";
 import { resolveTabLabel } from "../page";
 import { SectionHeading } from "./SectionHeading";
 import { RecordRailGroup } from "./form-view-rail";
-import { formViewRailSlot } from "./form-view-slots";
 
 export { SectionHeading, type SectionHeadingProps } from "./SectionHeading";
 export { RecordRailGroup, type RecordRailField, type RecordRailGroupProps } from "./form-view-rail";
@@ -54,15 +53,7 @@ export {
   acknowledgeFormSubmit,
 } from "./form-view-surface";
 
-export {
-  FORM_VIEW_RECORD_ACTIONS_SLOT,
-  FORM_VIEW_RECORD_CHROME_SLOT,
-  FORM_VIEW_RAIL_SLOT,
-  FORM_VIEW_SECTIONS_SLOT,
-  formViewRailSlot,
-  formViewRecordActionsSlot,
-  formViewSectionsSlot,
-} from "./form-view-slots";
+export { FORM_CONTAINERS } from "./form-containers";
 
 export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
@@ -143,7 +134,6 @@ function FormViewComponent(props: FormViewProps): React.ReactElement {
 export const FormView = Object.assign(FormViewComponent, {
   RailGroup: RecordRailGroup,
   SectionHeading,
-  railSlot: formViewRailSlot,
 });
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
@@ -206,14 +196,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     applyPatch,
     reload,
   } = surface;
-  const primaryRecordActions = React.useMemo(
-    () => recordActions.filter((entry) => entry.recordActionPlacement !== "menu"),
-    [recordActions],
-  );
-  const menuRecordActions = React.useMemo(
-    () => recordActions.filter((entry) => entry.recordActionPlacement === "menu"),
-    [recordActions],
-  );
+  const { primary: primaryRecordActions, menu: menuRecordActions } = recordActions;
   const [toolbarHost, setToolbarHost] = React.useState<HTMLElement | null>(null);
   const recordChromeContext = React.useMemo(
     () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
@@ -363,7 +346,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             contributedActions={
               !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (
                 <RecordChromeProvider value={recordChromeContext}>
-                  <SlotOutlet entries={menuRecordActions} />
+                  <ContainerOutlet entries={menuRecordActions} />
                 </RecordChromeProvider>
               ) : undefined
             }
@@ -372,7 +355,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         ) : null}
         {!awaitingRecord && !readOnly && recordChromeContext ? (
           <RecordChromeProvider value={recordChromeContext}>
-            <SlotOutlet entries={primaryRecordActions} />
+            <ContainerOutlet entries={primaryRecordActions} />
           </RecordChromeProvider>
         ) : null}
       </div>

@@ -12,10 +12,10 @@ The rail entry is named Decisions; messaging retains Inbox. The backend's
 value owns viewer editability.
 
 The record declares a read-only `Form`. For a viewer who can act on an open
-decision, the page renders the `Decide` form inline (the shared action form's
-`inline` presentation) with the kind's registered content, and opens the
-decision's subject beside it in the record peek on large screens; there is no
-Decide dialog. Others see the content read-only. The form's dynamic args
+decision, the shared action form's `inline` presentation renders the answer
+fields with the kind's registered content and places Decide in the record
+toolbar. The decision's subject opens beside it in the record peek on large
+screens. Others see the content read-only. The form's dynamic args
 use the shared `jsonSchemaActionArgs` owner for the retained JSON Schema,
 including offered actions, initial values, immutable fields and validation.
 The generated `decide` action receives the action separately from its values
@@ -26,10 +26,13 @@ A conflict locks the draft; reloading the page reviews the refreshed question.
 Changing actions replaces only branch values; consumer-content values outside
 those fields survive. Successful submissions use native model invalidation;
 only rejected submissions refresh the revision directly.
+A re-asked decision displays the previous answer's refusal above its fields.
+The status summary reads enum values through the shared option-label owner.
 
-Consumers contribute `decisionContent(kind, Component)` through their addon's
-`slots` array. The helper targets the owned content slot, which accepts exactly one contribution per kind:
-the framework's composition collision check rejects duplicate claims. Content
+Consumers declare a `decisions#content` child built with
+`decisionContent(kind, Component)` in their addon's `containers`. Decisions
+declares that container with `unique: "key"`, the key being the decision kind,
+so composition rejects a second child for one kind. Content
 receives read-only `{decision, basis, context}` in the Context tab and in the
 inline Decide form, where it inherits the action's native React Hook Form context.
 The record tab disables consumer controls. Consumers parse their own basis/context
@@ -38,15 +41,16 @@ region stays hidden to avoid duplicating its presentation. Otherwise the generic
 context renderer validates and displays facts as readable fields; references and
 evidence open through record peeks.
 
-`DECISION_ORIGIN_SLOT` lets an independent waiting owner contribute links for the
-current group. Its content reads `useDecisionContent()` and renders nothing when
-that owner has no relevant link. The page renders nothing for an empty slot.
-Decisions imports no waiting owner's concepts or queries.
+A `decisions#origin` child lets an independent waiting owner contribute links
+for the current group. Its content reads `useDecisionContent()` and renders
+nothing when that owner has no relevant link. The page renders nothing for an
+empty container. Decisions imports no waiting owner's concepts or queries.
 
 `Decision.kind_label` owns the inbox label and record representation. The Context
 tab lists other visible seats through the same resource list owner.
-Consumers can contribute `decisionRecordTab(model)` to show decisions for a
-record; its filter uses the backend's `subject_model` and `subject_id` fields.
+Consumers can declare `decisionRecordTab()` as a `<model>#sections` child under
+their own id (`"<addon>.decisions"`) to show decisions for a record; its filter
+uses the backend's `subject_model` and `subject_id` fields.
 
 This schema-dependent fragment typechecks after composition and web codegen at
 the stack root. Its stories and provider-backed tests exercise the same shared

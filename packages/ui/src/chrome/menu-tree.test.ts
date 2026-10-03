@@ -32,6 +32,79 @@ const MENU: readonly ChromeMenuItem[] = [
   { id: "single", label: "Single", to: "/single" },
 ];
 
+describe("match", () => {
+  test.each([
+    ["", "m.all"],
+    ["?preset=archived", "m.all"],
+    ["?preset=unread", "m.unread"],
+  ])("ranks mismatched preset references below the general page on %s", (search, expected) => {
+    const tree = MenuTree.from([{ id: "m", children: [
+      { id: "m.unread", to: "/m/messages?preset=unread" },
+      { id: "m.all", to: "/m/messages" },
+    ] }]);
+    expect(tree.match("/m/messages", search)?.item.id).toBe(expected);
+    expect(tree.match(`/m/messages${search}`)?.item.id).toBe(expected);
+    expect(tree.roots[0]?.activeTargetedChild(`/m/messages${search}`)?.id).toBe(expected);
+  });
+
+  test("eight equal route references highlight the first declaring owner", () => {
+    const tree = MenuTree.from(Array.from({ length: 8 }, (_, index) => ({
+      id: `owner-${index}`, to: "/shared",
+    })));
+    expect(tree.match("/shared")?.item.id).toBe("owner-0");
+    expect(tree.activeItem("/shared")?.id).toBe("owner-0");
+    expect(tree.activeAppRoot("/shared")?.id).toBe("owner-0");
+  });
+
+  test("a child beats its root on the same path and returns its trail", () => {
+    const tree = MenuTree.from([{ id: "desk", to: "/desk", children: [
+      { id: "desk.home", to: "/desk" },
+    ] }]);
+    expect(tree.match("/desk")?.item.id).toBe("desk.home");
+    expect(tree.match("/desk")?.trail.map((item) => item.id)).toEqual(["desk", "desk.home"]);
+    expect(tree.roots[0]?.activeTargetedChild("/desk")?.id).toBe("desk.home");
+  });
+
+  test("more equal preset search params win before depth, while path length wins first", () => {
+    const tree = MenuTree.from([{ id: "desk", children: [
+      { id: "desk.all", to: "/desk/notes" },
+      { id: "desk.open", to: "/desk/notes?preset=open", children: [
+        { id: "desk.deep", to: "/desk/notes" },
+      ] },
+      { id: "desk.mine", to: "/desk/notes?preset=open&owner=me" },
+      { id: "desk.record", to: "/desk/notes/one" },
+    ] }]);
+    expect(tree.match("/desk/notes", "?preset=open")?.item.id).toBe("desk.open");
+    expect(tree.match("/desk/notes?preset=open&owner=me")?.item.id).toBe("desk.mine");
+    expect(tree.match("/desk/notes/one", "?preset=open&owner=me")?.item.id).toBe("desk.record");
+    expect(tree.match("/unrelated")).toBeUndefined();
+  });
+
+  test("pre-order follows the assembled tree, including parentId contributions", () => {
+    const tree = MenuTree.from([
+      { id: "contribution", parentId: "desk", to: "/shared" },
+      { id: "desk", children: [{ id: "desk.owner", to: "/shared" }] },
+    ]);
+    expect(tree.activeItem("/shared")?.id).toBe("desk.owner");
+  });
+
+  test("nodes separate apps and menus and select the nearest visible app", () => {
+    const tree = MenuTree.from([{ id: "suite", children: [
+      { id: "desk", app: true, children: [{ id: "desk.notes", to: "/notes" }] },
+      { id: "suite.inbox", to: "/inbox" },
+      { id: "hidden", app: true, hidden: true, to: "/hidden" },
+    ] }, { id: "legacy", parentId: "suite", to: "/legacy" },
+    { id: "platform", group: "platform", to: "/settings" }]);
+    const suite = tree.byId.get("suite")!;
+    expect(suite.isApp).toBe(true);
+    expect(suite.appChildren().map((item) => item.id)).toEqual(["desk"]);
+    expect(suite.menuItems().map((item) => item.id)).toEqual(["suite.inbox", "legacy"]);
+    expect(tree.byId.get("platform")?.isApp).toBe(false);
+    expect(tree.match("/notes")?.app?.id).toBe("desk");
+    expect(tree.match("/hidden")?.app?.id).toBe("suite");
+  });
+});
+
 test("confinement selects one root for the rail and palette without mutating composition", () => {
   const tree = MenuTree.from([...MENU, { id: "notes.extra", parentId: "notes", to: "/notes/extra" }]);
   const confined = tree.confineTo("notes");
@@ -41,6 +114,16 @@ test("confinement selects one root for the rail and palette without mutating com
   expect(tree.roots).toHaveLength(3);
   expect(() => tree.confineTo("missing")).toThrow(/Unknown menu root/);
   expect(() => tree.confineTo("notes.all")).toThrow(/Unknown menu root/);
+});
+
+test("confinement keeps personal Settings roots, such as appearance, beside the root's own", () => {
+  const tree = MenuTree.from([...MENU,
+    { id: "appearance", label: "Appearance", group: "platform", personal: true, to: "/settings/appearance" },
+    { id: "platform", label: "Platform", group: "platform", to: "/settings/platform" },
+    { id: "notes.settings", parentId: "notes", label: "Notes settings", group: "platform", to: "/notes/settings" }]);
+  const confined = tree.confineTo("notes");
+  expect(confined.settingsMenuItems().map((node) => node.id)).toEqual(["notes.settings", "appearance"]);
+  expect(confined.railMenuItems().map((node) => node.id)).toEqual(["notes"]);
 });
 
 describe("resolveMenuRouteTargets", () => {

@@ -208,7 +208,7 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
     lines.push("    },");
     return lines.join("\n");
   });
-  const addonValues = addonPackages.map((_pkg, index) => `addon${index}`).join(", ");
+  const addonValues = composedAddonValues(addonPackages, manifest.deployment).join(", ");
   const body = [
     "// Generated composed web runtime - do not edit by hand.",
     "// Run `pnpm codegen`; `manage.py angee build` emits the manifest it reads.",
@@ -245,6 +245,27 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
   console.log(
     `composed web runtime: ${addonPackages.length} addon(s), ${schemaNames.length} schema(s)`,
   );
+}
+
+/**
+ * Attach the composer's addon ancestry to each manifest as web ids, then append
+ * the deployment's ANGEE_UI layer, which depends on every composed addon.
+ */
+function composedAddonValues(addonPackages, deployment) {
+  const indexByApp = new Map(addonPackages.map((pkg, index) => [pkg.app, index]));
+  const values = addonPackages.map((pkg, index) => {
+    const ancestors = (pkg.dependsOn ?? []).map((app) => {
+      const ancestor = indexByApp.get(app);
+      if (ancestor === undefined) throw new Error(`${pkg.package} depends on ${app}, which has no web package in the manifest.`);
+      return `addon${ancestor}.id`;
+    });
+    return ancestors.length ? `{ ...addon${index}, dependsOn: [${ancestors.join(", ")}] }` : `addon${index}`;
+  });
+  if (deployment) {
+    const everyAddon = addonPackages.map((_pkg, index) => `addon${index}.id`).join(", ");
+    values.push(`{ id: "deployment", ...${JSON.stringify(deployment)}, dependsOn: [${everyAddon}] }`);
+  }
+  return values;
 }
 
 async function loadInstalledThemes(addonSources) {

@@ -1,0 +1,22 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see hatch-angee's native AddonManifest.
+[addon]
+name = "angee.pm"
+description = "Project-management suite: projects, teams, intake, proposals and portfolio configured as one product"
+keywords = ["pm", "projects", "work", "suite"]
+category = "Productivity"
+depends_on = [
+  "angee.intake",
+  "angee.portfolio",
+  "angee.projects",
+  "angee.proposals",
+  "angee.proposals_work",
+  "angee.work",
+]
+
+[resources]
+demo = [
+  { path = "resources/demo/010_iam.user.yaml", adopt = "username" },
+  { path = "resources/demo/020_parties.person.yaml", depends_on = "resources/demo/010_iam.user.yaml", adopt = "user" },
+  { path = "resources/demo/030_spaces.membership.yaml", depends_on = ["resources/demo/020_parties.person.yaml", "work:resources/demo/010_work.queue.yaml"], adopt = ["group", "party"] },
+]

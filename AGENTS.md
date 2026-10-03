@@ -69,7 +69,7 @@ highest standard.
 - **Compose through declared contracts.** Addon declaration facts belong to
   `addon.toml`; Django `AppConfig` owns app identity and lifecycle. Use schema
   buckets, model `extends`, input/type extensions, settings/autoconfig,
-  `ImplClassField`, slots, registered forms/glyphs, generated SDL, and native
+  `ImplClassField`, containers, registered forms/glyphs, generated SDL, and native
   dependency extension points. Never probe foreign object shapes or monkey-patch
   composed model classes. The [owner decision tree](docs/guidelines.md#put-behavior-on-the-owning-object)
   distinguishes owner behavior from legitimate cross-owner orchestration.

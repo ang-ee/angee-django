@@ -30,10 +30,20 @@ query and fixed preset scope.
 `ResourceList.createAction` places a typed server verb in the normal create
 position, using its projected `record` and `permission` for visibility; the
 default create label uses the resource vocabulary.
-Console chatter follows the app's inherited surface policy. A named slot,
-aside or drawer list restricts that address; an omitted address keeps its
-contributions. Public and sign-in routes stay unfiltered. An unscoped chatter
-contribution appears on record routes by default; a route that lists it by id shows it on any page.
+Console chatter renders the `record#aside` and `<model>#aside` children for the
+active view after every layer's narrowing (`useContainer`). A `record#aside` tab
+appears on record views; a model-level tab on that model's pages. Tabs a page
+publishes follow the composed ones and take the same narrowing. Tab ids are
+namespaced, and `aliases` keep their former ids working in `?chatterTab=` links.
+The view switcher offers a collection's `resource#views` children for its
+models: the built-in `list`, `board`, `calendar`, `gantt` and `dashboard`
+kinds, and kinds addons contribute as `<model>#views` children with namespaced
+ids. A contributed kind declares `label`, `icon`, `capabilities` and a `render`
+component that reads the collection through `useResourceView()`; `?view=`,
+presets and favourites name it by id. The calendar, Gantt and dashboard kinds
+stay offered only where the page declares the data they need, and layers narrow
+the offered kinds per model with `only`, `except` and `hide`. See
+[containers](../../docs/frontend/guidelines.md#containers).
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and
 `recordParam` select explicit destinations when the default route is unsuitable.
@@ -63,7 +73,7 @@ known. Zoned full timestamps retain seconds and now use that same language.
 `useRuntimeViewAs`, `ViewAsBanner` and `ViewAsPicker` consume an injected
 `RuntimeAuthState.viewAs` controller. Its identity and selectable people come from the
 app's authorized identity read; the components issue no identity requests. The
-banner fits `CONSOLE_NOTICE_SLOT`. The controller's owner must implement the
+banner is a `shell#notices` child. The controller's owner must implement the
 actor transition, HTTP header, query reset, subscription shutdown and write
 disabling before enabling preview in a host.
 

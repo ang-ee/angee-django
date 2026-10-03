@@ -1,6 +1,4 @@
 export const enMessagingSlackMessages: Record<string, string> = {
-  "channel.slack.menu.label": "Slack",
-  "channel.slack.menu.description": "Sync Slack workspace conversations",
   "channel.slack.button": "Connect Slack",
   "channel.slack.title": "Connect Slack",
   "channel.slack.description":

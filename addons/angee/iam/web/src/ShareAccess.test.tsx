@@ -39,7 +39,6 @@ const mocks = vi.hoisted(() => ({
   queryOptions: null as unknown,
   readerOptions: null as unknown,
   dialogProps: null as Record<string, unknown> | null,
-  directSlot: true,
   roleEntries: [] as { id: string; content: unknown }[],
   visibilityEntries: [] as { id: string; content: unknown }[],
 }));
@@ -82,9 +81,8 @@ vi.mock("@angee/ui", () => ({
   },
   useActionResultRun: () => async (run: () => unknown) => run(),
   useRecordChromeContext: () => mocks.record,
-  useModelSlot: ({ slot }: { slot: string }) => slot === "access.roles" ? mocks.roleEntries : mocks.visibilityEntries,
+  useContainer: (address: string) => address === "iam#access-roles" ? mocks.roleEntries : mocks.visibilityEntries,
   useResourceViewUtilityContext: () => mocks.list,
-  useSlot: () => mocks.directSlot ? [{ id: "iam.direct" }] : [],
   useUiT: () => (key: string) => key,
 }));
 
@@ -130,7 +128,6 @@ describe("shared record access chrome", () => {
     mocks.query.data.record_access = [];
     mocks.readerQuery.data.record_readers = [{ subject: "auth/user:ada", label: "Ada", you: true, following: true }];
     mocks.dialogProps = null;
-    mocks.directSlot = true;
     mocks.roleEntries = [];
     mocks.visibilityEntries = [];
   });
@@ -188,11 +185,10 @@ describe("shared record access chrome", () => {
     expect(mocks.queryOptions).toMatchObject({ enabled: false });
   });
 
-  test("keeps the People surface while the app admits no direct share", () => {
-    mocks.directSlot = false;
+  test("always offers direct share of the model's grantable relations", () => {
     render(<ShareRecordChrome />);
-    expect(mocks.dialogProps?.directShare).toBe(false);
-    expect(mocks.dialogProps?.grantable).toEqual([]);
+    expect(mocks.dialogProps?.directShare).toBe(true);
+    expect(mocks.dialogProps?.grantable).toMatchObject([{ relation: "reader" }]);
   });
 
   test("omits Share when the record projection lacks share permission", () => {

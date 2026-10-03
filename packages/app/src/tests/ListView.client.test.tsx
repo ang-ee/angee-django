@@ -139,7 +139,6 @@ const ADDON_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
 
 describe("ListView client row model", () => {
   beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
     Element.prototype.scrollIntoView ??= () => undefined;
   });
 

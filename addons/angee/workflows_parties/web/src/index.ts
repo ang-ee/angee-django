@@ -8,8 +8,10 @@ import { enWorkflowsPartiesMessages } from "./i18n";
 export default defineBaseAddon({
   id: "workflows-parties",
   i18n: { "workflows-parties": enWorkflowsPartiesMessages },
-  slots: [
-    decisionContent("review-party-identity", PartyIdentityDecisionContent),
-    decisionContent("review-dupe-party", DuplicatePartyDecisionContent),
-  ],
+  containers: {
+    "decisions#content": {
+      "workflows-parties.review-party-identity": decisionContent("review-party-identity", PartyIdentityDecisionContent),
+      "workflows-parties.review-dupe-party": decisionContent("review-dupe-party", DuplicatePartyDecisionContent),
+    },
+  },
 });

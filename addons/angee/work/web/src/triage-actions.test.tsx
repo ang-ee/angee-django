@@ -9,7 +9,7 @@ vi.mock("@angee/projects", () => ({
 
 vi.mock("@angee/ui", () => ({
   ActionFormDialog: () => null,
-  RecordActionTrigger: () => null,
+  ActionTrigger: () => null,
   canonicalOptionValue: (
     options: readonly { value: string }[],
     value: unknown,
@@ -37,6 +37,12 @@ vi.mock("./task-work", () => ({
 
 import { declineReason, useTriageActions } from "./triage-actions";
 
+/** Triage verbs declare their argument list statically, never per form context. */
+function staticArgs(args: ReturnType<typeof useTriageActions>[number]["args"]): readonly unknown[] | undefined {
+  if (typeof args === "function" || (args && !Array.isArray(args))) throw new Error("Expected a static argument list");
+  return args as readonly unknown[] | undefined;
+}
+
 describe("triage action relation scopes", () => {
   test("offers only custom queue stages and live canonical tasks", () => {
     const { result } = renderHook(() => useTriageActions("que_eng"));
@@ -45,7 +51,7 @@ describe("triage action relation scopes", () => {
       (action) => action.id === "work-duplicate-task",
     );
 
-    expect(accept?.args?.[0]).toMatchObject({
+    expect(staticArgs(accept?.args)?.[0]).toMatchObject({
       filters: [
         { field: "queue", operator: "eq", value: "que_eng" },
         { field: "category", operator: "ne", value: "triage" },
@@ -54,7 +60,7 @@ describe("triage action relation scopes", () => {
         { field: "conceals", operator: "eq", value: false },
       ],
     });
-    expect(duplicate?.args?.[0]).toMatchObject({
+    expect(staticArgs(duplicate?.args)?.[0]).toMatchObject({
       filters: [
         { field: "queue", operator: "eq", value: "que_eng" },
         { field: "status", operator: "ne", value: "DROPPED" },

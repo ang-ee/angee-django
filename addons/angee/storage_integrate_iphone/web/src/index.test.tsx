@@ -1,5 +1,6 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { STORAGE_MOUNT_TOOLBAR_SLOT } from "@angee/storage-integrate";
+import storageIntegrate from "@angee/storage-integrate";
 import { describe, expect, test } from "vitest";
 
 import storageIntegrateIphone from "./index";
@@ -10,11 +11,15 @@ describe("angee.storage_integrate_iphone addon manifest", () => {
   });
 
   test("contributes the iPhone connection action to the Mount toolbar", () => {
-    expect(storageIntegrateIphone.slots?.[0]).toMatchObject({
-      slot: STORAGE_MOUNT_TOOLBAR_SLOT,
-      id: "storage-integrate-iphone.connect",
-      sequence: 20,
-    });
+    // The Mount toolbar's owner declares the container; this addon adds its verb after local folders.
+    const { containers } = composeAddons(
+      [{ id: storageIntegrate.id, containers: storageIntegrate.containers }, { ...storageIntegrateIphone, dependsOn: ["storage-integrate"] }],
+      { canonicalModelLabel: (model) => model },
+    );
+    expect(containers.children["storage-integrate.mounts#toolbar"]?.map(({ id, sequence }) => ({ id, sequence }))).toEqual([
+      { id: "storage-integrate.connect-local-folder", sequence: 10 },
+      { id: "storage-integrate-iphone.connect", sequence: 20 },
+    ]);
     expect(
       storageIntegrateIphone.i18n?.storage?.["iphone.mount.connect.button"],
     ).toBe("Connect iPhone backup");
