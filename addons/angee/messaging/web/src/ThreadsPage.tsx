@@ -41,7 +41,7 @@ export function ThreadsPage(): React.ReactElement {
           header={t("threads.title")}
           render={(row) => threadTitle(row, t("threads.noTitle"))}
         />
-        <Column field="channel.vendor.display_name" header={t("threads.channelType")} />
+        <Column field="channel.kind" header={t("threads.channelType")} />
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />

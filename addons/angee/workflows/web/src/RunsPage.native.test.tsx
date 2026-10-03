@@ -207,6 +207,7 @@ test("run list groups and filters status, workflow and origin through shared met
   expect(requests.some(({ variables }) => JSON.stringify(variables.group_by) === '[{"field":"STATUS"}]')).toBe(true);
   fireEvent.click(await screen.findByLabelText(/^Filter( and favorites)?$/));
   fireEvent.click((await screen.findAllByRole("button", { name: "Failed" })).at(-1)!);
+  expect(screen.getAllByRole("button", { name: "Manual" })).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Manual" }));
   await waitFor(() => expect(requests.some(({ variables }) => {
     const where = JSON.stringify(variables.where) ?? "";

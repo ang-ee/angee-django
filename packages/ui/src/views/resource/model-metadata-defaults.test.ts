@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type {
   DataResourceFieldMetadata,
   DataResourceMetadata,
@@ -9,6 +9,7 @@ import type {
 import {
   RelationRepresentationError,
   ResourceQuery,
+  modelMetadataForLabel,
   rowValueAtPath,
   schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
@@ -27,6 +28,7 @@ import {
   columnsWithMetadataDefaults,
   fieldsWithMetadataDefaults,
   relationFieldInfo,
+  relationFieldInfoForQueryField,
   relationFieldInfoForDescriptor,
   relationListFieldInfo,
 } from "./model-metadata-defaults";
@@ -796,6 +798,39 @@ describe("relation column read expansion", () => {
     expect(column && "relationList" in column).toBe(false);
   });
 
+  test("an authored to-many selection and renderer need no target resource metadata", () => {
+    const model = canonicalModel({
+      assignees: { name: "assignees", kind: "list", scalar: null, relationModelLabel: "example.Assignee" },
+    }, testDataResource("example.Task"));
+    const schema = schemaFieldMetadataFromDataResources([model.resource]);
+    const render = () => "Authored assignees";
+    const declaration = { field: "assignees", selectionPaths: ["assignees.name"], render };
+    const [column] = columnsWithMetadataDefaults<Row>([declaration], model, schema);
+    expect(column).toMatchObject(declaration);
+    expect(column?.relationList).toBeUndefined();
+    expect(refineFieldsFromPaths(requestedFieldPaths([column!], undefined, model)))
+      .toEqual(["id", { assignees: ["name"] }]);
+    expect(column?.render?.({ id: "task-1" })).toBe("Authored assignees");
+    for (const incomplete of [{ field: "assignees", render }, { field: "assignees", selectionPaths: ["assignees.name"] }]) {
+      expect(() => columnsWithMetadataDefaults<Row>([incomplete], model, schema)).toThrow(RelationRepresentationError);
+    }
+  });
+
+  test("authored selections also bypass target inference for nested to-many columns", () => {
+    const parent = canonicalModel({
+      task: { name: "task", kind: "relation", relationObject: true, relationModelLabel: "example.Task" },
+    }, testDataResource("example.Project"));
+    const task = testDataResource("example.Task", { fields: [{ name: "assignees", kind: "list", scalar: null,
+      relationModelLabel: "example.Assignee", readable: true, aggregatable: false,
+      creatable: false, updatable: false, requiredOnCreate: false }] });
+    const schema = schemaFieldMetadataFromDataResources([parent.resource, task]);
+    const [column] = columnsWithMetadataDefaults<Row>([
+      { field: "task.assignees", selectionPaths: ["task.assignees.name"], render: () => null },
+    ], parent, schema);
+    expect(column?.selectionPaths).toEqual(["task.assignees.name"]);
+    expect(column?.relationList).toBeUndefined();
+  });
+
   test("a to-one FK projected as a public-id scalar stays a leaf (not sub-selected)", () => {
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "location" }], metadata, schema);
     // `location` is `kind: relation` but not `relationObject` — selecting
@@ -889,6 +924,29 @@ describe("relation column read expansion", () => {
       "product.display_name",
     ]);
   });
+});
+
+test("schema-only relation targets have no picker and produce no unknown-resource warning", () => {
+  const subtype = testQueryField("subtype", { kind: "relation", scalar: "ID",
+    relation: { model: "messaging.MessageSubtype", identityPath: "subtype.id", labelPath: "subtype.name" },
+    filter: { field: "subtype", scalar: "String", values: [], operators: ["exact"] },
+  });
+  const model = canonicalModel({
+    subtype: { name: "subtype", kind: "relation", relationObject: true, relationModelLabel: "messaging.MessageSubtype" },
+  }, testDataResource("messaging.Message", { query: testResourceQuery({ fields: { subtype } }) }));
+  const schema = schemaFieldMetadataFromDataResources([model.resource]);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(relationFieldInfo("subtype", model, schema)).toBeNull();
+    expect(relationFieldInfoForQueryField(subtype, schema)).toBeNull();
+    expect(relationFilterFields(ResourceQuery.from(model), model, schema)).toEqual([]);
+    expect(relationFilterFields(ResourceQuery.from(model), null, schema)).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(modelMetadataForLabel(schema, "messaging.MessageSubtype")).toBeNull();
+    expect(warn).toHaveBeenCalledOnce();
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 describe("canonical relation grouping", () => {

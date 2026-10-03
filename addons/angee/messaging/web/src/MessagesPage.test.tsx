@@ -58,8 +58,11 @@ vi.mock("./i18n", () => ({
   useMessagingT: () => (key: string) => key,
 }));
 
+vi.mock("./ThreadTranscript", () => ({ ThreadTranscript: () => null }));
+
 import { messageForm } from "./MessageForm";
 import { MessagesPage } from "./MessagesPage";
+import { ThreadsPage } from "./ThreadsPage";
 
 describe("MessagesPage", () => {
   beforeEach(() => {
@@ -96,6 +99,14 @@ describe("MessagesPage", () => {
       ]),
     );
     expect(columnFields).not.toContain("sender.value");
+  });
+
+  test("ThreadsPage selects the schema-owned channel kind without a vendor relation", () => {
+    render(<ThreadsPage />);
+    expect(pageMocks.resourceProps?.resource).toBe("messaging.Thread");
+    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channelType");
+    expect(channelColumn?.field).toBe("channel.kind");
+    expect(pageMocks.columns.some((column) => column.field.startsWith("channel.vendor"))).toBe(false);
   });
 
   test("renders the same server-owned relation scalars used by ordering", () => {
