@@ -54,6 +54,14 @@ describe("compileMenus", () => {
         ["legacy.page", undefined], ["messaging", true], ["parties", true],
       ]);
     }
+    // A removed included app is recorded as one, so developer mode shows it in the rail.
+    const removedApp = compileMenus([
+      { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
+      { id: "parties", menus: { parties: { route: "parties.people" } } },
+      { id: "nexus", dependsOn: ["messaging", "parties"], menus: { nexus: { route: "nexus.inbox", include: ["messaging", "parties"] } } },
+      { id: "product", dependsOn: ["nexus"], menus: { parties: { remove: true } } },
+    ]);
+    expect(removedApp.removed).toEqual([{ id: "parties", route: "parties.people", by: "product", parent: "nexus", app: true }]);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { app: true } } } as unknown as MenuLayer]))
       .toThrow(/unknown key "app"/);
     expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", app: true }] } as unknown as MenuLayer]))
@@ -83,7 +91,7 @@ describe("compileMenus", () => {
     expect(rail(navigation)).toEqual([{ pm: [
       "pm.inbox", "projects.my-work", "work.triage-hub", "projects.tasks", "work.cycles-hub",
     ] }]);
-    expect(removed).toEqual([{ id: "projects.board", route: "projects.board", by: "pm" }]);
+    expect(removed).toEqual([{ id: "projects.board", route: "projects.board", by: "pm", parent: "pm" }]);
   });
 
   test("removal takes the subtree; hide keeps the node in the logical tree only", () => {
@@ -166,8 +174,8 @@ describe("compileMenus", () => {
     } };
     const stray: MenuLayer = { id: "stray", menus: [{ id: "elsewhere.page", route: "elsewhere.page" }] };
     const compiled = compileMenus([projects, work, pm, product, stray]);
-    expect(compiled.removed).toContainEqual({ id: "work.cycles-hub", route: "work.cycles-hub", by: "product" });
-    expect(compiled.removed).toContainEqual({ id: "projects.board", route: "projects.board", by: "pm" });
+    expect(compiled.removed).toContainEqual({ id: "work.cycles-hub", route: "work.cycles-hub", by: "product", parent: "pm" });
+    expect(compiled.removed).toContainEqual({ id: "projects.board", route: "projects.board", by: "pm", parent: "pm" });
     expect(compiled.hidden).toEqual([{ id: "projects.tasks", by: "product", reason: "hide" }]);
     expect(compiled.provenance["projects.my-work"]).toEqual({ route: "projects", parent: "projects", sequence: "pm" });
     expect(compiled.diagnostics).toEqual(['Addon "stray" declares menu item "elsewhere.page" outside its namespace ("stray" or "stray.…").']);

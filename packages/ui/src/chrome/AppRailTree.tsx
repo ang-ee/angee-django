@@ -7,11 +7,20 @@ import { tv } from "../lib/variants";
 import { barVariants } from "../layouts/bar";
 import { Accordion } from "../ui/accordion";
 import { Badge, CountBadge } from "../ui/badge";
+import { Tooltip } from "../ui/tooltip";
 import { railLinkToggleProps } from "./app-rail-model";
+import { useDeveloperRail, type DeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuNode } from "./menu-tree";
 
 const ActiveMenuItemContext = createContext<{ selected?: string; page?: string }>({});
+// The tree resolves developer mode once; every item reads it from here.
+const DeveloperRailContext = createContext<DeveloperRail | null>(null);
+function useRail(): DeveloperRail {
+  const rail = useContext(DeveloperRailContext);
+  if (!rail) throw new Error("A rail item rendered outside AppRailTree.");
+  return rail;
+}
 
 export const appRailTreeVariants = tv({
   slots: {
@@ -73,6 +82,7 @@ export function AppRailTree({
   onActiveToggle,
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
+  const rail = useDeveloperRail();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [openRootId, setOpenRootId] = useDerivedOverride<string | null>(
     defaultOpenRootId,
@@ -83,6 +93,7 @@ export function AppRailTree({
   const [onlyRoot] = roots;
 
   return (
+    <DeveloperRailContext.Provider value={rail}>
     <ActiveMenuItemContext.Provider value={{ selected: selectedSubAppId ?? selectedAppId, page: pageId }}>
       <div className={styles.root({ className })}>
         {scope === "settings" ? (
@@ -99,10 +110,13 @@ export function AppRailTree({
         ) : null}
         <div className={styles.tree()}>
           {flat && roots.length === 1 && onlyRoot ? (
-            onlyRoot.appChildren().map((item) => (
-              <MenuLink key={item.id} item={item}
-                pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
-            ))
+            <>
+              {rail.apps(onlyRoot).map((item) => (
+                <MenuLink key={item.id} item={item}
+                  pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
+              ))}
+              <RemovedMenuItems parentId={onlyRoot.id} styles={styles} />
+            </>
           ) : <Accordion.Root
             variant="flush"
             value={openRootId ? [openRootId] : []}
@@ -122,9 +136,31 @@ export function AppRailTree({
               />
             ))}
           </Accordion.Root>}
+          {scope === "apps" && !flat ? <RemovedMenuItems parentId={null} styles={styles} /> : null}
         </div>
       </div>
     </ActiveMenuItemContext.Provider>
+    </DeveloperRailContext.Provider>
+  );
+}
+
+/** Developer mode: removed apps, struck through where they showed, naming who removed them. */
+function RemovedMenuItems({ parentId, styles }: { parentId: string | null; styles: AppRailTreeStyles }): ReactElement | null {
+  const t = useUiT();
+  // Under a root only removed apps belong to the rail; removed menus show in the top bar.
+  const removed = useRail().removedUnder(parentId).filter((node) => parentId === null || node.app);
+  if (!removed.length) return null;
+  return (
+    <>
+      {removed.map((node) => (
+        <Tooltip key={node.id} label={node.route ? `${node.id} → ${node.route}` : node.id} side="right">
+          <span tabIndex={0} role="link" aria-disabled="true" className={`${styles.link()} cursor-default line-through`}>
+            <Glyph name="x" size={14} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{t("developer.removedBy", { label: node.displayLabel, layer: node.by })}</span>
+          </span>
+        </Tooltip>
+      ))}
+    </>
   );
 }
 
@@ -162,9 +198,10 @@ function RootMenuItem({
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const t = useUiT();
+  const rail = useRail();
   if (!item.target) return null;
-  const children = item.appChildren();
-  if (!children.length) {
+  const children = rail.apps(item);
+  if (!children.length && !rail.removedUnder(item.id).some((node) => node.app)) {
     return (
       <div className={styles.rootItem()}>
         <MenuLink
@@ -177,7 +214,7 @@ function RootMenuItem({
     );
   }
   const panelId = menuPanelId(idPrefix, item.id);
-  const accessibleLabel = menuItemAccessibleLabel(t, item);
+  const accessibleLabel = menuItemAccessibleLabel(t, item, rail.label(item));
   return (
     <Accordion.Item value={item.id} className={styles.rootItem()}>
       <Accordion.Header className={styles.row()}>
@@ -206,6 +243,7 @@ function RootMenuItem({
           styles={styles}
           onActiveToggle={onActiveToggle}
         />
+        <RemovedMenuItems parentId={item.id} styles={styles} />
       </Accordion.Panel>
     </Accordion.Item>
   );
@@ -249,6 +287,7 @@ function MenuLink({
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const active = useContext(ActiveMenuItemContext);
+  const rail = useRail();
   const current = active.selected === item.id;
   const toggleProps = railLinkToggleProps(item.target, pathname, onActiveToggle, true);
   const linkProps = useLinkProps({
@@ -258,19 +297,21 @@ function MenuLink({
   });
   if (!item.target) return null;
   return (
-    <a
-      {...linkProps}
-      aria-current={current ? (active.page === item.id ? "page" : "true") : undefined}
-      data-current={current}
-      data-status={undefined}
-      className={styles.link()}
-    >
-      <span className={item.tone ? toneGlyph(item.tone) : undefined}>
-        <Glyph name={item.iconName} fallbackName="help" size={14} aria-hidden="true" />
-      </span>
-      <span className="min-w-0 flex-1 truncate">{item.displayLabel}</span>
-      <MenuItemMetadata item={item} styles={styles} />
-    </a>
+    <Tooltip label={rail.describe(item)} side="right">
+      <a
+        {...linkProps}
+        aria-current={current ? (active.page === item.id ? "page" : "true") : undefined}
+        data-current={current}
+        data-status={undefined}
+        className={styles.link()}
+      >
+        <span className={item.tone ? toneGlyph(item.tone) : undefined}>
+          <Glyph name={item.iconName} fallbackName="help" size={14} aria-hidden="true" />
+        </span>
+        <span className="min-w-0 flex-1 truncate">{rail.label(item)}</span>
+        <MenuItemMetadata item={item} styles={styles} />
+      </a>
+    </Tooltip>
   );
 }
 
@@ -298,8 +339,8 @@ function MenuItemMetadata({
   );
 }
 
-function menuItemAccessibleLabel(t: UiTranslate, item: ChromeMenuNode): string {
-  let label = item.displayLabel;
+function menuItemAccessibleLabel(t: UiTranslate, item: ChromeMenuNode, displayed: string): string {
+  let label = displayed;
   if (typeof item.badge === "number" && item.badge > 0) {
     label = t("chrome.itemWithCount", { label, count: item.badge });
   }

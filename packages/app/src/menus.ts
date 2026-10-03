@@ -1,5 +1,5 @@
 import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
-import type { MenuItem } from "@angee/ui/runtime";
+import type { HiddenMenuItem, MenuItem, RemovedMenuItem } from "@angee/ui/runtime";
 
 import { DEPLOYMENT_LAYER_ID, layerAncestry, type Layer } from "./layers";
 
@@ -55,10 +55,10 @@ export interface CompiledMenus {
    * left out of the rail kept with `hidden`, so the palette and admission keep them.
    */
   navigation: readonly ChromeMenuItem[];
-  /** Removed nodes, subtrees included, with the routes they referenced and the removing layer. */
-  removed: readonly { id: string; route?: string; by: string }[];
+  /** Removed nodes, subtrees included; `parent` is the rail item each showed under. */
+  removed: readonly RemovedMenuItem[];
   /** Surviving nodes left out of the rail, by a `hide` or by a layer's `only`. */
-  hidden: readonly { id: string; by: string; reason: "hide" | "only" }[];
+  hidden: readonly HiddenMenuItem[];
   /** The layer that set each node field, declarations included. */
   provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
   /** Non-fatal findings, such as menu ids declared outside the addon's namespace. */
@@ -256,10 +256,27 @@ function resolve(
     }
   }
 
+  // A flattened app renders no item of its own: its children show under its
+  // nearest unflattened ancestor, as `navigationChildren` lifts them.
+  const shownUnder = (node: Node): string | undefined => {
+    let parent = parentOf(node);
+    while (parent !== undefined && nodes.get(parent)!.fields.flatten && parentOf(nodes.get(parent)!) !== undefined) {
+      parent = parentOf(nodes.get(parent)!);
+    }
+    return parent;
+  };
   const removed = new Map<string, CompiledMenus["removed"][number]>();
   const collectRemoved = (node: Node, by: string): void => {
     if (removed.has(node.id)) return;
-    removed.set(node.id, { id: node.id, ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}), by });
+    const parent = shownUnder(node);
+    removed.set(node.id, {
+      id: node.id,
+      ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}),
+      by,
+      ...(parent !== undefined ? { parent } : {}),
+      ...(typeof node.fields.label === "string" ? { label: node.fields.label } : {}),
+      ...(node.declaredRoot && parentOf(node) !== undefined && !node.fields.flatten ? { app: true } : {}),
+    });
     for (const child of children.get(node.id) ?? []) collectRemoved(child, by);
   };
   for (const node of nodes.values()) if (node.fields.remove) collectRemoved(node, node.setBy.remove!);

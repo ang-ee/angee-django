@@ -19,6 +19,7 @@ import type {
   ModelSlotTarget,
   PreviewContribution,
   RuntimeBrand,
+  RuntimeComposition,
   SlotContribution,
   WidgetMap,
 } from "./contracts";
@@ -123,6 +124,11 @@ export interface AppRuntime {
   loginPath: string;
   /** Installed theme catalogue composed from addon contributions. */
   themes: readonly ThemeContribution[];
+  /** How the composition came out; developer mode shows it. */
+  composition?: RuntimeComposition | null;
+  /** The active route's name and its app (menu root), per page. */
+  activeRouteName?: string | null;
+  activeApp?: string | null;
 }
 
 export interface RuntimeI18n {

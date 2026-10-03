@@ -195,7 +195,12 @@ export class ChromeMenuNode implements ChromeMenuItem {
 
   /** Visible children with navigation targets, before app/menu classification. */
   get targetedChildren(): readonly ChromeMenuNode[] {
-    return (this.children ?? []).filter((child) => child.target && !child.hidden);
+    return this.railChildren();
+  }
+
+  /** Children with a target; developer mode's rail includes the hidden ones. */
+  railChildren(includeHidden = false): readonly ChromeMenuNode[] {
+    return (this.children ?? []).filter((child) => child.target && (includeHidden || !child.hidden));
   }
 
   /** Most-specific targeted child whose subtree contains `pathname`. */
@@ -269,18 +274,19 @@ export class MenuTree {
       : this.roots;
   }
 
-  railMenuItems(): readonly ChromeMenuNode[] {
+  /** The app roots the rail lists; developer mode's rail includes the hidden ones. */
+  railMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
     return this.appRoots().filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id) || item.hidden) return false;
+      if (CHROME_MENU_PARENT_IDS.has(item.id) || (item.hidden && !includeHidden)) return false;
       if (item.group === "platform") return false;
       return Boolean(item.target);
     });
   }
 
   /** Navigable root categories that live in the Settings place. */
-  settingsMenuItems(): readonly ChromeMenuNode[] {
+  settingsMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
     return this.roots.filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id) || item.hidden) return false;
+      if (CHROME_MENU_PARENT_IDS.has(item.id) || (item.hidden && !includeHidden)) return false;
       return item.group === "platform" && Boolean(item.target);
     });
   }
@@ -313,7 +319,7 @@ export class MenuTree {
    * and which of them is the active one (`null` when the path belongs to
    * neither, or to the other scope's roots).
    */
-  railPlace(location: string | MenuMatch | undefined): {
+  railPlace(location: string | MenuMatch | undefined, includeHidden = false): {
     scope: "apps" | "settings";
     roots: readonly ChromeMenuNode[];
     activeRootId: string | null;
@@ -321,8 +327,8 @@ export class MenuTree {
     const active = (typeof location === "string" ? this.match(location) : location)?.trail[0];
     const scope = active?.group === "platform" ? "settings" : "apps";
     const roots = scope === "settings"
-      ? this.settingsMenuItems()
-      : this.railMenuItems();
+      ? this.settingsMenuItems(includeHidden)
+      : this.railMenuItems(includeHidden);
     return {
       scope,
       roots,
@@ -371,8 +377,9 @@ export class MenuTree {
   }
 
   /** Own-path matches rank by length, equal params, fewer mismatches, depth, then pre-order. */
-  match(path: string, search?: string | URLSearchParams): MenuMatch | undefined {
-    return matchWithin(this.roots, path, search);
+  /** The item a location selects; developer mode's `includeHidden` lets a hidden app be the active one. */
+  match(path: string, search?: string | URLSearchParams, includeHidden = false): MenuMatch | undefined {
+    return matchWithin(this.roots, path, search, includeHidden);
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -402,7 +409,7 @@ export class MenuTree {
 export interface MenuMatch {
   item: ChromeMenuNode;
   trail: readonly ChromeMenuNode[];
-  /** Nearest visible app on the navigation trail. Settings has its own place. */
+  /** Nearest visible app on the navigation trail (hidden ones too in developer mode). Settings has its own place. */
   app?: ChromeMenuNode;
 }
 
@@ -410,6 +417,7 @@ function matchWithin(
   roots: readonly ChromeMenuNode[],
   path: string,
   search?: string | URLSearchParams,
+  includeHidden = false,
 ): MenuMatch | undefined {
   const location = new URL(path, "https://angee.invalid");
   const params = new URLSearchParams(search ?? location.search);
@@ -431,7 +439,7 @@ function matchWithin(
     for (const child of item.children ?? []) visit(child, trail);
   };
   for (const root of roots) visit(root, []);
-  return best && { ...best, app: best.trail.findLast((item) => item.isApp && !item.hidden) };
+  return best && { ...best, app: best.trail.findLast((item) => item.isApp && (includeHidden || !item.hidden)) };
 }
 
 const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);

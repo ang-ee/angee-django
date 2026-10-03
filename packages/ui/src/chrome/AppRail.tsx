@@ -37,6 +37,7 @@ import { Tooltip } from "../ui/tooltip";
 import { AppBrand } from "./AppBrand";
 import { AppChooser } from "./AppChooser";
 import { AppRailTree, appRailTreeVariants } from "./AppRailTree";
+import { useDeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuItem, ChromeMenuNode } from "./menu-tree";
 import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
@@ -93,6 +94,7 @@ function AppRailBody({
   navigationTarget,
 }: Omit<AppRailProps, "menuItems">): ReactElement {
   const t = useUiT();
+  const rail = useDeveloperRail();
   const { tree, pathname, match } = useChromePlace();
   const brand = useRuntimeBrand();
   const { confineTo } = useAppRuntime();
@@ -110,17 +112,23 @@ function AppRailBody({
     railPreferences.expanded,
     largeViewport,
   );
-  const activePlace = useMemo(() => tree.railPlace(match), [tree, match]);
+  // Developer mode lists hidden apps too.
+  const activePlace = useMemo(() => tree.railPlace(match, rail.enabled), [tree, match, rail.enabled]);
   const selectedAppId = match?.trail[0]?.id;
   const selectedSubAppId = match?.app?.parentNode ? match.app.id : undefined;
   const pageId = match?.item.id;
   const place = useMemo(() => drawerMode && navigationTarget
-    ? tree.railPlace(navigationTarget)
-    : activePlace, [tree, drawerMode, navigationTarget, activePlace]);
+    ? tree.railPlace(navigationTarget, rail.enabled)
+    : activePlace, [tree, drawerMode, navigationTarget, activePlace, rail.enabled]);
   const settingsActive = place.scope === "settings";
   const items = useMemo(
     () => orderedRailItems(tree.railMenuItems(), railPreferences.order),
     [railPreferences.order, tree],
+  );
+  // Developer mode lists hidden apps in the expanded tree; the icon rail keeps its order and default.
+  const treeItems = useMemo(
+    () => rail.enabled ? orderedRailItems(tree.railMenuItems(true), railPreferences.order) : items,
+    [items, rail.enabled, railPreferences.order, tree],
   );
   const [onlyRoot] = items;
   const railBrand = brand ?? (confineTo && onlyRoot
@@ -229,7 +237,7 @@ function AppRailBody({
             <AppRailTree
               scope={place.scope}
               flat={Boolean(singleApp) && !settingsActive}
-              roots={settingsActive ? place.roots : items}
+              roots={settingsActive ? place.roots : treeItems}
               activeRootId={activeRootId}
               selectedAppId={selectedAppId}
               selectedSubAppId={selectedSubAppId}
@@ -241,7 +249,7 @@ function AppRailBody({
             <div className="flex flex-col gap-1">
               {singleApp.root.appChildren().map((item) => item.target ? (
                 <RailSettingsItem key={item.id} active={selectedSubAppId === item.id} currentPage={pageId === item.id} expanded={false}
-                  icon={item.iconName} label={item.displayLabel} to={item.target} pathname={pathname}
+                  icon={item.iconName} label={rail.label(item)} to={item.target} pathname={pathname}
                   onActiveToggle={onActiveToggle} />
               ) : null)}
             </div>

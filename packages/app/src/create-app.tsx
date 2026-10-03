@@ -57,6 +57,7 @@ import {
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
+  applyDeveloperModeSearch,
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
@@ -78,6 +79,7 @@ import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ViewAsBanner, ViewAsPicker } from "@angee/ui/chrome/ViewAs";
+import { DeveloperModeMenuItem } from "@angee/ui/chrome/DeveloperMode";
 import { USER_MENU_ITEMS_SLOT } from "@angee/ui/chrome/UserMenu";
 import { SurfacePresentationProvider, type SurfacePresentation } from "@angee/ui/chrome/surface-policy";
 import { CONSOLE_NOTICE_SLOT } from "@angee/ui/layouts/ConsoleLayout";
@@ -269,6 +271,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       { id: "base", icons: baseIcons, slots: [
         { slot: CONSOLE_NOTICE_SLOT, id: "view-as", content: <ViewAsBanner /> },
         { slot: USER_MENU_ITEMS_SLOT, id: "view-as", content: <ViewAsPicker /> },
+        { slot: USER_MENU_ITEMS_SLOT, id: "developer-mode", sequence: 90, content: <DeveloperModeMenuItem /> },
       ], layoutProviders: layoutNamesForRoutes(input.layouts)
         .filter((layout) => layout !== "console")
         .map((layout) => ({ id: "view-as", layout, component: ViewAsLayoutNotice })),
@@ -479,6 +482,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
         routeHref: runtimeRouteHref,
+        composition: explain,
+        activeRouteName: activeRoute?.name ?? null,
+        activeApp: app ?? null,
       };
     }, [app, activeRoute, words, surface]);
     return (
@@ -530,7 +536,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  const rootRoute = createRootRoute({ component: RootOutlet });
+  const rootRoute = createRootRoute({
+    component: RootOutlet,
+    // `?debug=1|0` sets developer mode for the session on any navigation, `/` included.
+    beforeLoad: ({ search }) => applyDeveloperModeSearch((search as Record<string, unknown>).debug),
+  });
 
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,

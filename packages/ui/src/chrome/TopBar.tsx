@@ -11,6 +11,7 @@ import { AppMenu } from "./AppMenu";
 import { Glyph } from "./Glyph";
 import { Systray } from "./Systray";
 import { UserMenu } from "./UserMenu";
+import { DeveloperMenu } from "./DeveloperMode";
 
 export interface TopBarProps {
   /** Optional leading brand/lockup. Omit inside ConsoleLayout — the rail's
@@ -76,6 +77,7 @@ export function TopBar({
         <CommandPalette triggerPlaceholder={searchPlaceholder} />
       )}
       <Systray onHelp={onHelp} onNotifications={onNotifications} />
+      <DeveloperMenu />
       {showUserMenu ? (
         <UserMenu
           className="size-icon-btn-md rounded-6 border-0"

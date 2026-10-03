@@ -89,7 +89,7 @@ describe("AppRail intermediate navigation", () => {
     fireEvent.click(within(nav).getByRole("link", { name: "Unread" }));
     await waitFor(() => expect(within(nav).getByRole("link", { name: "Unread" }).getAttribute("aria-current")).toBe("page"));
     expect(match).toHaveBeenCalledTimes(2);
-    expect(match).toHaveBeenLastCalledWith("/m/messages", "?preset=unread");
+    expect(match).toHaveBeenLastCalledWith("/m/messages", "?preset=unread", false);
   });
 
   test("a hidden declaring root cannot make the pruned rail select a later route reference", async () => {

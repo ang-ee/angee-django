@@ -11,6 +11,12 @@ export {
   type PreferenceSliceState,
 } from "./user-preferences";
 export {
+  applyDeveloperModeSearch,
+  useDeveloperMode,
+  useDeveloperModeSwitch,
+  useRuntimeComposition,
+} from "./developer-mode";
+export {
   AppRuntimeProvider,
   useAppRuntime,
   useWidget,
@@ -81,7 +87,10 @@ export type {
   MenuItem,
   ModelSlotTarget,
   PreviewContribution,
+  HiddenMenuItem,
+  RemovedMenuItem,
   RuntimeBrand,
+  RuntimeComposition,
   SlotContribution,
   WidgetMap,
 } from "./contracts";

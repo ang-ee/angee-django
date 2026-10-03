@@ -4,6 +4,8 @@ import { createLink } from "@tanstack/react-router";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { DropdownMenu } from "../ui/dropdown-menu";
+import { Tooltip } from "../ui/tooltip";
+import { useDeveloperRail, type DeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import type { MenuTree, ChromeMenuItem, ChromeMenuNode } from "./menu-tree";
 import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
@@ -30,12 +32,13 @@ export function AppMenu({ menuItems, className }: AppMenuProps): ReactElement {
 
 function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactElement | null {
   const t = useUiT();
+  const rail = useDeveloperRail();
   const { tree, match } = useChromePlace();
   const settings = match?.trail[0]?.group === "platform" ? tree.settingsEntry() : undefined;
   const app = match?.app;
   if (!app && !settings) return null;
   const label = settings ? t("chrome.settings") : app!.displayLabel;
-  const items = settings?.items ?? app!.menuItems();
+  const items = settings?.items ?? rail.menus(app!);
   const currentId = match?.item.id;
 
   return <nav aria-label={t("chrome.appMenu", { label })}
@@ -46,51 +49,73 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
       {label}
     </AppMenuLink>
     {items.map((item) => {
-      const children = item.menuItems();
-      if (!children.length || (!item.to && children.length === 1)) {
+      const children = rail.menus(item);
+      const removed = rail.removedUnder(item.id).filter((node) => !node.app);
+      if ((!children.length && !removed.length) || (!item.to && children.length === 1 && !removed.length)) {
         const destination = children[0] ?? item;
-        return <AppMenuLink key={item.id} to={destination.target} href={destination.target}
-          data-current={destination.id === currentId} className={menuItemClass}>
-          {item.displayLabel}
-        </AppMenuLink>;
+        return <Tooltip key={item.id} label={rail.describe(destination)} side="bottom">
+          <AppMenuLink to={destination.target} href={destination.target}
+            data-current={destination.id === currentId} className={menuItemClass}>
+            {rail.label(item)}
+          </AppMenuLink>
+        </Tooltip>;
       }
       const current = match?.trail.some((node) => node.id === item.id) === true;
       return <DropdownMenu.Root key={item.id} modal={false}>
         <DropdownMenu.Trigger aria-current={current ? "true" : undefined}
           data-current={current} className={menuItemClass}>
-          {item.displayLabel}<Glyph name="chevron-down" size={12} aria-hidden="true" />
+          {rail.label(item)}<Glyph name="chevron-down" size={12} aria-hidden="true" />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Positioner side="bottom" align="start" sideOffset={4}>
             <DropdownMenu.Content>
-              <MenuEntries item={item} currentId={currentId} />
+              <MenuEntries item={item} currentId={currentId} rail={rail} />
             </DropdownMenu.Content>
           </DropdownMenu.Positioner>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>;
     })}
+    {app ? <RemovedMenus rail={rail} parentId={app.id} /> : null}
   </nav>;
 }
 
+/** Developer mode: menus a layer removed, struck through where they showed, naming who removed them. */
+function RemovedMenus({ rail, parentId, inMenu = false }: { rail: DeveloperRail; parentId: string; inMenu?: boolean }): ReactElement | null {
+  const t = useUiT();
+  // Removed apps show in the rail, where included apps live.
+  const removed = rail.removedUnder(parentId).filter((node) => !node.app);
+  if (!removed.length) return null;
+  return <>{removed.map((node) => {
+    const label = t("developer.removedBy", { label: node.displayLabel, layer: node.by });
+    return inMenu
+      ? <DropdownMenu.Item key={node.id} disabled className="line-through">{label}</DropdownMenu.Item>
+      : <Tooltip key={node.id} label={node.route ? `${node.id} → ${node.route}` : node.id} side="bottom">
+        <span tabIndex={0} role="link" aria-disabled="true" className={cn(menuItemClass, "cursor-default line-through")}>{label}</span>
+      </Tooltip>;
+  })}</>;
+}
+
 /** Deeper levels are labelled groups in the same native dropdown. */
-function MenuEntries({ item, currentId }: { item: ChromeMenuNode; currentId?: string }): ReactElement {
-  const children = item.menuItems();
+function MenuEntries({ item, currentId, rail }: { item: ChromeMenuNode; currentId?: string; rail: DeveloperRail }): ReactElement {
+  const children = rail.menus(item);
   const ownPage = item.to && !children.some((child) => child.targetPath === item.path);
   return <>
-    {ownPage ? <MenuPage item={item} currentId={currentId} /> : null}
-    {children.map((child) => child.menuItems().length ? (
+    {ownPage ? <MenuPage item={item} currentId={currentId} rail={rail} /> : null}
+    {children.map((child) => rail.menus(child).length ? (
       <DropdownMenu.Group key={child.id}>
-        {child.displayLabel !== item.displayLabel ? <DropdownMenu.Label>{child.displayLabel}</DropdownMenu.Label> : null}
-        <MenuEntries item={child} currentId={currentId} />
+        {child.displayLabel !== item.displayLabel ? <DropdownMenu.Label>{rail.label(child)}</DropdownMenu.Label> : null}
+        <MenuEntries item={child} currentId={currentId} rail={rail} />
       </DropdownMenu.Group>
-    ) : <MenuPage key={child.id} item={child} currentId={currentId} />)}
+    ) : <MenuPage key={child.id} item={child} currentId={currentId} rail={rail} />)}
+    <RemovedMenus rail={rail} parentId={item.id} inMenu />
   </>;
 }
 
-function MenuPage({ item, currentId }: { item: ChromeMenuNode; currentId?: string }): ReactElement | null {
+function MenuPage({ item, currentId, rail }: { item: ChromeMenuNode; currentId?: string; rail: DeveloperRail }): ReactElement | null {
   if (!item.target) return null;
+  const description = rail.describe(item);
   return <DropdownMenu.LinkItem href={item.target} closeOnClick
-    render={<AppMenuLink to={item.target} href={item.target} data-current={item.id === currentId} />}>
-    {item.displayLabel}
+    render={<AppMenuLink to={item.target} href={item.target} data-current={item.id === currentId} title={description} />}>
+    {rail.label(item)}
   </DropdownMenu.LinkItem>;
 }

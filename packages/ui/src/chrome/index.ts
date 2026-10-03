@@ -21,6 +21,7 @@ export {
 } from "./Breadcrumb";
 export { DocumentTitle } from "./DocumentTitle";
 export { ViewAsBanner, ViewAsPicker } from "./ViewAs";
+export { DeveloperMenu, DeveloperModeMenuItem, useDeveloperFieldTitle } from "./DeveloperMode";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
 export {
   AppRailTree,

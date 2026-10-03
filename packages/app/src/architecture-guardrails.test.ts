@@ -177,6 +177,12 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
     prefix: "calendar.mode.",
     values: ["month", "week", "day"],
   },
+  {
+    namespace: "ui",
+    owner: "@angee/ui HiddenMenuItem reason",
+    prefix: "developer.reason.",
+    values: ["hide", "only"],
+  },
 ];
 
 describe("React architecture guardrails", () => {

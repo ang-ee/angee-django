@@ -50,6 +50,20 @@ declarations; ids outside the addon's namespace are reported, not refused.
 Menu entries are checked: unknown keys and malformed values fail composition,
 and the deployment layer must be a mapping.
 
+**Developer mode** shows how the app was composed, like Odoo's debug mode. Any
+signed-in user turns it on from the user menu, which stores it in their
+preferences, or for the browser session with `?debug=1` on any URL (`?debug=0`
+turns it off). The session choice, from the URL or the menu, wins over the
+stored preference until the tab closes. A debug button then sits beside the
+avatar: hovering it gives the page's route, app, perspective and home, and
+clicking it opens the composition (shell provenance, removed and hidden menu
+items, unavailable routes, findings, and the layers behind each menu item). The
+expanded rail lists hidden items, marked "(hidden)", and removed items, struck
+through under the item they showed in, each with its id and layers on hover;
+form field labels and list column headers show their technical field name. It
+reveals composition facts only, never records, and changes nothing the server
+allows.
+
 `createApp(...).explain` reports how the composition came out: the resolved
 shell with the layer behind each field, the effective home and confinement, the
 layer that set each menu node field, removed nodes and who removed them, hidden

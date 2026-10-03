@@ -233,7 +233,7 @@ describe("composition explanation", () => {
     const href = createRouteHref(routes);
     const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
     const explanation = explainComposition(resolveShell(layers), compiled, unavailableRoutes(routes, logical, compiled.removed), { home: "/desk", confineTo: null });
-    expect(explanation.menus.removed).toEqual([{ id: "desk.review", route: "desk.review", by: "suite" }]);
+    expect(explanation.menus.removed).toEqual([{ id: "desk.review", route: "desk.review", by: "suite", parent: "desk" }]);
     expect(explanation.menus.hidden).toEqual([{ id: "desk.home", by: "suite", reason: "hide" }]);
     expect(explanation.menus.unavailable).toEqual({
       "desk.review": 'menu item "desk.review" was removed',
