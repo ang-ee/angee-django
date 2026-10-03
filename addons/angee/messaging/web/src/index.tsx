@@ -1,7 +1,6 @@
 export { messageFeedRows, messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { useAuthoredQuery } from "@angee/refine";
-import { type BaseMenuItem } from "@angee/ui";
 import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import * as React from "react";
@@ -70,20 +69,6 @@ export {
   type TranscriptOrder,
 } from "./ThreadTranscript";
 
-const messagingMenu: readonly BaseMenuItem[] = [
-  {
-    id: "messaging",
-    label: "Messaging",
-    icon: "inbox",
-    children: [
-      // A plain message list. "Inbox" names Nexus's explorer and the PM suite's notifications.
-      { id: "messaging.inbox", label: "Messages", route: "messaging.inbox", icon: "inbox" },
-      { id: "messaging.threads", label: "Threads", route: "messaging.threads", icon: "threads" },
-      { id: "messaging.channels", label: "Channels", route: "messaging.channels", icon: "channel" },
-    ],
-  },
-];
-
 export interface MessagingAddonOptions {
   /** Composer shortcut for this app's built-in Comments tab. */
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
@@ -118,11 +103,17 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
       layout: "public",
       component: lazyRouteComponent(() => import("./PublicWebformPage"), "PublicWebformPage"),
     },
-    ...resourcePageRoutes("messaging.inbox", "/messaging/inbox", lazyRouteComponent(() => import("./MessagesPage"), "MessagesPage"), "messaging.Message"),
+    ...resourcePageRoutes("messaging.messages", "/messaging/messages", lazyRouteComponent(() => import("./MessagesPage"), "MessagesPage"), "messaging.Message"),
     ...resourcePageRoutes("messaging.threads", "/messaging/threads", lazyRouteComponent(() => import("./ThreadsPage"), "ThreadsPage"), "messaging.Thread"),
     ...resourcePageRoutes("messaging.channels", "/messaging/channels", lazyRouteComponent(() => import("./ChannelsPage"), "ChannelsPage"), "messaging.Channel"),
   ],
-  menus: messagingMenu,
+  menus: {
+    messaging: { label: "Messaging", icon: "inbox" },
+    // A plain message list. "Inbox" names Nexus's explorer.
+    "messaging.messages": { parent: "messaging", label: "Messages", route: "messaging.messages", icon: "inbox", sequence: 10 },
+    "messaging.threads": { parent: "messaging", label: "Threads", route: "messaging.threads", icon: "threads", sequence: 20 },
+    "messaging.channels": { parent: "messaging", label: "Channels", route: "messaging.channels", icon: "channel", group: "platform" },
+  },
   icons: { inbox: Inbox, threads: MessagesSquare, send: Send, channel: Mail },
   i18n: { messaging: enMessagingMessages },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },

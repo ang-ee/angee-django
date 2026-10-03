@@ -180,7 +180,7 @@ export class AppRouteProjection {
     options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
   ) {
     const navigation = options.navigation ?? menuTree;
-    this.navigationTree = confineTo === undefined ? navigation : navigation.confineTo(confineTo);
+    this.navigationTree = confineTo === undefined ? navigation.withSettingsPlace() : navigation.confineTo(confineTo);
     this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
     const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));

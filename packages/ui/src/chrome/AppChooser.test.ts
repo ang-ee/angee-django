@@ -15,9 +15,9 @@ describe("AppChooser", () => {
         icon: "inbox",
         children: [
           {
-            id: "messaging.inbox",
-            label: "Inbox",
-            to: "/messaging/inbox",
+            id: "messaging.messages",
+            label: "Messages",
+            to: "/messaging/messages",
           },
           {
             id: "messaging.imap",
