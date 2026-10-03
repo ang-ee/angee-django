@@ -300,7 +300,6 @@ function GraphCanvas<
   }));
   const geometryEdges = useValueStable(edges.map((edge) => ({
     id: edge.id,
-    kind: edge.kind,
     source: edge.source,
     target: edge.target,
   })));
@@ -615,7 +614,7 @@ function toReactFlowNode<
   selected = node.selected,
 ): RenderNode<TKind, TMeta> {
   const style = nodeStyleFor(node.kind, nodeStyles);
-  const emphasized = selected || node.highlighted;
+  const emphasized = node.highlighted;
   return {
     id: node.id,
     domAttributes: { "data-graph-node-id": node.id } as RenderNode<TKind, TMeta>["domAttributes"],
@@ -642,6 +641,8 @@ function toReactFlowNode<
         ? style.highlightedBackground ?? "var(--brand-soft)"
         : style.background ?? "var(--surface-sheet)",
       color: style.color ?? "var(--text-primary)",
+      outline: selected ? "2px solid var(--brand)" : undefined,
+      outlineOffset: selected ? 3 : undefined,
       padding: 0,
       borderStyle: "solid",
       borderRadius: 6,

@@ -277,9 +277,9 @@ describe("GraphView", () => {
     const initialLayouts = dagreMock.layouts;
     rendered.rerender(<GraphView
       nodes={nodes.map((node) => node.id === "draft" ? { ...node, title: "Draft renamed" } : node)}
-      edges={edges.map((edge) => ({ ...edge, label: "renamed outcome" }))}
+      edges={edges.map((edge) => ({ ...edge, kind: "taken", label: "renamed outcome" }))}
       nodeStyles={{ ...nodeStyles }}
-      edgeStyles={{ success: { stroke: "purple" } }}
+      edgeStyles={{ taken: { stroke: "var(--brand)", strokeWidth: 2 } }}
     />);
     expect(dagreMock.layouts).toBe(initialLayouts);
     const renderedNodes = reactFlowMock.lastProps?.nodes as Array<{ data: { node: { title: string } } }>;
