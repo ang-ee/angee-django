@@ -23,6 +23,7 @@ import type {
   SlotContribution,
   WidgetMap,
 } from "./contracts";
+import type { ComposedContainers, ContainerScope } from "./containers";
 import { makeContext } from "./make-context";
 import { createAngeeI18nInstance } from "./i18n";
 import {
@@ -124,6 +125,10 @@ export interface AppRuntime {
   loginPath: string;
   /** Installed theme catalogue composed from addon contributions. */
   themes: readonly ThemeContribution[];
+  /** The composed containers every container owner renders from. */
+  containers?: ComposedContainers;
+  /** The page's apps, routes and perspective, which container conditions read. */
+  containerScope?: ContainerScope;
   /** How the composition came out; developer mode shows it. */
   composition?: RuntimeComposition | null;
   /** The active route's name and its app (menu root), per page. */

@@ -32,7 +32,7 @@ CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
 
 WEB_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 DEFAULT_WEB_ROOT = "../../web"
-UI_LAYER_KEYS = frozenset({"menus", "shell", "perspectives"})
+UI_LAYER_KEYS = frozenset({"menus", "containers", "shell", "perspectives"})
 """Manifest keys the deployment's ``ANGEE_UI`` setting may declare; ``@angee/app`` validates their values."""
 
 

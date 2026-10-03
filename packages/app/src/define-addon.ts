@@ -31,6 +31,8 @@ import type {
   PreviewContribution,
   RuntimeFormRegistration,
   RuntimeBrand,
+  ComposedContainers,
+  ContainersDeclaration,
   SlotContribution,
   WidgetMap,
 } from "@angee/ui/runtime";
@@ -42,6 +44,8 @@ import type { AppSurface } from "./route-policy";
 import { resolveShell, type PerspectiveDeclaration, type ResolvedShell, type ShellDeclaration } from "./shell";
 import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
 import { layerAncestry } from "./layers";
+import { compileContainers } from "./containers";
+import { CORE_CONTAINERS } from "./core-containers";
 export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
 import {
   DASHBOARD_STORE_SLOT,
@@ -140,6 +144,12 @@ export interface AddonManifest {
   forms?: FormOverrideMap;
   chatter?: readonly ChatterContribution[];
   slots?: readonly SlotContribution[];
+  /**
+   * Children of named containers, keyed by address (`node#name`): own-namespace
+   * keys declare children, other keys alter a dependency's; `only`, `except` and
+   * `when` narrow what renders. An address on the addon's own node declares the container.
+   */
+  containers?: ContainersDeclaration;
   previews?: readonly PreviewContribution[];
   /** Addon-owned search keys that expire when the active record changes. */
   recordSearchKeys?: readonly string[];
@@ -191,6 +201,8 @@ export interface ComposedAddons {
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
+  /** The compiled containers: children per address, render-time narrowing, removals, provenance. */
+  containers: ComposedContainers;
   previews: readonly PreviewContribution[];
   recordSearchKeys: readonly string[];
   drawers: readonly DrawerContribution[];
@@ -312,6 +324,7 @@ export function composeAddons(
   const shell = resolveShell(addons, ancestors);
   const routes: AddonRoute[] = [];
   const compiledMenus = compileMenus(addons, ancestors);
+  const containers = compileContainers(addons, CORE_CONTAINERS, { ancestors, canonicalizeModel });
   const widgets: WidgetMap = {};
   const statusTones: Record<string, StatusToneMap[string]> = Object.create(null);
   const i18n: Record<string, Record<string, string>> = {};
@@ -464,6 +477,7 @@ export function composeAddons(
       ),
     ),
     slots,
+    containers,
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
     recordSearchKeys: Object.keys(recordSearchKeys).sort(),

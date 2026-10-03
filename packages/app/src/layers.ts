@@ -43,3 +43,31 @@ export function mostSpecific(
 ): string[] {
   return candidates.filter((id) => !candidates.some((other) => other !== id && ancestors.get(other)?.has(id)));
 }
+
+/** Refuse an alteration of something owned by an addon the altering layer does not depend on. */
+export function assertMayAlter(
+  ancestors: ReadonlyMap<string, ReadonlySet<string>>,
+  layer: string,
+  owner: string,
+  what: string,
+): void {
+  if (owner !== layer && !ancestors.get(layer)?.has(owner)) {
+    throw new Error(`Addon "${layer}" alters ${what} of "${owner}", which it does not depend on.`);
+  }
+}
+
+/**
+ * Whether `layer` may set a field `previous` already set: the same layer or a
+ * dependent overrides; a dependency setting it after its dependent leaves the
+ * dependent's value (returns false); two unrelated layers fail.
+ */
+export function overridesField(
+  ancestors: ReadonlyMap<string, ReadonlySet<string>>,
+  previous: string | undefined,
+  layer: string,
+  what: string,
+): boolean {
+  if (previous === undefined || previous === layer || ancestors.get(layer)?.has(previous)) return true;
+  if (ancestors.get(previous)?.has(layer)) return false;
+  throw new Error(`Unrelated addons "${previous}" and "${layer}" both set ${what}.`);
+}

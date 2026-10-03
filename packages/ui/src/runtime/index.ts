@@ -11,6 +11,24 @@ export {
   type PreferenceSliceState,
 } from "./user-preferences";
 export {
+  EMPTY_CONTAINERS,
+  containerName,
+  resolveContainer,
+  useContainer,
+  type ComposedContainerChild,
+  type ComposedContainers,
+  type ContainerAlteration,
+  type ContainerChild,
+  type ContainerCondition,
+  type ContainerEntry,
+  type ContainerKinds,
+  type ContainerRule,
+  type ContainerScope,
+  type ContainersDeclaration,
+  type CoreContainer,
+  type ResolveContainerOptions,
+} from "./containers";
+export {
   applyDeveloperModeSearch,
   useDeveloperMode,
   useDeveloperModeSwitch,

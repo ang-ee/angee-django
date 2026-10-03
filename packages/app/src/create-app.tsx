@@ -394,6 +394,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routeHref: runtimeRouteHref,
     loginPath,
     themes: composed.themes as readonly ThemeContribution[],
+    containers: composed.containers,
+  };
+  const routeTrail = (route: BaseAddonRoute | undefined): string[] => {
+    const names: string[] = [];
+    for (let current = route; current && !names.includes(current.name); current = current.parent ? routesByName.get(current.parent) : undefined) {
+      names.push(current.name);
+    }
+    return names;
   };
   const operationDocuments = operationDocumentsForSchemas(schemas);
   function resourceRegistryFor(
@@ -483,6 +491,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
         routesByResource: selected,
         routeHref: runtimeRouteHref,
         composition: explain,
+        containerScope: {
+          apps: app ? [app] : [],
+          routes: routeTrail(activeRoute),
+          perspective: confineTo !== undefined ? composed.shell.perspective?.id ?? null : null,
+        },
         activeRouteName: activeRoute?.name ?? null,
         activeApp: app ?? null,
       };
@@ -588,7 +601,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
     home,
     confineTo: confineTo ?? null,
-  });
+  }, composed.containers);
   if (developmentMode()) {
     for (const diagnostic of composed.shell.diagnostics) console.warn(`[angee] ${diagnostic}`);
     const menuFindings = composed.menuComposition.diagnostics.length;

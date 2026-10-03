@@ -122,6 +122,12 @@ function CompositionSections({ composition }: { composition: RuntimeComposition 
     // Composition findings are the app's own English diagnostics, shown as raised.
     [t("developer.diagnostics"), [...shell.diagnostics, ...menus.diagnostics]],
     [t("developer.menus"), Object.entries(menus.provenance).map(([id, fields]) => t("developer.setBy", { subject: id, layers: layersOf(fields) }))],
+    [t("developer.containerRules"), (composition.containers?.rules ?? []).map((rule) =>
+      t("developer.ruleLine", { address: rule.address, layer: rule.layer, summary: rule.summary }))],
+    [t("developer.containersRemoved"), (composition.containers?.removed ?? []).map((child) =>
+      t("developer.setBy", { subject: `${child.address}/${child.id}`, layers: child.by }))],
+    [t("developer.containers"), Object.entries(composition.containers?.provenance ?? {}).map(([child, fields]) =>
+      t("developer.setBy", { subject: child, layers: layersOf(fields) }))],
   ];
   return (
     <>

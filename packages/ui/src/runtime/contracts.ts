@@ -71,6 +71,14 @@ export interface RuntimeComposition {
     unavailable: Readonly<Record<string, string>>;
     diagnostics: readonly string[];
   };
+  containers?: {
+    /** Children a layer removed from a container. */
+    removed: readonly { address: string; id: string; by: string }[];
+    /** Each layer's narrowing per address: kept and dropped children, hides, and the condition. */
+    rules: readonly { address: string; layer: string; summary: string }[];
+    /** The layer behind each child field, keyed `address/id`. */
+    provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  };
 }
 
 /** Scoped presentation only; unknown message, resource, field and menu keys fail at boot. */
