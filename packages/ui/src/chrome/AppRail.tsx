@@ -37,6 +37,7 @@ import { Tooltip } from "../ui/tooltip";
 import { AppBrand } from "./AppBrand";
 import { AppChooser } from "./AppChooser";
 import { AppRailTree, appRailTreeVariants } from "./AppRailTree";
+import { useDeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import {
   MenuTree,
@@ -94,6 +95,7 @@ export function AppRail({
   navigationTarget,
 }: AppRailProps): ReactElement {
   const t = useUiT();
+  const rail = useDeveloperRail();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -241,9 +243,10 @@ export function AppRail({
             />
           ) : singleApp ? (
             <div className="flex flex-col gap-1">
-              {(singleApp.root.targetedChildren.length ? singleApp.root.targetedChildren : [singleApp.root]).map((item) => item.target ? (
+              {(rail.children(singleApp.root).length ? rail.children(singleApp.root) : [singleApp.root]).map((item) => item.target ? (
                 <RailSettingsItem key={item.id} active={item.matchesPath(pathname)} expanded={false}
-                  icon={item.iconName} label={item.displayLabel} to={item.target} pathname={pathname}
+                  icon={item.iconName} label={rail.enabled && item.hidden ? `${item.displayLabel} (${t("developer.hiddenMark")})` : item.displayLabel}
+                  to={item.target} pathname={pathname}
                   onActiveToggle={onActiveToggle} onOpenNavigation={item.targetedChildren.length ? openNavigation : undefined} />
               ) : null)}
             </div>

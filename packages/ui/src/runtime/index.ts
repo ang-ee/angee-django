@@ -11,6 +11,12 @@ export {
   type PreferenceSliceState,
 } from "./user-preferences";
 export {
+  DEVELOPER_MODE_PREFERENCE_KEY,
+  useDeveloperMode,
+  useRuntimeComposition,
+  type RuntimeComposition,
+} from "./developer-mode";
+export {
   AppRuntimeProvider,
   useAppRuntime,
   useWidget,

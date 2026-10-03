@@ -11,6 +11,7 @@ import { Collapsible } from "../ui/collapsible";
 import { railLinkToggleProps } from "./app-rail-model";
 import { Glyph } from "./Glyph";
 import { MenuTree, type ChromeMenuNode } from "./menu-tree";
+import { useDeveloperRail } from "./DeveloperMode";
 
 const ActiveMenuItemContext = createContext<string | undefined>(undefined);
 
@@ -67,6 +68,7 @@ export function AppRailTree({
   onActiveToggle,
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
+  const rail = useDeveloperRail();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -96,10 +98,13 @@ export function AppRailTree({
         ) : null}
         <div className={styles.tree()}>
           {flat && roots.length === 1 && onlyRoot ? (
-            (onlyRoot.targetedChildren.length ? onlyRoot.targetedChildren : roots).map((item) => (
-              <NestedMenuItem key={item.id} idPrefix={idPrefix} item={item}
-                pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
-            ))
+            <>
+              {(rail.children(onlyRoot).length ? rail.children(onlyRoot) : roots).map((item) => (
+                <NestedMenuItem key={item.id} idPrefix={idPrefix} item={item}
+                  pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
+              ))}
+              <RemovedMenuItems parentId={onlyRoot.id} styles={styles} />
+            </>
           ) : <Accordion.Root
             variant="flush"
             value={openRootId ? [openRootId] : []}
@@ -159,8 +164,9 @@ function RootMenuItem({
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const t = useUiT();
+  const rail = useDeveloperRail();
   if (!item.target) return null;
-  const children = item.targetedChildren;
+  const children = rail.children(item);
   if (!children.length) {
     return (
       <div className={styles.rootItem()}>
@@ -199,6 +205,7 @@ function RootMenuItem({
       <Accordion.Panel id={panelId} className={styles.panel()}>
         <MenuChildren
           idPrefix={idPrefix}
+          parentId={item.id}
           items={children}
           pathname={pathname}
           styles={styles}
@@ -211,12 +218,14 @@ function RootMenuItem({
 
 function MenuChildren({
   idPrefix,
+  parentId,
   items,
   pathname,
   styles,
   onActiveToggle,
 }: {
   idPrefix: string;
+  parentId: string;
   items: readonly ChromeMenuNode[];
   pathname: string;
   styles: AppRailTreeStyles;
@@ -234,7 +243,27 @@ function MenuChildren({
           onActiveToggle={onActiveToggle}
         />
       ))}
+      <RemovedMenuItems parentId={parentId} styles={styles} />
     </div>
+  );
+}
+
+/** Developer mode: removed menu items, struck through where they were, naming who removed them. */
+function RemovedMenuItems({ parentId, styles }: { parentId: string; styles: AppRailTreeStyles }): ReactElement | null {
+  const t = useUiT();
+  const rail = useDeveloperRail();
+  const removed = rail.removedUnder(parentId);
+  if (!removed.length) return null;
+  return (
+    <>
+      {removed.map((node) => (
+        <span key={node.id} aria-disabled="true" title={node.route ? `${node.id} → ${node.route}` : node.id}
+          className={`${styles.link()} cursor-default line-through opacity-50`}>
+          <Glyph name="x" size={14} aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate">{t("developer.removedBy", { label: node.label ?? node.id, layer: node.by })}</span>
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -252,7 +281,8 @@ function NestedMenuItem({
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const t = useUiT();
-  const children = item.targetedChildren;
+  const rail = useDeveloperRail();
+  const children = rail.children(item);
   const activeChildId = item.activeTargetedChild(pathname)?.id ?? null;
   const [open, setOpen] = useDerivedOverride(
     activeChildId !== null,
@@ -299,6 +329,7 @@ function NestedMenuItem({
       <Collapsible.Panel id={panelId} className={styles.panel()}>
         <MenuChildren
           idPrefix={idPrefix}
+          parentId={item.id}
           items={children}
           pathname={pathname}
           styles={styles}
@@ -320,6 +351,7 @@ function MenuLink({
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const current = useContext(ActiveMenuItemContext) === item.id;
+  const rail = useDeveloperRail();
   const toggleProps = railLinkToggleProps(item.target, pathname, onActiveToggle, true);
   const linkProps = useLinkProps({
     to: item.target,
@@ -333,7 +365,8 @@ function MenuLink({
       aria-current={current ? "page" : undefined}
       data-active={current}
       data-status={current ? "active" : undefined}
-      className={styles.link()}
+      title={rail.describe(item)}
+      className={item.hidden ? `${styles.link()} italic opacity-60` : styles.link()}
     >
       <span className={item.tone ? toneGlyph(item.tone) : undefined}>
         <Glyph name={item.iconName} fallbackName="help" size={14} aria-hidden="true" />

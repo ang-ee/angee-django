@@ -55,8 +55,8 @@ export interface CompiledMenus {
    * left out of the rail kept with `hidden`, so the palette and admission keep them.
    */
   navigation: readonly ChromeMenuItem[];
-  /** Removed nodes, subtrees included, with the routes they referenced and the removing layer. */
-  removed: readonly { id: string; route?: string; by: string }[];
+  /** Removed nodes, subtrees included: the routes they referenced, the removing layer, where they sat, their label. */
+  removed: readonly { id: string; route?: string; by: string; parent?: string; label?: string }[];
   /** Surviving nodes left out of the rail, by a `hide` or by a layer's `only`. */
   hidden: readonly { id: string; by: string; reason: "hide" | "only" }[];
   /** The layer that set each node field, declarations included. */
@@ -257,7 +257,14 @@ function resolve(
   const removed = new Map<string, CompiledMenus["removed"][number]>();
   const collectRemoved = (node: Node, by: string): void => {
     if (removed.has(node.id)) return;
-    removed.set(node.id, { id: node.id, ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}), by });
+    const parent = parentOf(node);
+    removed.set(node.id, {
+      id: node.id,
+      ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}),
+      by,
+      ...(parent !== undefined ? { parent } : {}),
+      ...(typeof node.fields.label === "string" ? { label: node.fields.label } : {}),
+    });
     for (const child of children.get(node.id) ?? []) collectRemoved(child, by);
   };
   for (const node of nodes.values()) if (node.fields.remove) collectRemoved(node, node.setBy.remove!);
