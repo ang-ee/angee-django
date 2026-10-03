@@ -200,7 +200,9 @@ materializes its framework sources and boots the complete stack.
    There is no `--dev` flag: `dev` is the default value of `-t/--template`.
    `angee dev` is the supported bring-up command for the whole local stack;
    `angee up` starts container Services only. Don't start Django, Vite, Daphne,
-   or workers by hand. The rendered manifest declares the consolidated framework
+   or workers by hand, and restart them through the operator, which keeps
+   running while it restarts them
+   ([Restart the running stack](#restart-the-running-stack)). The rendered manifest declares the consolidated framework
    source plus optional external sources; `angee dev` materializes them, cuts the
    `src` workspace, and runs the composed host at the stack root against those
    worktrees.
@@ -357,6 +359,56 @@ A jj workspace is a second working copy of the source. It does not create an
 isolated running host or database: run web checks and browser verification in
 the stack's `src` workspace after merging the bookmark there. The operator does
 not manage jj yet, so do not create workspaces with `angee ws create`.
+
+### Restart the running stack
+
+The angee operator is the stack's monitoring and management service. It is not
+part of the application: it supervises the frontend, the backend and the
+workers, and it keeps running while it restarts them. Use it for every restart,
+whether from the CLI, its API, or **Settings > Operator** in the app. Never kill
+or relaunch processes by hand; a process started outside the operator is one it
+can no longer see or restart. Run these from the controlling stack root
+(`ANGEE_ROOT`):
+
+```sh
+# The whole application. Use the stack's restart job: deps on dev stacks,
+# provision on instance stacks.
+angee --root "$ANGEE_ROOT" job run deps --chained-restart
+
+# One or more services by name; also `start` and `stop`
+angee --root "$ANGEE_ROOT" restart django celery-worker
+```
+
+- **Whole application.** This is the same as **Settings > Operator > Restart
+  application**. The stack's restart job is `ANGEE_OPERATOR_RESTART_JOB` in its
+  `angee.yaml`. The job runs, then its downstream jobs, then every service that
+  waits on them restarts. On a dev stack that sequence is:
+  - `deps` runs `pnpm install`;
+  - `provision` runs the bootstrap, `uv sync` and
+    `angee provision --demo --force-rebac` (migrations and permission sync);
+  - `operator-schema` and `codegen` run;
+  - Django, the frontend, Storybook and the Celery workers restart.
+
+  Postgres, Redis and the operator keep running, so the operator stays
+  reachable throughout and reports the restart's progress.
+- **Dependency changes.** Apply them with the whole-application restart. Never
+  run `uv sync` or `uv lock` on the stack's venv while the stack is running:
+  long-lived workers that later import a changed module mix old and new code and
+  fail. `provision` syncs before the workers restart.
+- **One service.** For a stack running under process-compose, this is
+  `process-compose process restart <name>`.
+- **Operator API.** Every operator command is also an API call. The stack's
+  operator serves GraphQL at `http://127.0.0.1:<operator port>/graphql`, with
+  `Authorization: Bearer <operator token>`:
+  - `jobRun(name, chainedRestart: true)` starts the whole-application restart;
+  - `jobRunOperation(id)` follows its progress;
+  - `jobRunPreview(name, chainedRestart: true)` lists the jobs and services it
+    would touch, without running anything;
+  - `serviceRestart(name)`, `serviceStart(name)` and `serviceStop(name)` act on
+    one service.
+
+  `angee --operator <url>`, or `ANGEE_OPERATOR_URL`, sends the CLI's commands to
+  that API instead of running the operator in-process against `--root`.
 
 ## What's needed for agents to self-build?
 

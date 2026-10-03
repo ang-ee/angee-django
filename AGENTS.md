@@ -228,7 +228,17 @@ and pass it explicitly as `angee --root "$angee_root" ws ...`.
 
 `angee dev` is the supported way to start the complete local stack. Run it against
 the resolved stack root; never start Django, Vite, ASGI servers, workers, or
-watchers by hand. One-shot management commands use the stack host's `manage.py`.
+watchers by hand. The angee operator is the stack's monitoring and management
+service: it is not part of the frontend or backend and keeps running while it
+restarts them, so use it for every restart.
+`angee --root "$angee_root" job run deps --chained-restart` restarts the whole
+application (the restart job is `provision` on instance stacks), and
+`angee --root "$angee_root" restart <service>...` restarts single services. Apply
+dependency changes with the whole-application restart; never `uv sync` the stack's
+venv while the stack runs.
+[Restart the running stack](docs/howto/getstarted.md#restart-the-running-stack)
+has the details and the operator API. One-shot management commands use the stack
+host's `manage.py`.
 [Checks](docs/checks.md#composition-and-schema) owns their command context and
 ordering. For a new branch, use the workspace skill's Create Workspace workflow.
 Never `git checkout` or `git switch` inside a pinned workspace slot.

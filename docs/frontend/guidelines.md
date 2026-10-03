@@ -833,9 +833,12 @@ Hard-won traps — the wise learn from others' mistakes
   verification path in [Checks](../checks.md).
 - **A new web package must enter the composed manifest and dependency graph.**
   Declare it through the addon/template owners, refresh the stack-owned install
-  and generated composition, and restart the frontend through the stack
-  lifecycle owner so Vite sees the new package. See [Checks](../checks.md) for
-  environment setup and safe script invocation.
+  and generated composition, and restart the frontend through the operator
+  (`angee --root "$ANGEE_ROOT" restart frontend`, or the whole-application
+  restart after an install; see
+  [Restart the running stack](../howto/getstarted.md#restart-the-running-stack))
+  so Vite sees the new package. See [Checks](../checks.md) for environment setup
+  and safe script invocation.
 - **Install JS dependencies once at the owning stack workspace root.** Never run
   `pnpm install` inside a source slot, `packages/`, `addons/`, or `examples/`: a
   nested install forks linked
