@@ -16,7 +16,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Exists, F, Max, OuterRef, Q, Value
+from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
 from pydantic import Field, TypeAdapter
@@ -733,6 +733,18 @@ class StepWatchManager(AngeeManager):
 
 class StepRunQuerySet(AngeeQuerySet):
     """Own conditional step transitions and database-clock candidate scopes."""
+
+    def nodes(self) -> Any:
+        """Read declared nodes with bounded map progress, excluding item rows."""
+        return self.exclude(node_key__endswith=MAP_BODY_SUFFIX).annotate(
+            _map_settled=self.model.map_settled_expression(),
+        )
+
+    def item_counts(self) -> Any:
+        """Aggregate every admitted map item without fetching its payload."""
+        return (self.filter(node_key__endswith=MAP_BODY_SUFFIX).order_by()
+                .values("node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
+                .order_by("node_key", "status"))
 
     def for_map(self, run_id: Any, node_key: Any) -> Any:
         """Select a containing map's body rows, accepting native ORM expressions."""

@@ -38,11 +38,12 @@ from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 from angee.workflows.definition import Body, Definition, Issue
-from angee.workflows.states import RunOrigin
+from angee.workflows.states import RunOrigin, StepRunStatus
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
+strawberry.enum(cast(Any, StepRunStatus))
 
 Workflow = apps.get_model("workflows", "Workflow")
 WorkflowVersion = apps.get_model("workflows", "WorkflowVersion")
@@ -137,6 +138,11 @@ class WorkflowRunType(RecordReferenceNode):
     updated_at: auto
     finished_at: auto
 
+    @strawberry_django.field(only=["version_id"], prefetch_related=[_RUN_POLICY_VERSION])
+    def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
+        """Dispatch the bounded projection through the run's read policy."""
+        return cast(WorkflowRunGraph, cast(Any, self).graph(request_from_info(info).user))
+
     @strawberry_django.field(only=["status"])
     def can_cancel(self, info: strawberry.Info) -> bool:
         """Project the model's viewer-specific cancellation predicate."""
@@ -194,6 +200,7 @@ class StepRunType(AngeeNode):
     waiting_kind: auto
     wait_reason: auto
     attempt: auto
+    page_index: auto
     retries: auto
     dispatches: auto
     deadline_at: auto
@@ -201,6 +208,7 @@ class StepRunType(AngeeNode):
     dispatched_at: auto
     input: JSON
     output: JSON
+    failure_reason: str | None = strawberry_django.field(only=["status", "output"])
     outcome: auto
     outcome_label: str = strawberry_django.field(
         only=["node_key", "outcome", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
@@ -242,6 +250,7 @@ class StepAttemptType(AngeeNode):
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["number"])
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     number: auto
+    page_index: auto
     started_at: auto
     finished_at: auto
     result: auto
@@ -253,6 +262,60 @@ class StepAttemptType(AngeeNode):
     def acknowledged_by(self) -> PublicID | None:
         """Return the operator's public identity without exposing a user row."""
         return optional_public_id(user_public_id(cast(Any, self).acknowledged_by_id))
+
+
+@strawberry.type
+class WorkflowRunGraphOutcome:
+    """A frozen outcome label attached to a graph port."""
+
+    id: str
+    label: str
+
+
+@strawberry.type
+class StepRunStatusCount:
+    """Exact item cardinality in one execution state."""
+
+    status: StepRunStatus
+    count: int
+
+
+@strawberry.type
+class WorkflowRunGraphNode:
+    """A published node with one parent row and unbounded-item aggregates."""
+
+    key: str
+    label: str
+    step: str
+    step_label: str
+    rank: int
+    body_key: str | None
+    step_run: StepRunType | None
+    item_counts: list[StepRunStatusCount]
+    item_attempts: int
+
+    @strawberry.field
+    def outcomes(self) -> list[WorkflowRunGraphOutcome]:
+        """Expose the definition owner's named ports as a typed collection."""
+        return [WorkflowRunGraphOutcome(id=key, label=label) for key, label in cast(Any, self).outcomes.items()]
+
+
+@strawberry.type
+class WorkflowRunGraphEdge:
+    """One published route with its retained execution evidence."""
+
+    source: str
+    outcome: str
+    target: str
+    taken: bool
+
+
+@strawberry.type
+class WorkflowRunGraph:
+    """Payload-free graph summary accessible to a run reader."""
+
+    nodes: list[WorkflowRunGraphNode]
+    edges: list[WorkflowRunGraphEdge]
 
 
 @strawberry_django.type(StepWatch)

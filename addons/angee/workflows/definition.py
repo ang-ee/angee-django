@@ -159,6 +159,36 @@ class PlannedNode:
     existing: bool = False
 
 
+@dataclass(frozen=True)
+class GraphNode:
+    """A published node's reader vocabulary, ports and execution order."""
+
+    key: str
+    label: str
+    step: str
+    step_label: str
+    rank: int
+    outcomes: dict[str, str]
+    body_key: str | None
+
+
+@dataclass(frozen=True)
+class GraphEdge:
+    """One routed outcome from a published node to a target."""
+
+    source: str
+    outcome: str
+    target: str
+
+
+@dataclass(frozen=True)
+class GraphTopology:
+    """Payload-free structure of the immutable graph."""
+
+    nodes: tuple[GraphNode, ...]
+    edges: tuple[GraphEdge, ...]
+
+
 class Definition(BaseModel):
     """The sole declaration shape and graph policy for a workflow document."""
 
@@ -277,6 +307,21 @@ class Definition(BaseModel):
         """Use the frozen label, an explicit step label, or the authored node key."""
         node = self.node(key)
         return node.label or node.implementation.__dict__.get("label") or key.replace("_", " ").capitalize()
+
+    def topology(self) -> GraphTopology:
+        """Project frozen labels and every routed port in stable execution order."""
+        return GraphTopology(
+            nodes=tuple(GraphNode(
+                key=key, label=self.node_label(key), step=node.step,
+                step_label=node.implementation.display_label() or node.step, rank=rank,
+                outcomes={outcome: self.node_outcome_label(key, outcome)
+                          for outcome in sorted(node.outcome_labels.keys() | node.next.keys())},
+                body_key=map_body_key(key) if node.body is not None else None,
+            ) for key, rank in self.ranks.items() for node in (self.nodes[key],)),
+            edges=tuple(GraphEdge(source, outcome, target)
+                        for source in self.ranks for outcome in sorted(self.nodes[source].next)
+                        for target in sorted(self.nodes[source].targets(outcome))),
+        )
 
     def node_outcome_label(self, key: str, outcome: str) -> str:
         """Name a node result from its frozen declaration, including old documents."""
@@ -871,7 +916,7 @@ class Definition(BaseModel):
             ):
                 continue
             live = [
-                source not in skipped and self._edge_live(existing[source], outcomes)
+                source not in skipped and self.edge_live(existing[source], outcomes)
                 for source, outcomes in sources.items()
             ]
             active = all(live) if self.nodes[key].join == "all" else any(live)
@@ -882,7 +927,8 @@ class Definition(BaseModel):
         return planned
 
     @staticmethod
-    def _edge_live(row: StepRow, outcomes: set[str]) -> bool:
+    def edge_live(row: StepRow, outcomes: set[str]) -> bool:
+        """Whether a retained settlement took one of the routed outcomes."""
         return StepRunStatus(row.status).has_outcome and row.outcome in outcomes
 
     def input_for(self, key: str, run_input: Any, rows: Iterable[Any], *, map_index: int = 0) -> Any:

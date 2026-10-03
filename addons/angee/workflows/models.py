@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 from django.apps import apps
@@ -25,7 +26,7 @@ from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.service_users import sync_service_user
 from angee.resources.mixins import ResourceLoadMixin
-from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
+from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
     StepAttemptQuerySet,
     StepRunManager,
@@ -47,6 +48,38 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerEventManager, TriggerManager, TriggerSource
+
+
+@dataclass(frozen=True)
+class StepRunStatusCount:
+    """An exact count of a node's admitted items in one execution state."""
+
+    status: StepRunStatus
+    count: int
+
+
+@dataclass(frozen=True)
+class RunGraphNode(GraphNode):
+    """Published topology composed with actor-readable execution progress."""
+
+    step_run: StepRun | None
+    item_counts: tuple[StepRunStatusCount, ...]
+    item_attempts: int
+
+
+@dataclass(frozen=True)
+class RunGraphEdge(GraphEdge):
+    """A routed edge and whether its source retained that outcome."""
+
+    taken: bool
+
+
+@dataclass(frozen=True)
+class RunGraph:
+    """One run's pinned structure and bounded node summaries."""
+
+    nodes: tuple[RunGraphNode, ...]
+    edges: tuple[RunGraphEdge, ...]
 
 
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
@@ -238,12 +271,38 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
             return self.output["error"]
         with system_context(reason="workflows.failure_reason"):
-            outputs = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
+            rows = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
                 "rank", "map_index", "pk",
-            ).values_list("output", flat=True)
-            return next((output["error"] for output in outputs
-                         if isinstance(output, dict) and isinstance(output.get("error"), str)
-                         and output["error"]), None)
+            ).only("status", "output")
+            return next((reason for row in rows if (reason := row.failure_reason)), None)
+
+    def graph(self, actor: Any) -> RunGraph:
+        """Read this run's frozen topology with two actor-scoped execution queries."""
+        self.require_access("read", actor)
+        definition = self.policy_version.definition
+        topology = definition.topology()
+        steps = cast(Any, read_scoped_queryset(self.step_runs.model, actor)).filter(run_id=self.pk)
+        rows = {row.node_key: row for row in steps.nodes()}
+        for row in rows.values():
+            row.run = self
+        counts: dict[str, list[StepRunStatusCount]] = {}
+        attempts: dict[str, int] = {}
+        for item in steps.item_counts():
+            key = item["node_key"]
+            counts.setdefault(key, []).append(StepRunStatusCount(StepRunStatus(item["status"]), item["count"]))
+            attempts[key] = attempts.get(key, 0) + item["attempts"]
+        return RunGraph(
+            nodes=tuple(RunGraphNode(
+                key=node.key, label=node.label, step=node.step, step_label=node.step_label, rank=node.rank,
+                outcomes=node.outcomes, body_key=node.body_key, step_run=rows.get(node.key),
+                item_counts=tuple(counts.get(node.body_key, ())) if node.body_key else (),
+                item_attempts=attempts.get(node.body_key, 0) if node.body_key else 0,
+            ) for node in topology.nodes),
+            edges=tuple(RunGraphEdge(
+                source=edge.source, outcome=edge.outcome, target=edge.target,
+                taken=edge.source in rows and definition.edge_live(rows[edge.source], {edge.outcome}),
+            ) for edge in topology.edges),
+        )
 
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
@@ -389,6 +448,14 @@ class StepRun(AngeeDataModel):
         """Return this row's published outcome label."""
         return (self.run.policy_version.definition.node_outcome_label(self.node_key, self.outcome)
                 if self.outcome else "")
+
+    @property
+    def failure_reason(self) -> str | None:
+        """Return only a failed row's retained reader-facing error."""
+        if (self.status == StepRunStatus.FAILED and isinstance(self.output, dict)
+                and isinstance(self.output.get("error"), str) and self.output["error"]):
+            return self.output["error"]
+        return None
 
     @property
     def is_mapped(self) -> bool:
