@@ -56,7 +56,7 @@ EXPECTED_VERBS = {
     "workflows.Trigger.queryset": "bulk_create update",
     "workflows.TriggerEvent.manager": "record_change",
     "workflows.TriggerEvent.queryset": "pending",
-    "workflows.Workflow.manager": "install_definition publish save_draft save_identity",
+    "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": "cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
     "workflows.WorkflowRun.queryset": "for_subject hold hold_owned retention_candidates",
     "decisions.Decision.manager": "admit_group cancel_group decide expire_due reask resolution resolutions",
@@ -97,8 +97,8 @@ EXPECTED_SETTINGS = {
 }
 
 EXPECTED_TEST_DRIVERS = (
-    "RunFactory", "capture_tasks", "decide", "load_workflow", "observe", "register_steps", "run_until",
-    "start_run", "trigger_source",
+    "RunFactory", "capture_tasks", "decide", "load_workflow", "observe", "publish_draft", "register_steps",
+    "run_until", "start_run", "trigger_source",
 )
 
 
