@@ -312,7 +312,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const navigationTree = projection.navigationTree;
   validateContainerConditions(composed.containers, {
     routes: routesByName,
-    apps: menuTree.byId,
+    // The ids a page's app trail can hold: roots and included apps, flattened ones too.
+    apps: menuTree.appIds(),
     perspectives: new Set(input.addons.flatMap((addon) => Object.keys(addon.perspectives ?? {}))),
   });
   for (const preset of Object.values(composed.resourceViews)) {
@@ -469,6 +470,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const words = vocabularyForRoute(app, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
+    // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
+    const appTrail = publicRoute ? "" : projection.appTrail(pathname).join("\0");
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
       const menuResourceViewIds = new Set<string>();
@@ -486,16 +489,15 @@ export function createApp(input: CreateAppInput): AngeeApp {
         routesByResource: selected,
         routeHref: runtimeRouteHref,
         composition: explain,
-        // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
         containerScope: {
-          apps: app && !publicRoute ? [app] : [],
+          apps: appTrail ? appTrail.split("\0") : [],
           routes: routeTrail(activeRoute),
           perspective: confineTo !== undefined ? composed.shell.perspective?.id ?? null : null,
         },
         activeRouteName: activeRoute?.name ?? null,
         activeApp: app ?? null,
       };
-    }, [app, activeRoute, words, publicRoute]);
+    }, [app, appTrail, activeRoute, words]);
     return (
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
@@ -882,12 +884,13 @@ function mergeI18n(base: I18nResources, addons: I18nResources): I18nResources {
 }
 
 /**
- * A container condition names a route, an app (a menu node) or a perspective
+ * A container condition names a route, an app (a root or an included app, flattened
+ * ones too: what a page's app trail holds) or a perspective
  * that exists; a misspelt one would never match, so it fails at boot.
  */
 function validateContainerConditions(
   containers: ComposedContainers,
-  known: { routes: ReadonlyMap<string, unknown>; apps: ReadonlyMap<string, unknown>; perspectives: ReadonlySet<string> },
+  known: { routes: ReadonlyMap<string, unknown>; apps: ReadonlySet<string>; perspectives: ReadonlySet<string> },
 ): void {
   const listed = (value: string | readonly string[] | undefined): readonly string[] =>
     value === undefined ? [] : typeof value === "string" ? [value] : value;

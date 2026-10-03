@@ -64,6 +64,8 @@ export interface FormSectionModel {
   render?: () => ReactNode;
   /** Projected record permission required to show this section. */
   permission?: string;
+  /** The container child behind it, shown only on records that admit that child. */
+  containerChild?: string;
   sequence?: number;
   order?: number;
 }
@@ -101,6 +103,7 @@ export function formSections(
         fields: group.fields,
         ...(group.content !== undefined ? { render: () => group.content } : {}),
         ...(group.permission !== undefined ? { permission: group.permission } : {}),
+        ...(group.containerChild !== undefined ? { containerChild: group.containerChild } : {}),
         sequence: sequences[index],
         order: index,
       },

@@ -28,6 +28,8 @@ export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<Chrom
   hide?: boolean;
   /** Allowlist of the children the rail shows; layers narrow it, never widen it. */
   only?: readonly string[];
+  /** The deployment only (`ANGEE_UI.menus`), beside an `only`: it stands in for every addon's `only` (G-14). */
+  force?: boolean;
 }
 
 export type MenuDeclarations = Readonly<Record<string, MenuEntry>>;
@@ -71,7 +73,7 @@ const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon",
   "appRoot", "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after",
 ] as const satisfies readonly (keyof MenuEntry)[];
-const OPERATION_FIELDS = ["include", "remove", "hide", "only"] as const satisfies readonly (keyof MenuEntry)[];
+const OPERATION_FIELDS = ["include", "remove", "hide", "only", "force"] as const satisfies readonly (keyof MenuEntry)[];
 type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[number];
 // Every MenuEntry key is a declaration field or an operation; adding one without listing it fails here.
 const _complete: Exclude<keyof MenuEntry, EntryKey> extends never ? true : never = true;
@@ -90,7 +92,7 @@ interface Node {
   fields: Partial<Record<Field, unknown>>;
   setBy: Partial<Record<Field, string>>;
   /** Each layer's allowlist of children, intersected at resolution. */
-  only: { layer: string; ids: ReadonlySet<string> }[];
+  only: { layer: string; ids: ReadonlySet<string>; force: boolean }[];
 }
 
 /**
@@ -153,7 +155,7 @@ export function compileMenus(
     for (const [field, value] of Object.entries(pick(entry))) set(layer, id, field as Field, value);
     if (entry.hide !== undefined) set(layer, id, "hide", entry.hide);
     if (entry.remove) set(layer, id, "remove", true);
-    if (entry.only) target(layer, id).only.push({ layer, ids: new Set(entry.only) });
+    if (entry.only) target(layer, id).only.push({ layer, ids: new Set(entry.only), force: entry.force === true });
     for (const include of entry.include ?? []) {
       const included = typeof include === "string" ? { id: include } : include;
       target(layer, id);
@@ -181,8 +183,12 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "appRoot", "personal"] as const) {
+  for (const key of ["remove", "hide", "appRoot", "personal", "force"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
+  }
+  // Addons only narrow (G-14); the deployment may force an `only`, and says so.
+  if (value.force !== undefined && (layer !== DEPLOYMENT_LAYER_ID || value.only === undefined)) {
+    throw new Error(`${where}: only the deployment forces, with force beside an only.`);
   }
   for (const key of ["sequence"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "number") throw new Error(`${where}: ${key} must be a number.`);
@@ -307,10 +313,13 @@ function resolve(
       ? navigationChildren(child).map((lifted) => ({ ...lifted, app: child, hidden: lifted.hidden || child.fields.hide === true }))
       : [{ child, app: undefined as Node | undefined, hidden: child.fields.hide === true }]);
     const byId = new Map(entries.map((entry) => [entry.child.id, entry]));
+    // Each layer's `only` narrows; a forced deployment `only` stands in for all of them (G-14).
+    const forced = node.only.filter(({ force }) => force);
+    const narrowing = forced.length ? forced : node.only;
     return position(entries.map((entry) => entry.child)).map((child) => {
       const entry = byId.get(child.id)!;
       if (child.fields.hide === true) hidden.set(child.id, { id: child.id, by: child.setBy.hide!, reason: "hide" });
-      const excluding = node.only.find(({ layer, ids }) => !(ids.has(child.id) || (entry.app !== undefined && ids.has(entry.app.id))
+      const excluding = narrowing.find(({ layer, ids }) => !(ids.has(child.id) || (entry.app !== undefined && ids.has(entry.app.id))
         || child.owner === layer || Boolean(ancestors.get(child.owner)?.has(layer))));
       if (excluding && !entry.hidden) hidden.set(child.id, { id: child.id, by: excluding.layer, reason: "only" });
       return { child, hidden: entry.hidden || excluding !== undefined };

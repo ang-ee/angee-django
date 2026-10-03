@@ -32,6 +32,8 @@ export interface GroupDescriptor {
   savedOnly?: boolean;
   /** Projected record permission required to show this group; set from a contribution. */
   permission?: string;
+  /** The container child that contributed it, when the record decides (its `impl` or a variant); set by FormView. */
+  containerChild?: string;
 }
 
 function GroupMarker(_props: GroupProps): null {

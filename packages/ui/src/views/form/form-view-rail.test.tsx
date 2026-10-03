@@ -59,3 +59,17 @@ test("rail group ids fail fast on collision", () => {
   })];
   expect(() => recordRailGroups(entries)).toThrow(/duplicate record rail group id/);
 });
+
+test("alternatives the record chooses between may share a group id, never with a fixed group", () => {
+  const original = railChild("notes.health", { content: <RecordRailGroup id="health" label="Health" content="Generic" /> });
+  const variant = railChild("chat.health", {
+    variant: { of: "notes.health", impl: "chat" },
+    content: <RecordRailGroup id="health" label="Health" content="Chat" />,
+  });
+  const groups = recordRailGroups([original, variant]);
+  const admits = (child: string, record: { kind?: string }) => (child === "chat.health") === (record.kind === "chat");
+  expect(visibleRecordRailGroups(groups, { id: "n", kind: "chat" }, metadata, admits).map((group) => group.content)).toEqual(["Chat"]);
+  expect(visibleRecordRailGroups(groups, { id: "n", kind: "mail" }, metadata, admits).map((group) => group.content)).toEqual(["Generic"]);
+  const fixed = railChild("notes.status", { content: <RecordRailGroup id="health" label="Status" /> });
+  expect(() => recordRailGroups([fixed, variant])).toThrow(/duplicate record rail group id "health"/);
+});

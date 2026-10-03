@@ -6,8 +6,8 @@ import {
 } from "@angee/metadata";
 
 import { useContainer, type ComposedContainerChild, modelChain } from "../../runtime";
-import { optionToken } from "../../widgets/types";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
+import { rowImplementations } from "./container-admission";
 
 export interface UseFormViewRecordChromeProps {
   dataResource: DataResourceMetadata | null;
@@ -61,10 +61,7 @@ export function useFormViewRecordChrome({
   );
   // The row's ImplClassField values select the bridges' variants of a verb.
   const impls = React.useMemo(
-    () => (dataResource?.implFields ?? []).flatMap((field) => {
-      const impl = optionToken(record?.[field]);
-      return impl ? [impl] : [];
-    }),
+    () => rowImplementations(dataResource?.implFields, record),
     [dataResource, record],
   );
   const primary = useContainer("form#actions", { models, row: record, impls });

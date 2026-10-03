@@ -251,6 +251,17 @@ export class AppRouteProjection {
     return this.confineTo ?? this.menuTree.activeAppRoot(pathname)?.id;
   }
 
+  /**
+   * The apps a container `when: { app }` matches on this path, outermost first:
+   * every app on its menu trail. Under a confinement only the root's own count;
+   * a page another root owns (a Settings link) sits in the root alone.
+   */
+  appTrail(pathname: string): readonly string[] {
+    const trail = this.menuTree.appTrail(pathname).map((item) => item.id);
+    if (this.confineTo === undefined) return trail;
+    return trail[0] === this.confineTo ? trail : [this.confineTo];
+  }
+
   /** Collection defaults are inherited by its record children. */
   defaultResourceView(routeName?: string): string | undefined {
     const route = routeName ? this.routesByName.get(routeName) : undefined;
