@@ -153,7 +153,7 @@ describe("composable standard project and task declarations", () => {
     expect(projectRecordTabsFor({ tabs: ["tasks"] }).map(({ id }) => id)).toEqual(["tasks"]);
     expect(taskRecordTabsFor([])).toEqual([]);
     // This panel needs only the saved id, as a native RecordPanelContext supplies.
-    render(projectTimelineTab.render({ recordId: "project-a" } as RecordPanelContext));
+    render(projectTimelineTab.render({ recordId: "project-a", active: true } as RecordPanelContext & { active: boolean }));
     expect(mounted.list).toMatchObject({
       resource: MILESTONE_MODEL, scope: "local", defaultView: "gantt",
       baseFilter: { project: { exact: "project-a" } },
