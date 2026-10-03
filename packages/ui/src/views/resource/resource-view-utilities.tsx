@@ -28,20 +28,30 @@ export function useResourceViewUtilityContext(): ResourceViewUtilityContext {
   return ResourceViewUtilityContextBinding.use();
 }
 
-/** The `resource#utilities` children for one collection's model and its MTI parent. */
-export function useResourceViewUtilities(resource: string): readonly ComposedContainerChild[] {
-  const canonical = useModelMetadata(resource)?.resource.canonicalLabel;
+/**
+ * The `resource#utilities` children for one collection's model and its MTI
+ * parent. A list over its own `source` names no schema model, so it skips the
+ * model lookup (`modelBacked: false`) and keeps the kind-level utilities.
+ */
+export function useResourceViewUtilities(
+  resource: string,
+  { modelBacked = true }: { modelBacked?: boolean } = {},
+): readonly ComposedContainerChild[] {
+  const canonical = useModelMetadata(modelBacked ? resource : "")?.resource.canonicalLabel;
   const models = React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
   return useContainer("resource#utilities", { models });
 }
 
 export function ResourceViewUtilities({
   value,
+  modelBacked = true,
 }: {
   value: ResourceViewUtilityContext;
+  /** False for a list over its own `source`, which names no schema model. */
+  modelBacked?: boolean;
 }): React.ReactElement | null {
   const { resource, filter, fields, refresh, selectedIds, selectable } = value;
-  const entries = useResourceViewUtilities(resource);
+  const entries = useResourceViewUtilities(resource, { modelBacked });
   const record = useRecordChromeContextMaybe();
   const context = React.useMemo(
     () => ({ resource, filter, fields, refresh, selectedIds, selectable, record }),

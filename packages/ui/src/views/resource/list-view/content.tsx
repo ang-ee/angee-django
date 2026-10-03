@@ -184,6 +184,7 @@ export function ListViewContent<TRow extends Row = Row>({
   const resolvedRenderCard = renderCard ?? (boardCard ? boardCardBody : undefined);
   const contributedUtilities = (
     <ResourceViewUtilities
+      modelBacked={!source}
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
