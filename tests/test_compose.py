@@ -339,6 +339,18 @@ def test_web_runtime_projects_package_ancestry_through_backend_only_addons() -> 
     }
 
 
+def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
+    """Nexus alone pulls in every app whose menu it includes, already in the test host."""
+
+    configs = AppGraph().resolve(("angee.nexus",))
+    assert {config.name for config in configs if addon_manifest(config) is not None} <= {
+        config.name for config in apps.get_app_configs()
+    }
+    manifest = WebRuntime(configs).manifest
+    nexus = next(entry for entry in manifest["addonPackages"] if entry["app"] == "angee.nexus")
+    assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
+
+
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:
     """``ANGEE_UI`` reaches the web runtime as the last layer; unknown keys fail composition."""
 

@@ -78,7 +78,8 @@ const messagingMenu: readonly BaseMenuItem[] = [
     label: "Messaging",
     icon: "inbox",
     children: [
-      { id: "messaging.inbox", label: "Inbox", route: "messaging.inbox", icon: "inbox" },
+      // A plain message list. "Inbox" names Nexus's explorer and the PM suite's notifications.
+      { id: "messaging.inbox", label: "Messages", route: "messaging.inbox", icon: "inbox" },
       { id: "messaging.threads", label: "Threads", route: "messaging.threads", icon: "threads" },
       { id: "messaging.channels", label: "Channels", route: "messaging.channels", icon: "channel" },
     ],
