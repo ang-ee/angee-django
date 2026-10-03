@@ -4,24 +4,28 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.impl import impl_choices_enum
 from angee.base.scoping import system_queryset
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.messaging.events import message_ingested
+from angee.workflows import triggers
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
+from angee.workflows_messaging.sources import MessageIngested
 
 Channel = apps.get_model("messaging.Channel")
 Message = apps.get_model("messaging.Message")
@@ -54,6 +58,12 @@ class WatchMessage(Step[None, None, None]):
             return ctx.done()
         ctx.watch(ctx.subject_for_update())
         return ctx.wait(state={"watching": True})
+
+
+class RefinedMessageIngested(MessageIngested):
+    """A refinement of the message source registered under its own key."""
+
+    key = "refined_message_ingested"
 
 
 class MessageTriggerTests(TransactionTestCase):
@@ -349,6 +359,35 @@ class MessageTriggerTests(TransactionTestCase):
         run_until(run)
         self.assertEqual(run.status, "succeeded")
         self.assertFalse(system_queryset(StepWatch).filter(step_run=step).exists())
+
+    def test_refined_source_shares_the_one_capture_of_each_ingested_message(self):
+        """One ingested message is locked and observed once while both keys admit it."""
+        registry = {
+            **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
+            RefinedMessageIngested.key: f"{__name__}.RefinedMessageIngested",
+        }
+        self.enterContext(override_settings(ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES=registry))
+        self.enterContext(patch.object(
+            Trigger._meta.get_field("source"), "choices_enum", impl_choices_enum(triggers.TriggerSource),
+        ))
+        base = self.trigger()
+        with actor_context(self.admin):
+            refined = Trigger.objects.create(
+                workflow=self.workflow, source=RefinedMessageIngested.key, channel=self.channel,
+            )
+        refined = Trigger.objects.enable(refined, actor=self.admin)
+        with (
+            patch.object(triggers, "lock_if_supported", wraps=triggers.lock_if_supported) as locked,
+            patch.object(type(StepWatch.objects), "record_change", autospec=True) as observed,
+        ):
+            self.ingest()
+        self.assertEqual([call.args[0].model for call in locked.call_args_list], [Message])
+        self.assertEqual(observed.call_count, 1)
+        events = system_queryset(TriggerEvent).order_by("trigger_id")
+        self.assertEqual([event.trigger_id for event in events], [base.pk, refined.pk])
+        for event in events:
+            self.assertTrue(Trigger.objects.admit(event))
+        self.assertEqual(system_queryset(WorkflowRun).count(), 2)
 
     def test_live_signal_rolls_back_and_historical_replay_stays_silent(self):
         """Capture follows message commits and the messaging owner's replay rules."""
