@@ -401,7 +401,14 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
             )
         profile = base.resolve_impl("profile")()
         output = ProcessEvidenceOutput.from_extraction(base).model_dump()
-        if base.awaiting_correspondence and not value.identity_mapping:
+        # A held candidate the mapping model has not read still owes its
+        # inference; correspondence is judged on the inferred candidate.
+        corresponding = base.awaiting_correspondence and not (
+            value.allow_inference and not value.identity_mapping
+            and ExtractionRole.MAPPING not in base.used_model_roles
+            and profile.inference_required(base.result, base.unresolved_reasons)
+        )
+        if corresponding and not value.identity_mapping:
             return ctx.done(InferEvidenceOutput(**output), outcome="correspondence_required")
         if not base.awaiting_correspondence and (
             not value.allow_inference or not profile.inference_required(base.result, base.unresolved_reasons)
@@ -418,8 +425,8 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
             )
         model.objects.inference_authority_base(base, actor=ctx.actor)
         model_id = str(base.model.sqid) if base.inference_configured else ""
-        selected_model_id = model_id if base.awaiting_correspondence else value.model_id or model_id
-        if not base.awaiting_correspondence and not selected_model_id:
+        selected_model_id = model_id if corresponding else value.model_id or model_id
+        if not corresponding and not selected_model_id:
             return ctx.done(InferEvidenceOutput(
                 **output,
                 inference_failure={
@@ -441,7 +448,7 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 },
             ), outcome="inference_failed")
         failure = None
-        if base.awaiting_correspondence:
+        if corresponding:
             result = Result(
                 base.result,
                 parts,

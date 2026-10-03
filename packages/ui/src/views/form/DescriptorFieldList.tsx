@@ -128,7 +128,10 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
               }
             }
             form.clearErrors(field.name);
-            control.onChange(next);
+            // Controller accepts browser events as well as values. An object
+            // field may itself declare "target", so always put the value in
+            // the native event envelope to keep the entire object atomic.
+            control.onChange({ target: { value: next } });
             const seeds = field.prefill?.(next);
             if (!seeds) return;
             for (const [name, seed] of Object.entries(seeds)) {

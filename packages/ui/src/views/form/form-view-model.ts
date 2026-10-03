@@ -343,6 +343,11 @@ export function isFieldVisible(field: FieldDescriptor, values: FormValues): bool
   return !field.showWhen || field.showWhen(values);
 }
 
+/** A control is rendered only when it is neither hidden nor conditionally excluded. */
+export function isFieldControlVisible(field: FieldDescriptor, values: FormValues): boolean {
+  return !field.hidden && isFieldVisible(field, values);
+}
+
 export function missingRequiredFieldNames(
   values: FormValues,
   fields: readonly FieldDescriptor[],

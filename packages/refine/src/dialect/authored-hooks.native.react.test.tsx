@@ -507,3 +507,18 @@ test("shared host default metadata is not mutated or reused between authored cac
   expect(second.meta?.angeeModels).toEqual(["common.Model", "iam.User"]);
   expect(meta).toEqual({ host: "test", angeeModels: ["common.Model"] });
 });
+
+test("authored singleton reads opt into native previous-data placeholders across variable changes", async () => {
+  const next = deferred<{ data: Data }>();
+  const custom = vi.fn().mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } }).mockImplementationOnce(() => next.promise);
+  const f = fixture(custom);
+  const read = renderHook(({ id }) => useAuthoredQuery(DOCUMENT, { id }, { keepPreviousData: true }), {
+    initialProps: { id: "one" }, wrapper: f.wrapper,
+  });
+  await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("one"));
+  read.rerender({ id: "two" });
+  await waitFor(() => expect(read.result.current.isPlaceholderData).toBe(true));
+  expect(read.result.current.data?.notes[0]?.id).toBe("one");
+  await act(async () => { next.resolve({ data: { notes: [{ id: "two" }] } }); });
+  await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("two"));
+});

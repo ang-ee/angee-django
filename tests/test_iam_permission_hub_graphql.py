@@ -1053,3 +1053,25 @@ def _type_block(sdl: str, type_name: str) -> str:
     start = sdl.index(marker)
     end = sdl.index("\n}", start) + 2
     return sdl[start:end]
+
+def test_stored_assignment_subject_labels_ignore_activity_and_option_pagination(composed_tables: None) -> None:
+    """Stored user/group aliases retain names; unreadable identities do not leak."""
+    admin = _platform_admin("subject-label-admin")
+    reader = User.objects.create_user(username="subject-label-reader", first_name="Reader")
+    inactive = User.objects.create_user(username="subject-label-inactive", first_name="Former", is_active=False)
+    with system_context(reason="test subject label group fixture"):
+        group = iam_schema.Group.objects.create(name="Stored group")
+    subjects = [str(to_subject_ref(inactive)), f"auth/user:{inactive.sqid}",
+                f"auth/group:{group.sqid}#member", f"auth/user:{reader.sqid}", "invalid", "auth/user:999999"]
+    query = """query($subjects: [String!]!) {
+      users(limit: 1, order_by: [{username: asc}]) { assignment_subject }
+      iam_assignment_subject_labels(subjects: $subjects) { subject label }
+    }"""
+    result = _data(_execute(_schema("console"), query, {"subjects": subjects}, user=admin))
+    labels = {row["subject"]: row["label"] for row in result["iam_assignment_subject_labels"]}
+    assert labels == {subjects[0]: "Former", subjects[1]: "Former", subjects[2]: "Stored group", subjects[3]: "Reader"}
+    assert subjects[1] not in {row["assignment_subject"] for row in result["users"]}
+    visible = _data(_execute(_schema("console"), """query($subjects: [String!]!) {
+      iam_assignment_subject_labels(subjects: $subjects) { subject label }
+    }""", {"subjects": subjects}, user=reader))
+    assert visible["iam_assignment_subject_labels"] == []

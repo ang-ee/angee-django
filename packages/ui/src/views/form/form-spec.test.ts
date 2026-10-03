@@ -5,6 +5,7 @@ import { FORM_SPEC_ANNOTATIONS } from "./form-spec-schema";
 import {
   deserializeFormSpec,
   formSpecInitialValues,
+  formSpecHasControlForPath,
   normalizeFormSpecValues,
 } from "./form-spec";
 
@@ -15,7 +16,41 @@ test("FormSpec registers only its presentation annotations with JSON Schema vali
   ]);
 });
 
+test("control-path checks reject row errors and apply the renderer's per-row visibility rule", () => {
+  const fields = [{ name: "rows", widget: "rows", rowTemplate: [
+    { name: "target", showWhen: (row: Record<string, unknown>) => row.enabled === true },
+    { name: "hidden", hidden: true },
+  ] }];
+  const values = { rows: [{ enabled: false }, { enabled: true }] };
+  expect(formSpecHasControlForPath(fields, "rows.0", values)).toBe(false);
+  expect(formSpecHasControlForPath(fields, "rows.0.target", values)).toBe(false);
+  expect(formSpecHasControlForPath(fields, "rows.1.target", values)).toBe(true);
+  expect(formSpecHasControlForPath(fields, "rows.1.hidden", values)).toBe(false);
+  expect(formSpecHasControlForPath(fields, "rows.2.target", values)).toBe(false);
+});
+
 describe("deserializeFormSpec", () => {
+  test("only rendered controls claim nested issue paths while atomic widgets retain child messages", () => {
+    const fields = deserializeFormSpec({ type: "object", properties: {
+      visible: { type: "string" }, hidden: { type: "string", hidden: true },
+      details: { type: "object", properties: { title: { type: "string" } } },
+      rows: { type: "array", widget: "list", items: { type: "object", properties: { title: { type: "string" } } } },
+      raw: { type: "object", widget: "json" },
+    } }, defaultWidgets);
+    for (const path of ["visible", "details.title", "rows.0.title", "raw.anything"])
+      expect(formSpecHasControlForPath(fields, path, { rows: [{ title: "" }] }), path).toBe(true);
+    for (const path of ["hidden", "unknown", "details.unknown", "rows.0.unknown"])
+      expect(formSpecHasControlForPath(fields, path, { rows: [{ title: "" }] }), path).toBe(false);
+  });
+
+  test("registered custom arrays remain atomic fields", () => {
+    const fields = deserializeFormSpec({ properties: { recipients: {
+      type: "array", widget: "recipients", items: { type: "string" },
+    } } }, { ...defaultWidgets, recipients: defaultWidgets.text! });
+    expect(fields[0]).toMatchObject({ widget: "recipients" });
+    expect(fields[0]?.itemTemplate).toBeUndefined();
+  });
+
   test("projects declared objects through nested fields while keeping explicit JSON opaque", () => {
     const schema = { type: "object", properties: {
       identity: { type: "string", title: "Identity", readOnly: true, default: "retained" },
@@ -648,6 +683,19 @@ describe("formSpecInitialValues", () => {
     });
     expect(fields[1]).toMatchObject({ name: "line_total", nullable: true });
     expect(formSpecInitialValues(fields, {})).toEqual({ reference: null, line_total: null });
+  });
+
+  test("edits an unannotated decimal union as a number", () => {
+    const decimal = { type: "string", pattern: "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" };
+    const fields = deserializeFormSpec({ properties: {
+      quantity: { anyOf: [{ type: "number" }, decimal, { type: "null" }] },
+      rate: { anyOf: [{ type: "number" }, decimal] },
+      free: { anyOf: [{ type: "number" }, { type: "string" }] },
+      code: { anyOf: [{ type: "number" }, { type: "string", pattern: "^[A-Z]+$" }] },
+    } }, defaultWidgets);
+
+    expect(fields.map((field) => field.widget)).toEqual(["float", "float", "json", "json"]);
+    expect(fields[0]).toMatchObject({ nullable: true });
   });
 
   test("falls back to schema defaults when retained payload types are incompatible", () => {

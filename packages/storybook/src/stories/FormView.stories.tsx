@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FORM_CONTAINERS, FormView, containersFromChildren, type FormField, type GroupDescriptor } from "@angee/ui";
+import { useMemo } from "react";
+import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
 
@@ -213,6 +214,41 @@ export const TabbedLayout: Story = {
       layout="tabs"
     />
   ),
+};
+
+function RetainedEditor({ active }: { active: boolean }) {
+  const node = useMemo(() => active ? <p>The editor is active.</p> : null, [active]);
+  return <><PrimaryPanePublisher node={node} /><Input aria-label="Local editor draft" defaultValue="Retained across tabs" /></>;
+}
+function PublishedActivity() {
+  const { node } = usePrimaryPaneContent();
+  return <aside className="rounded-6 border p-3">{node ?? "No editor publication."}</aside>;
+}
+export const RetainedPanelActivity: Story = {
+  render: () => <PrimaryPaneProvider><RuntimeFixture schemas={storySchemas}>
+    <div className="grid grid-cols-[1fr_16rem] gap-4">
+      <FormView resource="notes.Note" id={storyRecord.id} fields={readOnlyFields}
+        defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true,
+          render: ({ active }) => <RetainedEditor active={active} /> }]} />
+      <PublishedActivity />
+    </div>
+  </RuntimeFixture></PrimaryPaneProvider>,
+};
+
+const graphNodes = Array.from({ length: 13 }, (_, index) => ({ id: `node-${index}`, kind: "item", title: `Item ${index + 1}` }));
+const graphEdges = graphNodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: graphNodes[index]!.id, target: node.id, kind: "next" }));
+export const FullBleedTab: Story = {
+  render: () => <RuntimeFixture schemas={storySchemas}>
+    <div className="h-[600px]">
+      <FormView resource="notes.Note" id={storyRecord.id} fields={readOnlyFields} defaultRecordTab="graph"
+        recordTabs={[
+          { id: "graph", label: "Graph", presentation: "full-bleed", keepMounted: true, render: () =>
+            <GraphView className="min-h-0 flex-1" nodes={graphNodes} edges={graphEdges}
+              nodeStyles={{ item: graphNodeStyle("var(--border-strong)", "neutral") }} layout={{ rankdir: "LR" }} initialView={{ minZoom: 0.65 }} miniMap /> },
+          { id: "activity", label: "Activity", render: () => <p>Document content keeps its centered column.</p> },
+        ]} />
+    </div>
+  </RuntimeFixture>,
 };
 
 const railFields = ["title", "owner", "priority"].map((name) => ({

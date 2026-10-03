@@ -97,7 +97,8 @@ export const IamIssueUserPassword = graphql(`
 `);
 
 export const IamAssignmentSubjects = graphql(`
-  query IamAssignmentSubjects($limit: Int = 500) {
+  query IamAssignmentSubjects($limit: Int = 500, $subjects: [String!]! = []) {
+    iam_assignment_subject_labels(subjects: $subjects) { subject label }
     users(limit: $limit, order_by: [{ username: asc }]) {
       id
       username

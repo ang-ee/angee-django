@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from dataclasses import asdict
+from typing import Any, Self, cast
 
 import strawberry
 from django.apps import apps
@@ -25,13 +26,19 @@ class ImplChoice:
     defaults: JSON
     config_schema: JSON | None
 
+    @classmethod
+    def from_choice(cls, choice: BaseImplChoice, **extra: Any) -> Self:
+        """Project implementation-owned metadata once, with declared subtype facts."""
+        return cls(**asdict(choice), **extra)
+
 
 def impl_choices(model: str, field: str) -> list[ImplChoice]:
-    """Return choice metadata for ``model.field`` when it is an ``ImplClassField``.
+    """Return choices for a ``model.field`` ImplClassField.
 
     The reusable resolver behind the impl-picker query. The framework stays
     auth-agnostic; the query owner authorizes administrators or the model's
-    explicit ``can_read_impl_choices`` policy before calling it.
+    explicit ``can_read_impl_choices`` policy before calling it. Rowless callers
+    authorize through their own record before requesting registry metadata.
     """
 
     django_model = _model_for_label(model)
@@ -46,26 +53,13 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
         else:
             message = f"{django_model._meta.label} has no field {field!r}."
         raise ImproperlyConfigured(message) from error
-    return [_project_choice(choice) for choice in model_field.impl_choices()]
+    return [ImplChoice.from_choice(choice) for choice in model_field.impl_choices()]
 
 
 def can_read_impl_choices(model: str, field: str, actor: Any) -> bool:
     """Delegate additional implementation metadata visibility to its model owner."""
     owner = _model_for_label(model)
     return issubclass(owner, AngeeModel) and owner.can_read_impl_choices(_field_name(field), actor)
-
-
-def _project_choice(choice: BaseImplChoice) -> ImplChoice:
-    """Project the base impl-choice value object onto the GraphQL type."""
-
-    return ImplChoice(
-        key=choice.key,
-        label=choice.label,
-        icon=choice.icon,
-        category=choice.category,
-        defaults=cast(JSON, choice.defaults),
-        config_schema=cast(JSON | None, choice.config_schema),
-    )
 
 
 def _model_for_label(label: str) -> type[Any]:

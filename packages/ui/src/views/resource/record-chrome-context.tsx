@@ -32,6 +32,8 @@ export interface RecordChromeContext {
   formReadOnly: boolean;
   /** Dirty or pending saved form; independent record verbs must wait. */
   actionsBlocked?: boolean;
+  /** The record toolbar's action group; an inline form portals its submit here. */
+  toolbarHost?: HTMLElement | null;
 }
 
 const binding = makeContext<RecordChromeContext>("RecordChromeContext");

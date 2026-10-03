@@ -4,7 +4,11 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import { Catalogue, CatalogueStory, QueryError, Unavailable } from "./WorkflowsPage.stories";
 
-beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
+beforeAll(() => {
+  Element.prototype.getAnimations ??= () => [];
+  class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
+  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+});
 afterEach(cleanup);
 
 test("opens a workflow from the catalogue with its retained versions and recent runs", async () => {
@@ -64,6 +68,33 @@ test("unreadable workflows show an empty state without a retry action", async ()
   render(Unavailable.render());
   expect(await screen.findByRole("heading", { name: "Record unavailable" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+});
+
+test("writers default to Studio while readers retain Overview without authoring reads", async () => {
+  const onRequest = vi.fn();
+  const { unmount } = render(<CatalogueStory writer onRequest={onRequest} />);
+  const studio = await screen.findByRole("tab", { name: "Studio" });
+  await waitFor(() => expect(studio.getAttribute("aria-selected")).toBe("true"));
+  expect(await screen.findByRole("button", { name: "Save draft" })).toBeTruthy();
+  const studioPanel = screen.getByRole("tabpanel", { name: "Studio" });
+  expect(studioPanel.className).toContain("flex-1");
+  expect(studioPanel.className).toContain("overflow-hidden");
+  expect(studioPanel.className).not.toContain("max-w-[1100px]");
+  expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-base");
+  fireEvent.click(await screen.findByTestId("rf__node-entry"));
+  fireEvent.change(await screen.findByRole("textbox", { name: "Key" }), { target: { value: "retained" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Versions" }));
+  expect(await screen.findByRole("tabpanel", { name: "Versions" })).toHaveProperty("className", expect.stringContaining("max-w-[1100px]"));
+  await waitFor(() => expect(screen.queryByRole("tab", { name: "Node inspector" })).toBeNull());
+  fireEvent.click(screen.getByRole("tab", { name: "Studio" }));
+  expect((await screen.findByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("retained");
+  unmount();
+  onRequest.mockClear();
+  render(<CatalogueStory onRequest={onRequest} />);
+  const overview = await screen.findByRole("tab", { name: "Overview" });
+  await waitFor(() => expect(overview.getAttribute("aria-selected")).toBe("true"));
+  expect(screen.queryByRole("tab", { name: "Studio" })).toBeNull();
+  expect(onRequest.mock.calls.some(([request]) => request.query.includes("workflow_step_choices"))).toBe(false);
 });
 
 test("transport errors offer the shared reload action", async () => {

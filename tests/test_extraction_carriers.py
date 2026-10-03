@@ -94,6 +94,29 @@ def test_message_target_accepts_its_attachment_file_source(message_evidence, evi
     assert retained.document_sources()[0].file.pk == file.pk
 
 
+def test_file_target_accepts_parts_of_the_message_that_delivered_it(message_evidence, evidence):
+    """A file keeps its delivering message's parts as context, subject to source read access."""
+    _, message_values, parts = message_evidence
+    retain_file, file_values = evidence
+    file = file_values["target"]
+    body = message_values["sources"][0]
+    file_source = replace(file_values["sources"][0], source_position=0)
+    context = replace(body, source_position=1)
+    result = replace(
+        file_values["result"],
+        parts=(*file_values["result"].parts, replace(message_values["result"].parts[0], source_position=1)),
+    )
+    reader = message_values["actor"]
+    with pytest.raises(ValidationError, match="belongs to the extraction target"):
+        retain_file(sources=(file_source, context), result=result, request_key="undelivered-file", actor=reader)
+    with system_context(reason="deliver the extraction target through the message"), mute_changes():
+        Part.objects.filter(pk=parts["attachment"].pk).update(file=file)
+    retained = retain_file(sources=(file_source, context), result=result, request_key="delivered-file", actor=reader)
+    sources = retained.document_sources()
+    assert sources[0].file.pk == file.pk
+    assert sources[1].message_part.pk == body.message_part.pk
+
+
 def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(message_evidence):
     retain, values, parts = message_evidence
     original = values["sources"][0]

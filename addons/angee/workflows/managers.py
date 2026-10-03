@@ -9,16 +9,17 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Any, Literal, cast
+from typing import Annotated, Any, cast
 from uuid import uuid4
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Exists, F, Max, OuterRef, Q, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
+from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, system_context, to_subject_ref
 
@@ -26,7 +27,7 @@ from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
-from angee.base.mixins import AppendOnlyQuerySet
+from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
@@ -34,7 +35,7 @@ from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
-from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, DefinitionInvalid, Issue
+from angee.workflows.definition import MAP_BODY_SUFFIX, Body, Definition, DefinitionInvalid, Issue
 from angee.workflows.states import (
     CANCELED_OUTCOME,
     AttemptResult,
@@ -76,7 +77,6 @@ def _record_failure(operation: str) -> Iterator[None]:
 class DraftSave:
     """A conditional draft save and its complete validation diagnostics."""
 
-    status: Literal["saved", "conflict", "invalid"]
     revision: int
     issues: list[Issue]
 
@@ -116,6 +116,17 @@ class Cancellation:
         return "; ".join(["Run canceled" if self.canceled else "Run already finished", *changes]) + "."
 
 
+class StepConfiguration(Body):
+    """A client identity and typed declaration for rowless outcome authoring."""
+
+    node: str
+
+
+_CONFIGURATIONS: TypeAdapter[list[StepConfiguration]] = TypeAdapter(
+    Annotated[list[StepConfiguration], Field(max_length=100)]
+)
+
+
 class WorkflowManager(AngeeManager):
     """Own the editable document and the immutable publication sequence."""
 
@@ -125,29 +136,64 @@ class WorkflowManager(AngeeManager):
             definition = Definition.model_validate(draft)
         except PydanticValidationError:
             return draft, []
-        document = definition.model_dump(mode="json", by_alias=True)
+        issues = self._resolve_awaits(list(definition.declarations()), actor)
+        return definition.model_dump(mode="json", by_alias=True), issues
+
+    def _resolve_awaits(self, declarations: list[tuple[str, Body, list[str | int]]], actor: Any) -> list[Issue]:
+        """Resolve all awaited contracts in one read-scoped query, with per-node failures."""
         issues: list[Issue] = []
         readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
-        for key, node, path in definition.declarations():
-            if node.step != "await_run":
-                continue
-            config = document["nodes"][key.partition(".")[0]]
-            if key.endswith(MAP_BODY_SUFFIX):
-                config = config["body"]
-            config = config["config"]
+        awaited = [(key, node, path) for key, node, path in declarations if node.step == "await_run"]
+        expects_keys = {
+            expects for _, node, _ in awaited
+            if isinstance(expects := node.config.get("expects"), str) and expects
+        }
+        expected_by_key = {
+            expected.key: expected for expected in
+            readable.select_related("published").filter(key__in=expects_keys, published__isnull=False)
+        } if expects_keys else {}
+        for key, node, path in awaited:
+            config = node.config
             expects = config.get("expects")
             config.pop("outcomes", None)
             if not isinstance(expects, str) or not expects:
                 continue
-            expected = readable.select_related("published").filter(key=expects, published__isnull=False).first()
+            expected = expected_by_key.get(expects)
             if expected is None:
                 issues.append(Issue(
                     node=key, path=[*path, "config", "expects"], code="expected_workflow",
                     message=f"Expected workflow {expects!r} must be readable and published.",
                 ))
                 continue
-            config["outcomes"] = expected.published.definition.output_schemas
-        return document, issues
+            try:
+                config["outcomes"] = expected.published.definition.output_schemas
+            except (ImproperlyConfigured, ValidationError, PydanticValidationError):
+                issues.append(Issue(
+                    node=key, path=[*path, "config", "expects"], code="expected_workflow",
+                    message=f"Expected workflow {expects!r} has an invalid published contract.",
+                ))
+        return issues
+
+    def authoring_outcomes(
+        self, configurations: list[dict[str, Any]], *, actor: Any
+    ) -> list[tuple[str, dict[str, str], list[Issue]]]:
+        """Resolve each unfinished node independently under the viewer's read scope."""
+        try:
+            entries = _CONFIGURATIONS.validate_python(configurations)
+        except PydanticValidationError as error:
+            raise ValidationError({
+                ".".join(["configurations", *(str(part) for part in issue["loc"])]): [issue["msg"]]
+                for issue in error.errors()
+            }) from error
+        declarations: list[tuple[str, Body, list[str | int]]] = [
+            (entry.node, entry, ["nodes", entry.node]) for entry in entries
+        ]
+        resolved_issues = self._resolve_awaits(declarations, actor)
+        projected = []
+        for key, node, path in declarations:
+            outcomes, issues = Definition.node_outcomes(key, node, path)
+            projected.append((key, outcomes, [issue for issue in resolved_issues if issue.node == key] + issues))
+        return projected
 
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
         """Name readable published parents whose frozen contract names this workflow."""
@@ -201,32 +247,40 @@ class WorkflowManager(AngeeManager):
         *,
         draft: Any,
         expected_revision: int,
+        node_keys: dict[str, str] | None = None,
         layout: Any = None,
         actor: Any = None,
     ) -> DraftSave:
         """Save one parsable registered document with optimistic concurrency."""
 
         actor = workflow.require_access("write", actor)
+        with system_context(reason="workflows.save_draft revision preflight"):
+            current = self.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
+        require_revision(expected=expected_revision, current=current, minimum=0)
+        draft, layout = Definition.rekey(draft, keys=node_keys, layout=layout)
         resolved, resolution_issues = self._resolved_document(draft, actor)
         with system_context(reason="workflows.save_draft"):
             definition, issues = Definition.check(resolved, subject_model=workflow.subject_model)
             issues.extend(resolution_issues)
             if definition is None or any(issue.blocks_draft for issue in issues):
-                return DraftSave("invalid", expected_revision, issues)
+                raise DefinitionInvalid(issues)
             values = {"draft": draft, "draft_revision": F("draft_revision") + 1, "updated_at": Now()}
             if layout is not None:
                 values["layout"] = layout
             changed = self.filter(pk=workflow.pk, draft_revision=expected_revision).update(**values)
-            revision = self.values_list("draft_revision", flat=True).get(pk=workflow.pk)
-        return DraftSave("saved" if changed else "conflict", revision, issues)
+            if not changed:
+                current = self.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
+                raise StaleRevisionError(expected_revision, current)
+        return DraftSave(expected_revision + 1, issues)
 
-    def publish(self, workflow: Any, *, actor: Any = None) -> PublishResult:
+    def publish(self, workflow: Any, *, expected_revision: int, actor: Any = None) -> PublishResult:
         """Publish a frozen document and report readable dependents to republish."""
 
         actor = workflow.require_access("write", actor)
         with transaction.atomic():
             with system_context(reason="workflows.publish"):
                 current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+            require_revision(expected=expected_revision, current=current.draft_revision, minimum=0)
             resolved, resolution_issues = self._resolved_document(current.draft, actor)
             definition, issues = Definition.check(resolved, subject_model=current.subject_model)
             issues.extend(resolution_issues)
@@ -265,7 +319,11 @@ class WorkflowManager(AngeeManager):
 
         with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
             workflow = self.save_identity(
-                key=key, name=name, description=description, subject_model=subject_model, actor=actor,
+                key=key,
+                name=name,
+                description=description,
+                subject_model=subject_model,
+                actor=actor,
             )
             saved = self.save_draft(
                 workflow,
@@ -274,10 +332,8 @@ class WorkflowManager(AngeeManager):
                 layout=layout,
                 actor=actor,
             )
-            if saved.status != "saved":
-                raise DefinitionInvalid(saved.issues)
             if publish:
-                self.publish(workflow, actor=actor)
+                self.publish(workflow, expected_revision=saved.revision, actor=actor)
             workflow.refresh_from_db()
             return workflow
 

@@ -32,7 +32,7 @@ import type {
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { updatedRecord } from "./field-values";
-import { isCompositeFieldDescriptor, isFieldVisible } from "./form-view-model";
+import { isCompositeFieldDescriptor, isFieldControlVisible } from "./form-view-model";
 import { messagesForDottedPath } from "./validation-errors";
 
 export type RowsValue = readonly Record<string, unknown>[];
@@ -70,10 +70,10 @@ export function RowsField({
   const rows = rowsValue(value);
   const fieldName = rowsFieldName(field);
   const columns = rowTemplate(field).filter((column) =>
-    !column.hidden && (!rows.length || rows.some((row) => isFieldVisible(column, row))),
+    !rows.length ? !column.hidden : rows.some((row) => isFieldControlVisible(column, row)),
   );
   const rowFields = (row: Record<string, unknown>, rowIndex: number) => {
-    const visibleColumns = columns.filter((column) => isFieldVisible(column, row));
+    const visibleColumns = columns.filter((column) => isFieldControlVisible(column, row));
     const focusColumn = visibleColumns.find((column) => !column.readOnly);
     return (rowTitle ? visibleColumns : columns).map((column) => {
       const cellPath = `${fieldName}.${rowIndex}.${column.name}`;

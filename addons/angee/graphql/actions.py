@@ -32,6 +32,7 @@ _P = ParamSpec("_P")
 
 logger = logging.getLogger(__name__)
 
+
 class ActionTargetUnavailable(ValidationError):
     """A target preflight whose details stay in form errors under a generic banner."""
 
@@ -103,7 +104,7 @@ class ActionResult:
         )
         message = summary
         if validation_errors is not None and not isinstance(error, ActionTargetUnavailable):
-            message = "; ".join(validation_errors.get(NON_FIELD_ERRORS, ())) or summary
+            message = "; ".join(cast(dict[str, list[str]], validation_errors).get(NON_FIELD_ERRORS, ())) or summary
         return cls(
             ok=False,
             message=message,

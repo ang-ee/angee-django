@@ -11,20 +11,27 @@ import { userDisplayName } from "./identity-labels";
 import { useIamT } from "./i18n";
 import { IAM_LIST_LIMIT } from "./list-config";
 
+export type AssignmentSubjectKind = "user" | "group";
+
 export interface AssignmentSubjectOption extends SelectChoice {
   value: string;
   label: string;
   group: string;
-  kind: "user" | "group";
+  kind: AssignmentSubjectKind;
   id: string;
 }
 
 export interface UseAssignmentSubjectsOptions {
   limit?: number;
+  /** Stored references to label, including inactive and beyond-limit subjects. */
+  subjects?: readonly string[];
+  /** Native subjects offered by the IAM widget; omitted offers both kinds. */
+  kinds?: readonly AssignmentSubjectKind[];
 }
 
 export interface AssignmentSubjectsResult {
   options: readonly AssignmentSubjectOption[];
+  labels: ReadonlyMap<string, string>;
   isFetching: boolean;
   error: unknown;
   truncated: boolean;
@@ -34,6 +41,7 @@ export interface AssignmentSubjectsResult {
 export function assignmentSubjectOptions(
   data: IAMAssignmentSubjectsData | undefined,
   labels: { users: string; groups: string },
+  kinds?: readonly AssignmentSubjectKind[],
 ): readonly AssignmentSubjectOption[] {
   const users = (data?.users ?? [])
     .filter((user) => user.is_active)
@@ -51,26 +59,27 @@ export function assignmentSubjectOptions(
     kind: "group" as const,
     id: group.id,
   }));
-  return [...users, ...groups];
+  return [...users, ...groups].filter((option) => kinds === undefined || kinds.includes(option.kind));
 }
 
 export function useAssignmentSubjects(
-  { limit = IAM_LIST_LIMIT }: UseAssignmentSubjectsOptions = {},
+  { limit = IAM_LIST_LIMIT, kinds, subjects }: UseAssignmentSubjectsOptions = {},
 ): AssignmentSubjectsResult {
   const t = useIamT();
-  const variables = useMemo<IAMAssignmentSubjectsVariables>(() => ({ limit }), [limit]);
+  const variables = useMemo<IAMAssignmentSubjectsVariables>(() => ({ limit, subjects: [...(subjects ?? [])] }), [limit, subjects]);
   const query = useAuthoredQuery(IamAssignmentSubjects, variables);
-  const options = useMemo(
-    () => assignmentSubjectOptions(query.data, {
+  const groupLabels = useMemo(() => ({
       users: t("assignmentSubjects.users"),
       groups: t("assignmentSubjects.groups"),
-    }),
-    [query.data, t],
-  );
+  }), [t]);
+  const options = useMemo(() => assignmentSubjectOptions(query.data, groupLabels, kinds), [query.data, groupLabels, kinds]);
+  const labels = useMemo(() => new Map(query.data?.iam_assignment_subject_labels
+    .map(({ subject, label }) => [subject, label]) ?? []), [query.data]);
   const userCount = query.data?.users_aggregate.aggregate?.count ?? 0;
   const groupCount = query.data?.groups_aggregate.aggregate?.count ?? 0;
   return {
     options,
+    labels,
     isFetching: query.isFetching,
     error: query.error,
     truncated: userCount > limit || groupCount > limit,

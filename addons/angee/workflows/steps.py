@@ -238,8 +238,8 @@ class Step[I, O, C](ImplBase):
     and field-path errors. Step schema projections are cached by their declared type.
     """
 
+    config_form_spec_json_fields = True
     registry_setting = "ANGEE_WORKFLOW_STEP_CLASSES"
-    check_config_form_spec = False  # Authored step config is validated by the workflow contract.
 
     input_model: ClassVar[Any] = None
     output_model: ClassVar[Any] = None
@@ -317,6 +317,10 @@ class Step[I, O, C](ImplBase):
         outcomes = cls.outcomes_for(config)
         if validate:
             outcomes = cls.parse_value(outcomes, dict[Outcome, str], "outcomes")
+        return cls._with_error_outcome(outcomes)
+
+    @staticmethod
+    def _with_error_outcome(outcomes: dict[Outcome, str]) -> dict[Outcome, str]:
         return {**outcomes, ERROR_OUTCOME: "Error"}
 
     @classmethod

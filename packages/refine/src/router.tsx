@@ -12,56 +12,68 @@ import {
   type RouterProvider,
 } from "@refinedev/core";
 
-export const tanStackRouterProvider: RouterProvider = {
-  go: () => {
-    const navigate = useNavigate();
-    const router = useRouter();
-    return (config) => {
-      if (config.type === "path") {
-        const location = router.buildLocation({
-          to: config.to || ".",
-          search: config.query as never,
-          hash: config.hash?.replace(/^#/, ""),
-        } as never) as {
-          hash?: string;
-          href?: string;
-          pathname: string;
-          searchStr?: string;
-        };
-        return location.href
-          ?? `${location.pathname}${location.searchStr ?? ""}${location.hash ?? ""}`;
-      }
-      void navigate({
+const go: NonNullable<RouterProvider["go"]> = () => {
+  const navigate = useNavigate();
+  const router = useRouter();
+  return (config) => {
+    if (config.type === "path") {
+      const location = router.buildLocation({
         to: config.to || ".",
         search: config.query as never,
         hash: config.hash?.replace(/^#/, ""),
-        replace: config.type === "replace",
-      } as never);
-    };
-  },
-  back: () => () => {
-    if (typeof history !== "undefined") history.back();
-  },
-  parse: () => {
-    const location = useRouterState({ select: (state) => state.location });
-    const { resources } = React.useContext(ResourceContext);
-    return React.useCallback(
-      () =>
-        parsedLocation(
-          location.pathname,
-          location.search as Record<string, unknown>,
-          resources,
-        ),
-      [location.pathname, location.search, resources],
-    );
-  },
-  Link: ({ to, children, ...props }) =>
-    React.createElement(
-      TanStackLink as React.ComponentType<React.PropsWithChildren<{ to: string }>>,
-      { ...props, to },
-      children,
-    ),
+      } as never) as {
+        hash?: string;
+        href?: string;
+        pathname: string;
+        searchStr?: string;
+      };
+      return location.href
+        ?? `${location.pathname}${location.searchStr ?? ""}${location.hash ?? ""}`;
+    }
+    void navigate({
+      to: config.to || ".",
+      search: config.query as never,
+      hash: config.hash?.replace(/^#/, ""),
+      replace: config.type === "replace",
+    } as never);
+  };
 };
+
+const back: NonNullable<RouterProvider["back"]> = () => () => {
+  if (typeof history !== "undefined") history.back();
+};
+
+const Link: NonNullable<RouterProvider["Link"]> = ({ to, children, ...props }) =>
+  React.createElement(
+    TanStackLink as React.ComponentType<React.PropsWithChildren<{ to: string }>>,
+    { ...props, to },
+    children,
+  );
+
+/** Bind native parsing to the shared menu match without changing navigation components. */
+export function createTanStackRouterProvider(resourceIdentifier?: string): RouterProvider {
+  return {
+    go,
+    back,
+    Link,
+    parse: () => {
+      const location = useRouterState({ select: (state) => state.location });
+      const { resources } = React.useContext(ResourceContext);
+      return React.useCallback(
+        () =>
+          parsedLocation(
+            location.pathname,
+            location.search as Record<string, unknown>,
+            resources,
+            resourceIdentifier,
+          ),
+        [location.pathname, location.search, resources, resourceIdentifier],
+      );
+    },
+  };
+}
+
+export const tanStackRouterProvider = createTanStackRouterProvider();
 
 type RefineResources = React.ContextType<typeof ResourceContext>["resources"];
 
@@ -69,8 +81,15 @@ function parsedLocation(
   pathname: string,
   search: Record<string, unknown>,
   resources: RefineResources,
+  resourceIdentifier?: string,
 ) {
-  const match = matchResourceFromRoute(pathname, resources);
+  const preferred = resources.filter((resource) => (resource.identifier ?? resource.name) === resourceIdentifier);
+  // Refine matches pathnames; menu list URLs retain preset search for navigation.
+  const preferredMatch = matchResourceFromRoute(pathname, preferred.map((resource) => ({
+    ...resource,
+    ...(typeof resource.list === "string" ? { list: resource.list.split(/[?#]/, 1)[0] } : {}),
+  })));
+  const match = preferredMatch.found ? preferredMatch : matchResourceFromRoute(pathname, resources);
   if (!match.found) {
     return {
       pathname,

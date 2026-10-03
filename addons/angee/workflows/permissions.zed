@@ -1,7 +1,7 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 21
+// @rebac_schema_revision: 22
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=created_by
@@ -15,6 +15,7 @@ definition workflows/workflow {
     permission create = admin->member
     permission read = owner + editor + viewer + starter + operator + admin->member
     permission monitor = owner + editor + viewer + admin->member
+    permission read__draft_revision = monitor
     permission read__draft = monitor
     permission read__layout = monitor
     permission write = owner + editor + admin->member

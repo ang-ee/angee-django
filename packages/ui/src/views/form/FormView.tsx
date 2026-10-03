@@ -182,7 +182,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     saveConflict,
     declaredActions,
     actionsBlocked,
-    recordChromeContext,
+    recordChromeContext: surfaceChromeContext,
     recordActions,
     recordPanelContext,
     recordToolbarContext,
@@ -197,6 +197,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     reload,
   } = surface;
   const { primary: primaryRecordActions, menu: menuRecordActions } = recordActions;
+  const [toolbarHost, setToolbarHost] = React.useState<HTMLElement | null>(null);
+  const recordChromeContext = React.useMemo(
+    () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },
+    [surfaceChromeContext, toolbarHost],
+  );
   const availableDeclaredActions = readOnly
     ? declaredActions.filter((action) => action.run || action.submit)
     : declaredActions;
@@ -242,12 +247,17 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         {recordExtras(recordPanelContext)}
       </div>
     ) : null;
-  const withRail = (body: React.ReactNode, active: boolean, workspace = false) => <div className={cn("@container w-full", workspace && "h-full min-h-0")}>
-    <div className={cn("grid gap-6", workspace && "min-h-full grid-rows-[minmax(0,1fr)_auto] @min-[52rem]:h-full @min-[52rem]:grid-rows-none", active && surface.railGroups.length > 0 && "@min-[52rem]:grid-cols-[minmax(0,1fr)_14rem]")}>
-      <div className={cn("min-w-0", workspace && "min-h-0")}>{body}</div>
-      {active ? <FormViewRail surface={surface} /> : null}
-    </div>
-  </div>;
+  const withRail = (body: React.ReactNode, active: boolean, workspace = false) => {
+    const hasRail = active && surface.railGroups.length > 0;
+    return <div className={cn("@container w-full", workspace && "h-full min-h-0")}>
+      <div className={cn("grid gap-6", workspace && "h-full min-h-0", workspace && (hasRail
+        ? "grid-rows-[minmax(0,1fr)_auto] @min-[52rem]:grid-rows-none"
+        : "grid-rows-[minmax(0,1fr)]"), hasRail && "@min-[52rem]:grid-cols-[minmax(0,1fr)_14rem]")}>
+        <div className={cn("min-w-0", workspace && "flex min-h-0 flex-col")}>{body}</div>
+        {active ? <FormViewRail surface={surface} /> : null}
+      </div>
+    </div>;
+  };
   const overviewContent = withRail(<>
     {overview}
     {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
@@ -257,7 +267,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     : overviewContent;
   const renderRecordPanel = (tab: RecordTabDescriptor) => {
     if (!recordPanelContext || awaitingRecord) return null;
-    const content = withRail(tab.render(recordPanelContext), activeRecordTab === tab.id, recordPresentation === "workspace");
+    const active = activeRecordTab === tab.id;
+    const content = withRail(tab.render({ ...recordPanelContext, active }), active, recordPresentation === "workspace" || tab.presentation === "full-bleed");
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
       : content;
@@ -320,6 +331,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             </Button>
           </div>
         ) : null}
+        <span ref={setToolbarHost} className="contents" />
         {!awaitingRecord && (
           availableDeclaredActions.length > 0 ||
           visibleDeleteAction !== undefined ||
@@ -447,26 +459,29 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     );
   }
 
-  if (recordPresentation === "workspace" && tabbed) {
+  // Keep one panel tree across presentations so retained editor drafts survive tab changes.
+  if (tabbed && (recordPresentation === "workspace" || recordTabList.some((tab) => tab.presentation === "full-bleed"))) {
+    const workspace = recordPresentation === "workspace"
+      || recordTabList.some((tab) => tab.id === activeRecordTab && tab.presentation === "full-bleed");
     return (
       <Tabs
         value={activeRecordTab}
         onValueChange={setActiveRecordTab}
         variant="card"
-        className={cn("flex h-full min-h-0 flex-col bg-sheet", className)}
+        className={cn("bg-sheet", workspace && "flex h-full min-h-0 flex-col", className)}
       >
         <form
-          className="contents"
+          className={workspace ? "contents" : "min-h-full"}
           onKeyDown={handleFormKeyDown}
           onSubmit={(event) => {
             void submitForm(event);
           }}
         >
           {controlBand}
-          <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            {recordHeader(true)}
+          <div className={workspace ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
+            {recordHeader(workspace)}
             {errorBanners}
-            <Tabs.List className="mt-2">
+            <Tabs.List className={workspace ? "mt-2" : undefined}>
               {orderedTabs.map((tab) => (
                 <Tabs.Tab
                   key={tab.id}
@@ -481,9 +496,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           </div>
           <Tabs.Panel
             value={FORM_VIEW_OVERVIEW_TAB_ID}
+            keepMounted={recordPresentation !== "workspace"}
             className="min-h-0 flex-1 overflow-auto pt-0"
           >
-            <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>{overviewWithFormExtras}</div>
+            <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6", workspace ? "py-6" : "pb-12")}>{overviewWithFormExtras}</div>
           </Tabs.Panel>
         </form>
         {recordTabList.map((tab) => (
@@ -491,7 +507,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             key={tab.id}
             value={tab.id}
             keepMounted={tab.keepMounted}
-            className="min-h-0 flex-1 overflow-auto pt-0"
+            className={recordPresentation === "workspace" || tab.presentation === "full-bleed"
+              ? cn("min-h-0 flex-1 pt-0", tab.presentation === "full-bleed" ? "overflow-hidden" : "overflow-auto")
+              : cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}
           >
             <ControlBandProvider host={undefined}>
               {renderRecordPanel(tab)}

@@ -106,6 +106,41 @@ def test_integration_node_resolves_nested_relations(
     }
 
 
+def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables: None) -> None:
+    """Stream and replica labels use their own identity without deferred-row queries."""
+
+    del composed_tables
+    admin = _platform_admin("sync-label-admin")
+    bridge = make_integration("sync-label", model=Channel)
+    schema = _schema()
+    query = """
+        query Labels {
+            sync_streams { display_name }
+            record_links { display_name }
+        }
+    """
+    with system_context(reason="test sync identity labels"):
+        stream = SyncStream.objects.current(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
+        RecordLink.objects.observe(stream, "person:1")
+    with CaptureQueriesContext(connection) as one:
+        rows = _data(_execute(schema, query, user=admin))
+    assert rows == {
+        "sync_streams": [{"display_name": "contacts (book)"}],
+        "record_links": [{"display_name": "person:1"}],
+    }
+    with system_context(reason="test additional sync labels"):
+        for index in range(4):
+            extra = SyncStream.objects.current(bridge, f"contacts-{index}", kind=StreamKind.RECORD_REPLICA)
+            RecordLink.objects.observe(extra, f"person:{index + 2}")
+    with CaptureQueriesContext(connection) as many:
+        rows = _data(_execute(schema, query, user=admin))
+    assert {row["display_name"] for row in rows["sync_streams"]} == {
+        "contacts (book)", *(f"contacts-{index}" for index in range(4)),
+    }
+    assert {row["display_name"] for row in rows["record_links"]} == {f"person:{index}" for index in range(1, 6)}
+    assert len(many) <= len(one) + 1
+
+
 def test_sync_stream_filter_and_batched_integration_projection(composed_tables: None) -> None:
     """The owner foreign key filters by public id and batches its projection."""
 

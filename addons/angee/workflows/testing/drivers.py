@@ -111,6 +111,19 @@ def load_workflow(
     )
 
 
+def publish_draft(workflow: Any, *, draft: Any, actor: Any) -> Any:
+    """Save a changed draft at the current revision, then publish exactly that revision."""
+
+    manager = type(workflow).objects
+    with system_context(reason="workflows testing draft revision"):
+        revision = type(workflow)._base_manager.filter(pk=workflow.pk).values_list("draft_revision", flat=True).get()
+    saved = manager.save_draft(workflow, draft=draft, expected_revision=revision, actor=actor)
+    result = manager.publish(workflow, expected_revision=saved.revision, actor=actor)
+    with system_context(reason="workflows testing published state"):
+        workflow.refresh_from_db()
+    return result
+
+
 def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
     """Start a run through the composed workflow run manager."""
 

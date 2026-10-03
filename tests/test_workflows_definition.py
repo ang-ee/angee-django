@@ -1153,3 +1153,124 @@ def test_definition_reuses_checked_validators(monkeypatch):
     definition.validate_input({})
     definition.validate_input({})
     assert len(built) == 2
+
+
+def test_definition_rekeys_routing_fallback_bindings_map_bodies_results_and_layout():
+    """All references compose typed binding owners while literal values stay opaque."""
+    document = {
+        "nodes": {
+            "client-a": {"step": "echo", "next": {"done": ["client-b"]}, "config": {"literal": "client-a"}},
+            "client-b": {
+                "step": "echo",
+                "input": {"payload": {"from": ["client-a", "input"]}, "literal": {"value": {"from": "client-a"}}},
+                "body": {"step": "echo", "input": {"from": ["client-a.body", "client-a"]}},
+            },
+        },
+        "results": [{"from": "client-b", "output": {"from": ["client-b", "client-a"]}}],
+    }
+    renamed, layout = Definition.rekey(
+        document, keys={"client-a": "first", "client-b": "second"}, layout={"client-a": [20, 40]}
+    )
+    assert list(renamed["nodes"]) == ["first", "second"]
+    assert renamed["nodes"]["first"]["next"] == {"done": ["second"]}
+    assert renamed["nodes"]["first"]["config"] == {"literal": "client-a"}
+    second = renamed["nodes"]["second"]
+    assert second["input"]["payload"]["from"] == ["first", "input"]
+    assert second["input"]["literal"] == {"value": {"from": "client-a"}}
+    assert second["body"]["input"]["from"] == ["first.body", "first"]
+    assert renamed["results"][0] == {"from": "second", "output": {"from": ["second", "first"]}}
+    assert layout == {"first": [20, 40]}
+    assert "client-a" in document["nodes"]
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        {"entry": [1]},
+        {"entry": [1, 2, 3]},
+        {"entry": [float("inf"), 2]},
+        {"entry": ["3", 2]},
+        {"entry": {"x": 1, "y": 2}},
+        [],
+    ],
+)
+def test_definition_layout_rejects_malformed_positions(layout):
+    with pytest.raises(ValidationError) as refused:
+        Definition.validate_layout(layout)
+    assert all(path.startswith("layout") for path in refused.value.message_dict)
+
+
+def test_rekey_locates_only_duplicate_entries_and_shares_parse_mapping():
+    from angee.workflows.definition import DefinitionInvalid
+
+    document = {"nodes": {id_: {"step": "echo"} for id_ in ("one", "two", "three")}}
+    with pytest.raises(DefinitionInvalid) as refused:
+        Definition.rekey(document, keys={"one": "same", "two": "same", "three": "different"})
+    assert {issue.node for issue in refused.value.issues} == {"one", "two"}
+    assert all(issue.path == ["nodes", issue.node] for issue in refused.value.issues)
+    malformed = {"nodes": {"entry": {"step": 3}}}
+    with pytest.raises(DefinitionInvalid) as refused:
+        Definition.rekey(malformed)
+    assert refused.value.issues == Definition.check(malformed)[1]
+    assert refused.value.issues[0].node == "entry"
+
+
+def test_rekey_rejects_ambiguous_identity_and_unknown_layout_without_repointing_bindings():
+    from angee.workflows.definition import DefinitionInvalid
+
+    document = {"nodes": {
+        "fetch": {"step": "echo"},
+        "new": {"step": "echo", "input": {"from": "fetch", "path": ["result"]}},
+    }}
+    with pytest.raises(DefinitionInvalid, match="client identity"):
+        Definition.rekey(document, keys={"fetch": "download", "new": "fetch"})
+    assert document["nodes"]["new"]["input"]["from"] == "fetch"
+    with pytest.raises(DefinitionInvalid, match="absent"):
+        Definition.rekey(document, layout={"absent": [1, 2]})
+
+
+def test_draft_save_applies_definition_rekey_and_layout_validation(execution):
+    from angee.base.scoping import system_queryset
+    from angee.workflows.testing.drivers import load_workflow
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor)
+    saved = Workflow.objects.save_draft(
+        workflow,
+        draft={"nodes": {"client-id": {"step": "echo"}}},
+        node_keys={"client-id": "renamed"},
+        layout={"client-id": [10, 20]},
+        expected_revision=workflow.draft_revision,
+        actor=actor,
+    )
+    persisted = system_queryset(Workflow).get(pk=workflow.pk)
+    assert persisted.draft == {"nodes": {"renamed": {"step": "echo"}}}
+    assert persisted.layout == {"renamed": [10, 20]}
+    with pytest.raises(ValidationError):
+        Workflow.objects.save_draft(
+            workflow, draft=persisted.draft, layout={"renamed": [20]}, expected_revision=saved.revision, actor=actor
+        )
+    assert system_queryset(Workflow).get(pk=workflow.pk).draft_revision == saved.revision
+
+
+def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execution, monkeypatch):
+    from angee.base.scoping import system_queryset
+    from angee.workflows.testing.drivers import load_workflow
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor)
+    queryset_type = type(Workflow.objects.get_queryset())
+    original = queryset_type.update
+
+    def update(queryset, **values):
+        changed = original(queryset, **values)
+        if "draft" in values and changed:
+            original(system_queryset(Workflow).filter(pk=workflow.pk), draft_revision=workflow.draft_revision + 2)
+        return changed
+
+    monkeypatch.setattr(queryset_type, "update", update)
+    saved = Workflow.objects.save_draft(
+        workflow, draft={"nodes": {"entry": {"step": "echo"}}}, expected_revision=workflow.draft_revision, actor=actor
+    )
+    assert saved.revision == workflow.draft_revision + 1
+    assert system_queryset(Workflow).get(pk=workflow.pk).draft_revision == saved.revision + 1

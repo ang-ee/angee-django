@@ -185,7 +185,9 @@ export function publicGraphQLError(value: unknown): PublicGraphQLError | null {
             validationErrors: extensions?.validationErrors,
             formErrors: extensions?.formErrors,
           }
-        : {}),
+        : code === "STALE_REVISION" && (extensions?.current_revision === null
+          || typeof extensions?.current_revision === "number" && Number.isSafeInteger(extensions.current_revision) && extensions.current_revision >= 0)
+          ? { current_revision: extensions.current_revision } : {}),
     },
   };
 }

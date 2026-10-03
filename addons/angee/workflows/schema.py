@@ -1,4 +1,4 @@
-"""Read-only execution resources and manager-backed operator actions."""
+"""Execution resources, monitor-readable authoring and manager-backed actions."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.impl import resolve_all_impl_classes
 from angee.base.models import record_display_label
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionGroupType
@@ -21,8 +22,10 @@ from angee.graphql.actions import (
     authorized_action_target,
     authorized_permission_target,
 )
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
     RecordReferenceNode,
@@ -34,7 +37,9 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
+from angee.workflows.definition import Body, Definition, Issue
 from angee.workflows.states import RunOrigin
+from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
@@ -52,22 +57,31 @@ TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
 Decision = apps.get_model("decisions", "Decision")
 _RUN_POLICY_VERSION = Prefetch(
-    "version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
+    "version",
+    queryset=system_queryset(WorkflowVersion).only("document"),
+    to_attr="policy_version",
 )
 _STEP_POLICY_VERSION = Prefetch(
-    "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
+    "run__version",
+    queryset=system_queryset(WorkflowVersion).only("document"),
+    to_attr="policy_version",
 )
 
 
 @strawberry_django.type(Workflow)
 class WorkflowType(AngeeNode):
-    """The identity of a run's workflow, without unpublished authoring fields."""
+    """Workflow identity with draft fields governed by native REBAC redaction."""
 
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["name"])
     key: auto
     name: auto
     description: auto
     subject_model: auto
+    permissions = permissions_field(("monitor", "write"))
+    draft: JSON | None
+    draft_revision: int | None
+    layout: JSON | None
+
     published: WorkflowVersionType | None = actor_scoped_to_one("published")
 
 
@@ -366,74 +380,164 @@ class TriggerEventType(RecordReferenceNode):
 
 
 _WORKFLOW_RESOURCE = hasura_model_resource(
-    WorkflowType, model=Workflow, filterable=["id", "key", "subject_model"],
-    sortable=["key", "name", "created_at"], aggregatable=["id"],
-    insert=False, update=False, delete=False,
+    WorkflowType,
+    model=Workflow,
+    filterable=["id", "key", "subject_model"],
+    sortable=["key", "name", "created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
 )
 _VERSION_RESOURCE = hasura_model_resource(
-    WorkflowVersionType, model=WorkflowVersion, filterable=["id", "workflow", "number"],
-    sortable=["number", "created_at"], aggregatable=["id"],
-    insert=False, update=False, delete=False,
+    WorkflowVersionType,
+    model=WorkflowVersion,
+    filterable=["id", "workflow", "number"],
+    sortable=["number", "created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
 )
 _RUN_RESOURCE = hasura_model_resource(
-    WorkflowRunType, model=WorkflowRun,
-    filterable=["id", "version", "version__workflow", "version__workflow__key", "parent_step", "parent_step__run",
-                "run_as", "status", "origin", "outcome", "reprocess_of", "trigger_event",
-                "created_at", "finished_at"],
-    record_ref_filters=("subject_model", "subject_id"), record_ref_requires_read=True,
+    WorkflowRunType,
+    model=WorkflowRun,
+    filterable=[
+        "id",
+        "version",
+        "version__workflow",
+        "version__workflow__key",
+        "parent_step",
+        "parent_step__run",
+        "run_as",
+        "status",
+        "origin",
+        "outcome",
+        "reprocess_of",
+        "trigger_event",
+        "created_at",
+        "finished_at",
+    ],
+    record_ref_filters=("subject_model", "subject_id"),
+    record_ref_requires_read=True,
     sortable=["created_at", "updated_at", "finished_at", "status"],
-    aggregatable=["id"], groupable=["status", "origin", "outcome", "version__workflow", "version__workflow__name"],
-    insert=False, update=False, delete=False,
+    aggregatable=["id"],
+    groupable=["status", "origin", "outcome", "version__workflow", "version__workflow__name"],
+    insert=False,
+    update=False,
+    delete=False,
 )
 _RUN_EVIDENCE_RESOURCE = hasura_model_resource(
-    WorkflowRunEvidenceType, model=WorkflowRunEvidence, filterable=["id", "run"],
-    record_ref_filters=("record_model", "record_id"), record_ref_requires_read=True,
-    sortable=["id"], aggregatable=["id"], insert=False, update=False, delete=False,
-)
-_STEP_RESOURCE = hasura_model_resource(
-    StepRunType, model=StepRun,
-    filterable=["id", "run", "decision_group", "awaited_run", "node_key", "map_index",
-                "status", "waiting_kind", "outcome"],
-    sortable=["rank", "created_at", "node_key", "map_index", "deadline_at", "wake_at"],
-    aggregatable=["id"], groupable=["status", "waiting_kind"],
-    insert=False, update=False, delete=False,
-)
-_ATTEMPT_RESOURCE = hasura_model_resource(
-    StepAttemptType, model=StepAttempt,
-    filterable=["id", "step_run", "number", "result", "acknowledged_by"],
-    sortable=["number", "started_at", "finished_at"], aggregatable=["id"],
-    insert=False, update=False, delete=False,
-)
-_ARTIFACT_RESOURCE = hasura_model_resource(
-    StepArtifactType, model=StepArtifact,
-    filterable=["id", "step_run", "label"], sortable=["created_at", "label"], aggregatable=["id"],
-    insert=False, update=False, delete=False,
-)
-_WATCH_RESOURCE = hasura_model_resource(
-    StepWatchType, model=StepWatch, filterable=["id", "step_run"], sortable=["id"], aggregatable=["id"],
-    insert=False, update=False, delete=False,
-)
-_TRIGGER_INSERT = ("workflow", "source", "model_label", "condition",
-                   *declared_hasura_resource_fields(Trigger, "hasura_insertable_fields"))
-_TRIGGER_UPDATE = ("source", "model_label", "condition",
-                   *declared_hasura_resource_fields(Trigger, "hasura_updatable_fields"))
-_TRIGGER_RESOURCE = hasura_model_resource(
-    TriggerType, model=Trigger,
-    filterable=["id", "workflow", "source", "model_label", "enabled",
-                *declared_hasura_resource_fields(Trigger, "hasura_filterable_fields")],
-    sortable=["created_at", "updated_at"], aggregatable=["id"],
-    insertable=_TRIGGER_INSERT, updatable=_TRIGGER_UPDATE,
-    write_backend=AngeeHasuraWriteBackend(Trigger, public_id_fields=tuple(
-        name for name in dict.fromkeys((*_TRIGGER_INSERT, *_TRIGGER_UPDATE))
-        if Trigger._meta.get_field(name).is_relation
-    )),
-)
-_TRIGGER_EVENT_RESOURCE = hasura_model_resource(
-    TriggerEventType, model=TriggerEvent, filterable=["id", "trigger", "started_run", "admitted_at"],
+    WorkflowRunEvidenceType,
+    model=WorkflowRunEvidence,
+    filterable=["id", "run"],
     record_ref_filters=("record_model", "record_id"),
     record_ref_requires_read=True,
-    sortable=["changed_at", "evaluated_at", "admitted_at"], aggregatable=["id"],
-    insert=False, update=False, delete=False,
+    sortable=["id"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_STEP_RESOURCE = hasura_model_resource(
+    StepRunType,
+    model=StepRun,
+    filterable=[
+        "id",
+        "run",
+        "decision_group",
+        "awaited_run",
+        "node_key",
+        "map_index",
+        "status",
+        "waiting_kind",
+        "outcome",
+    ],
+    sortable=["rank", "created_at", "node_key", "map_index", "deadline_at", "wake_at"],
+    aggregatable=["id"],
+    groupable=["status", "waiting_kind"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_ATTEMPT_RESOURCE = hasura_model_resource(
+    StepAttemptType,
+    model=StepAttempt,
+    filterable=["id", "step_run", "number", "result", "acknowledged_by"],
+    sortable=["number", "started_at", "finished_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_ARTIFACT_RESOURCE = hasura_model_resource(
+    StepArtifactType,
+    model=StepArtifact,
+    filterable=["id", "step_run", "label"],
+    sortable=["created_at", "label"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_WATCH_RESOURCE = hasura_model_resource(
+    StepWatchType,
+    model=StepWatch,
+    filterable=["id", "step_run"],
+    sortable=["id"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_TRIGGER_INSERT = (
+    "workflow",
+    "source",
+    "model_label",
+    "condition",
+    *declared_hasura_resource_fields(Trigger, "hasura_insertable_fields"),
+)
+_TRIGGER_UPDATE = (
+    "source",
+    "model_label",
+    "condition",
+    *declared_hasura_resource_fields(Trigger, "hasura_updatable_fields"),
+)
+_TRIGGER_RESOURCE = hasura_model_resource(
+    TriggerType,
+    model=Trigger,
+    filterable=[
+        "id",
+        "workflow",
+        "source",
+        "model_label",
+        "enabled",
+        *declared_hasura_resource_fields(Trigger, "hasura_filterable_fields"),
+    ],
+    sortable=["created_at", "updated_at"],
+    aggregatable=["id"],
+    insertable=_TRIGGER_INSERT,
+    updatable=_TRIGGER_UPDATE,
+    write_backend=AngeeHasuraWriteBackend(
+        Trigger,
+        public_id_fields=tuple(
+            name
+            for name in dict.fromkeys((*_TRIGGER_INSERT, *_TRIGGER_UPDATE))
+            if Trigger._meta.get_field(name).is_relation
+        ),
+    ),
+)
+_TRIGGER_EVENT_RESOURCE = hasura_model_resource(
+    TriggerEventType,
+    model=TriggerEvent,
+    filterable=["id", "trigger", "started_run", "admitted_at"],
+    record_ref_filters=("record_model", "record_id"),
+    record_ref_requires_read=True,
+    sortable=["changed_at", "evaluated_at", "admitted_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
 )
 
 
@@ -507,22 +611,169 @@ class WorkflowActionMutation:
         return ActionResult(ok=True, message="Step retried with duplicate risk acknowledged.")
 
 
+@strawberry.type
+class WorkflowStepChoice(ImplChoice):
+    """Shared implementation metadata plus step-owned palette and outcome facts."""
+
+    internal: bool
+    outcomes: JSON
+
+    @classmethod
+    def from_step(cls, step: type[Step]) -> WorkflowStepChoice:
+        """Build common metadata and workflow facts from one resolved class."""
+        choice = step.choice()
+        outcomes, _ = Definition.node_outcomes(
+            step.key, Body(step=step.key, config=choice.defaults.get("config", {})), [], implementation=step,
+        )
+        return cls.from_choice(choice, internal=step.internal, outcomes=outcomes)
+
+
+@strawberry.input
+class WorkflowStepConfiguration:
+    """One client node identity and the step configuration whose outcomes it needs."""
+
+    node: str
+    step: str
+    config: JSON
+
+
+@strawberry.experimental.pydantic.type(model=Issue, all_fields=True)
+class WorkflowIssue:
+    """Typed projection of the document owner's located diagnostic."""
+
+    path: JSON
+
+
+@strawberry.type
+class WorkflowConfiguredOutcomes:
+    """Configured outcomes associated with their stable client node identity."""
+
+    node: str
+    outcomes: JSON
+    issues: list[WorkflowIssue]
+
+
+@strawberry.type
+class WorkflowStudioQuery:
+    """Monitor-readable adapters over the rowless implementation and step owners."""
+
+    @strawberry.field
+    def workflow_step_choices(self, info: strawberry.Info, id: PublicID) -> list[WorkflowStepChoice]:
+        """Offer registered steps, including internal metadata for retained nodes."""
+        authorized_permission_target(info, Workflow, id, "monitor")
+        return [WorkflowStepChoice.from_step(step) for step in resolve_all_impl_classes(Step)]
+
+    @strawberry.field
+    def workflow_step_outcomes(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        configurations: list[WorkflowStepConfiguration],
+    ) -> list[WorkflowConfiguredOutcomes]:
+        """Project each unfinished node through actor-scoped resolution and its owner."""
+        authorized_permission_target(info, Workflow, id, "monitor")
+        return [
+            WorkflowConfiguredOutcomes(
+                node=node,
+                outcomes=cast(JSON, outcomes),
+                issues=cast(list[WorkflowIssue], issues),
+            )
+            for node, outcomes, issues in Workflow.objects.authoring_outcomes(
+                [{"node": entry.node, "step": entry.step, "config": entry.config}
+                 for entry in configurations],
+                actor=request_from_info(info).user,
+            )
+        ]
+
+
+@strawberry.type
+class WorkflowDraftAcknowledgement:
+    """Revision accepted by this save and its non-blocking diagnostics."""
+
+    revision: int
+    diagnostics: list[WorkflowIssue]
+
+
+@strawberry.type
+class WorkflowPublication:
+    """Publication number and readable dependents returned by its owner."""
+
+    number: int
+    dependents: list[str]
+
+
+@strawberry.type
+class WorkflowStudioMutation:
+    """Thin explicit authoring submissions; managers retain all write policy."""
+
+    @strawberry.mutation
+    def save_workflow_draft(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        draft: JSON,
+        layout: JSON,
+        expected_revision: int,
+        node_keys: JSON | None = None,
+    ) -> WorkflowDraftAcknowledgement:
+        """Save the authored document and layout against the observed revision."""
+        workflow = authorized_permission_target(info, Workflow, id, "write")
+        saved = Workflow.objects.save_draft(
+            workflow,
+            draft=draft,
+            layout=layout,
+            expected_revision=expected_revision,
+            node_keys=node_keys,
+            actor=request_from_info(info).user,
+        )
+        return WorkflowDraftAcknowledgement(
+            revision=saved.revision,
+            diagnostics=cast(list[WorkflowIssue], saved.issues),
+        )
+
+    @strawberry.mutation
+    def publish_workflow(self, info: strawberry.Info, id: PublicID, expected_revision: int) -> WorkflowPublication:
+        """Publish the saved revision through its publication owner."""
+        workflow = authorized_permission_target(info, Workflow, id, "write")
+        published = Workflow.objects.publish(
+            workflow,
+            expected_revision=expected_revision,
+            actor=request_from_info(info).user,
+        )
+        return WorkflowPublication(number=published.version.number, dependents=list(published.dependents))
+
+
 _RESOURCES = (
-    _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _RUN_EVIDENCE_RESOURCE,
-    _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE, _WATCH_RESOURCE,
-    _TRIGGER_RESOURCE, _TRIGGER_EVENT_RESOURCE,
+    _WORKFLOW_RESOURCE,
+    _VERSION_RESOURCE,
+    _RUN_RESOURCE,
+    _RUN_EVIDENCE_RESOURCE,
+    _STEP_RESOURCE,
+    _ATTEMPT_RESOURCE,
+    _ARTIFACT_RESOURCE,
+    _WATCH_RESOURCE,
+    _TRIGGER_RESOURCE,
+    _TRIGGER_EVENT_RESOURCE,
 )
 schemas = {
     "console": {
-        "query": [resource.query for resource in _RESOURCES],
-        "mutation": [WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
+        "query": [WorkflowStudioQuery, *(resource.query for resource in _RESOURCES)],
+        "mutation": [WorkflowStudioMutation, WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
         "subscription": [changes(WorkflowRun, field="workflowRunChanged")],
         "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
         "types": [
             RunOrigin,
-            WorkflowType, WorkflowVersionType, WorkflowRunType, WorkflowRunEvidenceType,
-            StepRunType, StepAttemptType, StepArtifactType, StepWatchType,
-            TriggerEnablePreviewType, TriggerType, TriggerEventType,
+            WorkflowType,
+            WorkflowVersionType,
+            WorkflowRunType,
+            WorkflowRunEvidenceType,
+            StepRunType,
+            StepAttemptType,
+            StepArtifactType,
+            StepWatchType,
+            TriggerEnablePreviewType,
+            TriggerType,
+            TriggerEventType,
             *(type_ for resource in _RESOURCES for type_ in resource.types),
         ],
     },

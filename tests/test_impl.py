@@ -1164,3 +1164,106 @@ def test_materialize_fk_default_requires_declared_slug() -> None:
 
     with pytest.raises(FieldDoesNotExist):
         _BrokenFkImpl.materialize(NeedsNoSlug(), provided=frozenset())
+
+
+def test_form_spec_json_fields_preserve_structured_siblings_and_typed_validation():
+    """Unstructured config leaves compose the JSON widget without weakening parsing."""
+    class OpenConfig(BaseModel):
+        label: str = "Example"
+        payload: dict[str, int] = Field(default_factory=dict)
+        timeout: float = Field(default=10, gt=0)
+
+    spec = model_config_form_spec(OpenConfig, owner="OpenConfig", json_fields=True)
+    assert spec["properties"]["label"]["type"] == "string"
+    assert spec["properties"]["payload"]["widget"] == "json"
+    assert spec["properties"]["timeout"]["widget"] == "json"
+    with pytest.raises(ImproperlyConfigured, match="mapping/additionalProperties"):
+        model_config_form_spec(OpenConfig, owner="OpenConfig")
+    class Configured(ImplBase):
+        config_model = OpenConfig
+    with pytest.raises(ValidationError) as refused:
+        Configured.parse_config({"payload": {"value": "wrong"}, "timeout": 0})
+    assert {"config.payload.value", "config.timeout"} <= set(refused.value.message_dict)
+
+
+def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_shape():
+    """New unsupported constraints inherit JSON fallback without a second allow-list."""
+
+    class Config(BaseModel):
+        regular: str = "Editable"
+        patterned: str = Field(default="abc", pattern="^[a-z]+$")
+        unique: set[int] = Field(default_factory=set)
+
+    class JsonImpl(ImplBase):
+        config_model = Config
+        config_form_spec_json_fields = True
+
+    fields = JsonImpl.config_form_spec()["properties"]
+    assert fields["regular"]["type"] == "string"
+    assert fields["patterned"]["widget"] == fields["unique"]["widget"] == "json"
+    with pytest.raises(ValidationError):
+        JsonImpl.parse_config({"patterned": "INVALID"})
+    with pytest.raises(ImproperlyConfigured, match="pattern"):
+        model_config_form_spec(Config, owner="Config")
+
+
+def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
+    class Target(str, Enum):
+        first = "first"
+
+    class Config(BaseModel):
+        nullable: str | None = Field(default=None, json_schema_extra={"relation": {"resource": "demo.Target"}})
+        referenced: Target = Field(json_schema_extra={"relation": {"resource": "demo.Target"}})
+
+    fields = model_config_form_spec(Config, owner="Config", json_fields=True)["properties"]
+    assert fields["nullable"]["nullable"] and fields["nullable"]["relation"]["resource"] == "demo.Target"
+    assert fields["referenced"]["enum"] == ["first"] and fields["referenced"]["relation"]["resource"] == "demo.Target"
+
+
+@pytest.mark.parametrize("annotation", [
+    {"widget": ""}, {"widget": 1}, {"relation": {"resource": ""}},
+    {"relation": {"resource": "iam.User"}, "widget": "text"},
+])
+def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, monkeypatch):
+    class Nested(BaseModel):
+        value: str = Field(default="", json_schema_extra=annotation)
+
+    class Config(BaseModel):
+        nested: Nested
+        mapping: dict[str, Nested]
+
+    with pytest.raises(ImproperlyConfigured, match="form annotation"):
+        model_config_form_spec(Config, owner="Config", json_fields=True)
+    class BadAnnotation(_BaseImpl):
+        key = "bad_annotation"
+        config_model = Config
+        config_form_spec_json_fields = True
+    monkeypatch.setattr(importlib.import_module(__name__), "BadAnnotation", BadAnnotation, raising=False)
+    with override_settings(ANGEE_TEST_IMPLS={BadAnnotation.key: "tests.test_impl.BadAnnotation"}):
+        assert [error.id for error in check_impl_registry(_BaseImpl)] == ["angee.E005"]
+
+def test_relation_annotation_errors_retain_the_native_location_in_both_form_paths():
+    from angee.base.impl import check_form_annotations
+
+    relation = {"resource": "demo.Target", "create": {"resource": 0}}
+    with pytest.raises(ValidationError, match="invalid relation at create.resource"):
+        check_form_annotations({"type": "string", "relation": relation})
+
+    class Config(BaseModel):
+        target: str = Field(json_schema_extra={"relation": relation})
+
+    with pytest.raises(ImproperlyConfigured, match="invalid relation at create.resource"):
+        model_config_form_spec(Config, owner="Config", json_fields=True)
+    with pytest.raises(ValidationError, match="invalid relation at create.resource"):
+        materialize_form_schema(Config.model_json_schema())
+
+
+def test_namespaced_relation_widgets_survive_config_and_frozen_action_form_projection():
+    class Config(BaseModel):
+        target: str = Field(title="Target", json_schema_extra={
+            "widget": "demo.target", "relation": {"resource": "demo.Target"},
+        })
+
+    for schema in (model_config_form_spec(Config, owner="Config"), materialize_form_schema(Config.model_json_schema())):
+        assert schema["properties"]["target"]["widget"] == "demo.target"
+        assert schema["properties"]["target"]["relation"] == {"resource": "demo.Target"}

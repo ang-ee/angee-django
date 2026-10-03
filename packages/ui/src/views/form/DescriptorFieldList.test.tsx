@@ -45,6 +45,17 @@ function FormHarness<TValues extends Values = Values>({
 afterEach(cleanup);
 
 describe("DescriptorFieldList", () => {
+  test("structured values containing target remain atomic native form values", async () => {
+    const submit = vi.fn();
+    const fields = deserializeFormSpec({ properties: { config: {
+      type: "object", properties: { target: { type: "string" }, retained: { type: "integer" } },
+    } } }, defaultWidgets);
+    render(<FormHarness fields={fields} defaultValues={{ config: { target: "first", retained: 7 } }} onSubmit={submit} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Target" }), { target: { value: "second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ config: { target: "second", retained: 7 } }, expect.anything()));
+  });
+
   test("humanizes schema field names when no field title is declared", async () => {
     const fields = deserializeFormSpec({ properties: {
       note: { type: "string" },

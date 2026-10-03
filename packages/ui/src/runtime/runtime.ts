@@ -125,6 +125,8 @@ export interface AppRuntime {
   composition?: RuntimeComposition | null;
   /** The active route's name and its app (menu root), per page. */
   activeRouteName?: string | null;
+  /** Winning menu destination after URL specificity and the inherited route anchor. */
+  activeMenuId?: string | null;
   activeApp?: string | null;
 }
 

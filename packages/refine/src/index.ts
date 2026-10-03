@@ -166,6 +166,7 @@ export {
   type ResourceMutationOperations,
 } from "./operations";
 export {
+  createTanStackRouterProvider,
   tanStackRouterProvider,
 } from "./router";
 export {

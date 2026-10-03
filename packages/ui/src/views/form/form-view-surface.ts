@@ -4,6 +4,7 @@ import {
   lineReadSelectionPaths,
   modelFieldForPath,
   refineResourceName,
+  relationRepresentationForPath,
   useModelMetadata,
   useSchemaFieldMetadata,
   type ModelMetadata,
@@ -105,17 +106,21 @@ export interface RecordToolbarContext {
 export interface RecordTabDescriptor {
   id: string;
   label: TabLabel;
+  /** Fill the available content area beneath compact record chrome. Other tabs retain document layout. */
+  presentation?: "full-bleed";
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
-  render: (context: RecordPanelContext) => React.ReactNode;
+  /** Active lets a retained panel suspend queries and shell publications. */
+  render: (context: RecordPanelContext & { active: boolean }) => React.ReactNode;
   /** Shown only while the loaded record satisfies it; absent until the record loads. */
   visibleWhen?: (record: Row) => boolean;
   /**
-   * Keep the panel mounted even while inactive. Base UI mounts a keep-mounted
-   * panel eagerly from the first render, so do not opt in for eager work such as
-   * a socket, subscription, fetch, or token mint; leave it false unless state
-   * preservation outweighs that cost.
+   * Keep the panel's React state and effects mounted while inactive. Base UI
+   * mounts it eagerly; render receives active=false and must suspend its reads
+   * and shell publications explicitly. Persistent effects such as unsaved-edit
+   * navigation guards remain mounted. This differs from React Activity, which
+   * tears down hidden effects, including those guards.
    */
   keepMounted?: boolean;
 }
@@ -481,6 +486,20 @@ export function useFormViewSurface({
       const resolved = modelMetadata ? modelFieldForPath(field.name, modelMetadata, schemaMetadata) : null;
       const fieldMetadata = resolved?.field;
       if (modelMetadata && (!fieldMetadata || fieldMetadata.readable === false)) continue;
+      // A field that names its own leaf paths reads exactly those, like a column that does.
+      if (field.selectionPaths) {
+        for (const path of field.selectionPaths) paths.add(path);
+        continue;
+      }
+      // A to-many relation selects its records' identity and representation,
+      // the same selection a list column of that relation makes.
+      const relationList = modelMetadata && fieldMetadata?.kind === "list"
+        ? relationRepresentationForPath(field.name, modelMetadata, schemaMetadata)
+        : null;
+      if (relationList?.relationList) {
+        for (const path of relationList.selectionPaths) paths.add(path);
+        continue;
+      }
       addFieldSelection(
         paths,
         field,

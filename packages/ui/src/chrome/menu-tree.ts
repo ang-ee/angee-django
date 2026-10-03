@@ -391,8 +391,8 @@ export class MenuTree {
    * included app on the way, flattened ones too, which stay apps for words and
    * rules (G-8). Read it from the logical tree, which keeps flattened apps.
    */
-  appTrail(pathname: string): readonly ChromeMenuNode[] {
-    return this.match(pathname)?.trail.filter(scopesApp) ?? [];
+  appTrail(pathname: string, search?: string | URLSearchParams, menuId?: string): readonly ChromeMenuNode[] {
+    return this.match(pathname, search, false, menuId)?.trail.filter(scopesApp) ?? [];
   }
 
   /** Every id an app trail can hold: what `when: { app }` may name. */
@@ -405,10 +405,9 @@ export class MenuTree {
     return this.match(pathname)?.item;
   }
 
-  /** Own-path matches rank by length, equal params, fewer mismatches, depth, then pre-order. */
-  /** The item a location selects; developer mode's `includeHidden` lets a hidden app be the active one. */
-  match(path: string, search?: string | URLSearchParams, includeHidden = false): MenuMatch | undefined {
-    return matchWithin(this.roots, path, search, includeHidden);
+  /** Rank by path, params, sitting at or under the route anchor, depth, then pre-order. */
+  match(path: string, search?: string | URLSearchParams, includeHidden = false, menuId?: string): MenuMatch | undefined {
+    return matchWithin(this.roots, path, search, includeHidden, menuId);
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -447,18 +446,21 @@ function matchWithin(
   path: string,
   search?: string | URLSearchParams,
   includeHidden = false,
+  menuId?: string,
 ): MenuMatch | undefined {
   const location = new URL(path, "https://angee.invalid");
   const params = new URLSearchParams(search ?? location.search);
   let best: { item: ChromeMenuNode; trail: readonly ChromeMenuNode[] } | undefined;
-  let bestRank = [-1, -1, -Infinity, -1];
+  let bestRank = [-1, -1, -Infinity, -1, -1];
   const visit = (item: ChromeMenuNode, ancestors: readonly ChromeMenuNode[]): void => {
     const trail = [...ancestors, item];
     if (item.path && pathMatchesTarget(location.pathname, item.path)) {
       const targetParams = [...new URLSearchParams(item.search)];
       const equalParams = targetParams.filter(([key, value]) => params.getAll(key).includes(value)).length;
       const mismatches = targetParams.length - equalParams;
-      const rank = [item.path.length, equalParams, -mismatches, trail.length];
+      // The anchor names a place: the item itself or any item under it.
+      const anchored = menuId !== undefined && trail.some((node) => node.id === menuId);
+      const rank = [item.path.length, equalParams, -mismatches, Number(anchored), trail.length];
       const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
       if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
         best = { item, trail };

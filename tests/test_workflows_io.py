@@ -387,9 +387,16 @@ def test_reprocess_retains_lineage_and_uses_the_current_publication(execution):
     original = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 4}, request_key="test:lineage")
     run_until(original)
     Workflow.objects.save_draft(
-        workflow, draft=document("entry", "last"), expected_revision=workflow.draft_revision, actor=actor,
+        workflow,
+        draft=document("entry", "last"),
+        expected_revision=workflow.draft_revision,
+        actor=actor,
     )
-    current = Workflow.objects.publish(workflow, actor=actor).version
+    current = Workflow.objects.publish(
+        workflow,
+        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        actor=actor,
+    ).version
     replacement = WorkflowRun.objects.reprocess(original, actor=actor)
     assert original.origin == "manual" and replacement.origin == "reprocess"
     assert replacement.reprocess_of_id == original.pk and replacement.version_id == current.pk

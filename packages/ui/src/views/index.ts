@@ -81,6 +81,7 @@ export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
   formSpecInitialValues,
+  formSpecHasControlForPath,
   normalizeFormSpecValues,
   resolveSchemaReference,
   useFormSpecFields,
@@ -101,7 +102,7 @@ export {
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
-export { useWatch, type ResolverResult } from "react-hook-form";
+export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
 export {
   useActionForm,
   type UseActionFormOptions,
@@ -155,6 +156,7 @@ export {
   type GraphViewEdge,
   type GraphViewEdgeStyle,
   type GraphViewLayout,
+  type GraphViewInitialView,
   type GraphViewNode,
   type GraphViewNodeStyle,
   type GraphViewProps,

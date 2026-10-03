@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { MenuTree, resolveMenuRouteTargets, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { createRouteHref } from "@angee/ui/runtime";
 import { resourcePageRoutes, type BaseAddonRoute } from "./define-base-addon";
-import { AppRouteProjection, refineRouteResourceProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
+import { AppRouteProjection, menuNodeForRoute, refineRouteResourceProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
 import { chromeMenuItemsFromRefine } from "@angee/ui/chrome/refine-menu";
 import type { TreeMenuItem } from "@refinedev/core";
 import { compileMenus, type MenuLayer } from "./menus";
@@ -312,6 +312,13 @@ describe("availability edge cases", () => {
     const projection = new AppRouteProjection(anchored, tree, undefined, { removed: [{ id: "decisions", route: "inbox" }] });
     expect(projection.unavailable.size).toBe(0);
     expect(projection.allows(anchored[0]!, "/inbox")).toBe(true);
+  });
+  test("a removed anchor does not hand a parameterized route to one of its destinations", () => {
+    const boards: readonly BaseAddonRoute[] = [{ name: "boards.board", path: "/boards/$key", menu: "boards" }];
+    const tree = MenuTree.from(resolveMenuRouteTargets(
+      [{ id: "boards.main", route: "boards.board", params: { key: "main" } }], createRouteHref(boards),
+    ) as readonly ChromeMenuItem[]);
+    expect(menuNodeForRoute(boards[0]!, tree)).toBeUndefined();
   });
   test("only console routes become unavailable; an anchor naming nothing is a wiring error", () => {
     const tree = MenuTree.from([]);

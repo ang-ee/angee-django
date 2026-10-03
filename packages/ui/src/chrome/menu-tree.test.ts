@@ -33,6 +33,50 @@ const MENU: readonly ChromeMenuItem[] = [
 ];
 
 describe("match", () => {
+  test("an anchor cannot select an unrelated path", () => {
+    const tree = MenuTree.from([{ id: "desk", children: [{ id: "desk.hub", to: "/desk/hub" }] },
+      { id: "foreign", to: "/records" }]);
+    const match = tree.match("/records/one", undefined, false, "desk.hub");
+    expect(match?.item.id).toBe("foreign");
+    expect(match?.app?.id).toBe("foreign");
+    expect(tree.match("/records/one", undefined, false, "removed")?.item.id).toBe("foreign");
+  });
+
+  test("path and params beat the anchor; depth decides among the items at or under it", () => {
+    const tree = MenuTree.from([
+      { id: "dashboards", to: "/dashboards" },
+      { id: "accounting", children: [{ id: "vendors", children: [
+        { id: "payable", to: "/dashboards/addon/accounts-payable" },
+      ] }] },
+      { id: "payments", to: "/payments", children: [
+        { id: "vendor-payments", to: "/payments?preset=vendor" },
+        { id: "foreign-payments", to: "/payments" },
+      ] },
+    ]);
+    expect(tree.match("/dashboards/addon/accounts-payable", undefined, false, "dashboards")?.item.id).toBe("payable");
+    expect(tree.match("/payments", undefined, false, "payments")?.item.id).toBe("foreign-payments");
+    expect(tree.match("/payments?preset=vendor", undefined, false, "payments")?.item.id).toBe("vendor-payments");
+    expect(tree.match("/payments?preset=other", undefined, false, "vendor-payments")?.item.id).toBe("foreign-payments");
+  });
+
+  test("an anchor on an app root keeps the page on its own item under that root", () => {
+    const tree = MenuTree.from([
+      { id: "files", to: "/storage", children: [{ id: "files.all", to: "/storage" }] },
+      { id: "desk", children: [{ id: "desk.tools", children: [{ id: "desk.files", to: "/storage" }] }] },
+    ]);
+    expect(tree.match("/storage")?.item.id).toBe("desk.files");
+    expect(tree.match("/storage", undefined, false, "files")?.item.id).toBe("files.all");
+    expect(tree.match("/storage/one", undefined, false, "files")?.trail.map((item) => item.id)).toEqual(["files", "files.all"]);
+  });
+
+  test("anchored hidden apps use the same developer-mode visibility rule", () => {
+    const tree = MenuTree.from([{ id: "suite", children: [
+      { id: "desk", app: true, hidden: true, children: [{ id: "desk.page", to: "/desk" }] },
+    ] }]);
+    expect(tree.match("/desk", undefined, false, "desk.page")?.app?.id).toBe("suite");
+    expect(tree.match("/desk", undefined, true, "desk.page")?.app?.id).toBe("desk");
+  });
+
   test.each([
     ["", "m.all"],
     ["?preset=archived", "m.all"],

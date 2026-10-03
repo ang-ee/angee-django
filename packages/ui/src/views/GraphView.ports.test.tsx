@@ -31,3 +31,19 @@ test("distinguishes omitted default ports from an explicitly terminal node", () 
   expect(screen.getAllByLabelText("Output")).toHaveLength(1);
   expect(screen.getAllByLabelText("Input")).toHaveLength(2);
 });
+
+test("horizontal outcomes sit on the trailing edge and update on direction changes", () => {
+  const props = { nodes: [{ id: "a", kind: "node", title: "Alpha", ports: [{ id: "done", label: "Done" }, { id: "error", label: "Error" }] }], edges: [], nodeStyles: { node: graphNodeStyle("gray", "neutral") } };
+  const view = render(<GraphView {...props} layout={{ rankdir: "LR" }} />, { wrapper: Provider });
+  const done = screen.getByLabelText("Done");
+  const error = screen.getByLabelText("Error");
+  expect(done.className).toContain("react-flow__handle-right");
+  expect(screen.getByLabelText("Input").className).toContain("react-flow__handle-left");
+  expect(done.parentElement).not.toBe(error.parentElement);
+  expect(done.parentElement?.className).toContain("relative");
+  expect(done.parentElement?.textContent).toBe("Done");
+  expect(error.parentElement?.textContent).toBe("Error");
+  view.rerender(<GraphView {...props} layout={{ rankdir: "TB" }} />);
+  expect(screen.getByLabelText("Done").className).toContain("react-flow__handle-bottom");
+  expect(screen.getByLabelText("Input").className).toContain("react-flow__handle-top");
+});

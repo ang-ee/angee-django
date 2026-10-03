@@ -1131,6 +1131,40 @@ describe("FormView", () => {
     expect(screen.queryByRole("textbox", { name: "Version" })).toBeNull();
   });
 
+  test("selects a to-many relation's record identity and representation, not the bare object list", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "run-1", workflows: [{ id: "workflow-1", name: "Daily briefing" }] };
+    const metadata = workflowRelationMetadata();
+    const run = metadata.types.RunType!;
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" fields={[
+      { name: "workflows", hidden: true },
+    ]} />, { types: { ...metadata.types,
+      RunType: { ...run, fields: { ...run.fields,
+        workflows: { name: "workflows", kind: "list", relationModelLabel: "workflows.Workflow" } } },
+    } });
+    await waitFor(() => expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "workflows.id", "workflows.name",
+    ])));
+    expect(sdkMocks.recordSelection).not.toContain("workflows");
+  });
+
+  test("a field naming its own leaf paths selects those, even when its list has no resource to represent it", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "run-1", stages: [{ step: { id: "step-1", name: "Collect" } }] };
+    const metadata = workflowRelationMetadata();
+    const run = metadata.types.RunType!;
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" fields={[
+      { name: "stages", hidden: true, selectionPaths: ["stages.step.id", "stages.step.name"] },
+    ]} />, { types: { ...metadata.types,
+      RunType: { ...run, fields: { ...run.fields,
+        stages: { name: "stages", kind: "list", relationModelLabel: "workflows.RunStage" } } },
+    } });
+    await waitFor(() => expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "stages.step.id", "stages.step.name",
+    ])));
+    expect(sdkMocks.recordSelection).not.toContain("stages");
+  });
+
   test("falls back from a missing relation label to identity, then Untitled", async () => {
     sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1" } };
     const metadata = workflowRelationMetadata();
@@ -2850,7 +2884,9 @@ describe("FormView", () => {
         overviewTab={{ label: "Settings", position: "last" }}
         recordExtras={() => <p>Related records</p>}
         recordTabs={[
-          { id: "editor", label: "Editor", keepMounted: true, render: () => <button type="button">Editor action</button> },
+          { id: "editor", label: "Editor", keepMounted: true, render: ({ active }) => <>
+            <button type="button">Editor action</button><output data-testid="retained-panel-active">{String(active)}</output>
+          </> },
           { id: "runs", label: "Runs", render: () => <p>Runs panel</p> },
         ]}
       />,
@@ -2859,6 +2895,7 @@ describe("FormView", () => {
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Editor", "Runs", "Settings"]);
     expect(screen.getByRole("button", { name: "Editor action" })).toBeTruthy();
+    expect(screen.getByTestId("retained-panel-active").textContent).toBe("true");
     expect(await screen.findByText("Active")).toBeTruthy();
     expect(screen.queryByText("ACTIVE")).toBeNull();
     expect(screen.queryByLabelText("Reminder")).toBeNull();
@@ -2869,6 +2906,7 @@ describe("FormView", () => {
     expect(await screen.findByLabelText("Reminder")).toBeTruthy();
     expect(screen.getByText("Related records")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Editor action" })).toBeNull();
+    expect(screen.getByTestId("retained-panel-active").textContent).toBe("false");
   });
 
   test("workspace record panels keep full-height content beside one rail", async () => {
@@ -2887,6 +2925,35 @@ describe("FormView", () => {
     expect(panel.innerHTML).not.toContain("max-w-[1100px]");
     expect(within(panel).getByRole("complementary")).toBeTruthy();
     expect(document.querySelectorAll("aside")).toHaveLength(1);
+  });
+
+  test("a full-bleed tab fills compact chrome while document tabs retain their column and editor draft", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} defaultRecordTab="editor"
+      recordTabs={[
+        { id: "editor", label: "Editor", presentation: "full-bleed", keepMounted: true,
+          render: () => <input aria-label="Editor draft" defaultValue="Original" /> },
+        { id: "activity", label: "Activity", render: () => <p>Activity content</p> },
+      ]} />);
+    const editor = await screen.findByRole("tabpanel", { name: "Editor" });
+    const draft = within(editor).getByRole("textbox", { name: "Editor draft" });
+    fireEvent.change(draft, { target: { value: "Unsaved draft" } });
+    expect(editor.className).toContain("flex-1");
+    expect(editor.className).toContain("overflow-hidden");
+    expect(editor.closest('[data-tabs-root]')?.className ?? editor.parentElement?.className).toContain("h-full");
+    expect(editor.innerHTML).not.toContain("max-w-[1100px]");
+    expect(editor.firstElementChild?.className).toContain("h-full");
+    expect(draft.parentElement?.parentElement?.className).toContain("h-full");
+    expect(draft.parentElement?.parentElement?.className).toContain("grid-rows-[minmax(0,1fr)]");
+    expect(screen.getByRole("textbox", { name: "Title" }).closest("header")?.className).toContain("gap-1");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    const activity = await screen.findByRole("tabpanel", { name: "Activity" });
+    expect(activity.className).toContain("max-w-[1100px]");
+    expect(screen.getByRole("textbox", { name: "Title" }).closest("header")?.className).toContain("gap-4");
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByLabelText("Reminder")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+    expect(screen.getByRole("textbox", { name: "Editor draft" })).toBe(draft);
+    expect(draft).toHaveProperty("value", "Unsaved draft");
   });
 
   test("workspace records without tabs keep the compact header and scrolling form body", async () => {

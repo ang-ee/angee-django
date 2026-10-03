@@ -11,6 +11,7 @@ import {
   MenuTree,
   pathMatchesTarget,
   type ChromeMenuNode,
+  type MenuMatch,
 } from "@angee/ui/chrome/menu-tree";
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
@@ -80,12 +81,14 @@ export function refineRouteResourceProjection(
   for (const node of navigationTree.byId.values()) {
     const menuTrail = navigationTree.trailFor(node.id);
     menuTrail.forEach((item, index) => {
+      const breadcrumbTrail = breadcrumbTrailFromMenuTrail(menuTrail.slice(0, index + 1));
       addMenuRouteResource(
         resourcesByIdentifier,
         item,
         menuTrail[index - 1],
         appRootIds.has(item.id),
         menuRouteShowPath(item, routesByName, childrenByParentName),
+        breadcrumbTrail.at(-2),
       );
     });
   }
@@ -247,8 +250,21 @@ export class AppRouteProjection {
     return root;
   }
 
-  activeApp(pathname: string): string | undefined {
-    return this.confineTo ?? this.menuTree.activeAppRoot(pathname)?.id;
+  /** Record routes inherit their collection's declared chrome anchor. */
+  menuAnchor(routeName?: string): ChromeMenuNode | undefined {
+    const route = routeName ? this.routesByName.get(routeName) : undefined;
+    if (!route) return undefined;
+    const owner = inheritedRouteFact(route, this.routesByName, (item) => item.menu ? item : undefined);
+    return owner ? menuNodeForRoute(owner, this.menuTree) : undefined;
+  }
+
+  activeMenu(pathname: string, routeName?: string, search?: string): MenuMatch | undefined {
+    return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  }
+
+  /** The logical root a page sits in; lifting a node into Settings does not change it. */
+  activeApp(pathname: string, routeName?: string, search?: string): string | undefined {
+    return this.confineTo ?? this.menuTree.match(pathname, search, false, this.menuAnchor(routeName)?.id)?.trail[0]?.id;
   }
 
   /**
@@ -256,8 +272,8 @@ export class AppRouteProjection {
    * every app on its menu trail. Under a confinement only the root's own count;
    * a page another root owns (a Settings link) sits in the root alone.
    */
-  appTrail(pathname: string): readonly string[] {
-    const trail = this.menuTree.appTrail(pathname).map((item) => item.id);
+  appTrail(pathname: string, routeName?: string, search?: string): readonly string[] {
+    const trail = this.menuTree.appTrail(pathname, search, this.menuAnchor(routeName)?.id).map((item) => item.id);
     if (this.confineTo === undefined) return trail;
     return trail[0] === this.confineTo ? trail : [this.confineTo];
   }
@@ -308,6 +324,7 @@ function addMenuRouteResource(
   parent: ChromeMenuNode | undefined,
   appRoot: boolean,
   showPath: string | undefined,
+  breadcrumbParent: ChromeMenuNode | undefined,
 ): void {
   const target = item.target;
   if (!target || target === "#") return;
@@ -331,6 +348,7 @@ function addMenuRouteResource(
       label: item.displayLabel,
       icon: item.iconName,
       menuId: item.id,
+      menuOrder: resourcesByIdentifier.size,
       // Refine's list may borrow a descendant's target; chrome needs the own target.
       menuTarget: item.to ?? null,
       ...(appRoot ? { appRoot: true } : {}),
@@ -341,7 +359,9 @@ function addMenuRouteResource(
       ...(item.tone ? { tone: item.tone } : {}),
       ...(item.badge !== undefined ? { badge: item.badge } : {}),
       ...(item.hidden ? { hidden: true } : {}),
-      ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
+      // Native breadcrumbs collapse repeated labels; chrome retains the full menu hierarchy.
+      ...(breadcrumbParent ? { parent: menuRouteResourceIdentifier(breadcrumbParent.id) } : {}),
+      ...(parent ? { menuParent: menuRouteResourceIdentifier(parent.id) } : {}),
     },
   });
 }
@@ -403,17 +423,17 @@ export function menuNodeForRoute(
   // An anchor composition removed falls back to the route's surviving references;
   // `unavailableRoutes` already refused anchors that name no menu item.
   const anchor = route.menu ? menuTree.byId.get(route.menu) : undefined;
+  // An item with params names one destination of a parameterized route, so only
+  // route-level refs can contest the declared chrome owner or stand in for a removed one.
+  const refs = menuTree.itemsForRoute(route.name).filter((item) => item.params === undefined);
   if (route.menu && anchor) {
-    const selected = anchor;
-    const refs = menuTree.itemsForRoute(route.name);
-    if (refs.length > 0 && !refs.some((item) => item.id === selected.id)) {
+    if (refs.length > 0 && !refs.some((item) => item.id === anchor.id)) {
       throw new Error(
         `Route "${route.name}" sets menu "${route.menu}", but that item does not reference the route.`,
       );
     }
-    return selected;
+    return anchor;
   }
-  const refs = menuTree.itemsForRoute(route.name);
   return refs.length === 1 ? refs[0] : undefined;
 }
 
@@ -430,7 +450,7 @@ function menuRouteShowPath(
   return child ? fullRoutePath(child, route) : undefined;
 }
 
-function menuRouteResourceIdentifier(menuId: string): string {
+export function menuRouteResourceIdentifier(menuId: string): string {
   return `menu:${menuId}`;
 }
 

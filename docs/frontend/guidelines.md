@@ -615,7 +615,10 @@ shared UI copy through an addon bundle.
   shared form owns branching, validation and draft retention across record refreshes.
 - Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
   `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
-  preserves edits and offers reload. Adapt wire responses with
+  preserves edits and offers reload. Typed GraphQL successes use
+  `savedFormSubmitResult`; thrown Django validation and revision refusals use
+  `formSubmitError` (VALIDATION and STALE_REVISION). Do not add another in-band
+  form transport. Adapt ActionResult wire responses with
   `actionFormSubmitResult(data, root)` and normalized outcomes with
   `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
@@ -847,6 +850,13 @@ save read only those children's fields. An original and its variants may reuse
 a tab or rail group id, never a fixed group's. A create form knows no
 implementation: originals stand, and the children that need one stay out of
 the form with their required fields and defaults.
+
+Record verbs are `#actions` children. The one exception is an inline action
+form rendered inside the record, such as a decision answered on its own page:
+its submit button must share the form's React Hook Form state, which a container
+child cannot reach, so `ActionFormDialog` with `inline` portals that button into
+the toolbar through `RecordChromeContext.toolbarHost`
+([record chrome context](../../packages/ui/src/views/resource/record-chrome-context.tsx)).
 
 ### Framework containers
 
@@ -1094,7 +1104,8 @@ Hard-won traps — the wise learn from others' mistakes
   hand-author daemon result types; actions return `MutationResult{status}`.
 - **Expose every addon web package through the composed web manifest** — the
   composer emits `runtime/web/tailwind.sources.css` from declared package
-  sources. Do not hand-edit runtime CSS; a package missing from the manifest will
+  sources, resolving workspace links to real directories so the dev watcher sees
+  edits. Do not hand-edit runtime CSS; a package missing from the manifest will
   miss its unique arbitrary Tailwind classes.
 - **Shared/generic icon glyphs live in the base `chrome/icon-registry.ts`** —
   composition is fail-fast on id, so an addon cannot re-register another's glyph,
@@ -1203,9 +1214,14 @@ Hard-won traps — the wise learn from others' mistakes
   provide no menu-derived trail or metadata. References from different roots
   still throw under a perspective; confinement does not choose an owner for
   the route. `useChromePlace()` shares one memoized
-  `MenuTree.match(pathname, searchStr)` across the rail and top bar.
+  `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
-  trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
+  trail. Match path length and search params first, then whether the item sits at
+  or under the route's menu anchor (inherited by record children), then depth
+  and pre-order: an anchor on an app root keeps the page on its own item there. The route projection
+  publishes the winning `activeMenuId`; the Refine router binding uses that same
+  destination for native breadcrumbs. A more specific preset or parameterized
+  target wins over an anchor. Breadcrumbs occupy the
   sheet strip below the top bar; pane toggles stay in the top bar.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and

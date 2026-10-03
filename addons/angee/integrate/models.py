@@ -3038,6 +3038,11 @@ class SyncStream(AuditMixin, AngeeDataModel):
     objects = SyncStreamManager()
     unscoped_objects = AngeeUnscopedManager()
 
+    def __str__(self) -> str:
+        """Label this stream by its adapter key and optional partition."""
+
+        return f"{self.key} ({self.partition})" if self.partition else self.key
+
     def has_completed_baseline(self) -> bool:
         """Read completion across retained epochs, including this persisted row.
 
@@ -3303,6 +3308,11 @@ class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
     tombstoned_at = models.DateTimeField(null=True, blank=True)
     objects = RecordLinkManager()
     unscoped_objects = AngeeUnscopedManager()
+
+    def __str__(self) -> str:
+        """Label this remote identity by its external key."""
+
+        return self.external_key
 
     class Meta:
         abstract = True

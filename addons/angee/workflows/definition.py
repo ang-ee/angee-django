@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import copy
+from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.evidence import EvidenceReference
@@ -48,6 +49,13 @@ from angee.workflows.states import (
 from angee.workflows.steps import EmptyOutput, Step, resolve_step
 
 MAP_BODY_SUFFIX = ".body"
+type Position = tuple[
+    Annotated[float, Field(strict=True, allow_inf_nan=False)],
+    Annotated[float, Field(strict=True, allow_inf_nan=False)],
+]
+type Layout = dict[NodeKey, Position]
+_LAYOUT: TypeAdapter[Layout] = TypeAdapter(Layout)
+"""Persisted node positions share one finite, two-coordinate shape."""
 
 
 def map_body_key(key: str) -> str:
@@ -74,7 +82,11 @@ class DefinitionInvalid(ValidationError):
 
     def __init__(self, issues: list[Issue]) -> None:
         self.issues = issues
-        super().__init__([issue.message for issue in issues])
+        fields: dict[str, list[str]] = {}
+        for issue in issues:
+            path = ".".join(str(part) for part in issue.path) if issue.path else "__all__"
+            fields.setdefault(path, []).append(issue.message)
+        super().__init__(fields)
 
 
 class Body(BaseModel):
@@ -155,6 +167,112 @@ class Definition(BaseModel):
     results: list[ResultBinding] = Field(default_factory=list)
     outcome_labels: dict[str, str] = Field(default_factory=dict)
 
+    @classmethod
+    def rekey(
+        cls,
+        document: Any,
+        *,
+        keys: Mapping[str, str] | None = None,
+        layout: Any = None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Translate client identities through the typed routing and binding owners.
+
+        Config and literal values stay opaque. Missing sources remain dangling;
+        renamed map bodies retain their suffix. The result uses authored keys so
+        subsequent diagnostics use the same captured identity map as the client.
+        """
+        if keys is not None:
+            try:
+                keys = TypeAdapter(dict[str, str]).validate_python(keys, strict=True)
+            except PydanticValidationError as error:
+                raise ValidationError(
+                    {"node_keys": "Node keys must map client identities to authored keys."}
+                ) from error
+        addressed = copy.deepcopy(document)
+        if keys is not None and isinstance(addressed, dict) and isinstance(addressed.get("nodes"), dict):
+            nodes = addressed["nodes"]
+            if set(nodes) != set(keys):
+                raise DefinitionInvalid(
+                    [Issue(path=["nodes"], code="parse", message="Node identities must match the key map.")]
+                )
+            duplicates = {key for key, count in Counter(keys.values()).items() if count > 1}
+            if duplicates:
+                raise DefinitionInvalid(
+                    [
+                        Issue(node=id_, path=["nodes", id_], code="parse", message="Node keys must be unique.")
+                        for id_, key in keys.items() if key in duplicates
+                    ]
+                )
+            ambiguous = [id_ for id_, key in keys.items() if key != id_ and key in keys]
+            if ambiguous:
+                raise DefinitionInvalid([
+                    Issue(node=id_, path=["nodes", id_], code="parse",
+                          message="A node key cannot equal another node's client identity.")
+                    for id_ in ambiguous
+                ])
+            addressed["nodes"] = {keys[id_]: value for id_, value in nodes.items()}
+        try:
+            definition = cls.model_validate(addressed)
+        except PydanticValidationError as error:
+            raise DefinitionInvalid(cls.parse_issues(error)) from error
+        keys = keys or {key: key for key in definition.nodes}
+
+        def reference(source: str) -> str:
+            if source in {INPUT_SOURCE, ITEM_SOURCE}:
+                return source
+            head, separator, suffix = source.partition(".")
+            return keys.get(head, head) + separator + suffix
+
+        def bindings(binding: InputBinding | None) -> None:
+            for value in cls._bindings(binding).values():
+                if isinstance(value, SourceBinding):
+                    value.source = (
+                        [reference(source) for source in value.source]
+                        if isinstance(value.source, list)
+                        else reference(value.source)
+                    )
+
+        for _, node, _ in definition.declarations():
+            bindings(node.input)
+        for node in definition.nodes.values():
+            if "next" not in node.model_fields_set:
+                continue
+            node.next = {
+                outcome: (
+                    [reference(target) for target in targets] if isinstance(targets, list) else reference(targets)
+                )
+                for outcome, targets in node.next.items()
+            }
+        for result in definition.results:
+            result.source = reference(result.source)
+            bindings(result.output)
+        positions = (
+            cls.validate_layout({keys.get(key, key): value for key, value in layout.items()})
+            if (isinstance(layout, dict))
+            else cls.validate_layout(layout)
+            if layout is not None
+            else None
+        )
+        if positions is not None and (unknown := positions.keys() - definition.nodes.keys()):
+            raise DefinitionInvalid([
+                Issue(node=key, path=["layout", key], code="parse", message="Layout node is absent from the document.")
+                for key in sorted(unknown)
+            ])
+        return definition.model_dump(mode="json", by_alias=True, exclude_unset=True), positions
+
+    @staticmethod
+    def validate_layout(layout: Any) -> dict[str, Any]:
+        """Validate persisted layout through the single node-position declaration."""
+        try:
+            return _LAYOUT.dump_python(_LAYOUT.validate_python(layout), mode="json")
+        except PydanticValidationError as error:
+            raise ValidationError(
+                {
+                    ".".join(["layout", *(str(part) for part in item["loc"])]): item["msg"]
+                    for item in error.errors(include_url=False, include_context=False, include_input=False)
+                }
+            ) from error
+
     def node_label(self, key: str) -> str:
         """Use the frozen label, an explicit step label, or the authored node key."""
         node = self.node(key)
@@ -199,16 +317,45 @@ class Definition(BaseModel):
         try:
             definition = cls.model_validate(document)
         except PydanticValidationError as error:
-            return None, [
-                Issue(
-                    node=str(item["loc"][1]) if len(item["loc"]) > 1 and item["loc"][0] == "nodes" else None,
-                    path=list(item["loc"]),
-                    code="parse",
-                    message=item["msg"],
-                )
-                for item in error.errors(include_url=False, include_context=False, include_input=False)
-            ]
+            return None, cls.parse_issues(error)
         return definition, definition.issues(subject_model=subject_model)
+
+    @staticmethod
+    def parse_issues(error: PydanticValidationError) -> list[Issue]:
+        """Locate typed parse failures consistently for checks and authoring writes."""
+        return [
+            Issue(
+                node=str(item["loc"][1]) if len(item["loc"]) > 1 and item["loc"][0] == "nodes" else None,
+                path=list(item["loc"]),
+                code="parse",
+                message=item["msg"],
+            )
+            for item in error.errors(include_url=False, include_context=False, include_input=False)
+        ]
+
+    @staticmethod
+    def node_outcomes(
+        key: str, node: Body, path: list[str | int], *, implementation: type[Step[Any, Any, Any]] | None = None,
+    ) -> tuple[dict[str, str], list[Issue]]:
+        """Offer one declaration's outcomes and locate its config or outcome refusal."""
+        try:
+            step = implementation or node.implementation
+        except ImproperlyConfigured as error:
+            return {}, [Issue(node=key, path=[*path, "step"], code="unknown_step", message=str(error))]
+        fallback = step._with_error_outcome(step.outcomes)
+        try:
+            config = step.parse_config(node.config) if implementation is not None else node.parsed_config
+        except ValidationError as error:
+            if hasattr(error, "message_dict"):
+                return fallback, [
+                    Issue(node=key, path=[*path, *field.split(".")], code="config", message=message)
+                    for field, messages in error.message_dict.items() for message in messages
+                ]
+            return fallback, [Issue(node=key, path=[*path, "config"], code="config", message=str(error))]
+        try:
+            return step.available_outcomes(config, validate=True), []
+        except ValidationError as error:
+            return fallback, [Issue(node=key, path=[*path, "step"], code="outcome", message=str(error))]
 
     def node(self, key: str) -> Body:
         """Return the declaration for one stable node key."""
@@ -329,11 +476,11 @@ class Definition(BaseModel):
                         message="This key is reserved for a binding source.",
                     )
                 )
-            try:
-                step = self.step(key)
-            except ImproperlyConfigured as error:
-                issues.append(Issue(node=key, path=[*path, "step"], code="unknown_step", message=str(error)))
+            outcomes, node_issues = self.node_outcomes(key, node, path)
+            issues.extend(node_issues)
+            if any(issue.code == "unknown_step" for issue in node_issues):
                 continue
+            step = self.step(key)
             if step is Map and (not isinstance(node, Node) or node.body is None):
                 issues.append(Issue(node=key, path=path, code="body", message="A map requires one non-map body."))
             if isinstance(node, Node) and node.body is not None and step is not Map:
@@ -359,16 +506,9 @@ class Definition(BaseModel):
                     issues.append(
                         Issue(node=key, path=[*path, "step"], code="schema", message=f"{name}: {error}")
                     )
-            try:
-                config = node.parsed_config
-            except ValidationError as error:
-                issues.append(Issue(node=key, path=[*path, "config"], code="config", message=str(error)))
+            if node_issues:
                 continue
-            try:
-                outcomes = step.available_outcomes(config, validate=True)
-            except ValidationError as error:
-                issues.append(Issue(node=key, path=[*path, "step"], code="outcome", message=str(error)))
-                continue
+            config = node.parsed_config
             if not isinstance(node, Node):
                 continue
             offered[key] = outcomes

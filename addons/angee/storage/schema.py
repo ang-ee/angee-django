@@ -359,6 +359,7 @@ _FILE_RESOURCE = hasura_model_resource(
     ],
     insert=False,
     updatable=["filename", "title", "folder", "metadata"],
+    record_representation="display_name",
     field_id_decode={
         "drive": public_pk_decoder(Drive),
         "folder": public_pk_decoder(Folder),

@@ -74,9 +74,33 @@ class ImplChoice:
 _SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default", "widget", "relation"})
 _POLICY_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 _FILTER_OPERATORS = (
-    "eq", "ne", "eqs", "nes", "lt", "gt", "lte", "gte", "in", "nin", "ina", "nina",
-    "contains", "ncontains", "containss", "ncontainss", "between", "nbetween", "null", "nnull",
-    "startswith", "nstartswith", "startswiths", "nstartswiths", "endswith", "nendswith", "endswiths",
+    "eq",
+    "ne",
+    "eqs",
+    "nes",
+    "lt",
+    "gt",
+    "lte",
+    "gte",
+    "in",
+    "nin",
+    "ina",
+    "nina",
+    "contains",
+    "ncontains",
+    "containss",
+    "ncontainss",
+    "between",
+    "nbetween",
+    "null",
+    "nnull",
+    "startswith",
+    "nstartswith",
+    "startswiths",
+    "nstartswiths",
+    "endswith",
+    "nendswith",
+    "endswiths",
     "nendswiths",
 )
 _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
@@ -84,35 +108,51 @@ _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
     "$defs": {
         "json": {
             "oneOf": [
-                {"type": "null"}, {"type": "string"}, {"type": "number"}, {"type": "boolean"},
+                {"type": "null"},
+                {"type": "string"},
+                {"type": "number"},
+                {"type": "boolean"},
                 {"type": "array", "items": {"$ref": "#/$defs/json"}},
                 {"type": "object", "additionalProperties": {"$ref": "#/$defs/json"}},
             ]
         },
-        "filter": {"oneOf": [
-        {
-            "type": "object", "additionalProperties": False, "required": ["operator", "value"],
-            "properties": {
-                "operator": {"enum": ["and", "or"]}, "key": {"type": "string"},
-                "value": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
-            },
+        "filter": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["operator", "value"],
+                    "properties": {
+                        "operator": {"enum": ["and", "or"]},
+                        "key": {"type": "string"},
+                        "value": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
+                    },
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["operator", "field"],
+                    "properties": {
+                        "operator": {"enum": list(_FILTER_OPERATORS)},
+                        "field": {"type": "string", "minLength": 1},
+                        "value": {"$ref": "#/$defs/json"},
+                    },
+                },
+            ]
         },
-        {
-            "type": "object", "additionalProperties": False, "required": ["operator", "field"],
-            "properties": {
-                "operator": {"enum": list(_FILTER_OPERATORS)},
-                "field": {"type": "string", "minLength": 1}, "value": {"$ref": "#/$defs/json"},
-            },
-        },
-    ]}},
-    "type": "object", "additionalProperties": False, "required": ["resource"],
+    },
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["resource"],
     "properties": {
         "resource": {"type": "string", "minLength": 1},
         "permission": {"type": "string", "pattern": _POLICY_IDENTIFIER.pattern},
         "labelField": {"type": "string", "minLength": 1},
         "filters": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
         "create": {
-            "type": "object", "additionalProperties": False, "required": ["resource"],
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["resource"],
             "properties": {
                 "resource": {"type": "string", "minLength": 1},
                 "defaultValues": {"type": "object", "additionalProperties": {"$ref": "#/$defs/json"}},
@@ -123,12 +163,21 @@ _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
 FORM_SPEC_RELATION_VALIDATOR = validator(_FORM_SPEC_RELATION_SCHEMA)
 """Native validator for the shared FormSpec relation metadata contract."""
 
-FORM_SCHEMA_ANNOTATIONS = frozenset({"title", "description", "widget", "relation", "options", "readOnly"})
+FORM_SCHEMA_ANNOTATIONS = frozenset(
+    {"title", "description", "widget", "relation", "options", "readOnly"}
+)
 """Presentation annotations shared by config forms and frozen form snapshots."""
 
-_FORM_SCHEMA_KEYS = frozenset(Draft202012Validator.VALIDATORS) | FORM_SCHEMA_ANNOTATIONS | {
-    "$schema", "$defs", "$anchor", "default",
-}
+_FORM_SCHEMA_KEYS = (
+    frozenset(Draft202012Validator.VALIDATORS)
+    | FORM_SCHEMA_ANNOTATIONS
+    | {
+        "$schema",
+        "$defs",
+        "$anchor",
+        "default",
+    }
+)
 _SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
 _FORM_MISSING = object()
 
@@ -163,18 +212,35 @@ def materialize_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _nullable_form_schema(schema: dict[str, Any]) -> dict[str, Any] | None:
+    """The one concrete branch of the bounded nullable FormSpec union."""
+    choices = schema.get("anyOf")
+    if isinstance(choices, list) and len(choices) == 2 and all(isinstance(choice, dict) for choice in choices):
+        concrete = [choice for choice in choices if choice != {"type": "null"}]
+        if len(concrete) == 1:
+            return concrete[0]
+    return None
+
+
 def check_form_annotations(schema: dict[str, Any]) -> None:
     """Validate shared form annotations and their declared field values."""
     for name in ("title", "description", "widget"):
         if name in schema and not isinstance(schema[name], str):
             raise ValidationError(f"Form annotation {name} must be a string.")
+    if "widget" in schema and not schema["widget"]:
+        raise ValidationError("Form annotation widget must not be empty.")
     if "readOnly" in schema and not isinstance(schema["readOnly"], bool):
         raise ValidationError("Form annotation readOnly must be a boolean.")
-    if "relation" in schema and (
-        not FORM_SPEC_RELATION_VALIDATOR.is_valid(schema["relation"])
-        or schema.get("type") != "string"
-    ):
-        raise ValidationError("Relation fields require a string value and a valid FormSpec relation.")
+    if "relation" in schema:
+        if (_nullable_form_schema(schema) or schema).get("type") != "string":
+            raise ValidationError("relation on a non-string field")
+        widget = schema.get("widget", "many2one")
+        if widget != "many2one" and "." not in widget:
+            raise ValidationError("relation with a non-relation widget")
+        error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(schema["relation"]), None)
+        if error is not None:
+            location = ".".join(str(part) for part in error.absolute_path)
+            raise ValidationError(f"invalid relation{f' at {location}' if location else ''}: {error.message}")
     if "options" in schema:
         options = schema["options"]
         if not isinstance(options, list) or not options or any(
@@ -218,16 +284,30 @@ def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
         freeze_form_schema(schema["items"])
 
 
+class _UnsupportedConfigSchema(ImproperlyConfigured):
+    """The projector rejected a shape outside the bounded form vocabulary."""
+
+
 class _ConfigFormSpecProjector:
     """Project bounded FormSpec shapes, resolving root-local refs through referencing."""
 
-    def __init__(self, model: type[BaseModel], *, owner: str) -> None:
+    def __init__(self, model: type[BaseModel], *, owner: str, json_fields: bool = False) -> None:
         self.owner = owner
+        self.json_fields = json_fields
         _validate_config_aliases(model, owner=owner)
         schema = model.model_json_schema(by_alias=True)
+        self.references = LocalSchemaReferences(schema)
+        for node in schema_nodes(schema):
+            if "relation" in node and "$ref" in node:
+                target = self.references.resolve(node["$ref"])
+                if isinstance(target, dict):
+                    node = {**target, **node}
+            try:
+                check_form_annotations(node)
+            except ValidationError as error:
+                raise ImproperlyConfigured(f"{owner}: invalid form annotation: {error}") from error
         if not isinstance(schema.get("$defs", {}), dict):
             self._unsupported("config", "$defs")
-        self.references = LocalSchemaReferences(schema)
         self.schema = {key: value for key, value in schema.items() if key != "$defs"}
 
     def form_spec(self) -> dict[str, Any]:
@@ -239,14 +319,22 @@ class _ConfigFormSpecProjector:
         return projected
 
     def _project(self, schema: Any, *, path: str, refs: tuple[str, ...]) -> dict[str, Any]:
+        try:
+            if isinstance(schema, dict) and schema.get("widget") == "json":
+                return self._json_field(schema)
+            return self._project_supported(schema, path=path, refs=refs)
+        except _UnsupportedConfigSchema:
+            if not self.json_fields or path == "config":
+                raise
+            return self._json_field(schema if isinstance(schema, dict) else {})
+
+    def _json_field(self, schema: dict[str, Any]) -> dict[str, Any]:
+        projected = {"type": schema.get("type") if schema.get("type") in {"object", "array"} else "any"}
+        return {**self._metadata(projected, schema), "widget": "json"}
+
+    def _project_supported(self, schema: Any, *, path: str, refs: tuple[str, ...]) -> dict[str, Any]:
         if not isinstance(schema, dict):
             self._unsupported(path, "non-object schema")
-        if schema.get("widget") == "json":
-            schema_type = schema.get("type")
-            return self._metadata(
-                {"type": schema_type if schema_type in {"object", "array"} else "any", "widget": "json"},
-                schema,
-            )
         if "$ref" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"$ref"}, path)
             reference = schema["$ref"]
@@ -261,13 +349,10 @@ class _ConfigFormSpecProjector:
 
         if "anyOf" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"anyOf"}, path)
-            choices = schema["anyOf"]
-            if not isinstance(choices, list) or len(choices) != 2:
+            concrete = _nullable_form_schema(schema)
+            if concrete is None:
                 self._unsupported(path, "union")
-            concrete = [choice for choice in choices if choice != {"type": "null"}]
-            if len(concrete) != 1:
-                self._unsupported(path, "union")
-            projected = self._project(concrete[0], path=path, refs=refs)
+            projected = self._project(concrete, path=path, refs=refs)
             projected["nullable"] = True
             return self._metadata(projected, schema)
 
@@ -379,27 +464,10 @@ class _ConfigFormSpecProjector:
         if "default" in schema:
             result["defaultValue"] = copy.deepcopy(schema["default"])
         if "widget" in schema:
-            widget = schema["widget"]
-            if not isinstance(widget, str) or not widget:
-                self._unsupported("config", "non-string widget")
-            result["widget"] = widget
+            result["widget"] = schema["widget"]
         if "relation" in schema:
-            if projected.get("type") != "string":
-                self._unsupported("config", "relation on a non-string field")
-            if result.get("widget", "many2one") != "many2one":
-                self._unsupported("config", "relation with a non-relation widget")
-            result["relation"] = self._relation(schema["relation"])
+            result["relation"] = copy.deepcopy(schema["relation"])
         return result
-
-    def _relation(self, value: Any) -> dict[str, Any]:
-        error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
-        if error is not None:
-            location = ".".join(str(part) for part in error.absolute_path)
-            self._unsupported(
-                "config",
-                f"invalid relation{f' at {location}' if location else ''}: {error.message}",
-            )
-        return copy.deepcopy(value)
 
     def _reject_keywords(self, schema: dict[str, Any], allowed: set[str] | frozenset[str], path: str) -> None:
         unsupported = sorted(set(schema) - set(allowed))
@@ -407,7 +475,7 @@ class _ConfigFormSpecProjector:
             self._unsupported(path, f"keywords {', '.join(unsupported)}")
 
     def _unsupported(self, path: str, detail: str) -> NoReturn:
-        raise ImproperlyConfigured(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
+        raise _UnsupportedConfigSchema(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
 
 
 def _pydantic_models_in(annotation: Any) -> tuple[type[BaseModel], ...]:
@@ -443,14 +511,17 @@ def _validate_config_aliases(
             _validate_config_aliases(nested, owner=owner, path=field_path, seen=seen | {model})
 
 
-def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, Any]:
+def model_config_form_spec(model: type[BaseModel], *, owner: str, json_fields: bool = False) -> dict[str, Any]:
     """Project a Pydantic model through the shared bounded FormSpec owner.
 
     Declared properties become structured fields. Extra root properties are not
     projected; callers that allow them must retain their existing raw JSON owner.
+    ``json_fields`` renders unstructured mappings, unions, recursive values and
+    unsupported scalar formats through the existing JSON widget. Typed parsing
+    remains the validation owner; bounded objects still expose structured fields.
     """
 
-    return _ConfigFormSpecProjector(model, owner=owner).form_spec()
+    return _ConfigFormSpecProjector(model, owner=owner, json_fields=json_fields).form_spec()
 
 
 class ImplBase:
@@ -469,6 +540,8 @@ class ImplBase:
     category: ClassVar[str] = ""
     defaults: ClassVar[dict[str, Any]] = {}
     config_model: ClassVar[type[BaseModel] | None] = None
+    config_form_spec_json_fields: ClassVar[bool] = False
+    """Render unsupported non-root config shapes through the JSON control."""
     check_config_form_spec: ClassVar[bool] = True
     """False for rowless contracts whose typed config is never offered as a FormSpec."""
 
@@ -583,7 +656,11 @@ class ImplBase:
 
         if cls.config_model is None:
             return None
-        return model_config_form_spec(cls.config_model, owner=cls.__name__)
+        return model_config_form_spec(
+            cls.config_model,
+            owner=cls.__name__,
+            json_fields=cls.config_form_spec_json_fields,
+        )
 
     @classmethod
     def materialize(

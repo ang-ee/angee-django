@@ -41,8 +41,10 @@ take an explicitly routed `disputed` branch.
 The [`permission schema`](permissions.zed) lets starters discover and read the
 workflows they may start, without editing them. Run actors can cancel and
 reprocess their own runs. Monitoring other runs and reading unpublished drafts
-requires workflow monitoring access. Execution rows and artifacts are engine-owned;
-the console exposes read resources and explicit operator actions through the
+requires workflow monitoring access, including read-only Studio inspection. Draft edits and
+publication require workflow write access. Execution rows and artifacts are engine-owned;
+the console exposes execution reads, monitor-readable draft authoring metadata,
+and writer-only save and publish operations, alongside explicit operator actions through the
 shared GraphQL resource and action owners.
 
 [`Runner`](runner.py) owns execution and the tick. The run and step managers and

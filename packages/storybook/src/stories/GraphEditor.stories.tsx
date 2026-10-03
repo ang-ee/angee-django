@@ -13,12 +13,13 @@ const initialNodes: GraphEditorNode[] = [
 ];
 
 export const Controlled: Story = { render: () => <EditorFixture /> };
+export const LeftToRight: Story = { render: () => <EditorFixture horizontal /> };
 export const ReadOnly: Story = { render: () => <EditorFixture readOnly /> };
 
-function EditorFixture({ readOnly = false }: { readOnly?: boolean }): React.ReactElement {
+function EditorFixture({ readOnly = false, horizontal = false }: { readOnly?: boolean; horizontal?: boolean }): React.ReactElement {
   const [nodes, setNodes] = React.useState(initialNodes);
   const [links, setLinks] = React.useState<GraphEditorLink[]>([{ from: "a", port: "left", to: "b" }]);
-  const [layout, setLayout] = React.useState<GraphEditorLayout>({ a: { x: 40, y: 40 }, b: { x: 40, y: 230 }, c: { x: 310, y: 230 } });
+  const [layout, setLayout] = React.useState<GraphEditorLayout>(horizontal ? {} : { a: { x: 40, y: 40 }, b: { x: 40, y: 230 }, c: { x: 310, y: 230 } });
   const [selected, setSelected] = React.useState<GraphEditorSelection>({ nodes: [], link: null });
   const nextId = React.useRef(1);
   const sameLink = (left: GraphEditorLink, right: GraphEditorLink) => left.from === right.from && left.port === right.port && left.to === right.to;
@@ -34,6 +35,7 @@ function EditorFixture({ readOnly = false }: { readOnly?: boolean }): React.Reac
   }
   return <GraphEditor
     className="h-screen bg-sheet" nodes={nodes} links={links} layout={layout}
+    layoutOptions={horizontal ? { rankdir: "LR" } : undefined}
     selected={selected} onSelectionChange={setSelected} readOnly={readOnly}
     status={{ a: { label: "Selected", tone: "info" } }}
     canLink={(from, _port, to) => from !== to}

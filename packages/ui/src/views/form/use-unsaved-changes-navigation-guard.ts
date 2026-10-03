@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useBlocker } from "@tanstack/react-router";
+import { useBlocker, type ShouldBlockFn } from "@tanstack/react-router";
 
 import { useConfirm } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -9,10 +9,13 @@ export function useUnsavedChangesNavigationGuard({
   isDirty,
   isDirtyNow,
   readOnly,
+  allowSearchChanges = false,
 }: {
   isDirty: boolean;
   isDirtyNow: () => boolean;
   readOnly: boolean;
+  /** Retained record tabs may change search state without abandoning their form. */
+  allowSearchChanges?: boolean;
 }): () => Promise<boolean> {
   const confirm = useConfirm();
   const t = useUiT();
@@ -31,7 +34,8 @@ export function useUnsavedChangesNavigationGuard({
     return leave;
   }, [confirm, isDirtyNow, readOnly, t]);
 
-  const shouldBlockFn = React.useCallback(async () => !(await requestLeave()), [requestLeave]);
+  const shouldBlockFn = React.useCallback<ShouldBlockFn>(async ({ current, next }) =>
+    !(allowSearchChanges && current.pathname === next.pathname) && !(await requestLeave()), [allowSearchChanges, requestLeave]);
 
   useBlocker({
     shouldBlockFn,

@@ -3,16 +3,22 @@ import * as React from "react";
 import {
   Background,
   Controls,
+  MiniMap,
+  getIncomers,
+  getViewportForBounds,
   MarkerType,
   Position,
   ReactFlow,
+  ReactFlowProvider,
   Handle,
   useUpdateNodeInternals,
+  useNodesInitialized,
+  useReactFlow,
+  useStore,
   type Edge,
   type FitViewOptions,
   type Node,
   type NodeProps,
-  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -127,6 +133,15 @@ export interface GraphViewConnection {
   targetHandle?: string | null;
 }
 
+export interface GraphViewInitialView {
+  /** Defer the initial viewport while an asynchronous graph projection is incomplete. */
+  ready?: boolean;
+  /** Center this node along the flow axis; defaults to a source node, then the first node. */
+  anchorNodeId?: string;
+  /** Readable initial zoom floor. Does not restrict subsequent whole-graph fits. Defaults to 0.65. */
+  minZoom?: number;
+}
+
 export interface GraphViewProps<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -141,6 +156,12 @@ export interface GraphViewProps<
   layout?: GraphViewLayout;
   status?: Readonly<Record<string, GraphViewStatus | undefined>>;
   fitViewOptions?: FitViewOptions;
+  /** Change this token to request another fit after the initial measured fit. */
+  fitViewRequest?: number;
+  /** Initially fit the graph's cross-axis and anchor its flow-axis, using measured native bounds. */
+  initialView?: GraphViewInitialView;
+  /** Native overview with pan and zoom navigation. */
+  miniMap?: boolean;
   /** Accessible name for the focusable graph surface. */
   ariaLabel?: string;
   className?: string;
@@ -195,11 +216,27 @@ const DEFAULT_EDGE_STYLE: Required<GraphViewEdgeStyle> = {
   labelColor: "var(--text-muted)",
 };
 const EMPTY_EDGE_STYLES = {} as Readonly<Partial<Record<string, GraphViewEdgeStyle>>>;
-const DEFAULT_FIT_VIEW_OPTIONS: FitViewOptions = { padding: 0.18 };
+const DEFAULT_FIT_VIEW_OPTIONS: FitViewOptions = { padding: 0.18, minZoom: 0.05 };
+const HANDLE_POSITIONS = {
+  TB: { source: Position.Bottom, target: Position.Top },
+  BT: { source: Position.Top, target: Position.Bottom },
+  LR: { source: Position.Right, target: Position.Left },
+  RL: { source: Position.Left, target: Position.Right },
+};
+const NO_EDGES: never[] = [];
 
 const NODE_TYPES = { angee: GraphNode };
 
 export function GraphView<
+  TNodeKind extends string = string,
+  TEdgeKind extends string = string,
+  TNodeMeta extends Record<string, unknown> = Record<string, unknown>,
+  TEdgeMeta extends Record<string, unknown> = Record<string, unknown>,
+>(props: GraphViewProps<TNodeKind, TEdgeKind, TNodeMeta, TEdgeMeta>): React.ReactElement {
+  return <ReactFlowProvider><GraphCanvas {...props} /></ReactFlowProvider>;
+}
+
+function GraphCanvas<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
   TNodeMeta extends Record<string, unknown> = Record<string, unknown>,
@@ -213,6 +250,9 @@ export function GraphView<
   layout,
   status,
   fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
+  fitViewRequest = 0,
+  initialView,
+  miniMap = false,
   ariaLabel,
   className,
   onNodeClick,
@@ -307,13 +347,15 @@ export function GraphView<
       const overlay = status?.[node.id];
       if (previous && sameNodeContent(previous.data.node, node)
         && previous.data.style === style && previous.data.status === overlay
+        && previous.sourcePosition === HANDLE_POSITIONS[rankdir].source
+        && previous.targetPosition === HANDLE_POSITIONS[rankdir].target
         && previous.selected === selected && previous.measured === measured[node.id]
         && previous.position.x === position.x && previous.position.y === position.y) {
         next.set(node.id, previous);
         return previous;
       }
       const rendered = {
-        ...toReactFlowNode(node, resolvedNodeStyles, overlay, selected),
+        ...toReactFlowNode(node, resolvedNodeStyles, HANDLE_POSITIONS[rankdir], overlay, selected),
         position, measured: measured[node.id],
       };
       next.set(node.id, rendered);
@@ -321,14 +363,83 @@ export function GraphView<
     });
     nodeCache.current = next;
     return result;
-  }, [nodes, resolvedNodeStyles, status, selection, dragging, measured, geometryLayout]);
+  }, [nodes, resolvedNodeStyles, status, selection, dragging, measured, geometryLayout, rankdir]);
+  // Declared handles are authoritative. An impossible link cannot stall other
+  // edges or fitting, even if React Flow retains bounds from an older render.
+  const invalidEdges = React.useMemo(() => edges.filter((edge) => {
+    const source = nodes.find((node) => node.id === edge.source);
+    const target = nodes.find((node) => node.id === edge.target);
+    if (!source || !target) return true;
+    const sourceExists = source.ports
+      ? source.ports.some((port) => port.id === (edge.sourceHandle ?? null))
+      : (edge.sourceHandle ?? null) === null && nodeStyles[source.kind].type !== "output";
+    return !sourceExists || (edge.targetHandle ?? null) !== null || nodeStyles[target.kind].type === "input";
+  }), [edges, nodes, nodeStyles]);
+  const warnedEdges = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    for (const edge of invalidEdges) {
+      if (warnedEdges.current.has(edge.id)) continue;
+      warnedEdges.current.add(edge.id);
+      console.warn(`GraphView excluded edge "${edge.id}": its declared source or target handle does not exist.`);
+    }
+  }, [invalidEdges]);
   const renderEdges = React.useMemo(() => edges
-    .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id))
+    .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id) && !invalidEdges.includes(edge))
     .map((edge) => ({
       ...toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle),
       selected: edge.selected ?? edgeSelection[edge.id] ?? false,
-    })), [edges, geometryLayout, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
-  const instanceRef = React.useRef<ReactFlowInstance<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>> | null>(null);
+    })), [edges, geometryLayout, invalidEdges, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
+  // A primitive selector stays stable when unrelated store state changes.
+  const handlesReady = useStore((state) => renderEdges.every((edge) => {
+    const source = state.nodeLookup.get(edge.source)?.internals.handleBounds?.source;
+    const target = state.nodeLookup.get(edge.target)?.internals.handleBounds?.target;
+    return source?.some((handle) => (handle.id ?? null) === (edge.sourceHandle ?? null))
+      && target?.some((handle) => (handle.id ?? null) === (edge.targetHandle ?? null));
+  }));
+  const initialized = useNodesInitialized();
+  // Valid links mount together once every handle is measured. Mounting them one
+  // by one re-filters the edge set as bounds land, and React Flow's edge-label
+  // measurement then loops ("Maximum update depth exceeded" in EdgeText).
+  // Impossible links are already excluded above, so they cannot hold this back.
+  const readyRenderEdges = React.useMemo(
+    () => (initialized && handlesReady ? renderEdges : NO_EDGES),
+    [initialized, handlesReady, renderEdges],
+  );
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
+  const { fitView, getNode, getEdge, getNodes, getNodesBounds, setViewport, viewportInitialized } = useReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>();
+  const fittedRequest = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (!initialized || fittedRequest.current === fitViewRequest) return;
+    if (fittedRequest.current === undefined && initialView) {
+      if (initialView.ready === false || !viewportInitialized || width <= 0 || height <= 0) return;
+      const measuredNodes = getNodes();
+      const anchor = measuredNodes.find((node) => node.id === initialView.anchorNodeId)
+        ?? measuredNodes.find((node) => getIncomers(node, measuredNodes, renderEdges).length === 0)
+        ?? measuredNodes[0];
+      if (!anchor) return;
+      const bounds = getNodesBounds(measuredNodes);
+      const anchorBounds = getNodesBounds([anchor]);
+      const horizontal = rankdir === "LR" || rankdir === "RL";
+      // Zero extent on the flow axis lets the native fitter consider only the
+      // cross-axis. Its center on that axis remains the chosen node's center.
+      const crossAxisBounds = horizontal
+        ? { ...bounds, x: anchorBounds.x + anchorBounds.width / 2, width: 0 }
+        : { ...bounds, y: anchorBounds.y + anchorBounds.height / 2, height: 0 };
+      const padding = fitViewOptions.padding ?? 0.18;
+      const viewport = getViewportForBounds(crossAxisBounds, width, height,
+        initialView.minZoom ?? 0.65, fitViewOptions.maxZoom ?? 1, padding);
+      // If the readable floor crops even the cross-axis, keep the anchor in
+      // view rather than centering a large branch extent away from its entry.
+      const cropped = horizontal ? bounds.height * viewport.zoom > height : bounds.width * viewport.zoom > width;
+      void setViewport(cropped
+        ? getViewportForBounds(anchorBounds, width, height, viewport.zoom, viewport.zoom, padding)
+        : viewport);
+    } else {
+      void fitView({ ...DEFAULT_FIT_VIEW_OPTIONS, ...fitViewOptions });
+    }
+    fittedRequest.current = fitViewRequest;
+  }, [initialized, viewportInitialized, width, height, fitViewRequest, fitView, fitViewOptions, initialView, getNodes, getNodesBounds, setViewport, rankdir, renderEdges]);
   // React Flow re-emits selection state whenever its store adopts replaced
   // nodes. Consumers set state from these callbacks, so re-emitting an
   // unchanged selection loops: setState → re-render → store resync → re-emit
@@ -355,121 +466,127 @@ export function GraphView<
       tabIndex={-1}
       role={ariaLabel ? "region" : undefined}
       aria-label={ariaLabel}
-      className={cn("min-h-0 outline-none", className)}
+      className={cn("relative min-h-0 outline-none", className)}
     >
-      <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
-        onInit={(instance) => { instanceRef.current = instance; }}
-        nodeTypes={NODE_TYPES}
-        deleteKeyCode={null}
-        nodes={renderNodes}
-        edges={renderEdges}
-        onKeyDown={(event) => {
-          if (!isGraphActivationKey(event.key)) return;
-          if (!(event.target instanceof Element)) return;
-          const nodeId = event.target.getAttribute("data-graph-node-id");
-          const edgeId = event.target.getAttribute("data-graph-edge-id");
-          if (nodeId) {
-            const node = instanceRef.current?.getNode(nodeId);
-            if (node) {
-              event.preventDefault();
-              onNodeClick?.(node.data.node, { source: "keyboard" });
-            }
-          } else if (edgeId) {
-            const edge = instanceRef.current?.getEdge(edgeId);
-            if (edge?.data?.edge) {
-              event.preventDefault();
-              onEdgeClick?.(edge.data.edge, { source: "keyboard" });
-            }
-          }
-        }}
-        onNodesChange={(changes) => {
-          const positions: Record<string, GraphViewPosition> = {};
-          const nextSelection = new Map(renderNodes.map((node) => [node.id, node.selected]));
-          let selectionChanged = false;
-          for (const change of changes) {
-            if (change.type === "select") {
-              setSelection((current) => ({ ...current, [change.id]: change.selected }));
-              nextSelection.set(change.id, change.selected);
-              selectionChanged = true;
-            }
-            if (change.type === "position" && change.position) {
-              if (!change.dragging) positions[change.id] = change.position;
-              setDragging((current) => {
-                const next = { ...current };
-                if (change.dragging) next[change.id] = change.position!;
-                else delete next[change.id];
-                return next;
-              });
-            }
-            if (change.type === "dimensions" && change.dimensions) {
-              const dimensions = change.dimensions;
-              setMeasured((current) => current[change.id]?.width === dimensions.width
-                && current[change.id]?.height === dimensions.height
-                ? current : { ...current, [change.id]: dimensions });
-            }
-          }
-          if (Object.keys(positions).length) onNodesPositionChange?.(positions);
-          if (selectionChanged && controlledNodeSelection) emitNodeSelection(nodes.filter((node) => nextSelection.get(node.id)));
-        }}
-        onEdgesChange={(changes) => {
-          const nextSelection = new Map(renderEdges.map((edge) => [edge.id, edge.selected]));
-          let selectionChanged = false;
-          for (const change of changes) {
-            if (change.type === "select") {
-              setEdgeSelection((current) => ({ ...current, [change.id]: change.selected }));
-              nextSelection.set(change.id, change.selected);
-              selectionChanged = true;
-            }
-          }
-          if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
-        }}
-        fitView
-        fitViewOptions={fitViewOptions}
-        nodesDraggable={nodesDraggable}
-        nodesConnectable={Boolean(onConnect)}
-        elementsSelectable={Boolean(onNodesSelect || onEdgeSelect)}
-        onNodeClick={
-          onNodeClick
-            ? (event, node) => onNodeClick(node.data.node, graphActivation(event))
-            : undefined
-        }
-        onEdgeClick={
-          onEdgeClick
-            ? (event, edge) => {
-                if (edge.data?.edge) onEdgeClick(edge.data.edge, graphActivation(event));
+      {/* React Flow sizes its root to 100% of its parent, which collapses to
+          zero under a min-height or flexed wrapper; an absolutely filled box
+          gives it a definite size however the caller sizes the wrapper. */}
+      <div className="absolute inset-0">
+        <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
+          nodeTypes={NODE_TYPES}
+          deleteKeyCode={null}
+          nodes={renderNodes}
+          edges={readyRenderEdges}
+          onKeyDown={(event) => {
+            if (!isGraphActivationKey(event.key)) return;
+            if (!(event.target instanceof Element)) return;
+            const nodeId = event.target.getAttribute("data-graph-node-id");
+            const edgeId = event.target.getAttribute("data-graph-edge-id");
+            if (nodeId) {
+              const node = getNode(nodeId);
+              if (node) {
+                event.preventDefault();
+                onNodeClick?.(node.data.node, { source: "keyboard" });
               }
-            : undefined
-        }
-        isValidConnection={isValidConnection}
-        edgesReconnectable={Boolean(onReconnect)}
-        onReconnect={onReconnect ? (edge, connection) => {
-          if (edge.data?.edge && (!isValidConnection || isValidConnection(connection))) onReconnect(edge.data.edge, connection);
-        } : undefined}
-        onConnect={
-          onConnect
-            ? (connection) => {
-                if (!connection.source || !connection.target || (isValidConnection && !isValidConnection(connection))) return;
-                onConnect({
-                  source: connection.source,
-                  target: connection.target,
-                  sourceHandle: connection.sourceHandle,
-                  targetHandle: connection.targetHandle,
+            } else if (edgeId) {
+              const edge = getEdge(edgeId);
+              if (edge?.data?.edge) {
+                event.preventDefault();
+                onEdgeClick?.(edge.data.edge, { source: "keyboard" });
+              }
+            }
+          }}
+          onNodesChange={(changes) => {
+            const positions: Record<string, GraphViewPosition> = {};
+            const nextSelection = new Map(renderNodes.map((node) => [node.id, node.selected]));
+            let selectionChanged = false;
+            for (const change of changes) {
+              if (change.type === "select") {
+                setSelection((current) => ({ ...current, [change.id]: change.selected }));
+                nextSelection.set(change.id, change.selected);
+                selectionChanged = true;
+              }
+              if (change.type === "position" && change.position) {
+                if (!change.dragging) positions[change.id] = change.position;
+                setDragging((current) => {
+                  const next = { ...current };
+                  if (change.dragging) next[change.id] = change.position!;
+                  else delete next[change.id];
+                  return next;
                 });
               }
-            : undefined
-        }
-        onSelectionChange={
-          onNodesSelect || onEdgeSelect
-            ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
-                if (!controlledNodeSelection) emitNodeSelection(selectedNodes.map((node) => node.data.node));
-                if (!controlledEdgeSelection) emitEdgeSelection(selectedEdges.flatMap((edge) => edge.data ? [edge.data.edge] : []));
+              if (change.type === "dimensions" && change.dimensions) {
+                const dimensions = change.dimensions;
+                setMeasured((current) => current[change.id]?.width === dimensions.width
+                  && current[change.id]?.height === dimensions.height
+                  ? current : { ...current, [change.id]: dimensions });
               }
-            : undefined
-        }
-      >
-        <Background color="var(--border-subtle)" gap={20} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+            }
+            if (Object.keys(positions).length) onNodesPositionChange?.(positions);
+            if (selectionChanged && controlledNodeSelection) emitNodeSelection(nodes.filter((node) => nextSelection.get(node.id)));
+          }}
+          onEdgesChange={(changes) => {
+            const nextSelection = new Map(renderEdges.map((edge) => [edge.id, edge.selected]));
+            let selectionChanged = false;
+            for (const change of changes) {
+              if (change.type === "select") {
+                setEdgeSelection((current) => ({ ...current, [change.id]: change.selected }));
+                nextSelection.set(change.id, change.selected);
+                selectionChanged = true;
+              }
+            }
+            if (selectionChanged && controlledEdgeSelection) emitEdgeSelection(edges.filter((edge) => nextSelection.get(edge.id)));
+          }}
+          minZoom={fitViewOptions.minZoom ?? DEFAULT_FIT_VIEW_OPTIONS.minZoom}
+          fitView={false}
+          fitViewOptions={fitViewOptions}
+          nodesDraggable={nodesDraggable}
+          nodesConnectable={Boolean(onConnect)}
+          elementsSelectable={Boolean(onNodesSelect || onEdgeSelect)}
+          onNodeClick={
+            onNodeClick
+              ? (event, node) => onNodeClick(node.data.node, graphActivation(event))
+              : undefined
+          }
+          onEdgeClick={
+            onEdgeClick
+              ? (event, edge) => {
+                  if (edge.data?.edge) onEdgeClick(edge.data.edge, graphActivation(event));
+                }
+              : undefined
+          }
+          isValidConnection={isValidConnection}
+          edgesReconnectable={Boolean(onReconnect)}
+          onReconnect={onReconnect ? (edge, connection) => {
+            if (edge.data?.edge && (!isValidConnection || isValidConnection(connection))) onReconnect(edge.data.edge, connection);
+          } : undefined}
+          onConnect={
+            onConnect
+              ? (connection) => {
+                  if (!connection.source || !connection.target || (isValidConnection && !isValidConnection(connection))) return;
+                  onConnect({
+                    source: connection.source,
+                    target: connection.target,
+                    sourceHandle: connection.sourceHandle,
+                    targetHandle: connection.targetHandle,
+                  });
+                }
+              : undefined
+          }
+          onSelectionChange={
+            onNodesSelect || onEdgeSelect
+              ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
+                  if (!controlledNodeSelection) emitNodeSelection(selectedNodes.map((node) => node.data.node));
+                  if (!controlledEdgeSelection) emitEdgeSelection(selectedEdges.flatMap((edge) => edge.data ? [edge.data.edge] : []));
+                }
+              : undefined
+          }
+        >
+          <Background color="var(--border-subtle)" gap={20} />
+          <Controls showInteractive={false} />
+          {miniMap ? <MiniMap pannable zoomable /> : null}
+        </ReactFlow>
+      </div>
       <div role="status" className="sr-only">
         {nodes.filter((node) => status?.[node.id]).map((node) => (
           <span key={node.id}>{node.ariaLabel ?? (typeof node.title === "string" ? node.title : node.id)}: {status?.[node.id]?.label}. </span>
@@ -493,6 +610,7 @@ function toReactFlowNode<
 >(
   node: GraphViewNode<TKind, TMeta>,
   nodeStyles: Readonly<Record<TKind, GraphViewNodeStyle>>,
+  positions: { source: Position; target: Position },
   status?: GraphViewStatus,
   selected = node.selected,
 ): RenderNode<TKind, TMeta> {
@@ -505,8 +623,8 @@ function toReactFlowNode<
     ariaLabel: node.ariaLabel,
     type: "angee",
     position: { x: 0, y: 0 },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
+    sourcePosition: positions.source,
+    targetPosition: positions.target,
     data: {
       node,
       label: <GraphNodeLabel node={node} style={style} status={status} />,
@@ -600,21 +718,26 @@ function GraphNodeLabel<TKind extends string>({
 }
 
 
-function GraphNode({ id, data, isConnectable }: NodeProps<RenderNode<string, Record<string, unknown>>>): React.ReactElement {
+function GraphNode({
+  id, data, isConnectable, sourcePosition = Position.Bottom, targetPosition = Position.Top,
+}: NodeProps<RenderNode<string, Record<string, unknown>>>): React.ReactElement {
   const t = useUiT();
   const updateNodeInternals = useUpdateNodeInternals();
   const portsSignature = JSON.stringify(data.node.ports?.map((port) => port.id));
-  React.useEffect(() => { updateNodeInternals(id); }, [id, portsSignature, data.style.type, updateNodeInternals]);
+  const horizontal = sourcePosition === Position.Right || sourcePosition === Position.Left;
+  React.useEffect(() => { updateNodeInternals(id); }, [id, portsSignature, data.style.type, sourcePosition, targetPosition, updateNodeInternals]);
   return (
     <>
-      {data.style.type !== "input" ? <Handle type="target" position={Position.Top} isConnectable={isConnectable} aria-label={t("graph.input")} /> : null}
+      {data.style.type !== "input" ? <Handle type="target" position={targetPosition} isConnectable={isConnectable} aria-label={t("graph.input")} /> : null}
       {data.label}
-      {data.node.ports ? <div className="flex justify-around gap-1 px-2 pb-2 text-2xs text-fg-muted">
-        {data.node.ports.map((port, index, ports) => <span key={port.id}>
+      {data.node.ports ? <div className={cn("flex gap-1 px-2 pb-2 text-2xs text-fg-muted", horizontal ? "flex-col" : "justify-around")}>
+        {data.node.ports.map((port, index, ports) => <span key={port.id} className={horizontal ? cn("relative w-full", sourcePosition === Position.Right ? "text-right" : "text-left") : undefined}>
           {port.label ?? port.id}
-          <Handle id={port.id} type="source" position={Position.Bottom} isConnectable={isConnectable} aria-label={port.label ?? port.id} style={{ left: ((index + 1) / (ports.length + 1)) * 100 + "%" }} />
+          <Handle id={port.id} type="source" position={sourcePosition} isConnectable={isConnectable} aria-label={port.label ?? port.id} style={horizontal
+            ? { top: "50%", [sourcePosition === Position.Right ? "right" : "left"]: -8 }
+            : { left: ((index + 1) / (ports.length + 1)) * 100 + "%" }} />
         </span>)}
-      </div> : data.style.type !== "output" ? <Handle type="source" position={Position.Bottom} isConnectable={isConnectable} aria-label={t("graph.output")} /> : null}
+      </div> : data.style.type !== "output" ? <Handle type="source" position={sourcePosition} isConnectable={isConnectable} aria-label={t("graph.output")} /> : null}
     </>
   );
 }
