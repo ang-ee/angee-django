@@ -6,7 +6,7 @@ import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 /** Assert the navigation/connect contract shared by every channel bridge addon. */
 export function expectValidChannelBridgeAddon(addon: BaseAddon): void {
   expectValidBaseAddon(addon);
-  const menus = addon.menus ?? [];
+  const menus = Array.isArray(addon.menus) ? addon.menus : [];
   if (menus.length !== 1) {
     throw new Error(`Channel bridge "${addon.id}" must contribute one menu item.`);
   }

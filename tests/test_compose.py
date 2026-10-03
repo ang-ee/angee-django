@@ -347,8 +347,8 @@ def test_web_runtime_carries_the_deployment_ui_layer() -> None:
 
     assert json.loads(WebRuntime((addon,), ui=ui).manifest_json())["deployment"] == ui
     assert "deployment" not in json.loads(WebRuntime((addon,), ui={}).manifest_json())
-    with pytest.raises(ImproperlyConfigured, match="unknown keys \\['menu'\\]"):
-        WebRuntime((addon,), ui={"menu": {}})
+    with pytest.raises(ImproperlyConfigured, match="unknown keys \\['rail'\\]"):
+        WebRuntime((addon,), ui={"rail": {}})
     with pytest.raises(ImproperlyConfigured, match="must be a mapping"):
         WebRuntime((addon,), ui=["shell"])
 

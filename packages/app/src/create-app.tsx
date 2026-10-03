@@ -124,6 +124,7 @@ import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
   AppRouteProjection,
+  unavailableRoutes,
   resourceMutationsForSchema,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
@@ -296,9 +297,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routeHref,
   );
   const menuTree = MenuTree.from(menus);
+  const unavailable = unavailableRoutes(routes, menuTree, composed.removedMenus);
   const confineTo = input.confineTo ?? composed.shell.perspective?.root;
   const homeInput = input.home ?? composed.shell.home;
-  const projection = new AppRouteProjection(routes, menuTree, confineTo);
+  const projection = new AppRouteProjection(routes, menuTree, confineTo, {
+    navigation: MenuTree.from(resolveMenuRouteTargets(composed.navigationMenus, routeHref)),
+    unavailable,
+  });
   const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
   const unrestrictedSurface: SurfacePresentation = {};
   const navigationTree = projection.navigationTree;
@@ -427,6 +432,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
     ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
+  if (homeRoute && unavailable.has(homeRoute.name)) {
+    throw new Error(`Home "${home}" is unavailable: the menu item that reaches it was removed.`);
+  }
   if (confineTo !== undefined && (homePath === "/"
     || !(homeRoute ? projection.rootFor(homeRoute) === confineTo : menuTree.activeAppRoot(homePath)?.id === confineTo))) {
     throw new Error(`Home "${home}" must belong to confined menu root "${confineTo}".`);
@@ -533,7 +541,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
-    ...(confineTo !== undefined ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } } : {}),
+    ...(confineTo !== undefined || unavailable.size
+      ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } }
+      : {}),
   });
 
   const router = createRouter({

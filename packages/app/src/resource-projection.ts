@@ -93,6 +93,7 @@ export function refineRouteResourceProjection(
   for (const route of routes) {
     const resource = route.resource ?? route.recordModel;
     if (!resource || (selectedRoutes && selectedRoutes[resource]?.collection !== route.name)) continue;
+    if (route.menu && !menuTree.byId.has(route.menu)) continue;
     const selected = menuNodeForRoute(route, menuTree);
     const trail = selected
       ? breadcrumbTrailFromMenuTrail(menuTree.trailFor(selected.id))
@@ -165,12 +166,18 @@ export class AppRouteProjection {
   private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
 
+  /** Console routes a removed menu node made unavailable; they redirect home. */
+  readonly unavailable: ReadonlySet<string>;
+
   constructor(
     readonly routes: readonly BaseAddonRoute[],
     readonly menuTree: MenuTree,
     readonly confineTo?: string,
+    options: { navigation?: MenuTree; unavailable?: ReadonlySet<string> } = {},
   ) {
-    this.navigationTree = confineTo === undefined ? menuTree : menuTree.confineTo(confineTo);
+    const navigation = options.navigation ?? menuTree;
+    this.navigationTree = confineTo === undefined ? navigation : navigation.confineTo(confineTo);
+    this.unavailable = options.unavailable ?? new Set();
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
     const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
     const canonical: BaseAddonRoute[] = [];
@@ -183,6 +190,7 @@ export class AppRouteProjection {
         || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     });
     for (const route of ordered) {
+      if (this.unavailable.has(route.name)) continue;
       const root = this.rootFor(route);
       const resource = route.resource ?? route.recordModel;
       if (!resource || !root || !appIds.has(root)) {
@@ -267,6 +275,7 @@ export class AppRouteProjection {
   }
 
   allows(route: BaseAddonRoute, pathname: string): boolean {
+    if (this.unavailable.has(route.name)) return false;
     if (this.confineTo === undefined) return true;
     const root = this.rootFor(route);
     if (root === undefined || root === this.confineTo) return true;
@@ -316,6 +325,39 @@ function addMenuRouteResource(
       ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
     },
   });
+}
+
+/**
+ * Console routes made unavailable by removed menu nodes. A route is unavailable
+ * when its `route.menu` anchor was removed, or when a removed node referenced it
+ * and no surviving node does; route descendants (`route.parent`) follow. Routes
+ * no menu ever referenced, and public routes, stay available.
+ */
+export function unavailableRoutes(
+  routes: readonly BaseAddonRoute[],
+  menuTree: MenuTree,
+  removed: readonly { id: string; route?: string }[],
+): Set<string> {
+  const removedIds = new Set(removed.map((node) => node.id));
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const candidates = new Set(removed.flatMap((node) => (node.route ? [node.route] : [])));
+  for (const route of routes) if (route.menu && removedIds.has(route.menu)) candidates.add(route.name);
+  const unavailable = new Set<string>();
+  for (const name of candidates) {
+    const route = routesByName.get(name);
+    if (!route || route.layout === "public") continue;
+    if ((route.menu && removedIds.has(route.menu)) || menuTree.itemsForRoute(name).length === 0) unavailable.add(name);
+  }
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const route of routes) {
+      if (route.parent && unavailable.has(route.parent) && !unavailable.has(route.name) && route.layout !== "public") {
+        unavailable.add(route.name);
+        grew = true;
+      }
+    }
+  }
+  return unavailable;
 }
 
 export function menuNodeForRoute(

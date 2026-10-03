@@ -40,6 +40,7 @@ import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
 import type { AppSurface } from "./route-policy";
 import { resolveShell, type PerspectiveDeclaration, type ResolvedShell, type ShellDeclaration } from "./shell";
+import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
 export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
 import {
   DASHBOARD_STORE_SLOT,
@@ -121,7 +122,11 @@ export interface AddonManifest {
   /** @deprecated Declare `shell.brand`. */
   brand?: RuntimeBrand;
   routes?: readonly AddonRoute[];
-  menus?: readonly MenuItem[];
+  /**
+   * Menu nodes keyed by id: own-namespace keys declare, other keys alter a node of
+   * an addon this one depends on. The array form is the legacy declaration list.
+   */
+  menus?: readonly MenuItem[] | MenuDeclarations;
   widgets?: WidgetMap;
   /** Product status vocabulary; normalized keys cannot claim framework defaults or another addon's value. */
   statusTones?: StatusToneMap;
@@ -171,7 +176,13 @@ export interface ComposedAddons {
   shell: ResolvedShell;
   brand: RuntimeBrand | null;
   routes: readonly AddonRoute[];
+  /** The logical menu tree: owns routes, trails and the active app. */
   menus: readonly ComposedMenuItem[];
+  /** The navigation projection: hidden nodes dropped, flattened apps lifted. */
+  navigationMenus: CompiledMenus["navigation"];
+  /** Removed menu nodes and the routes they referenced. */
+  removedMenus: CompiledMenus["removed"];
+  menuProvenance: CompiledMenus["provenance"];
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: I18nResources;
@@ -296,7 +307,7 @@ export function composeAddons(
   const canonicalizeModel = options.canonicalModelLabel;
   const shell = resolveShell(addons);
   const routes: AddonRoute[] = [];
-  const menus: ComposedMenuItem[] = [];
+  const compiledMenus = compileMenus(addons);
   const widgets: WidgetMap = {};
   const statusTones: Record<string, StatusToneMap[string]> = Object.create(null);
   const i18n: Record<string, Record<string, string>> = {};
@@ -306,7 +317,6 @@ export function composeAddons(
   const previews: PreviewContribution[] = [];
   const routeNames: Record<string, true> = {};
   const resourceViews: Record<string, ResourceViewPreset> = {};
-  const menuIds: Record<string, true> = {};
   const previewIds: Record<string, true> = {};
   const recordSearchKeys: Record<string, true> = {};
   const themes: ThemeManifestContribution[] = [];
@@ -346,9 +356,6 @@ export function composeAddons(
           },
         );
       }
-    }
-    if (addon.menus) {
-      menus.push(...normalizeMenuItems(menuIds, addon.menus, addon.id));
     }
     if (addon.widgets) {
       for (const [key, widget] of Object.entries(addon.widgets)) {
@@ -431,7 +438,10 @@ export function composeAddons(
     shell,
     brand: shell.brand,
     routes,
-    menus,
+    menus: compiledMenus.logical,
+    navigationMenus: compiledMenus.navigation,
+    removedMenus: compiledMenus.removed,
+    menuProvenance: compiledMenus.provenance,
     widgets,
     statusTones,
     i18n,
@@ -575,36 +585,3 @@ function normalizeSlotContributions(
   });
 }
 
-function normalizeMenuItems(
-  registry: Record<string, unknown>,
-  items: readonly MenuItem[],
-  addonId: string,
-): ComposedMenuItem[] {
-  return items.map((item) => normalizeMenuItem(registry, item, addonId));
-}
-
-function normalizeMenuItem(
-  registry: Record<string, unknown>,
-  item: MenuItem,
-  addonId: string,
-): ComposedMenuItem {
-  const id = menuItemId(item, addonId);
-  assertUnclaimed(registry, id, addonId, "menu item id");
-  registry[id] = true;
-  const { id: _id, children, ...rest } = item;
-  return {
-    ...rest,
-    id,
-    ...(children
-      ? { children: normalizeMenuItems(registry, children, addonId) }
-      : {}),
-  };
-}
-
-function menuItemId(item: MenuItem, addonId: string): string {
-  if (item.id) return item.id;
-  if (item.route) return item.route;
-  throw new Error(
-    `Addon "${addonId}" declares a menu item without id or route; menu id defaults require one of them.`,
-  );
-}

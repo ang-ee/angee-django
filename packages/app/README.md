@@ -29,6 +29,22 @@ keeps the full console. `createApp`'s `home` and `confineTo` inputs and the
 top-level `brand` field remain as deprecated overrides. Addons cannot claim the
 `ui` translation namespace, which belongs to the rendered package.
 
+Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
+the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
+alters a node of an addon it depends on, and the deployment's `ANGEE_UI.menus`
+may alter any node last. `include: [id | { id, flatten }]` places other apps
+under a node (an aggregator); a flattened app keeps its routes and trail but
+shows its items as the aggregator's own. `remove: true` takes a node and its
+subtree out and makes the pages only it reached unavailable: they stay
+registered, redirect home, and drop out of record links and claims (a
+`route.menu` anchor counts as a reference). `hide: true` only leaves the
+navigation; `hide: false` shows it again. `only: [ids]` narrows the visible
+children per layer, ignoring items the narrowing addon's dependents add.
+`sequence`, `before` and `after` order siblings; included apps follow the
+including node's own children in include order. Two unrelated addons setting
+one field of a node fail composition. The legacy array form remains a list of
+declarations.
+
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
 remain unique. A same-model route may declare `recordMatch` for its records;

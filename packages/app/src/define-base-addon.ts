@@ -1,4 +1,5 @@
 import type { DataProvider as RefineDataProvider } from "@refinedev/core";
+import type { MenuDeclarations } from "./menus";
 import type {
   RouteComponent,
 } from "@tanstack/react-router";
@@ -116,7 +117,8 @@ export function dashboardPageRoute(options: DashboardPageRouteOptions): BaseAddo
 export interface BaseAddon
   extends Omit<AddonManifest, "routes" | "menus" | "previews" | "themes" | "layoutProviders"> {
   routes?: readonly BaseAddonRoute[];
-  menus?: readonly BaseMenuItem[];
+  /** Menu nodes keyed by id (declare own, alter dependencies'), or the legacy declaration list. */
+  menus?: readonly BaseMenuItem[] | MenuDeclarations;
   /**
    * Full preview renderers. The SDK manifest tracks only the contribution id
    * (for collision detection); the rendered binding owns `PreviewProvider`, so

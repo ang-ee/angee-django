@@ -128,7 +128,10 @@ export function expectValidBaseAddon(
     }
     if (route.icon) assertValidIconName(addon.id, `route "${route.name}"`, route.icon);
   }
-  for (const item of addon.menus ?? []) {
+  const menuItems = Array.isArray(addon.menus)
+    ? addon.menus
+    : Object.entries(addon.menus ?? {}).flatMap(([id, { icon, label, route }]) => (icon ? [{ id, icon, label, route }] : []));
+  for (const item of menuItems) {
     assertValidMenuItem(addon.id, item);
   }
   for (const iconName of Object.keys(addon.icons ?? {})) {

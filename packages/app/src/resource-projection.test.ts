@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { MenuTree, resolveMenuRouteTargets, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { createRouteHref } from "@angee/ui/runtime";
 import { resourcePageRoutes, type BaseAddonRoute } from "./define-base-addon";
-import { AppRouteProjection, resourceRouteIndex } from "./resource-projection";
+import { AppRouteProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
+import { compileMenus, type MenuLayer } from "./menus";
 import { chatterRouteIndex } from "./chatter-routes";
 import { testDataResource } from "@angee/metadata/testing";
 import { resolveRoutePaths } from "./route-paths";
@@ -106,5 +107,66 @@ describe("app resource projection", () => {
     expect(index.find((route) => route.name === "desk.review.record")).toMatchObject({
       modelLabel: "records.Record", recordParam: "recordId", viewType: "records/record",
     });
+  });
+});
+
+describe("menu alterations in the route projection", () => {
+  const deskRoutes: readonly BaseAddonRoute[] = [
+    ...routes,
+    { name: "desk.cycles-hub", path: "/desk/cycles" },
+    { name: "desk.cycles", path: "/desk/queues/$queueId/cycles", menu: "desk.cycles-hub" },
+    { name: "desk.cycle", path: "$cycleId", parent: "desk.cycles" },
+  ];
+  const layers: MenuLayer[] = [
+    { id: "records", menus: [{ id: "records", route: "records.all" }] },
+    { id: "teams", menus: [{ id: "teams", route: "teams.all" }] },
+    { id: "desk", dependsOn: ["records", "teams"], menus: [{ id: "desk", children: [
+      { id: "desk.home", route: "desk.home" },
+      { id: "desk.incoming", route: "desk.incoming" },
+      { id: "desk.review", route: "desk.review" },
+      { id: "desk.cycles-hub", route: "desk.cycles-hub" },
+      { id: "desk.settings", group: "platform", children: [{ id: "desk.team", route: "teams.all.record", params: { id: "team-1" } }] },
+    ] }] },
+    { id: "suite", dependsOn: ["desk", "records", "teams"], menus: {
+      suite: { label: "Suite", appRoot: true, include: [{ id: "desk", flatten: true }, "records"] },
+      "desk.review": { remove: true },
+      "desk.cycles-hub": { remove: true },
+      "desk.incoming": { hide: true },
+    } },
+  ];
+  const compiled = compileMenus(layers);
+  const href = createRouteHref(deskRoutes);
+  const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
+  const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href) as readonly ChromeMenuItem[]);
+  const unavailable = unavailableRoutes(deskRoutes, logical, compiled.removed);
+  const route = (name: string) => deskRoutes.find((candidate) => candidate.name === name)!;
+
+  test("removal disables targeted routes, hub-anchored pages and their descendants; hide disables nothing", () => {
+    expect([...unavailable].sort()).toEqual(["desk.cycle", "desk.cycles", "desk.cycles-hub", "desk.review", "desk.review.record"]);
+  });
+
+  test("the guard refuses unavailable routes, also without a perspective", () => {
+    const projection = new AppRouteProjection(deskRoutes, logical, undefined, { navigation, unavailable });
+    expect(projection.allows(route("desk.cycles"), "/desk/queues/q1/cycles")).toBe(false);
+    expect(projection.allows(route("desk.cycle"), "/desk/queues/q1/cycles/c1")).toBe(false);
+    expect(projection.allows(route("desk.incoming"), "/desk/incoming")).toBe(true);
+  });
+
+  test("claims and record destinations skip removed pages; hidden pages keep their claims", () => {
+    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, unavailable });
+    expect(projection.rootFor(route("desk.incoming"))).toBe("suite");
+    const selected = projection.resourceRoutes("suite");
+    expect(selected["records.Record"]?.collection).toBe("desk.incoming");
+    expect(selected["records.Record"]?.recordDestinations).toBeUndefined();
+    expect(selected["records.Record"]?.record?.name).toBe("desk.incoming.record");
+  });
+
+  test("navigation flattens the included app and drops hidden items; the logical tree keeps them", () => {
+    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, unavailable });
+    expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["suite"]);
+    expect(projection.navigationTree.byId.get("suite")?.children?.map((item) => item.id)).toEqual(["desk.home", "records"]);
+    expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");
+    expect(logical.trailFor("desk.incoming").map((item) => item.id)).toEqual(["suite", "desk", "desk.incoming"]);
+    expect(projection.navigationTree.byId.has("desk.incoming")).toBe(false);
   });
 });
