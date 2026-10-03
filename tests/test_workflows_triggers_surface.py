@@ -216,8 +216,8 @@ def test_integration_grant_uses_record_label_in_preview_and_listing(trigger_surf
 
     schema, workflow, editor, viewer, _starter = trigger_surface
     with system_context(reason="test.workflow integration grant target"):
-        vendor = Vendor.objects.create(slug="ap", display_name="Accounts payable")
-        integration = Integration.objects.create(vendor=vendor, owner=editor, display_name="AP mailbox")
+        vendor = Vendor.objects.create(slug="shared-mail", display_name="Shared mail")
+        integration = Integration.objects.create(vendor=vendor, owner=editor, display_name="Shared mailbox")
 
     def grants(cls, trigger):
         return (TriggerGrantTarget(to_object_ref(integration), "reader", "write"),)
@@ -234,9 +234,9 @@ def test_integration_grant_uses_record_label_in_preview_and_listing(trigger_surf
     }"""
     variables = {"id": trigger.sqid}
     before = result_data(execute_schema(schema, query, variables, user=editor))["trigger_by_pk"]
-    assert before["enable_preview"]["grants"] == ["Reader on AP mailbox"]
+    assert before["enable_preview"]["grants"] == ["Reader on Shared mailbox"]
     Trigger.objects.enable(trigger, actor=editor)
-    for actor, label in ((editor, "AP mailbox"), (viewer, None)):
+    for actor, label in ((editor, "Shared mailbox"), (viewer, None)):
         listed = result_data(execute_schema(schema, query, variables, user=actor))["trigger_by_pk"]["grants"]
         assert listed == [{"relation": "reader", "relation_label": "Reader", "target_label": label}]
 
@@ -244,8 +244,8 @@ def test_integration_grant_uses_record_label_in_preview_and_listing(trigger_surf
 def test_relation_label_humanizes_an_undeclared_display_name() -> None:
     """A relation without a native label still has a readable grant caption."""
 
-    target = TriggerGrantTarget(to_object_ref(Vault(pk=1)), "ap_reviewer")
-    assert target.relation_label() == "Ap reviewer"
+    target = TriggerGrantTarget(to_object_ref(Vault(pk=1)), "reviewer_role")
+    assert target.relation_label() == "Reviewer role"
 
 
 @pytest.mark.parametrize("source_path,model_label,label", [
