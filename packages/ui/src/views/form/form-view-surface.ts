@@ -1,4 +1,5 @@
 import * as React from "react";
+import { developmentMode } from "../../lib/development-mode";
 import {
   lineReadSelectionPaths,
   modelFieldForPath,
@@ -720,18 +721,6 @@ function compareFormSections(
     || (left.order ?? 0) - (right.order ?? 0);
 }
 
-function developmentMode(): boolean {
-  const viteEnv = (
-    import.meta as ImportMeta & { readonly env?: { readonly DEV?: boolean } }
-  ).env;
-  if (typeof viteEnv?.DEV === "boolean") return viteEnv.DEV;
-  const nodeEnv = (
-    globalThis as typeof globalThis & {
-      process?: { env?: { NODE_ENV?: string } };
-    }
-  ).process?.env?.NODE_ENV;
-  return nodeEnv !== "production";
-}
 
 /** Append slot-contributed record tabs after the host-declared ones, fail-fast on id collisions. */
 function mergeRecordTabs(

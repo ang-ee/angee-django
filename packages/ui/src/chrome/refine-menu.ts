@@ -20,6 +20,7 @@ interface RefineChromeMenuMeta {
   status?: unknown;
   tone?: unknown;
   badge?: unknown;
+  hidden?: unknown;
 }
 
 export function useChromeMenuItems(): readonly ChromeMenuItem[] {
@@ -61,6 +62,7 @@ function chromeMenuItemFromRefine(
     ...(menuStatus(meta.status) ? { status: menuStatus(meta.status) } : {}),
     ...(menuTone(meta.tone) ? { tone: menuTone(meta.tone) } : {}),
     ...(numberValue(meta.badge) !== undefined ? { badge: numberValue(meta.badge) } : {}),
+    ...(meta.hidden === true ? { hidden: true } : {}),
     ...(children.length ? { children } : {}),
   };
   return [menuItem];

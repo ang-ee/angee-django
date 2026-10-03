@@ -31,8 +31,13 @@ const pm: MenuLayer = {
   },
 };
 
-const ids = (items: readonly { id: string; children?: readonly { id: string }[] }[]): unknown =>
+type Tree = readonly { id: string; hidden?: boolean; children?: Tree }[];
+const ids = (items: Tree): unknown =>
   items.map((item) => (item.children?.length ? { [item.id]: ids(item.children) } : item.id));
+/** What the rail renders: the navigation tree without hidden nodes. */
+const rail = (items: Tree): unknown => ids(strip(items));
+const strip = (items: Tree): Tree => items.filter((item) => !item.hidden)
+  .map((item) => ({ ...item, ...(item.children ? { children: strip(item.children) } : {}) }));
 
 describe("compileMenus", () => {
   test("legacy arrays compile to the same tree", () => {
@@ -53,7 +58,7 @@ describe("compileMenus", () => {
       { work: ["work.triage-hub", "work.cycles-hub"] },
     ] }]);
     expect((logical[0]!.children as CompiledMenuItem[]).find((item) => item.id === "projects")?.flatten).toBe(true);
-    expect(ids(navigation)).toEqual([{ pm: [
+    expect(rail(navigation)).toEqual([{ pm: [
       "pm.inbox", "projects.my-work", "work.triage-hub", "projects.tasks", "work.cycles-hub",
     ] }]);
     expect(removed).toEqual([{ id: "projects.board", route: "projects.board", by: "pm" }]);
@@ -66,7 +71,7 @@ describe("compileMenus", () => {
     const { logical, navigation, removed } = compileMenus([projects, work, pm, product]);
     expect(removed.map((node) => node.id)).toEqual(["projects.board", "work", "work.triage-hub", "work.cycles-hub"]);
     expect(ids(logical)).toEqual([{ pm: ["pm.inbox", { projects: ["projects.my-work", "projects.tasks"] }] }]);
-    expect(ids(navigation)).toEqual([{ pm: ["pm.inbox", "projects.my-work"] }]);
+    expect(rail(navigation)).toEqual([{ pm: ["pm.inbox", "projects.my-work"] }]);
   });
 
   test("a dependent may un-hide; only narrows and never filters its own author's dependents", () => {
@@ -81,11 +86,11 @@ describe("compileMenus", () => {
     } };
     const unhide: MenuLayer = { id: "unhide", dependsOn: ["top"], menus: { "projects.tasks": { hide: false } } };
     // narrow.page passes narrow's own only but not top's; work's items fail top's.
-    expect(ids(compileMenus([projects, work, pm, narrow, top]).navigation)).toEqual([
+    expect(rail(compileMenus([projects, work, pm, narrow, top]).navigation)).toEqual([
       { pm: ["pm.inbox", "projects.my-work", "top.page"] },
     ]);
-    expect(ids(compileMenus([projects, work, pm, narrow, top, unhide]).navigation)).toEqual([
-      { pm: ["pm.inbox", "projects.my-work", "top.page", "projects.tasks"] },
+    expect(rail(compileMenus([projects, work, pm, narrow, top, unhide]).navigation)).toEqual([
+      { pm: ["pm.inbox", "projects.my-work", "projects.tasks", "top.page"] },
     ]);
   });
 
@@ -114,7 +119,9 @@ describe("compileMenus", () => {
     expect(() => compileMenus([{ id: "a", menus: { a: { parent: "nowhere" } } }])).toThrow(/unknown parent "nowhere"/);
     expect(() => compileMenus([{ id: "a", menus: { a: { parent: "a.b" }, "a.b": { parent: "a" } } }])).toThrow(/parent cycle/);
     expect(() => compileMenus([{ id: "a", menus: { a: {}, "a.x": { parent: "a", before: "a.y" }, "a.y": { parent: "a", before: "a.x" } } }]))
-      .toThrow(/conflicting before\/after/);
+      .toThrow(/before\/after cycle/);
+    expect(() => compileMenus([{ id: "a", menus: { a: {}, "a.x": { parent: "a", after: "a.nowhere" } } }]))
+      .toThrow(/unknown menu item "a.nowhere"/);
   });
 
   test("before and after place siblings; a dangling anchor of a removed node is dropped", () => {
@@ -125,7 +132,7 @@ describe("compileMenus", () => {
     expect(ids(compileMenus([layer]).logical)).toEqual([{ a: ["a.z", "a.x", "a.y", "a.w"] }]);
   });
 
-  test("permuting unrelated layers yields the same tree", () => {
+  test("explicit sequences order unrelated layers whatever the composition order", () => {
     const one: MenuLayer = { id: "one", menus: { one: { sequence: 2 } } };
     const two: MenuLayer = { id: "two", menus: { two: { sequence: 1 } } };
     expect(ids(compileMenus([one, two]).logical)).toEqual(ids(compileMenus([two, one]).logical));
@@ -142,5 +149,50 @@ describe("compileMenus", () => {
     expect(compiled.hidden).toEqual([{ id: "projects.tasks", by: "product", reason: "hide" }]);
     expect(compiled.provenance["projects.my-work"]).toEqual({ route: "projects", parent: "projects", sequence: "pm" });
     expect(compiled.diagnostics).toEqual(['Addon "stray" declares menu item "elsewhere.page" outside its namespace ("stray" or "stray.…").']);
+  });
+
+  test("before/after holds in the rail, accepts several nodes on one anchor and chains in any order", () => {
+    const layer: MenuLayer = { id: "a", menus: {
+      a: {}, "a.x": { parent: "a", sequence: 10 }, "a.y": { parent: "a", sequence: 20 },
+      "a.z": { parent: "a", after: "a.x" }, "a.w": { parent: "a", after: "a.x" }, "a.v": { parent: "a", after: "a.z" },
+    } };
+    const compiled = compileMenus([layer]);
+    expect(ids(compiled.logical)).toEqual([{ a: ["a.x", "a.z", "a.v", "a.w", "a.y"] }]);
+    expect(rail(compiled.navigation)).toEqual([{ a: ["a.x", "a.z", "a.v", "a.w", "a.y"] }]);
+    const chain = { a: {}, "a.x": { parent: "a", sequence: 10 }, "a.y": { parent: "a", sequence: 20 },
+      "a.z": { parent: "a", after: "a.x" }, "a.v": { parent: "a", after: "a.z" } };
+    for (const menus of [chain, Object.fromEntries(Object.entries(chain).reverse())]) {
+      expect(ids(compileMenus([{ id: "a", menus }]).logical)).toEqual([{ a: ["a.x", "a.z", "a.v", "a.y"] }]);
+    }
+  });
+
+  test("a node is positioned against a flattened app's item in the aggregator's rail", () => {
+    const product: MenuLayer = { id: "product", dependsOn: ["pm"], menus: { "product.page": { parent: "pm", after: "projects.my-work" } } };
+    expect(rail(compileMenus([projects, work, pm, product]).navigation)).toEqual([{ pm: [
+      "pm.inbox", "projects.my-work", "product.page", "work.triage-hub", "projects.tasks", "work.cycles-hub",
+    ] }]);
+  });
+
+  test("only on a flattened app narrows the items it lifts", () => {
+    const narrow: MenuLayer = { id: "narrow", dependsOn: ["pm", "projects"], menus: { projects: { only: ["projects.my-work"] } } };
+    const compiled = compileMenus([projects, work, pm, narrow]);
+    expect(rail(compiled.navigation)).toEqual([{ pm: ["pm.inbox", "projects.my-work", "work.triage-hub", "work.cycles-hub"] }]);
+    expect(compiled.hidden).toContainEqual({ id: "projects.tasks", by: "narrow", reason: "only" });
+  });
+
+  test("hidden nodes stay in the navigation tree, flagged, so the palette and admission keep them", () => {
+    const product: MenuLayer = { id: "product", dependsOn: ["pm", "projects"], menus: { "projects.tasks": { hide: true } } };
+    const pmNode = compileMenus([projects, work, pm, product]).navigation[0]!;
+    expect(pmNode.children?.find((item) => item.id === "projects.tasks")).toMatchObject({ hidden: true });
+  });
+
+  test("the deployment places a node back at the top and refuses malformed entries", () => {
+    const deployment = (menus: unknown): MenuLayer =>
+      ({ id: DEPLOYMENT_LAYER_ID, dependsOn: ["projects", "work", "pm"], menus: menus as MenuLayer["menus"] });
+    expect(compileMenus([projects, work, pm, deployment({ work: { parent: null } })]).logical.map((root) => root.id))
+      .toEqual(["pm", "work"]);
+    expect(() => compileMenus([projects, work, pm, deployment({ work: { remvoe: true } })])).toThrow(/unknown key "remvoe"/);
+    expect(() => compileMenus([projects, work, pm, deployment({ pm: { only: "pm.inbox" } })])).toThrow(/only must be a list/);
+    expect(() => compileMenus([projects, work, pm, deployment([{ id: "x" }])])).toThrow(/must be a mapping/);
   });
 });

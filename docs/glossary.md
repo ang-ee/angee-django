@@ -316,6 +316,20 @@ views, slots, and other UI to the composition.
 **`createApp`** — the frontend entry point the host uses to compose addons into the
 running app.
 
+**Shell** — the app's home, brand and selected perspective. Product addons
+declare it (`shell`); a dependent overrides its dependencies, and the
+deployment's `ANGEE_UI` pins it last.
+
+**Perspective** — a named confinement: the console shows one menu root and sends
+other console routes home. Declared by an addon, selected by the shell.
+
+**Aggregator** — an addon that places other addons' apps under its own menu root
+(`include`), like the `angee.pm` suite. A **flattened** include shows the app's
+items as the aggregator's own while the app keeps its routes and words.
+
+**Layer** — one composed addon manifest, ordered by its addon dependencies; the
+deployment layer comes last. Menus and the shell resolve layer by layer.
+
 **Slot** — an additive extension point in the component tree. Contribute to a slot
 before copying or forking a component.
 

@@ -1,8 +1,7 @@
 import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import type { MenuItem } from "@angee/ui/runtime";
 
-import { layerAncestry, type Layer } from "./layers";
-import { DEPLOYMENT_LAYER_ID } from "./shell";
+import { DEPLOYMENT_LAYER_ID, layerAncestry, type Layer } from "./layers";
 
 /** An included node, optionally rendered flat into the including node. */
 export type MenuInclude = string | { id: string; flatten?: boolean };
@@ -12,23 +11,31 @@ export type MenuInclude = string | { id: string; flatten?: boolean };
  * id, or `<id>.…`) declares a node; any other key alters a node declared by an
  * addon this one depends on.
  */
-export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<ChromeMenuExtra, "parentId" | "badge"> {
+export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<ChromeMenuExtra, "parentId" | "badge" | "hidden"> {
   /** The parent node id; `null` places the node at the top of the rail. */
   parent?: string | null;
   sequence?: number;
+  /** Place the node right before or after a node that ends up beside it; a cycle fails composition. */
   before?: string;
   after?: string;
   /** Nodes that become children of this one, with their subtrees. */
   include?: readonly MenuInclude[];
   /** Structural removal: the node and its subtree leave, and pages only they reach become unavailable. */
   remove?: boolean;
-  /** Cosmetic: the node leaves the navigation but keeps its pages reachable; `false` shows it again. */
+  /** Cosmetic: the node leaves the rail but keeps its pages reachable; `false` shows it again. */
   hide?: boolean;
-  /** Allowlist of visible children; layers narrow it, never widen it. */
+  /** Allowlist of the children the rail shows; layers narrow it, never widen it. */
   only?: readonly string[];
 }
 
 export type MenuDeclarations = Readonly<Record<string, MenuEntry>>;
+
+/** Whether an addon authored its menus as the legacy declaration list rather than the dict. */
+export function isMenuDeclarationList(
+  menus: readonly BaseMenuItem[] | MenuDeclarations | undefined,
+): menus is readonly BaseMenuItem[] {
+  return Array.isArray(menus);
+}
 
 export interface MenuLayer extends Layer {
   menus?: readonly BaseMenuItem[] | MenuDeclarations;
@@ -43,11 +50,14 @@ export interface CompiledMenuItem extends ChromeMenuItem {
 export interface CompiledMenus {
   /** Every surviving node in place: owns routes, trails and the active app. */
   logical: readonly CompiledMenuItem[];
-  /** What the rail, Settings and palette show: hidden nodes dropped, flattened apps lifted. */
+  /**
+   * What the chrome shows: flattened apps lifted into their aggregator, and nodes
+   * left out of the rail kept with `hidden`, so the palette and admission keep them.
+   */
   navigation: readonly ChromeMenuItem[];
   /** Removed nodes, subtrees included, with the routes they referenced and the removing layer. */
   removed: readonly { id: string; route?: string; by: string }[];
-  /** Surviving nodes left out of the navigation, by a `hide` or by a layer's `only`. */
+  /** Surviving nodes left out of the rail, by a `hide` or by a layer's `only`. */
   hidden: readonly { id: string; by: string; reason: "hide" | "only" }[];
   /** The layer that set each node field, declarations included. */
   provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
@@ -59,7 +69,16 @@ const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon",
   "appRoot", "description", "group", "status", "tone", "parent", "sequence", "before", "after",
 ] as const satisfies readonly (keyof MenuEntry)[];
-type Field = (typeof DECLARATION_FIELDS)[number] | "hide" | "remove" | "flatten";
+const OPERATION_FIELDS = ["include", "remove", "hide", "only"] as const satisfies readonly (keyof MenuEntry)[];
+type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[number];
+// Every MenuEntry key is a declaration field or an operation; adding one without listing it fails here.
+const _complete: Exclude<keyof MenuEntry, EntryKey> extends never ? true : never = true;
+void _complete;
+const ENTRY_KEYS: ReadonlySet<string> = new Set<string>([...DECLARATION_FIELDS, ...OPERATION_FIELDS]);
+/** Fields a node carries; `badge` arrives only through the legacy list. */
+type Field = (typeof DECLARATION_FIELDS)[number] | "badge" | "hide" | "remove" | "flatten";
+/** Resolution-only fields, never emitted on a compiled item. */
+const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "after", "hide", "remove"];
 
 interface Node {
   id: string;
@@ -76,11 +95,14 @@ interface Node {
  *
  * Declarations come first, in layer order; alterations then apply along
  * dependencies: a layer may alter only nodes declared by an addon it depends
- * on, a dependent overrides its dependency field by field, two unrelated layers
- * setting one field fail, and the deployment layer may alter anything last.
+ * on, a dependent overrides its dependency field by field, and two unrelated
+ * layers setting one field fail. The deployment layer depends on every addon,
+ * so it may alter anything, last.
  */
-export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
-  const ancestors = layerAncestry(layers);
+export function compileMenus(
+  layers: readonly MenuLayer[],
+  ancestors: ReadonlyMap<string, ReadonlySet<string>> = layerAncestry(layers),
+): CompiledMenus {
   const nodes = new Map<string, Node>();
   const alterations: { layer: string; id: string; entry: MenuEntry }[] = [];
   const diagnostics: string[] = [];
@@ -91,14 +113,15 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
     nodes.set(id, { id, owner: layer, index: nodes.size, fields, setBy, only: [] });
   };
   for (const layer of layers) {
-    if (!layer.menus) continue;
-    if (Array.isArray(layer.menus)) {
-      for (const item of layer.menus as readonly BaseMenuItem[]) declareLegacy(declare, diagnostics, layer.id, item, undefined);
+    if (isMenuDeclarationList(layer.menus)) {
+      if (layer.id === DEPLOYMENT_LAYER_ID) throw new Error("ANGEE_UI.menus must be a mapping of menu ids to alterations.");
+      for (const item of layer.menus) declareLegacy(declare, diagnostics, layer.id, item, undefined);
       continue;
     }
-    for (const [id, entry] of Object.entries(layer.menus as MenuDeclarations)) {
-      const owns = id === layer.id || id.startsWith(`${layer.id}.`);
-      if (owns && layer.id !== DEPLOYMENT_LAYER_ID) {
+    for (const [id, entry] of Object.entries(layer.menus ?? {})) {
+      validateEntry(layer.id, id, entry);
+      const owns = layer.id !== DEPLOYMENT_LAYER_ID && (id === layer.id || id.startsWith(`${layer.id}.`));
+      if (owns) {
         declare(layer.id, id, pick(entry));
         if (entry.include || entry.hide !== undefined || entry.remove || entry.only) {
           alterations.push({ layer: layer.id, id, entry: { include: entry.include, hide: entry.hide, remove: entry.remove, only: entry.only } });
@@ -109,27 +132,23 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
     }
   }
 
-  const provenance: Record<string, Record<string, string>> = Object.fromEntries(
-    [...nodes.values()].map((node) => [node.id, { ...node.setBy } as Record<string, string>]),
-  );
+  const target = (layer: string, id: string): Node => {
+    const node = nodes.get(id);
+    if (!node) throw new Error(`Addon "${layer}" alters unknown menu item "${id}".`);
+    if (node.owner !== layer && !ancestors.get(layer)?.has(node.owner)) {
+      throw new Error(`Addon "${layer}" alters menu item "${id}" of "${node.owner}", which it does not depend on.`);
+    }
+    return node;
+  };
   const set = (layer: string, id: string, field: Field, value: unknown): void => {
     const node = target(layer, id);
     const previous = node.setBy[field];
-    if (previous !== undefined && previous !== layer && layer !== DEPLOYMENT_LAYER_ID && !ancestors.get(layer)?.has(previous)) {
+    if (previous !== undefined && previous !== layer && !ancestors.get(layer)?.has(previous)) {
       if (ancestors.get(previous)?.has(layer)) return;
       throw new Error(`Unrelated addons "${previous}" and "${layer}" both set menu "${id}" ${field}.`);
     }
     node.fields[field] = value;
     node.setBy[field] = layer;
-    (provenance[id] ??= {})[field] = layer;
-  };
-  const target = (layer: string, id: string): Node => {
-    const node = nodes.get(id);
-    if (!node) throw new Error(`Addon "${layer}" alters unknown menu item "${id}".`);
-    if (layer !== DEPLOYMENT_LAYER_ID && node.owner !== layer && !ancestors.get(layer)?.has(node.owner)) {
-      throw new Error(`Addon "${layer}" alters menu item "${id}" of "${node.owner}", which it does not depend on.`);
-    }
-    return node;
   };
   // Included nodes sort after every declaration, in include-list order.
   let includeOrder = nodes.size;
@@ -146,7 +165,37 @@ export function compileMenus(layers: readonly MenuLayer[]): CompiledMenus {
       if (included.flatten) set(layer, included.id, "flatten", true);
     }
   }
-  return resolve(nodes, ancestors, provenance, diagnostics);
+  return resolve(nodes, ancestors, diagnostics);
+}
+
+/** Refuse unknown keys and malformed values, which would otherwise do nothing silently. */
+function validateEntry(layer: string, id: string, entry: unknown): asserts entry is MenuEntry {
+  const where = `Menu entry "${id}" of "${layer}"`;
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new Error(`${where} must be a mapping.`);
+  for (const key of Object.keys(entry)) {
+    if (!ENTRY_KEYS.has(key)) throw new Error(`${where} has unknown key "${key}".`);
+  }
+  const value = entry as Record<string, unknown>;
+  const strings = (key: string, list: unknown): void => {
+    if (!Array.isArray(list) || !list.every((item) => typeof item === "string" || (key === "include"
+      && typeof item === "object" && item !== null && typeof (item as { id?: unknown }).id === "string"))) {
+      throw new Error(`${where}: ${key} must be a list of menu ids.`);
+    }
+  };
+  if (value.include !== undefined) strings("include", value.include);
+  if (value.only !== undefined) strings("only", value.only);
+  for (const key of ["remove", "hide", "appRoot"] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
+  }
+  for (const key of ["sequence"] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "number") throw new Error(`${where}: ${key} must be a number.`);
+  }
+  for (const key of ["label", "route", "to", "icon", "before", "after"] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "string") throw new Error(`${where}: ${key} must be a string.`);
+  }
+  if (value.parent !== undefined && value.parent !== null && typeof value.parent !== "string") {
+    throw new Error(`${where}: parent must be a menu id or null.`);
+  }
 }
 
 function declareLegacy(
@@ -158,7 +207,7 @@ function declareLegacy(
 ): void {
   const id = item.id ?? item.route;
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
-  const { id: _id, children, parentId, badge: _badge, ...rest } = item;
+  const { id: _id, children, parentId, ...rest } = item;
   const owner = parent ?? parentId;
   if (id !== layer && !id.startsWith(`${layer}.`)) {
     diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);
@@ -176,12 +225,11 @@ function pick(entry: MenuEntry): Node["fields"] {
 function resolve(
   nodes: Map<string, Node>,
   ancestors: ReadonlyMap<string, ReadonlySet<string>>,
-  provenance: Record<string, Record<string, string>>,
   diagnostics: readonly string[],
 ): CompiledMenus {
   const parentOf = (node: Node): string | undefined => {
     const parent = node.fields.parent as string | null | undefined;
-    if (parent === undefined || parent === null || parent === "shell#rail") return undefined;
+    if (parent === undefined || parent === null) return undefined;
     if (!nodes.has(parent)) throw new Error(`Menu item "${node.id}" names unknown parent "${parent}".`);
     return parent;
   };
@@ -189,6 +237,14 @@ function resolve(
   for (const node of nodes.values()) {
     const parent = parentOf(node);
     children.set(parent, [...(children.get(parent) ?? []), node]);
+    for (const anchor of [node.fields.before, node.fields.after]) {
+      if (anchor !== undefined && !nodes.has(anchor as string)) {
+        throw new Error(`Menu item "${node.id}" positions itself against unknown menu item "${String(anchor)}".`);
+      }
+    }
+    if (node.fields.before !== undefined && node.fields.after !== undefined) {
+      throw new Error(`Menu item "${node.id}" sets both before and after.`);
+    }
   }
   for (const node of nodes.values()) {
     const seen = new Set<string>();
@@ -198,89 +254,107 @@ function resolve(
     }
   }
 
-  const removed: CompiledMenus["removed"][number][] = [];
+  const removed = new Map<string, CompiledMenus["removed"][number]>();
   const collectRemoved = (node: Node, by: string): void => {
-    removed.push({ id: node.id, ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}), by });
+    if (removed.has(node.id)) return;
+    removed.set(node.id, { id: node.id, ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}), by });
     for (const child of children.get(node.id) ?? []) collectRemoved(child, by);
   };
-  for (const node of nodes.values()) {
-    if (node.fields.remove && !removed.some((entry) => entry.id === node.id)) collectRemoved(node, node.setBy.remove!);
-  }
-  const gone = new Set(removed.map((entry) => entry.id));
-
-  const ordered = (parent: string | undefined): Node[] => {
-    const siblings = (children.get(parent) ?? []).filter((node) => !gone.has(node.id));
-    siblings.sort((left, right) => sequenceOf(left) - sequenceOf(right) || left.index - right.index);
-    const constrained = siblings.filter((node) => node.fields.before !== undefined || node.fields.after !== undefined);
-    for (const node of constrained) {
-      const anchor = (node.fields.before ?? node.fields.after) as string;
-      if (node.fields.before !== undefined && node.fields.after !== undefined) {
-        throw new Error(`Menu item "${node.id}" sets both before and after.`);
-      }
-      if (gone.has(anchor)) continue;
-      const at = siblings.findIndex((sibling) => sibling.id === anchor);
-      if (at < 0) throw new Error(`Menu item "${node.id}" positions itself against "${anchor}", which is not a sibling.`);
-      siblings.splice(siblings.indexOf(node), 1);
-      const position = siblings.findIndex((sibling) => sibling.id === anchor);
-      siblings.splice(node.fields.before !== undefined ? position : position + 1, 0, node);
-    }
-    for (const node of constrained) {
-      const anchor = (node.fields.before ?? node.fields.after) as string;
-      if (gone.has(anchor)) continue;
-      const delta = siblings.indexOf(node) - siblings.findIndex((sibling) => sibling.id === anchor);
-      if (node.fields.before !== undefined ? delta !== -1 : delta !== 1) {
-        throw new Error(`Menu item "${node.id}" has conflicting before/after constraints among its siblings.`);
-      }
-    }
-    return siblings;
-  };
+  for (const node of nodes.values()) if (node.fields.remove) collectRemoved(node, node.setBy.remove!);
+  const survivors = (parent: string | undefined): Node[] =>
+    (children.get(parent) ?? []).filter((node) => !removed.has(node.id));
 
   // Only a root is an app: an app another layer included keeps its place, not the
   // marker. An author nesting appRoot itself still fails tree validation.
-  const included = (node: Node): boolean => parentOf(node) !== undefined && node.setBy.parent !== node.owner;
-  const logicalItem = (node: Node): CompiledMenuItem => {
-    const { parent: _parent, sequence: _sequence, before: _before, after: _after, hide: _hide, remove: _remove, ...fields } = node.fields;
-    if (included(node)) delete fields.appRoot;
-    const nested = ordered(node.id).map(logicalItem);
-    return { ...(fields as Omit<CompiledMenuItem, "id">), id: node.id, ...(nested.length ? { children: nested } : {}) };
+  const emitted = (node: Node, drop: readonly Field[]): Record<string, unknown> => {
+    const fields: Record<string, unknown> = { ...node.fields };
+    for (const field of drop) delete fields[field];
+    if (parentOf(node) !== undefined && node.setBy.parent !== node.owner) delete fields.appRoot;
+    return fields;
   };
-  // A node's navigation children: its visible children, a flattened app's visible
-  // children lifted in its place, all ordered by sequence (stable otherwise). Each
-  // layer's `only` admits listed ids, items of a listed flattened app, and items
-  // declared by the `only` author or an addon depending on it.
+  const logicalItem = (node: Node): CompiledMenuItem => {
+    const nested = position(survivors(node.id)).map(logicalItem);
+    return { ...(emitted(node, RESOLUTION_FIELDS) as Omit<CompiledMenuItem, "id">), id: node.id, ...(nested.length ? { children: nested } : {}) };
+  };
+
+  // A node's navigation children: its children, with each flattened app's own
+  // navigation children lifted in its place, then positioned together. The rail
+  // leaves out a child that is hidden, excluded by a layer's `only` (which admits
+  // listed ids, items of a listed flattened app, and items declared by the `only`
+  // author or an addon depending on it), or lifted from a hidden app.
   const hidden = new Map<string, CompiledMenus["hidden"][number]>();
-  for (const node of nodes.values()) {
-    if (node.fields.hide === true && !gone.has(node.id)) hidden.set(node.id, { id: node.id, by: node.setBy.hide!, reason: "hide" });
-  }
-  const navigationChildren = (node: Node): { child: Node; app?: Node }[] => {
-    const shown = (child: Node): boolean => child.fields.hide !== true;
-    const lifted: { child: Node; app?: Node }[] = ordered(node.id).filter(shown).flatMap((child) => child.fields.flatten
-      ? ordered(child.id).filter(shown).map((grandchild) => ({ child: grandchild, app: child }))
-      : [{ child }]);
-    lifted.sort((left, right) => sequenceOf(left.child) - sequenceOf(right.child) || 0);
-    return lifted.filter(({ child, app }) => {
-      const excluding = node.only.find(({ layer, ids }) => !(ids.has(child.id) || (app !== undefined && ids.has(app.id))
+  const navigationChildren = (node: Node): { child: Node; hidden: boolean }[] => {
+    const entries = survivors(node.id).flatMap((child) => child.fields.flatten
+      ? navigationChildren(child).map((lifted) => ({ ...lifted, app: child, hidden: lifted.hidden || child.fields.hide === true }))
+      : [{ child, app: undefined as Node | undefined, hidden: child.fields.hide === true }]);
+    const byId = new Map(entries.map((entry) => [entry.child.id, entry]));
+    return position(entries.map((entry) => entry.child)).map((child) => {
+      const entry = byId.get(child.id)!;
+      if (child.fields.hide === true) hidden.set(child.id, { id: child.id, by: child.setBy.hide!, reason: "hide" });
+      const excluding = node.only.find(({ layer, ids }) => !(ids.has(child.id) || (entry.app !== undefined && ids.has(entry.app.id))
         || child.owner === layer || Boolean(ancestors.get(child.owner)?.has(layer))));
-      if (excluding) hidden.set(child.id, { id: child.id, by: excluding.layer, reason: "only" });
-      return !excluding;
+      if (excluding && !entry.hidden) hidden.set(child.id, { id: child.id, by: excluding.layer, reason: "only" });
+      return { child, hidden: entry.hidden || excluding !== undefined };
     });
   };
-  const navigationItem = (node: Node): ChromeMenuItem => {
-    const { parent: _parent, sequence: _sequence, before: _before, after: _after, hide: _hide, remove: _remove, flatten: _flatten, ...fields } = node.fields;
-    if (included(node)) delete fields.appRoot;
-    const nested = navigationChildren(node).map(({ child }) => navigationItem(child));
-    return { ...(fields as Omit<ChromeMenuItem, "id">), id: node.id, ...(nested.length ? { children: nested } : {}) };
+  const navigationItem = (node: Node, isHidden: boolean): ChromeMenuItem => {
+    const nested = navigationChildren(node).map((entry) => navigationItem(entry.child, entry.hidden));
+    return {
+      ...(emitted(node, [...RESOLUTION_FIELDS, "flatten"]) as Omit<ChromeMenuItem, "id">),
+      id: node.id,
+      ...(isHidden ? { hidden: true } : {}),
+      ...(nested.length ? { children: nested } : {}),
+    };
   };
-  const roots = ordered(undefined);
-  const navigation = roots.filter((node) => node.fields.hide !== true).map(navigationItem);
+
+  const roots = position(survivors(undefined));
+  for (const root of roots) if (root.fields.hide === true) hidden.set(root.id, { id: root.id, by: root.setBy.hide!, reason: "hide" });
+  const navigation = roots.map((root) => navigationItem(root, root.fields.hide === true));
   return {
     logical: roots.map(logicalItem),
     navigation,
-    removed,
+    removed: [...removed.values()],
     hidden: [...hidden.values()],
-    provenance,
+    provenance: Object.fromEntries([...nodes.values()].map((node) => [node.id, { ...node.setBy }])) as CompiledMenus["provenance"],
     diagnostics,
   };
+}
+
+/**
+ * Order one list of siblings: by sequence (missing sorts last), then declaration
+ * or include order. A node with `before`/`after` is then placed next to its
+ * anchor when the anchor is in the same list (nodes on one anchor keep that
+ * order); an anchor elsewhere or removed leaves the node in place. Anchors that
+ * depend on each other in a cycle fail composition.
+ */
+function position(siblings: readonly Node[]): Node[] {
+  const sorted = [...siblings].sort((left, right) => sequenceOf(left) - sequenceOf(right) || left.index - right.index);
+  const present = new Set(sorted.map((node) => node.id));
+  const anchorOf = (node: Node): { id: string; before: boolean } | undefined => {
+    const id = (node.fields.before ?? node.fields.after) as string | undefined;
+    return id !== undefined && present.has(id) ? { id, before: node.fields.before !== undefined } : undefined;
+  };
+  const result = sorted.filter((node) => !anchorOf(node));
+  let pending = sorted.filter((node) => anchorOf(node));
+  const lastAfter = new Map<string, string>();
+  while (pending.length) {
+    const placeable = pending.filter((node) => result.some((placed) => placed.id === anchorOf(node)!.id));
+    if (!placeable.length) {
+      throw new Error(`Menu items ${pending.map((node) => `"${node.id}"`).join(", ")} position themselves in a before/after cycle.`);
+    }
+    for (const node of placeable) {
+      const anchor = anchorOf(node)!;
+      if (anchor.before) {
+        result.splice(result.findIndex((placed) => placed.id === anchor.id), 0, node);
+      } else {
+        const last = lastAfter.get(anchor.id) ?? anchor.id;
+        result.splice(result.findIndex((placed) => placed.id === last) + 1, 0, node);
+        lastAfter.set(anchor.id, node.id);
+      }
+    }
+    pending = pending.filter((node) => !placeable.includes(node));
+  }
+  return result;
 }
 
 function sequenceOf(node: Node): number {

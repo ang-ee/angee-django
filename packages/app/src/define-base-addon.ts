@@ -149,9 +149,12 @@ export interface BaseLayoutProvider extends Omit<LayoutProviderContribution, "co
  * instead of annotating `const x: BaseAddon = {...}`. The authored `menus` form
  * (declaration list or dict) keeps its type for readers of the manifest.
  */
-export function defineBaseAddon<M extends BaseAddon["menus"] = undefined>(
-  addon: Omit<BaseAddon, "menus"> & { menus?: M },
-): Omit<BaseAddon, "menus"> & { menus?: M } {
+export function defineBaseAddon(addon: Omit<BaseAddon, "menus"> & { menus?: readonly BaseMenuItem[] }):
+  Omit<BaseAddon, "menus"> & { menus?: readonly BaseMenuItem[] };
+export function defineBaseAddon(addon: Omit<BaseAddon, "menus"> & { menus: MenuDeclarations }):
+  Omit<BaseAddon, "menus"> & { menus: MenuDeclarations };
+export function defineBaseAddon(addon: BaseAddon): BaseAddon;
+export function defineBaseAddon(addon: BaseAddon): BaseAddon {
   const routeDashboards = addon.routes
     ?.flatMap((route) => route.dashboard ? [route.dashboard] : []) ?? [];
   return {

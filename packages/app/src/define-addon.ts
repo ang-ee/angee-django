@@ -41,6 +41,7 @@ import { optionToken } from "@angee/ui/widgets/types";
 import type { AppSurface } from "./route-policy";
 import { resolveShell, type PerspectiveDeclaration, type ResolvedShell, type ShellDeclaration } from "./shell";
 import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
+import { layerAncestry } from "./layers";
 export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
 import {
   DASHBOARD_STORE_SLOT,
@@ -205,9 +206,12 @@ export interface ComposeAddonsOptions {
 }
 
 /** Brand an object as an addon manifest, giving one greppable declaration site. */
-export function defineAddon<M extends AddonManifest["menus"] = undefined>(
-  manifest: Omit<AddonManifest, "menus"> & { menus?: M },
-): Omit<AddonManifest, "menus"> & { menus?: M } {
+export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] }):
+  Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] };
+export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus: MenuDeclarations }):
+  Omit<AddonManifest, "menus"> & { menus: MenuDeclarations };
+export function defineAddon(manifest: AddonManifest): AddonManifest;
+export function defineAddon(manifest: AddonManifest): AddonManifest {
   return manifest;
 }
 
@@ -304,9 +308,10 @@ export function composeAddons(
   options: ComposeAddonsOptions,
 ): ComposedAddons {
   const canonicalizeModel = options.canonicalModelLabel;
-  const shell = resolveShell(addons);
+  const ancestors = layerAncestry(addons);
+  const shell = resolveShell(addons, ancestors);
   const routes: AddonRoute[] = [];
-  const compiledMenus = compileMenus(addons);
+  const compiledMenus = compileMenus(addons, ancestors);
   const widgets: WidgetMap = {};
   const statusTones: Record<string, StatusToneMap[string]> = Object.create(null);
   const i18n: Record<string, Record<string, string>> = {};

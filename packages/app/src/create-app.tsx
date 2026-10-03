@@ -124,11 +124,11 @@ import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
   AppRouteProjection,
-  unavailableRoutes,
   resourceMutationsForSchema,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
 import { explainComposition, type CompositionExplanation } from "./explain";
+import { developmentMode } from "@angee/ui/lib/development-mode";
 import { admittedContributions, routePolicyIndex } from "./route-policy";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
@@ -300,13 +300,22 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routeHref,
   );
   const menuTree = MenuTree.from(menus);
-  const unavailable = unavailableRoutes(routes, menuTree, composed.menuComposition.removed);
   const confineTo = input.confineTo ?? composed.shell.perspective?.root;
+  if (confineTo !== undefined && !menuTree.roots.some((root) => root.id === confineTo)) {
+    throw new Error(
+      `Unknown menu root "${confineTo}": a perspective root must be a top-level menu item, not removed or included under another item.`,
+    );
+  }
   const homeInput = input.home ?? composed.shell.home;
   const projection = new AppRouteProjection(routes, menuTree, confineTo, {
     navigation: MenuTree.from(resolveMenuRouteTargets(composed.menuComposition.navigation, routeHref)),
-    unavailable: new Set(unavailable.keys()),
+    removed: composed.menuComposition.removed,
   });
+  const unavailable = projection.unavailable;
+  // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
+  const runtimeRouteHref = unavailable.size
+    ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
+    : routeHref;
   const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
   const unrestrictedSurface: SurfacePresentation = {};
   const navigationTree = projection.navigationTree;
@@ -379,7 +388,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     drawers: composed.drawers,
     dashboards: composed.dashboards,
     routesByResource,
-    routeHref,
+    routeHref: runtimeRouteHref,
     loginPath,
     themes: composed.themes as readonly ThemeContribution[],
   };
@@ -430,7 +439,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const home =
     (homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined) ??
     (confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
-    routes.find((route) => route.layout !== "public")?.path ??
+    routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path ??
     "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
@@ -469,7 +478,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         drawers: admittedContributions(runtime.drawers, surface.admit, "drawers"),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref,
+        routeHref: runtimeRouteHref,
       };
     }, [app, activeRoute, words, surface]);
     return (
@@ -566,8 +575,15 @@ export function createApp(input: CreateAppInput): AngeeApp {
     defaultPendingComponent: () => <LoadingPanel />,
   });
 
-  const explain = explainComposition(composed.shell, composed.menuComposition, unavailable);
-  for (const diagnostic of composed.shell.diagnostics) console.warn(`[angee] ${diagnostic}`);
+  const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
+    home,
+    confineTo: confineTo ?? null,
+  });
+  if (developmentMode()) {
+    for (const diagnostic of composed.shell.diagnostics) console.warn(`[angee] ${diagnostic}`);
+    const menuFindings = composed.menuComposition.diagnostics.length;
+    if (menuFindings) console.warn(`[angee] ${menuFindings} menu finding(s); see createApp(...).explain.menus.diagnostics.`);
+  }
   return {
     router,
     explain,

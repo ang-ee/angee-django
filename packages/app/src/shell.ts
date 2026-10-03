@@ -1,6 +1,8 @@
 import type { RuntimeBrand } from "@angee/ui/runtime";
 
-import { layerAncestry, mostSpecific, type Layer } from "./layers";
+import { DEPLOYMENT_LAYER_ID, layerAncestry, mostSpecific, type Layer } from "./layers";
+
+export { DEPLOYMENT_LAYER_ID };
 
 /** Shell facts a product addon declares; a dependent overrides its dependencies field by field. */
 export interface ShellDeclaration {
@@ -15,7 +17,10 @@ export interface ShellDeclaration {
 export interface PerspectiveDeclaration {
   /** The menu root the rail, palette and route guard are confined to. */
   root: string;
-  /** Where `/` lands under this perspective; defaults to the shell's home. */
+  /**
+   * Where `/` lands when the deployment pins this perspective. A product that
+   * selects it keeps its own `shell.home`; this is the fallback.
+   */
   home?: string;
 }
 
@@ -37,9 +42,6 @@ export interface ResolvedShell {
   diagnostics: readonly string[];
 }
 
-/** The deployment's `ANGEE_UI` layer, appended by the composed runtime after every addon. */
-export const DEPLOYMENT_LAYER_ID = "deployment";
-
 const SHELL_FIELDS = ["home", "brand", "perspective"] as const;
 
 /**
@@ -51,8 +53,10 @@ const SHELL_FIELDS = ["home", "brand", "perspective"] as const;
  * unrelated ancestors of the selected product setting one field, fall back to
  * the framework default instead of failing; the deployment layer applies last.
  */
-export function resolveShell(layers: readonly ShellLayer[]): ResolvedShell {
-  const ancestors = layerAncestry(layers);
+export function resolveShell(
+  layers: readonly ShellLayer[],
+  ancestors: ReadonlyMap<string, ReadonlySet<string>> = layerAncestry(layers),
+): ResolvedShell {
   const perspectives = new Map<string, PerspectiveDeclaration>();
   for (const layer of layers) {
     for (const [id, perspective] of Object.entries(layer.perspectives ?? {})) {
@@ -106,8 +110,12 @@ export function resolveShell(layers: readonly ShellLayer[]): ResolvedShell {
     if (!declared) throw new Error(`Shell selects unknown perspective "${resolved.perspective}".`);
     perspective = { id: resolved.perspective, ...declared };
   }
-  const home = deployment?.home ?? perspective?.home ?? resolved.home;
-  if (home !== undefined && deployment?.home === undefined && perspective?.home !== undefined) {
+  // A pinned perspective brings its home; one a product selects defers to the
+  // product chain's shell.home, so a product layered on a bundle can move home.
+  const pinned = provenance.perspective === DEPLOYMENT_LAYER_ID ? perspective?.home : undefined;
+  const home = deployment?.home ?? pinned ?? resolved.home ?? perspective?.home;
+  if (deployment?.home === undefined && perspective?.home !== undefined && home === perspective.home
+    && (pinned !== undefined || resolved.home === undefined)) {
     provenance.home = provenance.perspective!;
   }
   return {

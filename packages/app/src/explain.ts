@@ -3,7 +3,10 @@ import type { ResolvedShell } from "./shell";
 
 /** Why the composed shell and menus look as they do, layer by layer. */
 export interface CompositionExplanation {
-  shell: Pick<ResolvedShell, "home" | "brand" | "perspective" | "provenance" | "diagnostics">;
+  /** The shell the layers resolved, with its provenance and fallback diagnostics. */
+  shell: ResolvedShell;
+  /** What the app runs with once deprecated `createApp` inputs override the shell. */
+  effective: { home: string; confineTo: string | null };
   menus: {
     /** The layer that set each node field, declarations included. */
     provenance: CompiledMenus["provenance"];
@@ -20,16 +23,12 @@ export function explainComposition(
   shell: ResolvedShell,
   menus: CompiledMenus,
   unavailable: ReadonlyMap<string, string>,
+  effective: CompositionExplanation["effective"],
 ): CompositionExplanation {
-  const { home, brand, perspective, provenance, diagnostics } = shell;
+  const { provenance, removed, hidden, diagnostics } = menus;
   return {
-    shell: { ...(home !== undefined ? { home } : {}), brand, perspective, provenance, diagnostics },
-    menus: {
-      provenance: menus.provenance,
-      removed: menus.removed,
-      hidden: menus.hidden,
-      unavailable: Object.fromEntries([...unavailable].sort(([left], [right]) => left.localeCompare(right))),
-      diagnostics: menus.diagnostics,
-    },
+    shell,
+    effective,
+    menus: { provenance, removed, hidden, unavailable: Object.fromEntries(unavailable), diagnostics },
   };
 }

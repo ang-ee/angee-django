@@ -38,10 +38,17 @@ describe("resolveShell", () => {
     expect(shell.provenance.perspective).toBe(DEPLOYMENT_LAYER_ID);
   });
 
-  test("a selected perspective's home wins over the product home, a deployment home over both", () => {
+  test("a pinned perspective's home wins over the product home, a deployment home over both", () => {
     const withHome: ShellLayer = { ...pm, perspectives: { pm: { root: "pm", home: "pm.home" } } };
     expect(resolveShell([withHome, product, deployment({ perspective: "pm" })]).home).toBe("pm.home");
     expect(resolveShell([withHome, product, deployment({ perspective: "pm", home: "x.home" })]).home).toBe("x.home");
+  });
+
+  test("a product keeping the bundle's perspective still moves home", () => {
+    const withHome: ShellLayer = { ...pm, shell: { ...pm.shell, home: undefined }, perspectives: { pm: { root: "pm", home: "pm.home" } } };
+    const onTop: ShellLayer = { id: "onTop", dependsOn: ["pm"], shell: { home: "onTop.home" } };
+    expect(resolveShell([withHome, onTop]).home).toBe("onTop.home");
+    expect(resolveShell([withHome]).home).toBe("pm.home");
   });
 
   test("unrelated products fall back to the framework default, unless the deployment pins", () => {

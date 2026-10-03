@@ -1,3 +1,9 @@
+/**
+ * The deployment's `ANGEE_UI` layer. The composed runtime appends it after every
+ * addon and makes it depend on all of them, so it applies last.
+ */
+export const DEPLOYMENT_LAYER_ID = "deployment";
+
 /** A composed manifest as a layer: its id and the ids of the manifests it depends on. */
 export interface Layer {
   id: string;
