@@ -584,11 +584,16 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
         "Do not run `angee init`",
         "`ANGEE_ROOT/workspaces/`",
         "Source checkouts are not stack roots",
+        "The angee operator is this stack's monitoring and management service.",
+        'angee --root "$ANGEE_ROOT" job run {{ restart_job }} --chained-restart',
+        'angee --root "$ANGEE_ROOT" restart <service>...',
+        "never run `uv sync` on the stack's venv while the stack runs",
+        "docs/howto/getstarted.md#restart-the-running-stack",
     ):
         assert contract in instructions
 
-    include = '{% include "../../_shared/AGENTS.md.jinja" %}'
-    for agents_template in (DEV_AGENTS_TEMPLATE, LOCAL_AGENTS_TEMPLATE):
+    for agents_template, restart_job in ((DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "provision")):
+        include = f'{{% include "../../_shared/AGENTS.md.jinja" with restart_job="{restart_job}" %}}'
         assert agents_template.read_text(encoding="utf-8").strip() == include
 
     for claude_template in (DEV_CLAUDE_TEMPLATE, LOCAL_CLAUDE_TEMPLATE):
@@ -1684,6 +1689,17 @@ def test_python_nodes_share_runtime_environment_and_restart_entry() -> None:
             assert node["env"]["ANGEE_OPERATOR_RESTART_JOB"] == restart_job
             assert node["env"]["ANGEE_OPERATOR_TOKEN"] == "${secret.operator-token}"
             assert node["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
+
+
+def test_stack_agent_instructions_name_the_rendered_restart_job() -> None:
+    """The root AGENTS.md restart command runs the job the manifest declares as the restart entry."""
+
+    for agents_template, stack in ((DEV_AGENTS_TEMPLATE, _render_dev_stack()), (LOCAL_AGENTS_TEMPLATE, _render_local_stack())):
+        match = re.search(r'with restart_job="([^"]+)"', agents_template.read_text(encoding="utf-8"))
+        assert match is not None, agents_template
+        restart_job = match.group(1)
+        assert restart_job in stack["jobs"]
+        assert stack["services"]["django"]["env"]["ANGEE_OPERATOR_RESTART_JOB"] == restart_job
 
 
 def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
