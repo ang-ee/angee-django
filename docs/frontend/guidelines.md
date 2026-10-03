@@ -1216,8 +1216,9 @@ Hard-won traps — the wise learn from others' mistakes
   the route. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
-  trail. Match path length and search params first, then the route's menu anchor
-  (inherited by record children), then depth and pre-order. The route projection
+  trail. Match path length and search params first, then whether the item sits at
+  or under the route's menu anchor (inherited by record children), then depth
+  and pre-order: an anchor on an app root keeps the page on its own item there. The route projection
   publishes the winning `activeMenuId`; the Refine router binding uses that same
   destination for native breadcrumbs. A more specific preset or parameterized
   target wins over an anchor. Breadcrumbs occupy the

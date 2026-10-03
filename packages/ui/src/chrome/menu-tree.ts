@@ -405,7 +405,7 @@ export class MenuTree {
     return this.match(pathname)?.item;
   }
 
-  /** Rank by path, params, route anchor, depth, then pre-order. */
+  /** Rank by path, params, sitting at or under the route anchor, depth, then pre-order. */
   match(path: string, search?: string | URLSearchParams, includeHidden = false, menuId?: string): MenuMatch | undefined {
     return matchWithin(this.roots, path, search, includeHidden, menuId);
   }
@@ -458,7 +458,9 @@ function matchWithin(
       const targetParams = [...new URLSearchParams(item.search)];
       const equalParams = targetParams.filter(([key, value]) => params.getAll(key).includes(value)).length;
       const mismatches = targetParams.length - equalParams;
-      const rank = [item.path.length, equalParams, -mismatches, Number(item.id === menuId), trail.length];
+      // The anchor names a place: the item itself or any item under it.
+      const anchored = menuId !== undefined && trail.some((node) => node.id === menuId);
+      const rank = [item.path.length, equalParams, -mismatches, Number(anchored), trail.length];
       const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
       if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
         best = { item, trail };
