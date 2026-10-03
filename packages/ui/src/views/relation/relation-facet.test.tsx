@@ -91,13 +91,13 @@ describe("useRelationFacets", () => {
     );
     expect(result.current.filters).toEqual([
       {
-        id: "provider:provider-anthropic",
+        id: 'provider:"provider-anthropic"',
         label: "Anthropic",
         chipLabel: "Anthropic",
         filter: { provider: { exact: "provider-anthropic" } },
       },
       {
-        id: "provider:provider-openai",
+        id: 'provider:"provider-openai"',
         label: "OpenAI",
         chipLabel: "OpenAI",
         filter: { provider: { exact: "provider-openai" } },
@@ -166,7 +166,7 @@ describe("useRelationFacets", () => {
     );
 
     expect(result.current.filters[0]).toMatchObject({
-      id: "publisher:provider-anthropic",
+      id: 'publisher:"provider-anthropic"',
       filter: { publisher: { exact: "provider-anthropic" } },
     });
     expect(result.current.filterFields).toEqual(expect.arrayContaining([expect.objectContaining({ type: "selection" })]));
@@ -188,7 +188,7 @@ describe("useRelationFacets", () => {
       { wrapper: Metadata },
     );
     expect(result.current.filters).toEqual([{
-      id: "status:draft", label: "Draft", chipLabel: "Draft",
+      id: 'status:"DRAFT"', label: "Draft", chipLabel: "Draft",
       filter: { status: { exact: "DRAFT" } },
     }]);
     expect(result.current.filterFields[0]?.options).toEqual([{ value: "draft", label: "Draft" }]);

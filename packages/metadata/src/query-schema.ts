@@ -11,6 +11,7 @@ export const FILTER_OPERATORS = [
 export type FilterOperator = (typeof FILTER_OPERATORS)[number];
 const OptionalString = v.nullish(v.string());
 const EnumValue = v.object({ value: v.string(), description: OptionalString });
+const ValueMap = v.pipe(v.array(v.object({ from: v.unknown(), to: v.unknown() })), v.readonly());
 const DrillSchema = v.object({
   kind: v.picklist(["value", "identity", "range", "json"]),
   field: v.string(),
@@ -18,7 +19,7 @@ const DrillSchema = v.object({
   rangeKey: OptionalString,
   jsonPath: OptionalString,
   valueTransform: v.nullish(v.literal("json")),
-  valueMap: v.optional(v.pipe(v.array(v.object({ from: v.unknown(), to: v.unknown() })), v.readonly()), []),
+  valueMap: v.optional(ValueMap, []),
   nullMode: v.picklist(["isNull", "value", "unavailable"]),
 });
 const ExtractionSchema = v.object({
@@ -34,7 +35,7 @@ const QueryFieldSchema = v.object({
   filter: v.nullish(v.object({
     field: v.string(), scalar: v.string(),
     values: v.optional(v.pipe(v.array(EnumValue), v.readonly()), []),
-    valueMap: v.optional(v.pipe(v.array(v.object({ from: v.unknown(), to: v.unknown() })), v.readonly())),
+    valueMap: v.optional(ValueMap),
     operators: v.pipe(v.array(v.picklist(FILTER_OPERATORS)), v.readonly()),
   })),
   sort: v.nullish(v.object({ field: v.string() })),
@@ -48,6 +49,7 @@ const AxisSchema = v.object({
   labelPath: OptionalString,
   server: v.nullish(v.object({
     input: v.string(), key: v.string(), labelInput: OptionalString, labelKey: OptionalString,
+    valueMap: v.optional(ValueMap),
   })),
   extractions: v.optional(v.pipe(v.array(ExtractionSchema), v.readonly()), []),
   drill: v.nullish(DrillSchema),

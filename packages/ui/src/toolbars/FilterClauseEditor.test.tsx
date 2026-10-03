@@ -40,6 +40,16 @@ test("submits typed values from the keyboard and preserves zero", async () => {
   expect((screen.getByLabelText("Filter value") as HTMLInputElement).value).toBe("");
 });
 
+test("submits a declared empty selection as an exact blank filter", async () => {
+  const onSubmit = vi.fn();
+  render(<FilterClauseEditor fields={[{ id: "country", label: "Country", type: "selection", operators: ["exact", "isNull"],
+    options: [{ value: "", label: "No value" }, { value: "DE", label: "Germany" }],
+  }]} onSubmit={onSubmit} />, { wrapper: Provider });
+  await choose("Filter value", "No value");
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  expect(onSubmit).toHaveBeenCalledWith({ field: "country", operator: "exact", value: "", type: "selection" });
+});
+
 test("controlled editing retains drafts and leaves collection updates to the caller", () => {
   const onSubmit = vi.fn();
   const onChange = vi.fn();

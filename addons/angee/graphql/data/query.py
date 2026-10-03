@@ -226,7 +226,17 @@ class ResourceQueryProjection:
                     if extraction.range_key is None or range_valid
                     else replace(extraction, range_key=None, drill=None)
                 )
-            axes.append(replace(axis, extractions=tuple(extractions)))
+            _, selected = self.selection(self.canonical(axis.field))
+            row_type = get_named_type(selected.type) if selected is not None else None
+            axes.append(
+                replace(
+                    axis,
+                    server=replace(
+                        axis.server, value_map=self.value_map(get_named_type(keys[axis.server.key].type), row_type),
+                    ),
+                    extractions=tuple(extractions),
+                )
+            )
         return tuple(axes)
 
     def canonical(self, name: str) -> str:
@@ -290,23 +300,26 @@ class ResourceQueryProjection:
         scalar = "Enum" if isinstance(named, GraphQLEnumType) else getattr(named, "name", "String")
         _, selected = self.selection(self.canonical(name))
         output = get_named_type(selected.type) if selected is not None else None
-        value_map: list[DataQueryValueMap] = []
-        if isinstance(output, GraphQLEnumType):
-            for key, item in output.values.items():
-                raw = getattr(item.value, "value", item.value)
-                operand = (
-                    next(
-                        (key for key, item in named.values.items() if getattr(item.value, "value", item.value) == raw),
-                        raw,
-                    )
-                    if isinstance(named, GraphQLEnumType)
-                    else raw
-                )
-                if key != operand:
-                    value_map.append(DataQueryValueMap(key, operand))
         return DataQueryFilter(
-            field=name, operators=operators, scalar=scalar, values=values, value_map=tuple(value_map)
+            field=name, operators=operators, scalar=scalar, values=values, value_map=self.value_map(output, named)
         )
+
+    def value_map(self, source: object, target: object) -> tuple[DataQueryValueMap, ...]:
+        """Translate final enum symbols into the target enum or scalar domain."""
+
+        if not isinstance(source, GraphQLEnumType):
+            return ()
+        target_values = (
+            {getattr(item.value, "value", item.value): key for key, item in target.values.items()}
+            if isinstance(target, GraphQLEnumType) else {}
+        )
+        mappings: list[DataQueryValueMap] = []
+        for key, item in source.values.items():
+            raw = getattr(item.value, "value", item.value)
+            operand = target_values.get(raw, raw)
+            if key != operand:
+                mappings.append(DataQueryValueMap(key, operand))
+        return tuple(mappings)
 
     def operators(self, comparison: GraphQLInputObjectType | None) -> tuple[str, ...]:
         if comparison is None:
@@ -428,4 +441,16 @@ class ResourceQueryProjection:
         null_mode = drill.null_mode
         if null_mode == "isNull" and "isNull" not in field.filter.operators:
             null_mode = "unavailable"
-        return replace(drill, field=name, null_mode=null_mode)
+        key_type = self.schema.get_type(self.types.group_key) if self.types.group_key else None
+        key = key_type.fields.get(drill.value_key) if isinstance(key_type, GraphQLObjectType) else None
+        comparison = self.comparison(field.filter.field)
+        operand = comparison.fields.get("_eq") if comparison is not None else None
+        return replace(
+            drill,
+            field=name,
+            null_mode=null_mode,
+            value_map=self.value_map(
+                get_named_type(key.type) if key is not None else None,
+                get_named_type(operand.type) if operand is not None else None,
+            ),
+        )

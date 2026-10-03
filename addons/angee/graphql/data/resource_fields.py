@@ -6,6 +6,7 @@ from typing import Any
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from django.utils.choices import flatten_choices
 from strawberry.types import get_object_definition
 from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
@@ -517,7 +518,7 @@ def _field_enum_values(
             value=str(raw),
             description=str(label) if str(label).strip() else None,
         )
-        for raw, label in field.flatchoices
+        for raw, label in flatten_choices(field.get_choices(include_blank=field.blank, blank_choice=[("", "")]))
     )
 
 

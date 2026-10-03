@@ -11,7 +11,7 @@ dependencies = [
   "channels>=4.0",
   "channels-redis>=4.2",
   "django-zed-rebac[strawberry-django]>=0.25.3",
-  "strawberry-django-aggregates>=0.13.0",
+  "strawberry-django-aggregates>=0.13.1",
   "strawberry-django-hasura>=0.13.0",
   # The GraphQL addon owns the fork pin as a direct reference so every composed
   # host receives the same source through its generated addons group; repeating

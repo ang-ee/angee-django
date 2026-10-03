@@ -66,10 +66,10 @@ class ResourceThing(AngeeDataModel):
         app_label = "tests"
 
 
-def resource_thing_country_choices() -> tuple[tuple[str, str], ...]:
-    """Lazy string choices exercising metadata without a GraphQL enum."""
+def resource_thing_country_choices() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """Lazy grouped string choices exercising metadata without a GraphQL enum."""
 
-    return (("DE", "Germany"), ("NL", "Netherlands"))
+    return (("Europe", (("DE", "Germany"), ("NL", "Netherlands"))),)
 
 
 class ResourceChoiceThing(AngeeDataModel):
@@ -78,6 +78,19 @@ class ResourceChoiceThing(AngeeDataModel):
     sqid_prefix = "rct_"
 
     country = models.CharField(max_length=2, choices=resource_thing_country_choices)
+
+    class Meta:
+        app_label = "tests"
+
+
+class ResourceBlankChoiceThing(AngeeDataModel):
+    """Nullable flat string choices with an explicit blank storage value."""
+
+    sqid_prefix = "rbct_"
+    country = models.CharField(
+        max_length=2, choices=ResourceChoiceThing._meta.get_field("country").flatchoices,
+        blank=True, null=True, default="",
+    )
 
     class Meta:
         app_label = "tests"
@@ -1434,6 +1447,58 @@ def test_data_resource_metadata_projects_string_field_choices_as_select_options(
         ("DE", "Germany"),
         ("NL", "Netherlands"),
     )
+
+
+def test_blank_choice_groups_emit_separate_blank_null_and_real_buckets(transactional_db: Any) -> None:
+    """The schema's generated enum owns both display decoding and exact drills."""
+
+    @strawberry_django.type(ResourceBlankChoiceThing)
+    class ResourceBlankChoiceThingType(AngeeNode):
+        country: auto
+
+    resource = hasura_model_resource(
+        ResourceBlankChoiceThingType,
+        model=ResourceBlankChoiceThing,
+        name="blank_choice_things",
+        filterable=["country"],
+        sortable=["country"],
+        groupable=["country"],
+        aggregatable=["id"],
+        insert=False,
+        update=False,
+        delete=False,
+        get_queryset=lambda info: ResourceBlankChoiceThing.objects.all(),
+    )
+    schema = GraphQLSchemas([SchemaAddon({"public": {
+        "query": [resource.query], "types": [ResourceBlankChoiceThingType, *resource.types],
+    }})]).build("public")
+    metadata = schema.angee_resources[0]
+    assert [(value.value, value.description) for value in metadata.query.fields["country"].values] == [
+        ("", None), ("DE", "Germany"), ("NL", "Netherlands"),
+    ]
+    axis = metadata.query.axes["country"]
+    assert axis.server is not None and axis.drill is not None
+    assert [(item.from_value, item.to_value) for item in axis.server.value_map] == [("BLANK", "")]
+    assert axis.drill.value_map == axis.server.value_map
+    assert axis.drill.null_mode == "isNull"
+
+    with model_tables((ResourceBlankChoiceThing,)):
+        with system_context(reason="test.blank_choice_groups.seed"):
+            for country in ("", None, "DE"):
+                ResourceBlankChoiceThing.objects.create(country=country)
+        data = result_data(execute_schema(schema, """
+            query {
+              blank_choice_things_groups(group_by: [{field: COUNTRY}]) {
+                key { country } aggregate { count }
+              }
+              blank: blank_choice_things(where: {country: {_eq: ""}}) { country }
+              null: blank_choice_things(where: {country: {_is_null: true}}) { country }
+            }
+        """))
+        assert {bucket["key"]["country"]: bucket["aggregate"]["count"]
+                for bucket in data["blank_choice_things_groups"]} == {"BLANK": 1, None: 1, "DE": 1}
+        assert data["blank"] == [{"country": ""}]
+        assert data["null"] == [{"country": None}]
 
 
 def test_data_resource_metadata_rejects_unsupported_surface_scalar() -> None:
