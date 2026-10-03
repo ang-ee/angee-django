@@ -57,3 +57,13 @@ installed `angee` CLI.
   repo's own checks before handing off.
 - Work in `.work/` is shared across checkouts: **commit and push continuously**,
   through `jj` when `.work/.jj` exists (`.work/AGENTS.md`).
+- **Restart the running stack through the operator** from the stack root, never
+  by killing processes. The angee operator is the stack's monitoring and
+  management service; it is not part of the frontend or backend and keeps
+  running while it restarts them:
+  `angee --root "$ANGEE_ROOT" job run deps --chained-restart` restarts the whole
+  application, and `angee --root "$ANGEE_ROOT" restart <service>...` restarts
+  single services. Apply dependency changes with the whole-application restart;
+  never `uv sync` the stack's venv while the stack runs. Details and the
+  operator API:
+  [Restart the running stack](angee/docs/howto/getstarted.md#restart-the-running-stack).

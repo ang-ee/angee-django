@@ -166,7 +166,10 @@ the process in
 
 - Bring the stack up with `angee --root "$angee_root" dev` against the resolved
   stack root containing `angee.yaml`; the framework source slot is not that root.
-  Never start individual processes by hand.
+  Never start individual processes by hand; restart them through the angee
+  operator, the stack's management service, which keeps running while it
+  restarts the application
+  ([Restart the running stack](docs/howto/getstarted.md#restart-the-running-stack)).
 - Follow [Checks](docs/checks.md) for backend, frontend, schema, and browser
   verification before opening a pull request. It distinguishes prescribed local
   checks from the coverage currently provided by CI.

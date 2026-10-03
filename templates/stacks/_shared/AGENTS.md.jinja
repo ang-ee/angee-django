@@ -28,6 +28,24 @@ ANGEE_ROOT=$(pwd -P)
 test -f "$ANGEE_ROOT/angee.yaml" || exit 1
 ```
 
+## Restart Through The Operator
+
+The angee operator is this stack's monitoring and management service. It is not
+part of the frontend or the backend and keeps running while they restart, so use
+it for every restart, never by killing or relaunching processes by hand:
+
+```sh
+angee --root "$ANGEE_ROOT" job run {{ restart_job }} --chained-restart   # whole application
+angee --root "$ANGEE_ROOT" restart <service>...                       # single services
+```
+
+The whole-application restart is the same as Settings > Operator > Restart
+application: it re-runs the `{{ restart_job }}` job and its downstream jobs, then
+restarts every service that waits on them. Apply dependency changes with it, and
+never run `uv sync` on the stack's venv while the stack runs. The operator API, a
+dry-run preview and the rest are in
+[Restart the running stack](https://github.com/ang-ee/angee-django/blob/main/docs/howto/getstarted.md#restart-the-running-stack).
+
 When entering a source checkout, read and follow its nested `AGENTS.md` for code,
 testing, and repository workflow. This file remains authoritative for which
 stack owns workspace lifecycle.

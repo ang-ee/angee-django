@@ -782,6 +782,11 @@ and current contracts before applying a historical example to a new deployment.
   interpreter and environment owner when a console script cannot spawn; do not
   assume an application failure. [Checks](../checks.md) owns the supported
   commands, module invocation, and environment preparation.
+- **Celery workers do not autoreload.** Only the ASGI `runserver` reloads on
+  source edits. After changing task, model or settings code, restart the workers
+  through the operator (`angee --root "$ANGEE_ROOT" restart celery-worker` and any
+  other worker services), or run the whole-application restart; see
+  [Restart the running stack](../howto/getstarted.md#restart-the-running-stack).
 - **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
   `angee.compose` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
   supervised by Django's follow-imports autoreloader (mirrors Daphne's override).
