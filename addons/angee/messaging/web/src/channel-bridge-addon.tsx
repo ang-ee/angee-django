@@ -68,7 +68,7 @@ export function defineChannelBridgeAddon({
   instructionKey,
   disconnectAction = <ChannelDisconnectAction />,
   recordActions = [],
-}: ChannelBridgeAddonOptions): BaseAddon {
+}: ChannelBridgeAddonOptions) {
   const connectActionId = `${id}.connect`;
   const pairingActionId = `${id}.pairing`;
   const channelActions = formViewRecordActionsSlot(CHANNEL_MODEL, key);
