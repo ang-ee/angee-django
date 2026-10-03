@@ -11,6 +11,7 @@ import { testDataResource } from "@angee/metadata/testing";
 
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { useActionResultRun } from "./action-result-run";
+import { InAppLinkProvider } from "../../lib/in-app-link";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -64,6 +65,15 @@ beforeEach(() => {
 });
 
 describe("useActionResultRun", () => {
+  test("created records follow the inherited content navigation owner", async () => {
+    const navigateInApp = vi.fn();
+    const { result } = renderHook(() => useActionResultRun({ linkTo: "example.Item" }), {
+      wrapper: ({ children }) => wrapper({ children: <InAppLinkProvider navigate={navigateInApp}>{children}</InAppLinkProvider> }),
+    });
+    await act(async () => { await result.current(async () => ({ ok: true, message: "Created.", id: "item_9" })); });
+    expect(navigateInApp).toHaveBeenCalledExactlyOnceWith("/example/items/item_9");
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
   test("toasts success and deep-links to the created record", async () => {
     const { result } = renderHook(
       () => useActionResultRun({ linkTo: "example.Item" }),

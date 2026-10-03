@@ -1,7 +1,7 @@
 import { useMemo, type ComponentPropsWithRef, type ReactElement } from "react";
 import { createLink } from "@tanstack/react-router";
 
-import { useHrefLinkOptions } from "../lib/in-app-link";
+import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useOverflowCount } from "../lib/use-overflow-count";

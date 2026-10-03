@@ -176,36 +176,19 @@ function GalleryCard<TRow extends Row>({
   );
   const dragProps = dragSourceProps(dragPayload ?? null);
   const title = cardTitle(row, titleField);
-  // Card body (custom or default) plus the selection checkbox overlay — kept at
-  // card level so a custom `renderCard` still gets selection. The checkbox stops
-  // propagation, so ticking it never triggers the card's click/navigation.
-  const content = (
-    <>
-      {renderCard ? (
-        renderCard(row)
-      ) : (
-        <DefaultCardBody
-          row={row}
-          imageField={imageField}
-          title={title}
-          subtitleField={subtitleField}
-        />
-      )}
-      {onToggle ? (
-        <div
-          className="absolute left-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100 data-[selected=true]:opacity-100"
-          data-selected={selected || undefined}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <Checkbox
-            checked={selected}
-            onCheckedChange={(next) => onToggle(next)}
-            aria-label={`Select ${title || "item"}`}
-          />
-        </div>
-      ) : null}
-    </>
-  );
+  // Selection is a sibling of the interactive body, including with custom cards.
+  const selection = onToggle ? (
+    <div
+      className="absolute left-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 data-[selected=true]:opacity-100"
+      data-selected={selected || undefined}
+    >
+      <Checkbox
+        checked={selected}
+        onCheckedChange={(next) => onToggle(next)}
+        aria-label={`Select ${title || "item"}`}
+      />
+    </div>
+  ) : null;
 
   return (
     <GalleryCardFrame
@@ -213,10 +196,13 @@ function GalleryCard<TRow extends Row>({
       href={href}
       onClick={onClick}
       actions={actions}
+      selection={selection}
       dragProps={dragProps}
       cardClass={cardClass}
     >
-      {content}
+      {renderCard ? renderCard(row) : <DefaultCardBody
+        row={row} imageField={imageField} title={title} subtitleField={subtitleField}
+      />}
     </GalleryCardFrame>
   );
 }
@@ -226,6 +212,7 @@ interface GalleryCardFrameProps<TRow extends Row> {
   href?: string;
   onClick?: (row: TRow) => void;
   actions?: ReactNode;
+  selection?: ReactNode;
   dragProps: ReturnType<typeof dragSourceProps>;
   cardClass: string;
   children: ReactNode;
@@ -237,6 +224,7 @@ function GalleryCardFrame<TRow extends Row>({
   href,
   onClick,
   actions,
+  selection,
   dragProps,
   cardClass,
   children,
@@ -260,6 +248,7 @@ function GalleryCardFrame<TRow extends Row>({
           {children}
         </div>
       )}
+      {selection}
       {actions ? (
         <footer className="flex items-center justify-end gap-1 border-t border-border-subtle p-2">
           {actions}

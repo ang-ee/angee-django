@@ -8,11 +8,13 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { InAppLinkProvider, useInAppNavigator, type InAppNavigator } from "../lib/in-app-link";
 
 import { AppRuntimeProvider } from "../runtime";
 import {
   Breadcrumb,
   BreadcrumbLabelProvider,
+  BreadcrumbContentLinks,
   useBreadcrumbLeafLabel,
   useBreadcrumbCollectionLink,
 } from "./Breadcrumb";
@@ -37,6 +39,24 @@ afterEach(() => {
 });
 
 describe("Breadcrumb", () => {
+  test("content navigation stays stable across trail updates and follows the latest trail", () => {
+    const navigate = vi.fn();
+    let follow: InAppNavigator | undefined;
+    function Probe() {
+      follow = useInAppNavigator();
+      return null;
+    }
+    const view = render(<InAppLinkProvider navigate={navigate}>
+      <BreadcrumbContentLinks trail={[{ label: "First", href: "/first" }]}><Probe /></BreadcrumbContentLinks>
+    </InAppLinkProvider>);
+    const initial = follow;
+    view.rerender(<InAppLinkProvider navigate={navigate}>
+      <BreadcrumbContentLinks trail={[{ label: "Second", href: "/second" }]}><Probe /></BreadcrumbContentLinks>
+    </InAppLinkProvider>);
+    expect(follow).toBe(initial);
+    follow?.("/third");
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("/third", { state: { breadcrumbTrail: [{ label: "Second", href: "/second" }] } });
+  });
   test("renders the refine breadcrumb trail", async () => {
     refineMocks.breadcrumbs = [
       { label: "Notes", href: "/notes" },

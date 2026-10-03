@@ -26,7 +26,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
-import { useHrefLinkOptions } from "../lib/in-app-link";
+import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useDndKitSensors } from "../lib/dnd";

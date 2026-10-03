@@ -1,7 +1,7 @@
 import type { ComponentPropsWithRef, ReactElement, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
-import { useHrefLinkOptions } from "../lib/in-app-link";
+import { useHrefLinkOptions } from "./href-link-options";
 import { cn } from "../lib/cn";
 
 export interface AppBrandProps extends Omit<ComponentPropsWithRef<"a">, "children"> {

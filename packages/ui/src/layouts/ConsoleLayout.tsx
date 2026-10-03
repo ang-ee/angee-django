@@ -204,10 +204,12 @@ function ConsoleLayoutBody({
                   the open drawer's content mounts once and survives navigation.
                   Overlays render first, rails last, so a tab stays clickable to
                   toggle its drawer closed even while the panel is open. */}
-              <DrawerOverlay edge="right" />
-              <DrawerOverlay edge="bottom" />
-              <DrawerRail edge="right" />
-              <DrawerRail edge="bottom" />
+              <BreadcrumbContentLinks trail={nestedTrail}>
+                <DrawerOverlay edge="right" />
+                <DrawerOverlay edge="bottom" />
+                <DrawerRail edge="right" />
+                <DrawerRail edge="bottom" />
+              </BreadcrumbContentLinks>
             </>
           </StatuslineProvider>
         </ControlBandProvider>

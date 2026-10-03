@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ActionOutcome } from "@angee/refine";
 
 import { errorMessage, useToast } from "../../feedback";
+import { useInAppNavigator } from "../../lib/in-app-link";
 import { useUiT } from "../../i18n";
 import { useResourceRecordHref } from "../../runtime";
 
@@ -57,6 +58,7 @@ export function useActionResultRun(
   const t = useUiT();
   const toast = useToast();
   const navigate = useNavigate();
+  const navigateInApp = useInAppNavigator();
   const targetRecordHref = useResourceRecordHref(options.linkTo ?? "");
   const noResultTitle = options.noResultTitle;
   return React.useCallback<ActionResultRun>(
@@ -84,10 +86,11 @@ export function useActionResultRun(
       toast.success({ title: outcome.message });
       const target = outcome.id ? targetRecordHref?.(outcome.id) : undefined;
       if (target) {
-        void navigate({ href: target });
+        if (navigateInApp) navigateInApp(target);
+        else void navigate({ href: target });
       }
       return outcome;
     },
-    [navigate, noResultTitle, t, targetRecordHref, toast],
+    [navigate, navigateInApp, noResultTitle, t, targetRecordHref, toast],
   );
 }

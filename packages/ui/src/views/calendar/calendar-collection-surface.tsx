@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 
+import { useInAppNavigator } from "../../lib/in-app-link";
 import { useUiT } from "../../i18n";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { Button } from "../../ui/button";
@@ -65,6 +66,7 @@ export function CalendarCollectionSurface({
 }: CalendarCollectionSurfaceProps): React.ReactElement {
   const t = useUiT();
   const navigate = useNavigate();
+  const navigateInApp = useInAppNavigator();
   const { mode, anchor } = resourceView.state;
   const anchorDate = React.useMemo(() => calendarAnchorToDate(anchor), [anchor]);
   // `CalendarView` positions the grid from `range.start`; the fetch window is the
@@ -85,9 +87,12 @@ export function CalendarCollectionSurface({
   const handleEventClick = React.useCallback(
     (occurrence: Occurrence) => {
       // A marker with a source-declared route navigates; one without is inert.
-      if (occurrence.to) void navigate({ href: occurrence.to });
+      if (occurrence.to) {
+        if (navigateInApp) navigateInApp(occurrence.to);
+        else void navigate({ href: occurrence.to });
+      }
     },
-    [navigate],
+    [navigate, navigateInApp],
   );
 
   const viewControls = React.useMemo<ResourceToolbarViewControls>(

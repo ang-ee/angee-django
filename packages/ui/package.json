@@ -65,10 +65,6 @@
       "types": "./src/lib/index.ts",
       "import": "./src/lib/index.ts"
     },
-    "./lib/in-app-link": {
-      "types": "./src/lib/in-app-link.tsx",
-      "import": "./src/lib/in-app-link.tsx"
-    },
     "./lib/container-outlet": {
       "types": "./src/lib/container-outlet.tsx",
       "import": "./src/lib/container-outlet.tsx"
@@ -439,10 +435,6 @@
       "./lib": {
         "types": "./dist/lib/index.d.ts",
         "default": "./dist/lib/index.js"
-      },
-      "./lib/in-app-link": {
-        "types": "./dist/lib/in-app-link.d.ts",
-        "default": "./dist/lib/in-app-link.js"
       },
       "./lib/container-outlet": {
         "types": "./dist/lib/container-outlet.d.ts",

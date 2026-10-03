@@ -15,16 +15,18 @@ import {
   RelationPicker,
   SegmentedControl,
   Tag,
+  TextLink,
   Workbench,
   useChatter,
   useResourceRecordHrefLookup,
   useRouteHref,
   useRouteSearch,
   updateRouteSearch,
+  useInAppNavigator,
   type ResourceRecordHrefLookup,
   type RouteHref,
 } from "@angee/ui";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import { NexusGraphParties, NexusPartyGraph } from "./documents";
 import {
@@ -49,6 +51,7 @@ export function GraphPage(): React.ReactElement {
   const t = useNexusT();
   const search = useRouteSearch();
   const navigate = useNavigate();
+  const navigateInApp = useInAppNavigator();
   const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();
   const { setActiveTab, setCollapsed } = useChatter();
@@ -114,7 +117,7 @@ export function GraphPage(): React.ReactElement {
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const setSearch = React.useCallback(
     (patch: Record<string, unknown>) => {
-      void navigate({ to: ".", search: updateRouteSearch(patch) });
+      void navigate({ to: ".", search: updateRouteSearch(patch), state: true });
     },
     [navigate],
   );
@@ -177,7 +180,10 @@ export function GraphPage(): React.ReactElement {
                   setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.timeline");
                   setCollapsed(false);
                   const path = nodePath(recordHref, node);
-                  if (path) void navigate({ to: path });
+                  if (path) {
+                    if (navigateInApp) navigateInApp(path);
+                    else void navigate({ href: path });
+                  }
                 }}
               />
             }
@@ -253,7 +259,7 @@ function Inspector({
                     ) : null}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {path ? <Button asChild size="sm"><Link to={path}>{t("graph.openRecord")}</Link></Button> : null}
+                    {path ? <Button asChild size="sm"><TextLink href={path}>{t("graph.openRecord")}</TextLink></Button> : null}
                     {isPartyNode(node) || isCircleNode(node) ? (
                       <Button size="sm" variant="ghost" onClick={() => openTimeline(node)}>{t("graph.openTimeline")}</Button>
                     ) : null}
@@ -263,9 +269,9 @@ function Inspector({
             })}
             {nodes.length === 2 && mergeHref ? (
               <Button asChild variant="primary">
-                <Link to={mergeHref}>
+                <TextLink href={mergeHref}>
                   {t("graph.merge")}
-                </Link>
+                </TextLink>
               </Button>
             ) : (
               <p className="text-2xs text-fg-muted">{t("graph.mergeHint")}</p>
@@ -296,7 +302,7 @@ function EdgeDetails({
         <Tag tone={edge.kind === "tie_fading" ? "warning" : "neutral"}>{edge.kind.replaceAll("_", " ")}</Tag>
         {typeof edge.meta?.gravity === "number" ? <Tag tone="brand">{t("ties.gravity")} {edge.meta.gravity.toFixed(2)}</Tag> : null}
       </div>
-      {path ? <Button asChild size="sm"><Link to={path}>{t("graph.openRecord")}</Link></Button> : null}
+      {path ? <Button asChild size="sm"><TextLink href={path}>{t("graph.openRecord")}</TextLink></Button> : null}
     </div>
   );
 }

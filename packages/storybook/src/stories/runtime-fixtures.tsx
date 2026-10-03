@@ -4,6 +4,7 @@ import {
 import {
   AppRuntimeProvider,
   InAppLinkProvider,
+  routerNavigator,
   baseIcons,
   ConsoleLayout,
   defaultWidgets,
@@ -189,7 +190,7 @@ export function RoutedRuntimeFixture({
       show: `${collectionPath}/:${recordParam}`,
       meta: { label: resourceLabel },
     }] : undefined;
-    const root = createRootRoute({ component: () => <InAppLinkProvider navigate={(href, options) => { void router.navigate({ href, ...options }); }}><RuntimeFixture
+    const root = createRootRoute({ component: () => <InAppLinkProvider navigate={navigate}><RuntimeFixture
       activeSchema={activeSchema}
       schemas={schemas}
       runtime={runtime}
@@ -218,6 +219,7 @@ export function RoutedRuntimeFixture({
         return query ? `?${query}` : "";
       },
     });
+    const navigate = routerNavigator(router);
     return router;
   }, [activeSchema, children, collectionPath, initialEntry, operationDocuments, recordParam, resourceLabel, resourceName, runtime, schemas]);
   return <RouterProvider router={router} />;
