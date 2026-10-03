@@ -4,7 +4,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { enDecisionsMessages } from "./i18n";
 
 export { DECISION_MODEL } from "./documents.console";
-export { decisionContent, useDecisionContent, type DecisionContentProps } from "./slots";
+export { decisionContent, useDecisionContent, type DecisionContentProps } from "./content";
 export { decisionRecordTab } from "./RecordDecisions";
 
 export default defineBaseAddon({

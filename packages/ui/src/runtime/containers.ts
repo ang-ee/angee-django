@@ -1,7 +1,9 @@
 import { useMemo, type ComponentType, type ReactNode } from "react";
 import { holdsPermission, type Row } from "@angee/metadata";
 
-import { positionSiblings } from "../lib/position";
+import { developmentMode } from "../lib/development-mode";
+import { orderById, positionSiblings } from "../lib/position";
+import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
 import type { ChatterTabContent, DrawerContribution, DrawerEdge } from "./contracts";
 import { useAppRuntime } from "./runtime";
@@ -123,7 +125,9 @@ export type ContainerEntry<TContent> = {
   unique?: "key";
   /** On an addon's own container: also addressed per model (`<model>#<name>`), inheriting along MTI parents. */
   models?: true;
-} & { readonly [child: `${string}.${string}`]: ContainerChild<TContent> | ContainerAlteration };
+} & { readonly [child: `${string}.${string}`]: ContainerChild<TContent> | ContainerAlteration }
+  // The framework's own children keep bare ids (the built-in view kinds); any layer may adjust them.
+  & { readonly [child in BuiltInResourceViewKind]?: ContainerAlteration };
 
 /** An addon's `containers`: addresses (`node#name`) to an entry or conditional alternatives. */
 export type ContainersDeclaration = {
@@ -137,6 +141,8 @@ export interface CoreContainer {
   models?: boolean;
   /** Children the framework itself declares, under bare ids (`list`, `board`) its owner already persists. */
   children?: Readonly<Record<string, ContainerChild>>;
+  /** The owner also adds children at render time (a page's chatter tabs), so `only` may name ids composition cannot know. */
+  extras?: true;
 }
 
 /** A child as composed: its id, its declaring addon and the address it was declared at. */
@@ -149,6 +155,8 @@ export interface ComposedContainerChild<TContent = unknown> extends ContainerChi
 /** A render-time narrowing one layer declared on one address. */
 export interface ContainerRule {
   layer: string;
+  /** Dependency rank: rules apply in this order, so a dependent's `hide: false` follows its dependency's `hide`. */
+  rank: number;
   when?: ContainerCondition;
   only?: readonly string[];
   except?: readonly string[];
@@ -161,13 +169,14 @@ export interface ContainerRule {
 /** The composed containers the runtime renders from. */
 export interface ComposedContainers {
   /** Every container: its owner (`framework` for core ones) and whether it takes model addresses. */
-  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key" }>>;
+  declared: Readonly<Record<string, { owner: string; models: boolean; unique?: "key"; extras?: true }>>;
   children: Readonly<Record<string, readonly ComposedContainerChild[]>>;
   rules: Readonly<Record<string, readonly ContainerRule[]>>;
   /** Children a layer removed, and who removed them. */
   removed: readonly { address: string; id: string; by: string }[];
   /** The layer behind each child field, keyed `address/id`. */
   provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** Non-fatal findings, such as a position against a child the container does not hold. */
   diagnostics: readonly string[];
 }
 
@@ -177,6 +186,8 @@ export interface ContainerScope {
   routes: readonly string[];
   perspective: string | null;
 }
+
+const warnedAddresses = new Set<string>();
 
 export const EMPTY_CONTAINERS: ComposedContainers = { declared: {}, children: {}, rules: {}, removed: [], provenance: {}, diagnostics: [] };
 
@@ -190,15 +201,20 @@ export function containersFromChildren(
   core: readonly CoreContainer[],
   children: Readonly<Record<string, Readonly<Record<string, ContainerChild>>>>,
 ): ComposedContainers {
+  const composed: Record<string, ComposedContainerChild[]> = {};
+  for (const container of core) {
+    for (const [id, child] of Object.entries(container.children ?? {})) {
+      (composed[container.address] ??= []).push({ ...child, id, owner: "framework", address: container.address });
+    }
+  }
+  for (const [address, byId] of Object.entries(children)) {
+    for (const [id, child] of Object.entries(byId)) (composed[address] ??= []).push({ ...child, id, owner: id.split(".")[0]!, address });
+  }
   return {
     ...EMPTY_CONTAINERS,
-    declared: Object.fromEntries(core.map((container) => [container.address, { owner: "framework", models: container.models === true }])),
-    children: {
-      ...Object.fromEntries(core.filter((container) => container.children).map((container) => [container.address,
-        Object.entries(container.children!).map(([id, child]) => ({ ...child, id, owner: "framework", address: container.address }))])),
-      ...Object.fromEntries(Object.entries(children).map(([address, byId]) => [address,
-        Object.entries(byId).map(([id, child]) => ({ ...child, id, owner: id.split(".")[0]!, address }))])),
-    },
+    declared: Object.fromEntries(core.map((container) => [container.address,
+      { owner: "framework", models: container.models === true, ...(container.extras ? { extras: true as const } : {}) }])),
+    children: composed,
   };
 }
 const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [], perspective: null };
@@ -208,14 +224,6 @@ export function containerName(address: string): string {
   const at = address.indexOf("#");
   if (at <= 0 || at === address.length - 1) throw new Error(`Container address "${address}" must be "node#name".`);
   return address.slice(at + 1);
-}
-
-function matches(condition: ContainerCondition | undefined, scope: ContainerScope): boolean {
-  if (!condition) return true;
-  const any = (wanted: string | readonly string[] | undefined, present: readonly string[]): boolean =>
-    wanted === undefined || (typeof wanted === "string" ? [wanted] : wanted).some((id) => present.includes(id));
-  return any(condition.app, scope.apps) && any(condition.route, scope.routes)
-    && any(condition.perspective, scope.perspective ? [scope.perspective] : []);
 }
 
 export interface ResolveContainerOptions {
@@ -231,63 +239,98 @@ export interface ResolveContainerOptions {
    * follow the composed ones and get the same narrowing.
    */
   extra?: readonly ComposedContainerChild[];
+  /**
+   * Every child the layers admit, whatever the row: `impl` children and all
+   * variants included, no permission check. A record's field projection reads it.
+   */
+  projection?: boolean;
+}
+
+/** A record's models for a container, most general first: its MTI parent, then itself. */
+export function modelChain(canonical: string | null | undefined, model: string | null | undefined): readonly string[] {
+  return [...new Set([canonical, model].filter((label): label is string => Boolean(label)))];
+}
+
+function matches(condition: ContainerCondition | undefined, scope: ContainerScope): boolean {
+  if (!condition) return true;
+  const any = (wanted: string | readonly string[] | undefined, present: readonly string[]): boolean =>
+    wanted === undefined || (typeof wanted === "string" ? [wanted] : wanted).some((id) => present.includes(id));
+  return any(condition.app, scope.apps) && any(condition.route, scope.routes)
+    && any(condition.perspective, scope.perspective ? [scope.perspective] : []);
 }
 
 /**
  * The children of a container as one page renders them: the kind-level address
- * and each model's address merged and positioned, variants applied for the row,
- * then every layer's narrowing whose condition holds, then the row's permission.
+ * and each model's address merged and positioned (ties in id order), then every
+ * layer's narrowing whose condition holds, applied in dependency order, with
+ * variants standing in for their originals on matching rows and the row's
+ * permission last. Narrowing by a variant's own id drops that variant (its
+ * original returns); narrowing by an original's id carries its variants along.
  */
 export function resolveContainer<TContent = unknown>(
   composed: ComposedContainers,
   address: string,
-  { models = [], scope = EMPTY_SCOPE, row, impls = [], extra = [] }: ResolveContainerOptions = {},
+  { models = [], scope = EMPTY_SCOPE, row, impls = [], extra = [], projection = false }: ResolveContainerOptions = {},
 ): readonly ComposedContainerChild<TContent>[] {
-  // Composition validates every address; a runtime composed without this container (a story, a bare test) has no children for it.
+  // Composition validates every address; a runtime composed without this container
+  // (a story, a bare test) has no composed children for it, only the page's own.
   const declared = composed.declared[address];
-  if (!declared) return [];
+  if (!declared) return extra as readonly ComposedContainerChild<TContent>[];
   const name = containerName(address);
   const addresses = declared.models ? [address, ...models.map((model) => `${model}#${name}`)] : [address];
   const merged = [
-    ...positionSiblings(addresses.flatMap((at) => composed.children[at] ?? []), `Children of "${address}"`),
+    ...positionSiblings(orderById(addresses.flatMap((at) => composed.children[at] ?? [])), `Children of "${address}"`),
     ...extra,
   ];
-
-  // Variants for the row's implementation stand in for their originals; one the
-  // row lacks the permission for leaves the original in place (G-13).
-  const permitted = (child: ComposedContainerChild): boolean =>
-    row === undefined || !child.permission || holdsPermission(row, child.permission);
-  const variants = new Map<string, ComposedContainerChild>();
-  for (const child of merged) {
-    if (!child.variant || !impls.includes(child.variant.impl) || !permitted(child)) continue;
-    const taken = variants.get(child.variant.of);
-    if (taken) throw new Error(`Children "${taken.id}" and "${child.id}" of "${address}" are both variants of "${child.variant.of}" for this row.`);
-    variants.set(child.variant.of, child);
+  const rules = addresses.flatMap((at) => composed.rules[at] ?? [])
+    .filter((rule) => matches(rule.when, scope))
+    .map((rule, index) => ({ rule, index }))
+    .sort((left, right) => left.rule.rank - right.rule.rank || left.index - right.index)
+    .map(({ rule }) => rule);
+  const hidden = new Set<string>();
+  for (const rule of rules) {
+    for (const id of rule.hide ?? []) hidden.add(id);
+    for (const id of rule.show ?? []) hidden.delete(id);
   }
+  const excepted = new Set(rules.flatMap((rule) => rule.except ?? []));
+  const blocked = (id: string): boolean => hidden.has(id) || excepted.has(id);
+
   // A variant carries its original's admission: its id and its owner for `only`'s exemption.
   const originals = new Map(merged.map((child) => [child.id, child]));
   const lineage = (child: ComposedContainerChild): string => child.variant?.of ?? child.id;
   const ownerOf = (child: ComposedContainerChild): string => originals.get(lineage(child))?.owner ?? child.owner;
-  let visible = merged.filter((child) => !child.variant || variants.get(child.variant.of) === child)
-    .filter((child) => !variants.has(child.id));
+  const permitted = (child: ComposedContainerChild): boolean =>
+    projection || row === undefined || !child.permission || holdsPermission(row, child.permission);
 
-  const hidden = new Set<string>();
-  for (const at of addresses) {
-    for (const rule of composed.rules[at] ?? []) {
-      if (!matches(rule.when, scope)) continue;
-      if (rule.only) {
-        const kept = new Set(rule.only);
-        visible = visible.filter((child) => kept.has(lineage(child)) || rule.exempt.includes(ownerOf(child)));
-      }
-      if (rule.except) visible = visible.filter((child) => !rule.except!.includes(lineage(child)));
-      for (const id of rule.hide ?? []) hidden.add(id);
-      for (const id of rule.show ?? []) hidden.delete(id);
+  let visible = merged.filter((child) => !blocked(child.id) && !blocked(lineage(child)));
+  if (!projection) {
+    // Variants for the row's implementation stand in for their originals; one the
+    // row lacks the permission for leaves the original in place (G-13).
+    const variants = new Map<string, ComposedContainerChild>();
+    for (const child of visible) {
+      if (!child.variant || !impls.includes(child.variant.impl) || !permitted(child)) continue;
+      const taken = variants.get(child.variant.of);
+      if (taken) throw new Error(`Children "${taken.id}" and "${child.id}" of "${address}" are both variants of "${child.variant.of}" for this row.`);
+      variants.set(child.variant.of, child);
     }
+    // A variant positioned in its own right keeps its place; one without stands where its original stood.
+    const placed = (child: ComposedContainerChild): boolean =>
+      child.sequence !== undefined || child.before !== undefined || child.after !== undefined;
+    visible = visible
+      .filter((child) => !child.variant || (variants.get(child.variant.of) === child && placed(child)))
+      .flatMap((child) => {
+        const variant = variants.get(child.id);
+        if (!variant) return [child];
+        return placed(variant) ? [] : [variant];
+      })
+      .filter((child) => child.impl === undefined || impls.includes(child.impl));
   }
-  visible = visible.filter((child) => !hidden.has(lineage(child)));
-  visible = visible.filter((child) => child.impl === undefined || impls.includes(child.impl));
-  visible = visible.filter(permitted);
-  return visible as readonly ComposedContainerChild<TContent>[];
+  for (const rule of rules) {
+    if (!rule.only) continue;
+    const kept = new Set(rule.only);
+    visible = visible.filter((child) => kept.has(child.id) || kept.has(lineage(child)) || rule.exempt.includes(ownerOf(child)));
+  }
+  return visible.filter(permitted) as readonly ComposedContainerChild<TContent>[];
 }
 
 /**
@@ -300,10 +343,14 @@ export function useContainer<TContent = unknown>(
   options: Omit<ResolveContainerOptions, "scope"> = {},
 ): readonly ComposedContainerChild<TContent>[] {
   const { containers = EMPTY_CONTAINERS, containerScope } = useAppRuntime();
-  const { models, row, impls, extra } = options;
+  const { models, row, impls, extra, projection } = options;
+  if (developmentMode() && containers !== EMPTY_CONTAINERS && !containers.declared[address] && !warnedAddresses.has(address)) {
+    warnedAddresses.add(address);
+    console.warn(`[angee] useContainer("${address}"): no such container was composed.`);
+  }
   return useMemo(
-    () => resolveContainer<TContent>(containers, address, { models, row, impls, extra, ...(containerScope ? { scope: containerScope } : {}) }),
-    [address, containerScope, containers, extra, impls, models, row],
+    () => resolveContainer<TContent>(containers, address, { models, row, impls, extra, projection, ...(containerScope ? { scope: containerScope } : {}) }),
+    [address, containerScope, containers, extra, impls, models, projection, row],
   );
 }
 

@@ -13,7 +13,7 @@ import {
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
-import { useContainer, useFormOverride } from "../../runtime";
+import { useContainer, useFormOverride, modelChain } from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
@@ -243,12 +243,14 @@ export function useFormViewSurface({
   const formOverride = useFormOverride(modelLabel);
   // Children of `form#…` show on every form; a model's own, and its MTI parent's, on its records.
   const models = React.useMemo(
-    () => [...new Set([canonicalResource, modelLabel])].filter(Boolean),
+    () => modelChain(canonicalResource, modelLabel),
     [canonicalResource, modelLabel],
   );
   const sectionEntries = useContainer<React.ReactNode>("form#sections", { models });
-  const primaryActionFieldEntries = useContainer("form#actions", { models });
-  const menuActionFieldEntries = useContainer("form#actions-menu", { models });
+  // The record projection reads every verb's fields, whichever implementation the row turns out to be.
+  const primaryActionFieldEntries = useContainer("form#actions", { models, projection: true });
+  const menuActionFieldEntries = useContainer("form#actions-menu", { models, projection: true });
+  const chromeFieldEntries = useContainer("form#chrome", { models, projection: true });
   const railEntries = useContainer<React.ReactNode>("form#rail", { models });
   React.useEffect(() => {
     if (!developmentMode()) return;
@@ -268,11 +270,13 @@ export function useFormViewSurface({
       }
     }
   }, [sectionEntries]);
-  const slotDeclarations = React.useMemo(
+  const contributedDeclarations = React.useMemo(
     () =>
-      sectionEntries.flatMap((entry, entryOrder) => {
-        const sequence = entry.sequence ?? 0;
-        return [
+      // Contributed groups and tabs keep the container's order (its sequences and
+      // before/after); a non-decreasing sequence interleaves them with the page's own groups at 0.
+      sectionEntries.reduce<{ floor: number; declarations: ContributedFormDeclaration[] }>(({ floor, declarations }, entry, entryOrder) => {
+        const sequence = Math.max(floor, entry.sequence ?? 0);
+        return { floor: sequence, declarations: [...declarations,
           ...parsePageGroups(entry.content as React.ReactNode).map(
             (group, childOrder) => ({
               kind: "group" as const,
@@ -291,25 +295,25 @@ export function useFormViewSurface({
               order: entryOrder * 1000 + childOrder,
             }),
           ),
-        ];
-      }).sort(compareSlotDeclaration),
+        ] };
+      }, { floor: Number.NEGATIVE_INFINITY, declarations: [] }).declarations,
     [sectionEntries],
   );
-  const slotGroups = React.useMemo(
+  const contributedGroups = React.useMemo(
     () =>
-      slotDeclarations.flatMap((declaration) =>
+      contributedDeclarations.flatMap((declaration) =>
         declaration.kind === "group" ? [declaration.group] : [],
       ),
-    [slotDeclarations],
+    [contributedDeclarations],
   );
-  const slotGroupSequences = React.useMemo(
+  const contributedGroupSequences = React.useMemo(
     () =>
-      slotDeclarations.flatMap((declaration) =>
+      contributedDeclarations.flatMap((declaration) =>
         declaration.kind === "group" ? [declaration.sequence] : [],
       ),
-    [slotDeclarations],
+    [contributedDeclarations],
   );
-  const slotActions = React.useMemo(
+  const contributedActions = React.useMemo(
     () =>
       sectionEntries.flatMap((entry) =>
         parsePageActions(entry.content as React.ReactNode),
@@ -320,12 +324,14 @@ export function useFormViewSurface({
   // projection. Read that field from its declared owner, never select invalid
   // child fields or require every consumer to duplicate the parent projection.
   const contributionFields = React.useMemo(() => [
-    ...slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
+    ...contributedDeclarations.flatMap((declaration) => declaration.kind === "tab"
       ? declaration.tab.requiredFields ?? [] : []),
+    ...sectionEntries.flatMap((entry) => entry.requiredFields ?? []),
     ...primaryActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
     ...menuActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
+    ...chromeFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
     ...railEntries.flatMap((entry) => entry.requiredFields ?? []),
-  ], [menuActionFieldEntries, primaryActionFieldEntries, railEntries, slotDeclarations]);
+  ], [chromeFieldEntries, menuActionFieldEntries, primaryActionFieldEntries, railEntries, sectionEntries, contributedDeclarations]);
   const canonicalTabFields = React.useMemo(() => [...new Set(
     contributionFields.filter((path) => {
           const head = path.split(".")[0]!;
@@ -356,19 +362,19 @@ export function useFormViewSurface({
   );
   const baseGroups = overrideGroups ?? groups ?? childGroups;
   const declaredGroups = React.useMemo(
-    () => [...baseGroups, ...slotGroups],
-    [baseGroups, slotGroups],
+    () => [...baseGroups, ...contributedGroups],
+    [baseGroups, contributedGroups],
   );
   const declaredGroupSequences = React.useMemo(
     () => [
       ...baseGroups.map(() => 0),
-      ...slotGroupSequences,
+      ...contributedGroupSequences,
     ],
-    [baseGroups, slotGroupSequences],
+    [baseGroups, contributedGroupSequences],
   );
   const declaredActions = React.useMemo(
-    () => [...(overrideActions ?? actions ?? childActions), ...slotActions],
-    [actions, childActions, overrideActions, slotActions],
+    () => [...(overrideActions ?? actions ?? childActions), ...contributedActions],
+    [actions, childActions, overrideActions, contributedActions],
   );
   const resolvedFields = React.useMemo(
     () =>
@@ -611,7 +617,7 @@ export function useFormViewSurface({
     () => mergeRecordTabs(
       (recordTabs ?? EMPTY_RECORD_TABS).filter((tab) =>
         !tab.visibleWhen || (tabRecord != null && tab.visibleWhen(tabRecord))),
-      slotDeclarations.flatMap((declaration): RecordTabDescriptor[] => {
+      contributedDeclarations.flatMap((declaration): RecordTabDescriptor[] => {
         if (declaration.kind !== "tab") return [];
         const tab = declaration.tab;
         if (tab.hidden || (tab.visibleWhen &&
@@ -625,7 +631,7 @@ export function useFormViewSurface({
         }];
       }),
     ),
-    [recordTabs, slotDeclarations, tabRecord],
+    [recordTabs, contributedDeclarations, tabRecord],
   );
   const activeRecordTab = recordTabList.some((tab) => tab.id === requestedRecordTab)
     ? requestedRecordTab
@@ -686,7 +692,7 @@ export function useFormViewSurface({
   };
 }
 
-type SlotFormDeclaration =
+type ContributedFormDeclaration =
   | {
       kind: "group";
       group: GroupDescriptor;
@@ -699,13 +705,6 @@ type SlotFormDeclaration =
       sequence: number;
       order: number;
     };
-
-function compareSlotDeclaration(
-  left: SlotFormDeclaration,
-  right: SlotFormDeclaration,
-): number {
-  return left.sequence - right.sequence || left.order - right.order;
-}
 
 function compareFormSections(
   left: FormSectionModel,

@@ -5,7 +5,7 @@ import {
   type Row,
 } from "@angee/metadata";
 
-import { useContainer, type ComposedContainerChild } from "../../runtime";
+import { useContainer, type ComposedContainerChild, modelChain } from "../../runtime";
 import { optionToken } from "../../widgets/types";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
 
@@ -56,7 +56,7 @@ export function useFormViewRecordChrome({
     [actionsBlocked, canonicalResource, dataResource, formReadOnly, id, isCreate, modelLabel, record],
   );
   const models = React.useMemo(
-    () => [...new Set([canonicalResource, modelLabel])].filter(Boolean),
+    () => modelChain(canonicalResource, modelLabel),
     [canonicalResource, modelLabel],
   );
   // The row's ImplClassField values select the bridges' variants of a verb.

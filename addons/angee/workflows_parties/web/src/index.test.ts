@@ -1,13 +1,18 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { DECISION_CONTENT_SLOT } from "@angee/decisions";
+import decisions from "@angee/decisions";
+import { resolveContainer } from "@angee/ui";
 import { expect, test } from "vitest";
 
 import workflowsParties from "./index";
 
 test("composes identity and mapped pair content into the shared decisions inbox", () => {
   expect(() => expectValidBaseAddon(workflowsParties)).not.toThrow();
-  expect(workflowsParties.slots?.map(({ slot, id }) => ({ slot, id }))).toEqual([
-    { slot: DECISION_CONTENT_SLOT, id: "review-party-identity" },
-    { slot: DECISION_CONTENT_SLOT, id: "review-dupe-party" },
+  const { containers } = composeAddons([decisions, { ...workflowsParties, dependsOn: ["decisions"] }],
+    { canonicalModelLabel: (model) => model });
+  // One child per decision kind, keyed by the kind the inbox renders; unsequenced siblings resolve in id order.
+  expect(resolveContainer(containers, "decisions#content").map(({ id, key }) => ({ id, key }))).toEqual([
+    { id: "workflows-parties.review-dupe-party", key: "review-dupe-party" },
+    { id: "workflows-parties.review-party-identity", key: "review-party-identity" },
   ]);
 });

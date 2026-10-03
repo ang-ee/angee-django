@@ -247,6 +247,7 @@ cycle, but new code should import `ColorSchemePreference` and
 `useColorSchemePreference` and target `data-color-scheme`.
 
 `angee.appearance_integrate` is optional. It adds a signed-in GraphQL analysis
-operation and a tool on the Appearance page. The server fetches only bounded
+operation and a tool on the Appearance page, as an `appearance.settings#tools`
+child. The server fetches only bounded
 public website facts through the shared pinned HTTP transport. Remote HTML,
 styles and images are never inserted into the browser.

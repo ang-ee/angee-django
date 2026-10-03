@@ -19,7 +19,7 @@ import { code } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
 import { useAcpRuntime, type AcpRuntime } from "../useAcpRuntime";
-import { AgentChatProvider, useAgentChatContext, type AgentChatProps } from "../chat-slot";
+import { AgentChatProvider, useAgentChatContext, type AgentChatProps } from "../chat-context";
 import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";

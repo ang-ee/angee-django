@@ -98,6 +98,7 @@ const iam = defineBaseAddon({
     },
     "iam.User#actions-menu": {
       "iam.issue-password": {
+        sequence: 5,
         requiredFields: ["can_issue_password"],
         content: createElement(IssuePasswordRecordAction),
       },
@@ -110,6 +111,7 @@ const iam = defineBaseAddon({
     },
     "integrate.OAuthClient#sections": {
       "iam.oidc-login": {
+        sequence: 10,
         // OIDC login lives on the OAuth client itself; this contributes the OIDC tab
         // into integrate's OAuth-client form, gated to the OIDC provider types this
         // addon owns. No separate OIDC page/model — it's the same OAuthClient row.

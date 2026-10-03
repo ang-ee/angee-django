@@ -58,16 +58,18 @@ import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
   applyDeveloperModeSearch,
+  modelChain,
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
   HOME_PATH_PREFERENCE_KEY,
   createRouteHref,
   type AppRuntime,
+  type ComposedContainers,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
-import { validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
+import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import { composeAddons } from "./define-addon";
 import {
   ModalsHost,
@@ -77,8 +79,7 @@ import {
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
-import { ViewAsBanner, ViewAsPicker } from "@angee/ui/chrome/ViewAs";
-import { DeveloperModeMenuItem } from "@angee/ui/chrome/DeveloperMode";
+import { ViewAsBanner } from "@angee/ui/chrome/ViewAs";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
   MenuTree,
@@ -231,7 +232,7 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
 /**
  * `createApp` — the single composition root. It merges the addon manifests into
  * one runtime (routes · route-resolved menus · widgets ·
- * i18n · slots), owns the provider stack (GraphQL clients · runtime · live
+ * i18n · containers), owns the provider stack (GraphQL clients · runtime · live
  * invalidation · auth), builds the router, and mounts one persistent layout
  * route per refine layout. The host writes one
  * `createApp({...}).mount(...)`.
@@ -261,13 +262,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   const composed = composeAddons(
     [
-      { id: "base", icons: baseIcons, containers: {
-        "shell#notices": { "base.view-as": { content: <ViewAsBanner /> } },
-        "shell#user-menu": {
-          "base.view-as": { content: <ViewAsPicker /> },
-          "base.developer-mode": { sequence: 90, content: <DeveloperModeMenuItem /> },
-        },
-      }, layoutProviders: layoutNamesForRoutes(input.layouts)
+      { id: "base", icons: baseIcons, layoutProviders: layoutNamesForRoutes(input.layouts)
         .filter((layout) => layout !== "console")
         .map((layout) => ({ id: "view-as", layout, component: ViewAsLayoutNotice })),
       },
@@ -314,6 +309,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
     : routeHref;
   const navigationTree = projection.navigationTree;
+  validateContainerConditions(composed.containers, {
+    routes: routesByName,
+    apps: menuTree.byId,
+    perspectives: new Set(input.addons.flatMap((addon) => Object.keys(addon.perspectives ?? {}))),
+  });
   for (const preset of Object.values(composed.resourceViews)) {
     const models = Object.values(schemas).flatMap((schema) => {
       const model = schema.fieldMetadata.labels[preset.resource];
@@ -325,6 +325,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
       catch (error) { failure = error; return false; }
     });
     if (!valid) throw failure ?? new Error(`Unknown resource "${preset.resource}" in view "${preset.id}".`);
+    // A preset may open on a contributed kind only where `resource#views` offers it for that resource.
+    if (preset.view && !isBuiltInResourceViewKind(preset.view)) {
+      const chain = modelChain(models[0]?.resource.canonicalLabel, preset.resource);
+      const offered = ["resource#views", ...chain.map((model) => `${model}#views`)]
+        .some((address) => composed.containers.children[address]?.some((child) => child.id === preset.view));
+      if (!offered) throw new Error(`Resource view "${preset.id}" opens on view kind "${preset.view}", which no addon contributes to "${preset.resource}#views".`);
+    }
   }
   const validateDefaultView = (id: string, route: BaseAddonRoute | undefined, menuId?: string) => {
     const preset = composed.resourceViews[id];
@@ -476,7 +483,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         routesByResource: selected,
         routeHref: runtimeRouteHref,
         composition: explain,
-        // Public routes and sign-in sit outside every app, as they did under surface admission.
+        // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
         containerScope: {
           apps: app && !publicRoute ? [app] : [],
           routes: routeTrail(activeRoute),
@@ -867,4 +874,30 @@ function mergeI18n(base: I18nResources, addons: I18nResources): I18nResources {
     }
   }
   return { ...base, ...addons };
+}
+
+/**
+ * A container condition names a route, an app (a menu node) or a perspective
+ * that exists; a misspelt one would never match, so it fails at boot.
+ */
+function validateContainerConditions(
+  containers: ComposedContainers,
+  known: { routes: ReadonlyMap<string, unknown>; apps: ReadonlyMap<string, unknown>; perspectives: ReadonlySet<string> },
+): void {
+  const listed = (value: string | readonly string[] | undefined): readonly string[] =>
+    value === undefined ? [] : typeof value === "string" ? [value] : value;
+  for (const [address, rules] of Object.entries(containers.rules)) {
+    for (const rule of rules) {
+      const where = `Addon "${rule.layer}" narrows "${address}"`;
+      for (const route of listed(rule.when?.route)) {
+        if (!known.routes.has(route)) throw new Error(`${where} on unknown route "${route}".`);
+      }
+      for (const app of listed(rule.when?.app)) {
+        if (!known.apps.has(app)) throw new Error(`${where} in unknown app "${app}".`);
+      }
+      for (const perspective of listed(rule.when?.perspective)) {
+        if (!known.perspectives.has(perspective)) throw new Error(`${where} in unknown perspective "${perspective}".`);
+      }
+    }
+  }
 }

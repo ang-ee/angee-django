@@ -8,7 +8,7 @@ export default defineBaseAddon({
   i18n: { platformIntegrateOperator: enPlatformIntegrateOperatorMessages },
   containers: {
     "shell#notices": {
-      "platform_integrate_operator.restart": { content: <RestartNotice /> },
+      "platform_integrate_operator.restart": { sequence: 10, content: <RestartNotice /> },
     },
   },
 });

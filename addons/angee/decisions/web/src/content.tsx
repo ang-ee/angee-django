@@ -1,4 +1,4 @@
-import type { ComponentType, ReactElement, ReactNode } from "react";
+import { useMemo, type ComponentType, type ReactElement, type ReactNode } from "react";
 import { makeContext, ContainerOutlet, useContainer, type ComposedContainerChild, type ContainerChild } from "@angee/ui";
 
 import type { Decision } from "./documents.console";
@@ -40,7 +40,8 @@ export function DecisionContentOutlet(): ReactElement {
 
 /** The selected kind's registered presentation replaces generic fact display. */
 export function useDecisionContentEntries(kind: string): readonly ComposedContainerChild[] {
-  return useContainer("decisions#content").filter((entry) => entry.key === kind);
+  const entries = useContainer("decisions#content");
+  return useMemo(() => entries.filter((entry) => entry.key === kind), [entries, kind]);
 }
 
 /** An empty `decisions#origin` renders nothing. Children read the decision with useDecisionContent. */

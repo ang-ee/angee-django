@@ -63,6 +63,7 @@ export interface RuntimeComposition {
     rules: readonly { address: string; layer: string; summary: string }[];
     /** The layer behind each child field, keyed `address/id`. */
     provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
+    diagnostics: readonly string[];
   };
 }
 
@@ -166,7 +167,7 @@ export interface ChatterTabContent {
   useCount?: (context: ChatterViewContext) => number | undefined;
   panelClassName?: string;
   render?: (context: ChatterViewContext) => ReactNode;
-  /** Earlier ids a `?aside=` link may still carry, kept for one release. */
+  /** Earlier ids a `?chatterTab=` link may still carry, kept for one release. */
   aliases?: readonly string[];
 }
 
@@ -184,12 +185,10 @@ export interface PreviewContribution {
 export type DrawerEdge = "right" | "bottom";
 
 /**
- * A non-modal overlay drawer contributed at build time. Pulled out by the shell's
- * edge stripe-tabs, sticky across navigation (mounted once above the router
- * outlet), and tabbed (multiple drawers on one edge become sibling tabs). Merges
- * by `(edge, id)` (fail-fast on collision, like widgets/previews) and orders by
- * `sequence`. The shell renders `render()` into a plain edge-anchored panel —
- * no scrim, no focus trap (JetBrains "Undock").
+ * A docked drawer as the shell renders it: a `shell#drawers-<edge>` child's id,
+ * sequence and content (`DockedDrawerContent`), with its edge. Drawers are
+ * edge stripe-tabs, sticky across navigation and tabbed; the shell renders
+ * `render()` into a plain edge-anchored panel, with no scrim and no focus trap.
  */
 export interface DrawerContribution {
   id: string;

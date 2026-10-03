@@ -15,7 +15,7 @@ import {
   useChatter,
   usePrimaryPaneContent,
 } from "@angee/ui";
-import type { AppRuntime } from "@angee/ui/runtime";
+import type { AppRuntime, ContainerAlteration, ContainerChild } from "@angee/ui/runtime";
 
 import {
   PassthroughChrome,
@@ -30,6 +30,8 @@ import {
 } from "@angee/ui/chrome/menu-tree";
 import { useChromeMenuItems } from "@angee/ui/chrome/refine-menu";
 import { trailingRouteParamName } from "./route-paths";
+import { compileContainers } from "./containers";
+import { CORE_CONTAINERS } from "./core-containers";
 import type { BaseAddonRoute } from "./define-base-addon";
 
 export interface ShellPageTestProvidersProps {
@@ -37,12 +39,15 @@ export interface ShellPageTestProvidersProps {
   runtime?: Partial<AppRuntime>;
 }
 
+/** The framework's containers with their own children, as a composed app has them before any addon. */
+const FRAMEWORK_CONTAINERS = compileContainers([], CORE_CONTAINERS);
+
 export function ShellPageTestProviders({
   children,
   runtime = {},
 }: ShellPageTestProvidersProps): ReactElement {
   return (
-    <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, containers: FRAMEWORK_CONTAINERS, ...runtime }}>
       <PrimaryPaneProvider>
         <ChatterProvider>{children}</ChatterProvider>
       </PrimaryPaneProvider>
@@ -142,19 +147,29 @@ export function expectValidBaseAddon(
       throw new Error(`Addon "${addon.id}" icon "${iconName}" must be kebab-case.`);
     }
   }
-  const asides = Object.entries((addon.containers ?? {}) as Record<string, Record<string, { content?: { icon?: string } }> | undefined>)
-    .filter(([address]) => address.endsWith("#aside"));
-  for (const [, tabs] of asides) {
-    for (const [id, tab] of Object.entries(tabs ?? {})) {
-      if (tab.content?.icon) assertValidIconName(addon.id, `chatter "${id}"`, tab.content.icon);
+  // Chatter tabs, docked drawers and view kinds render their declared glyph.
+  for (const address of Object.keys(addon.containers ?? {})) {
+    const name = address.slice(address.indexOf("#") + 1);
+    if (!["aside", "drawers-right", "drawers-bottom", "views"].includes(name)) continue;
+    for (const [id, child] of containerChildren(addon, address)) {
+      const icon = (child.content as { icon?: unknown } | undefined)?.icon;
+      if (typeof icon === "string") assertValidIconName(addon.id, `${name} child "${id}"`, icon);
     }
   }
-  for (const edge of ["right", "bottom"] as const) {
-    const drawers = (addon.containers as Record<string, Record<string, { content?: { icon?: string } }> | undefined> | undefined)?.[`shell#drawers-${edge}`];
-    for (const [id, drawer] of Object.entries(drawers ?? {})) {
-      if (drawer.content?.icon) assertValidIconName(addon.id, `drawer "${id}"`, drawer.content.icon);
-    }
-  }
+}
+
+/** The entries an addon declares for one address, conditional alternatives flattened. */
+export function containerEntries(addon: Pick<BaseAddon, "containers">, address: string): readonly Readonly<Record<string, unknown>>[] {
+  const value = (addon.containers as Readonly<Record<string, unknown>> | undefined)?.[address];
+  if (value === undefined) return [];
+  return (Array.isArray(value) ? value : [value]) as readonly Readonly<Record<string, unknown>>[];
+}
+
+/** The children an addon declares or alters at one address, by id (entry keys such as `only` left out). */
+export function containerChildren(addon: Pick<BaseAddon, "containers">, address: string): readonly (readonly [string, ContainerChild & ContainerAlteration])[] {
+  return containerEntries(addon, address).flatMap((entry) => Object.entries(entry)
+    .filter(([key]) => !["only", "except", "when", "unique", "models"].includes(key))
+    .map(([id, child]) => [id, child as ContainerChild & ContainerAlteration] as const));
 }
 
 function assertValidMenuItem(

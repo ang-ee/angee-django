@@ -42,9 +42,9 @@ test("a child's permission gates each group it declares without one of its own",
     }),
   ];
   const groups = recordRailGroups(entries);
-  expect(groups.map(({ id, permission }) => ({ id, permission }))).toEqual([
-    { id: "private", permission: "manage" },
-    { id: "public", permission: undefined },
+  expect(groups.map(({ id, permission, childPermission }) => ({ id, permission, childPermission }))).toEqual([
+    { id: "private", permission: undefined, childPermission: "manage" },
+    { id: "public", permission: undefined, childPermission: undefined },
   ]);
   const visibleTo = (permissions: string[]) =>
     visibleRecordRailGroups(groups, { id: "note-1", permissions }, metadata).map((group) => group.id);

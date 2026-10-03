@@ -21,7 +21,6 @@ import type { I18nResources } from "@angee/refine";
 import type {
   AppVocabulary,
   ComposedMenuItem,
-  DrawerContribution,
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
@@ -30,6 +29,7 @@ import type {
   RuntimeBrand,
   ComposedContainers,
   ContainersDeclaration,
+  DockedDrawerContent,
   WidgetMap,
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS } from "@angee/ui/runtime";
@@ -57,7 +57,7 @@ import {
 export type {
   AppVocabulary,
   ComposedMenuItem,
-  DrawerContribution,
+  DockedDrawerContent,
   DrawerEdge,
   FormOverrideMap,
   MenuItem,

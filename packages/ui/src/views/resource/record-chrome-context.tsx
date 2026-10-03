@@ -3,7 +3,7 @@ import type { Row } from "@angee/metadata";
 
 import { useMemo } from "react";
 
-import { makeContext, useContainer } from "../../runtime";
+import { makeContext, useContainer, modelChain } from "../../runtime";
 import { ContainerOutlet } from "../../lib/container-outlet";
 
 /**
@@ -51,7 +51,7 @@ export const useRecordChromeContextMaybe = binding.useMaybe;
 /** Shared outlet for saved forms and custom record surfaces: the `form#chrome` children for this record's models. */
 export function RecordChrome({ value }: { value: RecordChromeContext }): ReactElement {
   const models = useMemo(
-    () => [...new Set([value.canonicalResource, value.resource])].filter(Boolean),
+    () => modelChain(value.canonicalResource, value.resource),
     [value.canonicalResource, value.resource],
   );
   const entries = useContainer("form#chrome", { models, row: value.record });

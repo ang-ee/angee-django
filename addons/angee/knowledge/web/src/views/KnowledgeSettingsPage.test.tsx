@@ -66,7 +66,7 @@ async function submit(name = "Copy", template = "vlt_template") {
 test("failed responses and transport retries retain the same client key", async () => {
   render(<KnowledgeSettingsPage />);
   const rejected = await submit(" Copy ");
-  expect(rejected?.ok).toBe(false);
+  expect(rejected).toMatchObject({ ok: false });
   mocks.mutation.mockRejectedValueOnce(new Error("Offline"));
   await expect(submit()).rejects.toThrow("Offline");
   await submit();

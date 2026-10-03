@@ -20,15 +20,17 @@ import {
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+import { CORE_CONTAINERS } from "../core-containers";
 import { setThemePreference, storedThemePreference } from "@angee/ui/lib/theme";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
-import { CONSOLE_NOTICE_SLOT, ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
+import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
 import { ControlBand } from "@angee/ui/layouts/ControlBand";
 import { PrimaryPanePublisher } from "@angee/ui/layouts/primary-pane-context";
 import { Statusline, StatusSegment } from "@angee/ui/layouts/Statusline";
 import { useChatterContent } from "@angee/ui/communication/index";
 import {
   AppRuntimeProvider,
+  containersFromChildren,
   type AppRuntime,
   type RuntimeUserPreferences,
   type RuntimeUserPreferencesPatch,
@@ -149,6 +151,7 @@ function runtimeForConsoleTest(
 ): Partial<AppRuntime> {
   return {
     icons: baseIcons,
+    containers: containersFromChildren(CORE_CONTAINERS, {}),
     auth: {
       user: {
         id: "user_1",
@@ -463,11 +466,9 @@ describe("ConsoleLayout", () => {
       return visible ? <div>Restart notice</div> : null;
     }
     const runtime: Partial<AppRuntime> = {
-      slots: [{
-        slot: CONSOLE_NOTICE_SLOT,
-        id: "test.delayed-notice",
-        content: <DelayedNotice />,
-      }],
+      containers: containersFromChildren(CORE_CONTAINERS, {
+        "shell#notices": { "test.delayed-notice": { content: <DelayedNotice /> } },
+      }),
     };
     const { container } = renderInRouter(
       <ConsoleLayout>

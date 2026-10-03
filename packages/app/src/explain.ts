@@ -27,6 +27,7 @@ export function explainComposition(
         rules: Object.entries(containers.rules).flatMap(([address, rules]) =>
           rules.map((rule) => ({ address, layer: rule.layer, summary: ruleSummary(rule) }))),
         provenance: containers.provenance,
+        diagnostics: containers.diagnostics,
       },
     } : {}),
   };

@@ -49,24 +49,23 @@ describe("portfolio addon manifest", () => {
   });
 
   test("registers donor fields, update composers, and fixed-in release attribution", () => {
-    expect(portfolio.slots?.map((slot) => slot.id)).toEqual([
+    const children = containerChildren(portfolio.containers);
+    expect(children.map(([id]) => id)).toEqual([
       "portfolio.project-fields",
       "portfolio.project-updates",
       "portfolio.initiative-updates",
       "portfolio.task-release",
     ]);
 
-    const updateSlots = portfolio.slots?.filter((slot) =>
-      slot.id.endsWith("-updates"),
-    );
-    expect(updateSlots).toHaveLength(2);
-    expect(updateSlots?.map((slot) => {
-      if (!React.isValidElement<{ children: React.ReactElement }>(slot.content)) {
+    const updates = children.filter(([id]) => id.endsWith("-updates"));
+    expect(updates).toHaveLength(2);
+    expect(updates.map(([, { content }]) => {
+      if (!React.isValidElement<{ children: React.ReactElement }>(content)) {
         return null;
       }
       return {
-        marker: slot.content.type,
-        child: slot.content.props.children.type,
+        marker: content.type,
+        child: content.props.children.type,
       };
     })).toEqual([
       { marker: Tab, child: ProjectUpdatesSection },
@@ -85,3 +84,9 @@ describe("portfolio addon manifest", () => {
     ]);
   });
 });
+
+/** The manifest's container children, keyed by id, in declaration order. */
+function containerChildren(containers: object | undefined): [string, { content?: unknown }][] {
+  return Object.values(containers ?? {}).flatMap((entry) => (Array.isArray(entry) ? entry : [entry]) as Record<string, unknown>[])
+    .flatMap((entry) => Object.entries(entry).filter(([id]) => id.includes(".")) as [string, { content?: unknown }][]);
+}

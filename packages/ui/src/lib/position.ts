@@ -45,3 +45,8 @@ export function positionSiblings<T extends Positioned>(siblings: readonly T[], d
   }
   return result;
 }
+
+/** Siblings in id order: the deterministic input order containers position from, never addon order. */
+export function orderById<T extends { id: string }>(siblings: readonly T[]): T[] {
+  return [...siblings].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+}

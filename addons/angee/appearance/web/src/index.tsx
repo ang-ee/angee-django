@@ -20,7 +20,7 @@ export default defineBaseAddon({
   i18n: { appearance: enAppearanceMessages },
   icons: { appearance: Palette },
   containers: {
-    "shell#user-menu": { "appearance.settings": { content: createElement(AppearanceMenuItem) } },
+    "shell#user-menu": { "appearance.settings": { sequence: 10, content: createElement(AppearanceMenuItem) } },
     "appearance.settings#tools": {},
   },
 });

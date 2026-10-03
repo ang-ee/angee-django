@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import type { CoreContainer, ResourceViewKindContent } from "../../runtime";
-import { useContainer } from "../../runtime";
 import {
   RESOURCE_VIEW_KIND_CAPABILITIES,
   availableResourceViewKinds,
@@ -58,20 +57,16 @@ export function useResourceViewKindContent(kind: ResourceViewKind | undefined): 
 
 /**
  * The kinds a collection offers, in container order: the `resource#views`
- * children for its models after every layer's narrowing, keeping a built-in kind
- * only where the page declares the data it needs.
+ * children its enclosing `ResourceViewKindsProvider` resolved, keeping a
+ * built-in kind only where the page declares the data it needs.
  */
 export function useOfferedResourceViewKinds(
-  models: readonly string[],
   declared: Parameters<typeof availableResourceViewKinds>[0],
-): { kinds: readonly ResourceViewKind[]; contents: ReadonlyMap<string, ResourceViewKindContent> } {
-  const children = useContainer<ResourceViewKindContent>("resource#views", { models });
+): readonly ResourceViewKind[] {
+  const kinds = React.useContext(ResourceViewKindsContext);
   const runnable = React.useMemo(() => new Set<string>(availableResourceViewKinds(declared)), [declared]);
-  return React.useMemo(() => {
-    const offered = children.filter((child) => !isBuiltInResourceViewKind(child.id) || runnable.has(child.id));
-    return {
-      kinds: offered.map((child) => child.id as ResourceViewKind),
-      contents: new Map(offered.map((child) => [child.id, child.content])),
-    };
-  }, [children, runnable]);
+  return React.useMemo(
+    () => [...kinds.keys()].filter((kind) => !isBuiltInResourceViewKind(kind) || runnable.has(kind)) as ResourceViewKind[],
+    [kinds, runnable],
+  );
 }

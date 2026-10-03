@@ -2,15 +2,15 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FormProvider, useForm, useFormContext, useWatch } from "react-hook-form";
 import { afterEach, describe, expect, test } from "vitest";
-import { composeAddons, defineAddon } from "@angee/app";
+import { composeAddons, defineAddon, type AddonManifest } from "@angee/app";
 import { ShellPageTestProviders } from "@angee/app/testing";
-import type { SlotContribution } from "@angee/ui";
 
+import decisions from "./index";
 import { DecisionContext } from "./DecisionContext";
 import {
-  DECISION_ORIGIN_SLOT, DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet,
+  DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet,
   decisionContent, useDecisionContent, useDecisionContentEntries, type DecisionContentProps,
-} from "./slots";
+} from "./content";
 import { decisionFixture } from "./testing";
 
 afterEach(cleanup);
@@ -27,7 +27,7 @@ function Consumer({ decision: current, basis, context }: DecisionContentProps) {
 }
 function Origin() {
   const { decision: current } = useDecisionContent();
-  return <p>Waiting on {current.group.id}</p>;
+  return <p>Waiting on {current.group?.id}</p>;
 }
 function ContextWithContent() {
   const { decision: current } = useDecisionContent();
@@ -37,9 +37,16 @@ function ContextWithContent() {
     <DecisionContentOutlet />
   </>;
 }
-function Harness({ slots = [], withContext = false }: { slots?: readonly SlotContribution[]; withContext?: boolean }) {
+/** The decisions addon's containers, composed with the contributing addons. */
+function composed(contributors: readonly AddonManifest[] = []) {
+  return composeAddons([decisions, ...contributors], canonicalizer).containers;
+}
+const contributor = (id: string, containers: AddonManifest["containers"]): AddonManifest =>
+  defineAddon({ id, dependsOn: ["decisions"], containers });
+
+function Harness({ contributors = [], withContext = false }: { contributors?: readonly AddonManifest[]; withContext?: boolean }) {
   const form = useForm({ defaultValues: { note: "Initial note" } });
-  return <ShellPageTestProviders runtime={{ slots }}><FormProvider {...form}>
+  return <ShellPageTestProviders runtime={{ containers: composed(contributors) }}><FormProvider {...form}>
     <DecisionContentProvider value={{ decision, basis: decision.basis, context: decision.context }}>
       {withContext ? <ContextWithContent /> : <DecisionContentOutlet />}<DecisionOriginOutlet />
     </DecisionContentProvider>
@@ -48,15 +55,18 @@ function Harness({ slots = [], withContext = false }: { slots?: readonly SlotCon
 
 describe("decision content contracts", () => {
   test("duplicate contributions for one kind fail at native addon composition", () => {
-    expect(() => composeAddons([
-      defineAddon({ id: "first", slots: [decisionContent("review", Consumer)] }),
-      defineAddon({ id: "second", slots: [decisionContent("review", Consumer)] }),
-    ], canonicalizer)).toThrow(/slot entry/);
+    expect(() => composed([
+      contributor("first", { "decisions#content": { "first.review": decisionContent("review", Consumer) } }),
+      contributor("second", { "decisions#content": { "second.review": decisionContent("review", Consumer) } }),
+    ])).toThrow(/share key "review"/);
   });
 
   test("only the selected kind renders with retained props and inherited form context", () => {
     const other = () => <p>Other kind</p>;
-    render(<Harness slots={[decisionContent("review", Consumer), decisionContent("other", other)]} />);
+    render(<Harness contributors={[contributor("consumer", { "decisions#content": {
+      "consumer.review": decisionContent("review", Consumer),
+      "consumer.other": decisionContent("other", other),
+    } })]} />);
     expect(screen.getByText("review")).toBeTruthy();
     expect(screen.queryByText("Other kind")).toBeNull();
     expect(screen.getByText(JSON.stringify({ basis: decision.basis, context: decision.context }))).toBeTruthy();
@@ -65,7 +75,7 @@ describe("decision content contracts", () => {
   });
 
   test("registered content replaces the generic facts for its kind", () => {
-    const { rerender } = render(<Harness withContext slots={[decisionContent("review", Consumer)]} />);
+    const { rerender } = render(<Harness withContext contributors={[contributor("consumer", { "decisions#content": { "consumer.review": decisionContent("review", Consumer) } })]} />);
     expect(screen.getByText("review")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Facts" })).toBeNull();
     rerender(<Harness withContext />);
@@ -73,10 +83,10 @@ describe("decision content contracts", () => {
     expect(screen.getByText("Ready")).toBeTruthy();
   });
 
-  test("an independent waiting owner can consume the same decision and empty slots add no output", () => {
+  test("an independent waiting owner can consume the same decision and empty containers add no output", () => {
     const { container, rerender } = render(<Harness />);
     expect(container.textContent).toBe("");
-    rerender(<Harness slots={[{ slot: DECISION_ORIGIN_SLOT, id: "waiting-owner", content: <Origin /> }]} />);
+    rerender(<Harness contributors={[contributor("waiting", { "decisions#origin": { "waiting.owner": { content: <Origin /> } } })]} />);
     expect(screen.getByText("Waiting on dcg_review")).toBeTruthy();
   });
 });

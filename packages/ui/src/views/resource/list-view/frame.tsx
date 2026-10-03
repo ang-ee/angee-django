@@ -9,7 +9,7 @@ import {
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
-import { useContainer, useResourceRecordMatchFields, type ResourceViewKindContent } from "../../../runtime";
+import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ResourceViewKindContent } from "../../../runtime";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
 import { Filter, isBuiltInResourceViewKind } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
@@ -163,12 +163,15 @@ function ResourceViewKinds({ resource, children }: { resource: string; children:
   const metadata = useModelMetadata(resource);
   const models = useResourceModels(resource, metadata?.resource?.canonicalLabel);
   const kinds = useContainer<ResourceViewKindContent>("resource#views", { models });
+  const composed = Boolean(useAppRuntime().containers?.declared["resource#views"]);
   const contents = React.useMemo(() => new Map(kinds.map((kind) => [kind.id, kind.content])), [kinds]);
+  // Outside a composed app (a story, an embed) the built-in kinds stand.
+  if (!composed) return <>{children}</>;
   return <ResourceViewKindsProvider value={contents}>{children}</ResourceViewKindsProvider>;
 }
 
 function useResourceModels(resource: string, canonical: string | null | undefined): readonly string[] {
-  return React.useMemo(() => [...new Set([canonical ?? resource, resource])].filter(Boolean), [canonical, resource]);
+  return React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
 }
 
 function ListViewBody<TRow extends Row = Row>({
@@ -253,14 +256,11 @@ function ListViewBody<TRow extends Row = Row>({
     () => ({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable }),
     [calendarAvailable, ganttAvailable, dashboardAvailable],
   );
-  const offered = useOfferedResourceViewKinds(
-    useResourceModels(source ? "" : resource, modelMetadata?.resource?.canonicalLabel),
-    declaredSources,
-  );
+  const offered = useOfferedResourceViewKinds(declaredSources);
   // A page's own list of views is narrowed by what the layers offer; otherwise the container decides.
   const availableViews = React.useMemo(
-    () => declaredViews ? declaredViews.filter((kind) => offered.kinds.includes(kind)) : offered.kinds,
-    [declaredViews, offered.kinds],
+    () => declaredViews ? declaredViews.filter((kind) => offered.includes(kind)) : offered,
+    [declaredViews, offered],
   );
   const contributedKind = useResourceViewKindContent(resourceView.state.view);
   const schemaMetadata = useSchemaFieldMetadata();

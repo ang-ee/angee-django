@@ -43,7 +43,6 @@ import {
   defineChannelPollBridgeAddon,
 } from "./channel-bridge-addon";
 import { CHANNEL_MODEL } from "./documents";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 import { expectValidChannelBridgeAddon } from "./testing";
 
 const VENDOR = "messaging-integrate-example";
@@ -53,16 +52,27 @@ const VENDOR = "messaging-integrate-example";
  * would: integrate declares the lifecycle verbs on the MTI parent, the vendor
  * (which depends on it) adds and specializes them on `messaging.Channel`.
  */
-function channelVerbs(manifest: AddonManifest, impl: string) {
-  const { containers } = composeAddons([
+function composed(manifest: AddonManifest) {
+  return composeAddons([
     { id: integrate.id, containers: integrate.containers },
-    { id: manifest.id, dependsOn: [integrate.id], containers: manifest.containers },
-  ], { canonicalModelLabel: (model) => model });
+    // Messaging declares the Channels toolbar the vendors' connect verbs join.
+    { id: "messaging", dependsOn: [integrate.id], containers: { "messaging.channels#toolbar": {} } },
+    { id: manifest.id, dependsOn: [integrate.id, "messaging"], containers: manifest.containers },
+  ], { canonicalModelLabel: (model) => model }).containers;
+}
+
+function channelVerbs(manifest: AddonManifest, impl: string) {
+  const containers = composed(manifest);
   const options = { models: [INTEGRATION_MODEL, CHANNEL_MODEL], impls: [impl] };
   return {
     toolbar: resolveContainer<React.ReactNode>(containers, "form#actions", options),
     menu: resolveContainer<React.ReactNode>(containers, "form#actions-menu", options),
   };
+}
+
+/** The vendor's connect verbs on messaging's Channels toolbar (`messaging.channels#toolbar`). */
+function channelToolbar(manifest: AddonManifest) {
+  return summary(resolveContainer(composed(manifest), "messaging.channels#toolbar"));
 }
 
 const summary = (children: readonly ComposedContainerChild[]) =>
@@ -106,9 +116,7 @@ describe("defineChannelBridgeAddon live bridges", () => {
       parentId: "messaging",
       route: "messaging.channels",
     });
-    expect(manifest.slots).toMatchObject([
-      { slot: MESSAGING_CHANNEL_TOOLBAR_SLOT, id: `${VENDOR}.connect`, sequence: 22 },
-    ]);
+    expect(channelToolbar(manifest)).toEqual([{ id: `${VENDOR}.connect`, sequence: 22 }]);
 
     // On the vendor's own rows: its pairing verbs join integrate's, and its
     // variants stand in for integrate's resume and disconnect.
@@ -236,13 +244,7 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
       route: "messaging.channels",
       description: "Sync Example accounts",
     });
-    expect(manifest.slots?.map(({ slot, id, sequence }) => ({ slot, id, sequence }))).toEqual([
-      {
-        slot: MESSAGING_CHANNEL_TOOLBAR_SLOT,
-        id: `${VENDOR}.connect`,
-        sequence: 22,
-      },
-    ]);
+    expect(channelToolbar(manifest)).toEqual([{ id: `${VENDOR}.connect`, sequence: 22 }]);
     // Integrate's lifecycle verbs reach the vendor's rows unspecialized.
     const { toolbar, menu } = channelVerbs(manifest, "example");
     expect([...toolbar, ...menu].map((child) => child.owner)).toEqual(["integrate", "integrate", "integrate", "integrate"]);

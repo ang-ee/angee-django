@@ -2067,7 +2067,8 @@ describe("FormView", () => {
     };
     try {
       expect(() => renderRow("WHATSAPP")).toThrow(
-        /"whatsapp.disconnect" and "chatbridge.disconnect" of "form#actions" are both variants of "parties.disconnect" for this row/,
+        // Siblings resolve in id order, so the clash names them that way.
+        /"chatbridge.disconnect" and "whatsapp.disconnect" of "form#actions" are both variants of "parties.disconnect" for this row/,
       );
     } finally {
       consoleError.mockRestore();
@@ -2172,6 +2173,82 @@ describe("FormView", () => {
     await waitFor(() => expect(visibleWhen).toHaveBeenCalledWith(expect.objectContaining({ title })));
     expect(sdkMocks.recordSelection).toContain("title");
     expect(screen.queryAllByRole("tab", { name: "Related" })).toHaveLength(visible ? 1 : 0);
+  });
+
+  test("contributed #sections keep their container order, before/after anchors included", async () => {
+    // The kind-level and model-level children position as one list; an anchored
+    // child sits beside its anchor rather than sorting last for lacking a sequence.
+    sdkMocks.record = { id: "note-1", title: "Ordered note" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      formChildren({
+        "form#sections": {
+          "audit.trail": { sequence: 30, content: <Tab id="audit" label="Audit"><p>Audit trail</p></Tab> },
+        },
+        "notes.Note#sections": {
+          "notes.extra": { sequence: 10, content: <Tab id="extra" label="Extra"><p>Extra</p></Tab> },
+          "notes.before-audit": { before: "audit.trail", content: <Tab id="before" label="Before audit"><p>Before</p></Tab> },
+          "notes.after-extra": { after: "notes.extra", content: <Tab id="after" label="After extra"><p>After</p></Tab> },
+        },
+      }),
+    );
+
+    await screen.findByRole("tab", { name: "Audit" });
+    const contributed = screen.getAllByRole("tab").map((tab) => tab.textContent)
+      .filter((label) => ["Extra", "After extra", "Before audit", "Audit"].includes(label ?? ""));
+    expect(contributed).toEqual(["Extra", "After extra", "Before audit", "Audit"]);
+  });
+
+  test("projects the requiredFields of every admitted child, impl children and variants included, whatever the row", async () => {
+    // The row's impl is unknown until it loads, so the read selects what any
+    // impl's children and any variant need; permissions do not narrow it either.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "IMAP", permissions: [] };
+    const scalar = (name: string) => ({ name, kind: "scalar" as const, scalar: "String" });
+    const note = mtiModel("NoteType", "notes.Note", "parties.Party", ["kind"]);
+    const metadata = withTestResourceInventory({ types: {
+      NoteType: { ...note, fields: { ...note.fields, ...Object.fromEntries(
+        ["kind", "pairedAt", "bridgeId", "menuFlag", "chromeFlag", "sectionFlag"].map((name) => [name, scalar(name)]),
+      ) } },
+      PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
+    } });
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      metadata,
+      undefined,
+      formChildren({
+        "parties.Party#actions": {
+          "parties.disconnect": { content: <button type="button">Generic disconnect</button> },
+        },
+        "notes.Note#actions": {
+          "whatsapp.connect": { impl: "whatsapp", requiredFields: ["pairedAt"], content: <button type="button">Pair WhatsApp</button> },
+          "whatsapp.disconnect": {
+            variant: { of: "parties.disconnect", impl: "whatsapp" },
+            requiredFields: ["bridgeId"],
+            content: <button type="button">WhatsApp disconnect</button>,
+          },
+        },
+        "notes.Note#actions-menu": {
+          "whatsapp.repair": { impl: "whatsapp", requiredFields: ["menuFlag"], content: <button type="button">Repair</button> },
+        },
+        "form#chrome": {
+          "audit.badge": { permission: "manage", requiredFields: ["chromeFlag"], content: <span>Audit badge</span> },
+        },
+        "notes.Note#sections": {
+          "notes.extra": { requiredFields: ["sectionFlag"], content: <Tab id="extra" label="Extra"><p>Extra</p></Tab> },
+        },
+      }),
+    );
+
+    expect(await screen.findByRole("button", { name: "Generic disconnect" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pair WhatsApp" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "WhatsApp disconnect" })).toBeNull();
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining(["kind", "pairedAt", "bridgeId", "menuFlag", "chromeFlag", "sectionFlag"]));
   });
 
   test("composes #sections tabs through the saved-record tab owner", async () => {

@@ -1,5 +1,7 @@
 import { isMenuDeclarationList, type BaseAddon } from "@angee/app";
-import { expectValidBaseAddon } from "@angee/app/testing";
+import { containerChildren, expectValidBaseAddon } from "@angee/app/testing";
+
+import { CHANNEL_MODEL } from "./documents";
 
 
 /** Assert the navigation/connect contract shared by every channel bridge addon. */
@@ -19,10 +21,20 @@ export function expectValidChannelBridgeAddon(addon: BaseAddon): void {
       `Channel bridge "${addon.id}" must target the shared messaging channels menu.`,
     );
   }
-  const toolbar = (addon.containers as Record<string, Record<string, unknown> | undefined> | undefined)?.["messaging.channels#toolbar"];
-  if (!toolbar || !(`${addon.id}.connect` in toolbar)) {
+  if (!containerChildren(addon, "messaging.channels#toolbar").some(([id]) => id === `${addon.id}.connect`)) {
     throw new Error(
       `Channel bridge "${addon.id}" must contribute its connect action to the channels toolbar.`,
     );
+  }
+}
+
+/** Assert every channel verb a bridge adds shows only on its own rows: an `impl` child or a variant of integrate's verb. */
+export function expectChannelVerbsScoped(addon: BaseAddon, key: string): void {
+  const verbs = ["#actions", "#actions-menu"].flatMap((name) => containerChildren(addon, `${CHANNEL_MODEL}${name}`));
+  if (verbs.length === 0) throw new Error(`Channel bridge "${addon.id}" contributes no channel verbs.`);
+  for (const [id, verb] of verbs) {
+    if ((verb.impl ?? verb.variant?.impl) !== key) {
+      throw new Error(`Channel bridge "${addon.id}" verb "${id}" must be scoped to "${key}" rows (impl or variant).`);
+    }
   }
 }

@@ -14,6 +14,7 @@ export {
   EMPTY_CONTAINERS,
   containerName,
   containersFromChildren,
+  modelChain,
   useDrawers,
   resolveContainer,
   useContainer,

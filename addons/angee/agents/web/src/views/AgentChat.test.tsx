@@ -7,9 +7,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { FakeAcpAgent } from "../acp-test-agent";
 import { createAcpTestProviders } from "../acp-test-providers";
 
-import { AGENT_CHAT_SLOT, useAgentChatContext } from "../chat-slot";
 import type { AgentRosterItem } from "../documents";
-import { AcpAgentChat, AgentChat } from "./AgentChat";
+import { AgentChat } from "./AgentChat";
 
 const transport = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock("../acp-transport", async (original) => ({
@@ -26,11 +25,6 @@ function native() {
   return providers.Provider;
 }
 
-function ContributedChat() {
-  const { agentId, sessionId, view } = useAgentChatContext();
-  return <output>{`${agentId}:${sessionId}:${view.sqid}`}</output>;
-}
-
 const props = {
   agentId: "agt_1",
   sessionId: "ase_1",
@@ -39,11 +33,9 @@ const props = {
 } as const;
 
 describe("agent chat composition", () => {
-  test("a runtime slot can supply an explicit protocol and disagreement fails clearly", async () => {
+  test("an explicit protocol the agent does not speak fails clearly", async () => {
     const Provider = native();
-    render(<Provider><AppRuntimeProvider runtime={{ slots: [{
-      slot: AGENT_CHAT_SLOT, model: "agents.Agent", impl: "external", id: "chat", content: <AcpAgentChat protocolVersion={2} />,
-    }] }}><AgentChat {...props} /></AppRuntimeProvider></Provider>);
+    render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} protocolVersion={2} /></AppRuntimeProvider></Provider>);
     expect(await screen.findByText("This agent uses an unsupported chat protocol.")).toBeTruthy();
   });
   test("uses the default ACP surface when no transport contribution exists", async () => {
@@ -53,27 +45,7 @@ describe("agent chat composition", () => {
     expect(screen.queryByText("Chat is unavailable for this agent.")).toBeNull();
   });
 
-  test("selects only the matching runtime contribution and binds the current agent", () => {
-    const runtime = {
-      slots: [
-        { slot: AGENT_CHAT_SLOT, model: "agents.Agent", impl: "external", id: "chat", content: <ContributedChat /> },
-        { slot: AGENT_CHAT_SLOT, model: "agents.Agent", impl: "opencode", id: "chat", content: "Other runtime" },
-      ],
-    };
-    const { rerender } = render(
-      <AppRuntimeProvider runtime={runtime}><AgentChat {...props} /></AppRuntimeProvider>,
-    );
-    expect(screen.getByText("agt_1:ase_1:nte_1")).toBeTruthy();
-    expect(screen.queryByText("Other runtime")).toBeNull();
-    rerender(
-      <AppRuntimeProvider runtime={runtime}>
-        <AgentChat {...props} agentId="agt_2" sessionId="ase_2" />
-      </AppRuntimeProvider>,
-    );
-    expect(screen.getByText("agt_2:ase_2:nte_1")).toBeTruthy();
-  });
-
-  test("keeps the chooser available alongside the default ACP transport", async () => {
+  test("every runtime chats over ACP, with the chooser in the bar", async () => {
     const Provider = native();
     const agents: AgentRosterItem[] = ["external", "opencode"].map((runtime) => ({
       id: runtime, name: runtime, runtime_class: runtime as AgentRosterItem["runtime_class"],
@@ -84,9 +56,7 @@ describe("agent chat composition", () => {
       return <AgentChat {...props} sessionId={undefined} agentId={selected} runtimeClass={selected} agents={agents} onSelectAgent={select} />;
     }
     render(
-      <Provider><AppRuntimeProvider runtime={{ slots: [{
-        slot: AGENT_CHAT_SLOT, model: "agents.Agent", impl: "opencode", id: "chat", content: <ContributedChat />,
-      }] }}>
+      <Provider><AppRuntimeProvider runtime={{}}>
         <Switcher />
       </AppRuntimeProvider></Provider>,
     );
@@ -95,7 +65,8 @@ describe("agent chat composition", () => {
     fireEvent.pointerDown(option);
     fireEvent.pointerUp(option);
     fireEvent.click(option);
-    expect(screen.getByText("opencode:undefined:nte_1")).toBeTruthy();
+    expect((await screen.findByRole("combobox", { name: "Switch agent" })).textContent).toContain("opencode");
+    expect(await screen.findByRole("textbox")).toBeTruthy();
     expect(screen.queryByText("Chat is unavailable for this agent.")).toBeNull();
   });
 });

@@ -17,6 +17,7 @@ import {
   type AngeeHasuraSchemaConfig,
 } from "@angee/refine";
 import type { IResourceItem } from "@refinedev/core";
+import { composeAddons } from "@angee/app";
 import { ModalsHost, ToastProvider } from "@angee/ui";
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import {
@@ -40,6 +41,9 @@ type StorySchemaConfig = AngeeHasuraSchemaConfig & {
   metadata?: AngeeSchemaMetadata;
 };
 
+/** The framework's containers as `createApp` composes them: the view switcher's kinds, the chatter aside, the shell's. */
+const FRAMEWORK_CONTAINERS = composeAddons([], { canonicalModelLabel: (model) => model }).containers;
+
 export function RuntimeRegistryFixture({
   children,
   runtime = {},
@@ -49,7 +53,7 @@ export function RuntimeRegistryFixture({
 }): ReactNode {
   return (
     <AppRuntimeProvider
-      runtime={{ icons: baseIcons, widgets: defaultWidgets, ...runtime }}
+      runtime={{ icons: baseIcons, widgets: defaultWidgets, containers: FRAMEWORK_CONTAINERS, ...runtime }}
     >
       {children}
     </AppRuntimeProvider>

@@ -1,2 +1,2 @@
-/** The extension seam for runtime-owned chat transports. */
-export { useAgentChatContext, type AgentChatProps } from "./chat-slot";
+/** The chat context every agent's chat surface reads. */
+export { useAgentChatContext, type AgentChatProps } from "./chat-context";

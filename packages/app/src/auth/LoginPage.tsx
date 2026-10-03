@@ -40,7 +40,7 @@ export interface LoginPageProps {
   hero?: ReactNode | null;
   /** `undefined` renders the default card header, `null` leaves only `brand`, a node replaces it. */
   cardHeader?: ReactNode | null;
-  /** `undefined` renders the password-help slot when contributed, `null` suppresses it, a node replaces it. */
+  /** `undefined` renders the `auth.login#password-help` children, `null` suppresses them, a node replaces them. */
   passwordHelp?: ReactNode | null;
   showAtmosphere?: boolean;
   backgroundImageUrl?: string;

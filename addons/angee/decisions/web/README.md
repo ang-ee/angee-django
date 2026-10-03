@@ -24,9 +24,10 @@ Changing actions replaces only branch values; consumer-content values outside
 those fields survive. Successful submissions use native model invalidation;
 only rejected submissions refresh the revision directly.
 
-Consumers contribute `decisionContent(kind, Component)` through their addon's
-`slots` array. `DECISION_CONTENT_SLOT` accepts exactly one contribution per kind:
-the framework's composition collision check rejects duplicate claims. Content
+Consumers declare a `decisions#content` child built with
+`decisionContent(kind, Component)` in their addon's `containers`. Decisions
+declares that container with `unique: "key"`, the key being the decision kind,
+so composition rejects a second child for one kind. Content
 receives read-only `{decision, basis, context}` in the Context tab and in the
 Decide dialog, where it inherits the action's native React Hook Form context.
 The record tab disables consumer controls. Consumers parse their own basis/context
@@ -35,15 +36,16 @@ region stays hidden to avoid duplicating its presentation. Otherwise the generic
 context renderer validates and displays facts as readable fields; references and
 evidence open through record peeks.
 
-`DECISION_ORIGIN_SLOT` lets an independent waiting owner contribute links for the
-current group. Its content reads `useDecisionContent()` and renders nothing when
-that owner has no relevant link. The page renders nothing for an empty slot.
-Decisions imports no waiting owner's concepts or queries.
+A `decisions#origin` child lets an independent waiting owner contribute links
+for the current group. Its content reads `useDecisionContent()` and renders
+nothing when that owner has no relevant link. The page renders nothing for an
+empty container. Decisions imports no waiting owner's concepts or queries.
 
 `Decision.kind_label` owns the inbox label and record representation. The Context
 tab lists other visible seats through the same resource list owner.
-Consumers can contribute `decisionRecordTab(model)` to show decisions for a
-record; its filter uses the backend's `subject_model` and `subject_id` fields.
+Consumers can declare `decisionRecordTab()` as a `<model>#sections` child under
+their own id (`"<addon>.decisions"`) to show decisions for a record; its filter
+uses the backend's `subject_model` and `subject_id` fields.
 
 This schema-dependent fragment typechecks after composition and web codegen at
 the stack root. Its stories and provider-backed tests exercise the same shared

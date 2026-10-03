@@ -17,6 +17,7 @@ import {
   type ChatterView,
   type ChatterViewContext,
   type ComposedContainerChild,
+  modelChain,
 } from "../runtime";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
@@ -78,10 +79,10 @@ export function Chatter({
     [candidates],
   );
   const resolvedTabs = mergeChatterTabs(contributedTabs, publishedTabs);
-  // A `?aside=` link may name a tab by an id it carried before (one release).
-  const requestedId = requestedTab
-    ? activeContributions.find((child) => child.id === requestedTab || child.content.aliases?.includes(requestedTab))?.id ?? requestedTab
-    : null;
+  // A `?chatterTab=` link or a caller may still name a tab by the id it carried before (one release).
+  const resolveTabId = (id: string): string =>
+    activeContributions.find((child) => child.id === id || child.content.aliases?.includes(id))?.id ?? id;
+  const requestedId = requestedTab ? resolveTabId(requestedTab) : null;
   const resolvedComposer = composer ?? content?.composer;
   const requestedTabAvailable = Boolean(
     requestedId && resolvedTabs.some((tab) => tab.id === requestedId),
@@ -92,8 +93,9 @@ export function Chatter({
     setActiveTab(requestedId);
     setCollapsed(false);
   }, [requestIdentity, requestedId, requestedTabAvailable, setActiveTab, setCollapsed]);
-  const active = resolvedTabs.some((tab) => tab.id === activeTab)
-    ? activeTab
+  const activeId = activeTab ? resolveTabId(activeTab) : activeTab;
+  const active = resolvedTabs.some((tab) => tab.id === activeId)
+    ? activeId
     : resolvedTabs[0]?.id;
 
   // Collapse is owned by the enclosing SplitPane (it collapses the pane to zero
@@ -177,7 +179,7 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
   const { content } = useChatter();
   const published = explicitTabs ?? content?.tabs;
   const models = React.useMemo(
-    () => [...new Set([context.route?.canonicalLabel, context.route?.modelLabel].filter((label): label is string => Boolean(label)))],
+    () => modelChain(context.route?.canonicalLabel, context.route?.modelLabel),
     [context.route?.canonicalLabel, context.route?.modelLabel],
   );
   const extra = React.useMemo(

@@ -25,6 +25,8 @@ function Placeholder({ kind }: { kind: "comments" | "activity" }): ReactElement 
 export const CHATTER_CONTAINERS: readonly CoreContainer[] = [{
   address: "record#aside",
   models: true,
+  // Pages publish their own tabs at render time; `only` may name them.
+  extras: true,
   children: {
     "chatter.comments": {
       sequence: 10,

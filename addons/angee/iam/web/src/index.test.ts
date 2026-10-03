@@ -100,7 +100,11 @@ describe("iam addon manifest", () => {
   });
 
   test("contributes the login methods, the OIDC tab on the OAuth client form and the user's password verb", () => {
-    expect(iam.slots?.map((slot) => slot.id)).toEqual(["iam.direct"]);
+    // The Share panel's role and visibility containers, addressed per model by their contributors.
+    expect(iam.containers?.["iam#access-roles"]).toEqual({ models: true });
+    expect(iam.containers?.["iam#access-visibility"]).toEqual({ models: true });
+    expect(iam.containers?.["form#chrome"]).toMatchObject({ "iam.share-record": { sequence: 20 } });
+    expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20 } });
     expect(iam.containers?.["auth.login#method"]).toMatchObject({ "iam.oauth-login": { content: expect.anything() } });
     // The OIDC login tab the iam addon adds to integrate's OAuth client form.
     expect(iam.containers?.["integrate.OAuthClient#sections"]).toMatchObject({ "iam.oidc-login": { content: expect.anything() } });

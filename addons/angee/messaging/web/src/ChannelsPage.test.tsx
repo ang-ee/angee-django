@@ -9,11 +9,10 @@ const pageMocks = vi.hoisted(() => ({
   columnFields: [] as string[],
   fieldNames: [] as string[],
   recordAction: vi.fn(),
-  requestedSlots: [] as string[],
-  slotEntries: [
-    { slot: "messaging.channel.toolbar", id: "demo-connect", content: "Connect bridge" },
-    { slot: "messaging.channel.form-fields", id: "demo-fields", content: "Bridge form fields" },
-  ],
+  requestedContainers: [] as string[],
+  children: {
+    "messaging.channels#toolbar": [{ id: "demo.connect", content: "Connect bridge" }],
+  } as Record<string, readonly { id: string; content: unknown }[]>,
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
@@ -54,9 +53,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     );
   },
   useRecordActionMutation: () => [pageMocks.recordAction],
-  useSlot: (slot: string) => {
-    pageMocks.requestedSlots.push(slot);
-    return pageMocks.slotEntries.filter((entry) => entry.slot === slot);
+  useContainer: (address: string) => {
+    pageMocks.requestedContainers.push(address);
+    return pageMocks.children[address] ?? [];
   },
 }));
 
@@ -65,7 +64,6 @@ vi.mock("./i18n", () => ({
 }));
 
 import { ChannelsPage } from "./ChannelsPage";
-import { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 describe("ChannelsPage", () => {
   beforeEach(() => {
@@ -73,7 +71,7 @@ describe("ChannelsPage", () => {
     pageMocks.columnFields = [];
     pageMocks.fieldNames = [];
     pageMocks.recordAction.mockClear();
-    pageMocks.requestedSlots = [];
+    pageMocks.requestedContainers = [];
   });
 
   test("renders a model-driven channels page with addon toolbar actions", () => {
@@ -85,12 +83,9 @@ describe("ChannelsPage", () => {
       routed: true,
       hideCreate: true,
     });
-    expect(pageMocks.requestedSlots).toEqual([
-      MESSAGING_CHANNEL_TOOLBAR_SLOT,
-      MESSAGING_CHANNEL_FORM_FIELDS_SLOT,
-    ]);
+    // The vendors' connect verbs are the children of messaging's own toolbar container.
+    expect(pageMocks.requestedContainers).toEqual(["messaging.channels#toolbar"]);
     expect(screen.getByText("Connect bridge")).toBeTruthy();
-    expect(screen.getByText("Bridge form fields")).toBeTruthy();
     expect(pageMocks.columnFields).toEqual(
       expect.arrayContaining(["sync_stage", "last_sync_items", "last_sync_completed_at"]),
     );

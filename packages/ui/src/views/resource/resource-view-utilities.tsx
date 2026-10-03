@@ -1,7 +1,9 @@
 import * as React from "react";
 
 import { ContainerOutlet } from "../../lib/container-outlet";
-import { makeContext, useContainer, type ComposedContainerChild } from "../../runtime";
+import { useModelMetadata } from "@angee/metadata";
+
+import { makeContext, modelChain, useContainer, type ComposedContainerChild } from "../../runtime";
 import { useRecordChromeContextMaybe, type RecordChromeContext } from "./record-chrome-context";
 import type { ResourceViewFilter } from "./resource-view-model";
 
@@ -26,9 +28,10 @@ export function useResourceViewUtilityContext(): ResourceViewUtilityContext {
   return ResourceViewUtilityContextBinding.use();
 }
 
-/** The `resource#utilities` children for one collection's model. */
+/** The `resource#utilities` children for one collection's model and its MTI parent. */
 export function useResourceViewUtilities(resource: string): readonly ComposedContainerChild[] {
-  const models = React.useMemo(() => [resource], [resource]);
+  const canonical = useModelMetadata(resource)?.resource.canonicalLabel;
+  const models = React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
   return useContainer("resource#utilities", { models });
 }
 

@@ -14,7 +14,7 @@ import { parseFormSpecPayload } from "@angee/ui";
 import { DecisionContext } from "./DecisionContext";
 import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.console";
 import { useDecisionsT } from "./i18n";
-import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./slots";
+import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./content";
 
 /** Start with my open seats; server-owned authority also finds delegated seats. */
 export function InboxPage(): ReactElement {

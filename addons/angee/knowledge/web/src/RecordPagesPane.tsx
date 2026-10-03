@@ -30,7 +30,7 @@ export interface RecordPagesTabOptions {
   role?: string;
   sequence?: number;
   when?: ChatterTabContent["when"];
-  /** Earlier ids a `?aside=` link may still carry. */
+  /** Earlier ids a `?chatterTab=` link may still carry. */
   aliases?: readonly string[];
 }
 
