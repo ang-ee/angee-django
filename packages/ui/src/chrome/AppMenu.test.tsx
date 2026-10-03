@@ -31,8 +31,8 @@ describe("AppMenu", () => {
     renderMenu("/desk");
     const nav = await screen.findByRole("navigation", { name: "Desk menu" });
     expect(within(nav).queryByRole("button", { name: "More" })).toBeNull();
-    resize(300);
-    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Desk", "Notes"]);
+    resize(250);
+    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Notes"]);
     fireEvent.click(within(nav).getByRole("button", { name: "More" }));
     const popup = await screen.findByRole("menu");
     expect(within(popup).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open notes", "Reports", "Daily", "Year"]);
@@ -45,7 +45,7 @@ describe("AppMenu", () => {
   });
 
   test("swaps the current trail's menu into the last visible slot, including a hidden deep link", async () => {
-    mockOverflow(400);
+    mockOverflow(300);
     const items: readonly ChromeMenuItem[] = [{ id: "desk", label: "Desk", to: "/desk", children: [
       { id: "a", label: "A", to: "/a" },
       { id: "b", label: "B", to: "/b" },
@@ -64,7 +64,7 @@ describe("AppMenu", () => {
   });
 
   test("developer removed markers overflow first and remain disabled in declaration order", async () => {
-    const resize = mockOverflow(500);
+    const resize = mockOverflow(400);
     const composition: RuntimeComposition = {
       shell: { brand: null, perspective: null, provenance: {}, diagnostics: [] }, effective: { home: "/desk", confineTo: null },
       menus: { provenance: {}, hidden: [], unavailable: {}, diagnostics: [], removed: [
@@ -77,7 +77,7 @@ describe("AppMenu", () => {
     } });
     const nav = await screen.findByRole("navigation", { name: "Desk menu" });
     // Four developer-visible menus fit; only the removed markers spill at this width.
-    resize(600);
+    resize(500);
     expect(within(nav).getByRole("link", { name: "Hidden (hidden)" })).toBeTruthy();
     expect(within(nav).queryByRole("link", { name: /removed by/ })).toBeNull();
     fireEvent.click(within(nav).getByRole("button", { name: "More" }));
@@ -86,30 +86,25 @@ describe("AppMenu", () => {
     expect(entries.every((item) => item.getAttribute("aria-disabled") === "true")).toBe(true);
   });
 
-  test.each(["/desk", "/desk/notes"])("with no room the app dropdown stays current and links to the app page first (%s)", async (path) => {
-    mockOverflow(190);
-    const router = renderMenu(path);
+  test.each([["/desk", false], ["/desk/notes", true]])("with no room every menu goes into More, current only when it holds the page (%s)", async (path, current) => {
+    mockOverflow(150);
+    renderMenu(path);
     const nav = await screen.findByRole("navigation", { name: "Desk menu" });
     expect(within(nav).queryByRole("link")).toBeNull();
-    const trigger = within(nav).getByRole("button", { name: "Desk" });
-    expect(trigger.getAttribute("data-current")).toBe("true");
-    expect(trigger.getAttribute("aria-current")).toBe("true");
+    const trigger = within(nav).getByRole("button", { name: "More" });
+    expect(trigger.getAttribute("data-current")).toBe(String(current));
+    expect(trigger.getAttribute("aria-current")).toBe(current ? "true" : null);
     fireEvent.click(trigger);
     const popup = await screen.findByRole("menu");
     expect(within(popup).getAllByRole("menuitem").map((item) => item.textContent))
-      .toEqual(["Desk", "Notes", "Open notes", "Reports", "Daily", "Year"]);
-    const appPage = within(popup).getByRole("menuitem", { name: "Desk" });
-    expect(appPage.getAttribute("href")).toBe("/desk");
-    if (path === "/desk/notes") {
-      fireEvent.click(appPage);
-      await waitFor(() => expect(router.state.location.pathname).toBe("/desk"));
-    }
+      .toEqual(["Notes", "Open notes", "Reports", "Daily", "Year"]);
   });
 
   test("selects the nearest included app and renders its links with aria-current", async () => {
     const router = renderMenu("/desk/notes");
     const nav = await screen.findByRole("navigation", { name: "Desk menu" });
-    expect(within(nav).getByRole("link", { name: "Desk" }).getAttribute("href")).toBe("/desk");
+    // The breadcrumb strip names the app; the bar carries only its menus.
+    expect(within(nav).queryByRole("link", { name: "Desk" })).toBeNull();
     const notes = within(nav).getByRole("link", { name: "Notes" });
     expect(notes.getAttribute("aria-current")).toBe("page");
     expect(notes.getAttribute("data-current")).toBe("true");
@@ -126,7 +121,7 @@ describe("AppMenu", () => {
   test("an aggregator shows only its own items", async () => {
     renderMenu("/suite/inbox");
     const nav = await screen.findByRole("navigation", { name: "Suite menu" });
-    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Suite", "Inbox"]);
+    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Inbox"]);
     expect(within(nav).queryByRole("button")).toBeNull();
   });
 
@@ -152,7 +147,7 @@ describe("AppMenu", () => {
       { id: "operator.services", label: "Services", to: "/operator/services" },
     ] }]);
     const nav = await screen.findByRole("navigation", { name: "Settings menu" });
-    expect(within(nav).getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("/operator");
+    expect(within(nav).queryByRole("link", { name: "Settings" })).toBeNull();
     fireEvent.click(within(nav).getByRole("button", { name: "Operator" }));
     expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent))
       .toEqual(["Overview", "Services"]);
@@ -172,7 +167,7 @@ describe("AppMenu", () => {
   });
 
   test("More preserves the parent label and single-child destination of a route-less Settings item", async () => {
-    mockOverflow(300);
+    mockOverflow(250);
     renderMenu("/operator", [
       { id: "operator", label: "Operator", group: "platform", to: "/operator" },
       { id: "tags", label: "Tags", group: "platform", children: [
@@ -220,7 +215,7 @@ describe("AppMenu", () => {
       { id: "suite.inbox", label: "Inbox", to: "/suite/inbox" },
     ] }]);
     const nav = await screen.findByRole("navigation", { name: "Suite menu" });
-    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Suite", "Inbox"]);
+    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Inbox"]);
     expect(nav.querySelector('[aria-current="page"]')).toBeNull();
   });
 

@@ -26,7 +26,7 @@ test("partitions entries with the container gap, keeps border-box measurements o
     const [host, measurement, visible, overflow] = useOverflowCount(entries, keepIndex);
     return <div id="host" ref={host} style={{ columnGap: "10px", border: "4px solid", padding: "6px" }}>
       <div ref={measurement} style={{ columnGap: "40px" }}>
-        <span />{entries.map((id) => <span key={id} id={id === "d" ? "kept" : id} />)}<span />
+        {entries.map((id) => <span key={id} id={id === "d" ? "kept" : id} />)}<span />
       </div>
       <output>{JSON.stringify({ visible, overflow })}</output>
     </div>;
@@ -34,16 +34,16 @@ test("partitions entries with the container gap, keeps border-box measurements o
   const { rerender, unmount } = render(<Host keepIndex={-1} />);
   const partition = () => JSON.parse(screen.getByRole("status").textContent!);
   expect(partition()).toEqual({ visible: [0, 1, 2], overflow: [3] });
-  containerWidth = 355;
+  containerWidth = 280;
   act(() => callback!([{
-    target: document.getElementById("host")!, contentRect: { width: 335 } as DOMRectReadOnly,
+    target: document.getElementById("host")!, contentRect: { width: 260 } as DOMRectReadOnly,
     borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [],
   }], {} as ResizeObserver));
   expect(partition()).toEqual({ visible: [0, 1], overflow: [2, 3] });
   // An item-only notification must use the same available width as a container notification.
   act(() => callback!([], {} as ResizeObserver));
   expect(partition()).toEqual({ visible: [0, 1], overflow: [2, 3] });
-  containerWidth = 380;
+  containerWidth = 330;
   rerender(<Host keepIndex={3} />);
   expect(partition()).toEqual({ visible: [3], overflow: [0, 1, 2] });
   expect(observed.some((element) => element.id === "kept")).toBe(true);

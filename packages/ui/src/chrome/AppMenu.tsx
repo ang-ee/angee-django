@@ -56,41 +56,33 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
   ], [settings, app, rail]);
   const currentIndex = entries.findIndex((entry) => entry.kind === "menu" && match?.trail.some((node) => node.id === entry.node.id));
   const [containerRef, measurementRef, visible, overflow] = useOverflowCount(entries, currentIndex);
-  if (!app && !settings) return null;
+  if ((!app && !settings) || !entries.length) return null;
+  // The breadcrumb strip names the app; the bar carries only its menus.
   const label = settings ? t("chrome.settings") : app!.displayLabel;
   const currentId = match?.item.id;
-  const count = visible.length;
-  const overflowCurrent = count === 0 && (currentIndex >= 0 || app?.id === currentId);
-  const appTarget = settings?.target ?? app?.target;
-  const appLink = <AppMenuLink to={appTarget} href={appTarget}
-    data-current={app?.id === currentId} className={cn(menuItemClass, "font-semibold")}>
-    {label}
-  </AppMenuLink>;
+  const overflowCurrent = visible.length === 0 && currentIndex >= 0;
 
   return <nav ref={containerRef} aria-label={t("chrome.appMenu", { label })}
     className={cn("relative flex h-full min-w-0 flex-1 items-center gap-1 overflow-hidden", className)}>
     {/* One intrinsic ordered list; inert and hidden so its copies are never navigable. */}
     <div ref={measurementRef} inert aria-hidden="true"
       className="pointer-events-none invisible absolute inset-y-0 left-0 flex w-max items-center gap-1">
-      <span className={cn(menuItemClass, "font-semibold")}>{label}</span>
       {entries.map((entry) => <div key={entry.node.id} className="flex h-full shrink-0">
         <AppMenuEntryControl entry={entry} currentId={currentId} current={false} rail={rail} measuring />
       </div>)}
       <span className={menuItemClass}>{t("chrome.more")}<Glyph name="chevron-down" size={12} aria-hidden="true" /></span>
     </div>
-    {count > 0 || !overflow.length ? appLink : null}
     {visible.map((index) => <AppMenuEntryControl key={entries[index]!.node.id} entry={entries[index]!} currentId={currentId}
       current={index === currentIndex} rail={rail} />)}
     {overflow.length ? <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger data-current={overflowCurrent} aria-current={overflowCurrent ? "true" : undefined}
-        className={cn(menuItemClass, "min-w-0 shrink", count === 0 && "font-semibold")}>
-        <span className="truncate">{count === 0 ? label : t("chrome.more")}</span>
+        className={cn(menuItemClass, "min-w-0 shrink")}>
+        <span className="truncate">{t("chrome.more")}</span>
         <Glyph name="chevron-down" size={12} aria-hidden="true" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Positioner side="bottom" align="start" sideOffset={4}>
           <DropdownMenu.Content>
-            {count === 0 ? <MenuPage target={appTarget} label={label} current={app?.id === currentId} /> : null}
             {overflow.map((index) => {
               const entry = entries[index]!;
               return entry.kind === "removed"

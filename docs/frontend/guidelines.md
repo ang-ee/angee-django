@@ -1122,12 +1122,13 @@ Hard-won traps — the wise learn from others' mistakes
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
-  bar; deeper items use the shared dropdown menu and labelled groups.
+  bar; deeper items use the shared dropdown menu and labelled groups. The bar
+  never repeats the app's name: the rail and the breadcrumb strip carry it.
   The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
   measures the ordered menus followed by developer removed markers, and excess
   entries go into More. The current trail's menu keeps the last visible slot;
-  when no entries fit, the app name labels the dropdown, which leads with the
-  app's own page. A route-less menu with one child is the same link in the row
+  when no entries fit, More holds them all and is marked current when it holds
+  the current page. A route-less menu with one child is the same link in the row
   and in More. Icon-only rail links show supplementary name tooltips; developer
   descriptions follow the name.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,

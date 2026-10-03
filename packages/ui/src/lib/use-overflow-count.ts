@@ -2,9 +2,9 @@ import * as React from "react";
 
 /**
  * Count the ordered entries that fit, reserving an overflow control when needed.
- * The inert measurement row contains the leading control, one child per entry,
- * then the overflow control. The container owns the visible row's gap. Keep it at
- * intrinsic width so moving entries into a popup cannot change measurements.
+ * The inert measurement row contains one child per entry, then the overflow
+ * control. The container owns the visible row's gap. Keep it at intrinsic width
+ * so moving entries into a popup cannot change measurements.
  * `keepIndex` takes the last visible slot when it would otherwise overflow.
  */
 export function useOverflowCount<T>(
@@ -25,19 +25,18 @@ export function useOverflowCount<T>(
       const available = container.getBoundingClientRect().width - inset;
       const widths = Array.from(measurement.children, (child) => child.getBoundingClientRect().width);
       // Unlaid-out hosts (including SSR/test DOMs) cannot supply useful widths.
-      if (widths.length !== entries.length + 2 || widths.every((width) => width === 0)) return;
-      const leading = widths[0]!;
+      if (widths.length !== entries.length + 1 || widths.every((width) => width === 0)) return;
       const overflow = widths.at(-1)!;
       const gap = parseFloat(style.columnGap) || 0;
-      const itemWidths = widths.slice(1, -1);
-      if (leading + itemWidths.reduce((sum, width) => sum + width, 0) + gap * entries.length <= available) {
+      const itemWidths = widths.slice(0, -1);
+      if (itemWidths.reduce((sum, width) => sum + width, 0) + gap * (entries.length - 1) <= available) {
         setCount(entries.length);
         return;
       }
       for (let next = entries.length - 1; next > 0; next--) {
         const visibleWidth = visibleEntryIndices(entries.length, next, keepIndex)
           .reduce((sum, index) => sum + itemWidths[index]!, 0);
-        if (leading + visibleWidth + overflow + gap * (next + 1) <= available) {
+        if (visibleWidth + overflow + gap * next <= available) {
           setCount(next);
           return;
         }
