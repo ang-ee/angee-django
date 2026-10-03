@@ -94,9 +94,7 @@ export function AppRail({
   navigationTarget,
 }: AppRailProps): ReactElement {
   const t = useUiT();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
+  const { pathname, searchStr } = useRouterState({ select: (state) => state.location });
   const brand = useRuntimeBrand();
   const { confineTo } = useAppRuntime();
   const runtimeTree = useChromeMenuTree();
@@ -118,7 +116,8 @@ export function AppRail({
     railPreferences.expanded,
     largeViewport,
   );
-  const activePlace = tree.railPlace(pathname);
+  const activePlace = tree.railPlace(`${pathname}${searchStr}`);
+  const selectedAppId = tree.match(pathname, searchStr)?.app?.id;
   const place = drawerMode && navigationTarget
     ? tree.railPlace(navigationTarget)
     : activePlace;
@@ -241,8 +240,8 @@ export function AppRail({
             />
           ) : singleApp ? (
             <div className="flex flex-col gap-1">
-              {(singleApp.root.targetedChildren.length ? singleApp.root.targetedChildren : [singleApp.root]).map((item) => item.target ? (
-                <RailSettingsItem key={item.id} active={item.matchesPath(pathname)} expanded={false}
+              {singleApp.root.appChildren().map((item) => item.target ? (
+                <RailSettingsItem key={item.id} active={selectedAppId === item.id} expanded={false}
                   icon={item.iconName} label={item.displayLabel} to={item.target} pathname={pathname}
                   onActiveToggle={onActiveToggle} onOpenNavigation={item.targetedChildren.length ? openNavigation : undefined} />
               ) : null)}

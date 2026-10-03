@@ -14,6 +14,7 @@ interface RefineChromeMenuMeta {
   menuId?: unknown;
   parent?: unknown;
   appRoot?: unknown;
+  app?: unknown;
   icon?: unknown;
   description?: unknown;
   group?: unknown;
@@ -56,6 +57,7 @@ function chromeMenuItemFromRefine(
     ...(item.route ? { to: item.route } : {}),
     ...(parentId ? { parentId } : {}),
     ...(meta.appRoot === true ? { appRoot: true } : {}),
+    ...(meta.app === true ? { app: true } : {}),
     ...(stringValue(meta.icon ?? item.icon) ? { icon: stringValue(meta.icon ?? item.icon) } : {}),
     ...(stringValue(meta.description) ? { description: stringValue(meta.description) } : {}),
     ...(menuGroup(meta.group) ? { group: menuGroup(meta.group) } : {}),

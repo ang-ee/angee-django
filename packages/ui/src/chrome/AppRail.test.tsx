@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   Outlet,
@@ -52,6 +53,31 @@ const menuItems: readonly ChromeMenuItem[] = [
 ];
 
 describe("AppRail intermediate navigation", () => {
+  test("a branded single-app rail keeps its menus out of both expanded and icon modes", async () => {
+    media.large = true;
+    const items: readonly ChromeMenuItem[] = [{ id: "desk", label: "Desk", to: "/desk", children: [
+      { id: "desk.notes", label: "Notes", to: "/desk/notes" },
+    ] }];
+    function RailHost() {
+      const [preferences, setPreferences] = useState<Record<string, unknown>>({});
+      return <AppRuntimeProvider runtime={{
+        brand: { name: "Desk brand", mark: "app-rail" },
+        userPreferences: { available: true, preferences,
+          patchPreferences: async (patch) => { setPreferences(patch); },
+        },
+      }}><AppRail menuItems={items} /></AppRuntimeProvider>;
+    }
+    const root = createRootRoute({ component: RailHost });
+    const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/desk" })]),
+      history: createMemoryHistory({ initialEntries: ["/desk"] }) });
+    render(<RouterProvider router={router} />);
+    const collapse = await screen.findByRole("button", { name: "Collapse app navigation" });
+    expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
+    fireEvent.click(collapse);
+    await screen.findByRole("button", { name: "Expand app navigation" });
+    expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Desk brand" })).toBeTruthy();
+  });
   test("uses the supplied confined tree and retains shortcuts inside its root", async () => {
     media.large = true;
     const confined = MenuTree.from(menuItems).confineTo("projects");

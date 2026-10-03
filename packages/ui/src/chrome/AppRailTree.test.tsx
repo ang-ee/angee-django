@@ -17,9 +17,31 @@ import { MenuTree } from "./menu-tree";
 afterEach(cleanup);
 
 describe("AppRailTree", () => {
+  test("roots show included apps only, and sub-apps show no further children", async () => {
+    const tree = MenuTree.from([{ id: "suite", label: "Suite", to: "/suite", children: [
+      { id: "suite.inbox", label: "Inbox", to: "/suite/inbox" },
+      { id: "desk", label: "Desk", app: true, children: [
+        { id: "desk.notes", label: "Notes", to: "/notes" },
+        { id: "desk.inner", label: "Inner app", app: true, to: "/inner" },
+      ] },
+      { id: "hidden", label: "Hidden app", app: true, hidden: true, to: "/hidden" },
+    ] }]);
+    const root = createRootRoute({ component: () => <><AppRailTree scope="apps" roots={tree.roots} activeRootId="suite" /><Outlet /></> });
+    const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/notes" })]),
+      history: createMemoryHistory({ initialEntries: ["/notes"] }) });
+    render(<RouterProvider router={router} />);
+    const desk = await screen.findByRole("link", { name: "Desk" });
+    expect(desk.getAttribute("href")).toBe("/notes");
+    expect(desk.getAttribute("aria-current")).toBe("true");
+    expect(screen.queryByRole("link", { name: "Inbox" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Inner app" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Hidden app" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collapse Desk" })).toBeNull();
+  });
   test("follows a menu's preset through Router's full-href navigation", async () => {
     const tree = MenuTree.from([{ id: "desk", to: "/desk", children: [
-      { id: "desk.notes", label: "Open notes", to: "/desk/notes?preset=desk.open" },
+      { id: "desk.notes", app: true, label: "Open notes", to: "/desk/notes?preset=desk.open" },
     ] }]);
     const root = createRootRoute({ component: () => <>
       <AppRailTree scope="apps" roots={tree.roots} activeRootId="desk" />
@@ -43,7 +65,7 @@ describe("AppRailTree", () => {
         to: "/projects",
         badge: 3,
         children: [
-          { id: "projects.all", label: "All projects", to: "/projects" },
+          { id: "projects.all", app: true, label: "All projects", to: "/projects" },
         ],
       },
     ]);
@@ -85,7 +107,7 @@ describe("AppRailTree", () => {
         label: "Projects",
         to: "/projects",
         children: [
-          { id: "projects.all", label: "All projects", to: "/projects" },
+          { id: "projects.all", app: true, label: "All projects", to: "/projects" },
         ],
       },
       { id: "notes", label: "Notes", to: "/notes" },
@@ -132,13 +154,13 @@ describe("AppRailTree", () => {
         id: "projects",
         label: "Projects",
         to: "/projects",
-        children: [{ id: "projects.all", label: "All projects", to: "/projects" }],
+        children: [{ id: "projects.all", app: true, label: "All projects", to: "/projects" }],
       },
       {
         id: "notes",
         label: "Notes",
         to: "/notes",
-        children: [{ id: "notes.all", label: "All notes", to: "/notes" }],
+        children: [{ id: "notes.all", app: true, label: "All notes", to: "/notes" }],
       },
     ]);
     const rootRoute = createRootRoute({ component: () => <Outlet /> });

@@ -885,9 +885,12 @@ Hard-won traps — the wise learn from others' mistakes
   an update mutation. Delete affordances are
   schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
   omit record and bulk delete instead of requiring a delete-only `crud(...)`.
-- **An addon contributes one menu root.** The app rail is the one navigation
-  column: compact domain icons collapse into, and expand in place as, their
-  descendant accordion tree. A root with `group:"platform"` contributes to the
+- **An addon contributes one menu root.** The app rail renders apps and their
+  included, non-flattened sub-apps, at most two levels. The selected app's own
+  items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
+  bar; deeper items use the shared dropdown menu and labelled groups.
+  [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
+  `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
   shared **Settings place** instead: the rail and chooser expose one synthetic
   Settings entry, and the expanded rail swaps to the platform tree with a back
   header. Settings and the expansion toggle sit below the scrolling list, and
@@ -903,17 +906,18 @@ Hard-won traps — the wise learn from others' mistakes
   for explicit collection-view state, not derived menu children.
   [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
   app roots: explicit `appRoot` declarations win, otherwise every root is an app,
-  and `appRoot` on a non-root item throws (an app another addon includes drops
-  the marker: the including root is the app). A branded single-root rail shows the
-  brand and that root's children instead of the app chooser. Addons rearrange
+  and `appRoot` on a non-root item throws. An included app drops `appRoot` and
+  receives compiler-emitted `app: true`; authors do not declare that field.
+  A branded single-root rail shows the brand and included apps instead of the
+  app chooser. Addons rearrange
   other addons' menus only through the `menus` dict's declared verbs (include,
   flatten, remove, hide, only, position), along their dependencies; see
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
   another addon's items.
-  A route referenced by more than one menu item must set `route.menu` (the owning
-  item's id) or the chrome derivation throws "referenced by multiple menu items" —
-  or make the root route-less so it inherits its target through a descendant and the
-  leaf is the route's sole reference.
+  `route.menu` identifies a route's owning item when references are ambiguous.
+  Chrome currently selects the nearest visible app on `MenuTree.match()`'s
+  trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
+  sheet strip below the top bar; pane toggles stay in the top bar.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and
   temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
@@ -958,7 +962,7 @@ Hard-won traps — the wise learn from others' mistakes
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
-  justify/text live once; `TopBar` (including its inline Breadcrumb)/`ControlBand`/`PageToolbar`/
+  justify/text live once; `TopBar`/`BreadcrumbBar`/`ControlBand`/`PageToolbar`/
   `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
   bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
   recipe so the bars stay in lockstep.

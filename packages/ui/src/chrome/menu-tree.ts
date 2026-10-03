@@ -46,6 +46,8 @@ export interface BaseMenuItem extends MenuItem, ChromeMenuExtra {
 }
 
 export interface ChromeMenuItem extends ComposedMenuItem, ChromeMenuExtra {
+  /** Compiler-emitted identity of an included, non-flattened app; not authorable. */
+  app?: boolean;
   children?: readonly ChromeMenuItem[];
 }
 
@@ -138,6 +140,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   parentId?: string;
   parentNode?: ChromeMenuNode;
   appRoot?: boolean;
+  app?: boolean;
   description?: string;
   group?: ChromeMenuGroup;
   status?: ChromeMenuStatus;
@@ -176,14 +179,28 @@ export class ChromeMenuNode implements ChromeMenuItem {
     return this.parentId;
   }
 
-  /** Children the rail renders: those with a target that are not hidden. */
+  get isApp(): boolean {
+    return (!this.parentNode && this.group !== "platform") || this.app === true;
+  }
+
+  /** Visible included apps, whose own menus belong in the top bar. */
+  appChildren(): readonly ChromeMenuNode[] {
+    return this.targetedChildren.filter((child) => child.isApp);
+  }
+
+  /** Visible menu children, excluding included apps. */
+  menuItems(): readonly ChromeMenuNode[] {
+    return this.targetedChildren.filter((child) => !child.isApp);
+  }
+
+  /** Visible children with navigation targets, before app/menu classification. */
   get targetedChildren(): readonly ChromeMenuNode[] {
     return (this.children ?? []).filter((child) => child.target && !child.hidden);
   }
 
   /** Most-specific targeted child whose subtree contains `pathname`. */
   activeTargetedChild(pathname: string): ChromeMenuNode | undefined {
-    return deepestTargetMatch(this.targetedChildren, pathname);
+    return new MenuTree(this.targetedChildren, new Map()).match(pathname)?.trail[0];
   }
 
   matchesPath(pathname: string): boolean {
@@ -349,22 +366,42 @@ export class MenuTree {
    * child's target is the longest prefix of `pathname` (most-specific wins).
    */
   activeAppRoot(pathname: string): ChromeMenuNode | undefined {
-    return deepestTargetMatch(this.roots, pathname);
+    return this.match(pathname)?.trail[0];
   }
 
   /** One highlighted destination; ancestors remain expanded, not selected. */
   activeItem(pathname: string): ChromeMenuNode | undefined {
-    let best: ChromeMenuNode | undefined;
-    let bestLength = -1;
-    for (const item of this.byId.values()) {
-      if (!item.to || !item.matchesPath(pathname)) continue;
-      const length = item.path?.length ?? 0;
-      if (length >= bestLength) {
-        best = item;
-        bestLength = length;
+    return this.match(pathname)?.item;
+  }
+
+  /** Own-path matches rank by path length, equal search params, depth, then pre-order. */
+  match(path: string, search?: string | URLSearchParams): {
+    item: ChromeMenuNode;
+    trail: readonly ChromeMenuNode[];
+    /** Nearest visible app on the navigation trail. Settings has its own place. */
+    app?: ChromeMenuNode;
+  } | undefined {
+    const location = new URL(path, "https://angee.invalid");
+    const params = new URLSearchParams(search ?? location.search);
+    let best: { item: ChromeMenuNode; trail: readonly ChromeMenuNode[] } | undefined;
+    let bestRank = [-1, -1, -1];
+    const visit = (item: ChromeMenuNode, ancestors: readonly ChromeMenuNode[]): void => {
+      const trail = [...ancestors, item];
+      if (item.path && pathMatchesTarget(location.pathname, item.path)) {
+        const equalParams = [...new URLSearchParams(item.search)].filter(
+          ([key, value]) => params.getAll(key).includes(value),
+        ).length;
+        const rank = [item.path.length, equalParams, trail.length];
+        const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
+        if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
+          best = { item, trail };
+          bestRank = rank;
+        }
       }
-    }
-    return best;
+      for (const child of item.children ?? []) visit(child, trail);
+    };
+    for (const root of this.roots) visit(root, []);
+    return best && { ...best, app: best.trail.findLast((item) => item.isApp && !item.hidden) };
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -392,36 +429,6 @@ export class MenuTree {
 }
 
 const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);
-
-function* menuNodeDescendants(
-  root: ChromeMenuNode,
-): Generator<ChromeMenuNode> {
-  yield root;
-  for (const child of root.children ?? []) {
-    yield* menuNodeDescendants(child);
-  }
-}
-
-/** Most-specific matching subtree, returning the root that owns the match. */
-function deepestTargetMatch<T extends ChromeMenuNode>(
-  roots: readonly T[],
-  pathname: string,
-): T | undefined {
-  let best: T | undefined;
-  let bestLength = -1;
-  for (const root of roots) {
-    for (const candidate of menuNodeDescendants(root)) {
-      const target = candidate.target;
-      if (!target || !candidate.matchesPath(pathname)) continue;
-      const length = candidate.targetPath?.length ?? 0;
-      if (length > bestLength) {
-        best = root;
-        bestLength = length;
-      }
-    }
-  }
-  return best;
-}
 
 export function buildMenuTree(
   items: readonly ChromeMenuItem[],

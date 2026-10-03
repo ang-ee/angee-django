@@ -83,6 +83,7 @@ const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "af
 interface Node {
   id: string;
   owner: string;
+  declaredRoot: boolean;
   index: number;
   fields: Partial<Record<Field, unknown>>;
   setBy: Partial<Record<Field, string>>;
@@ -110,7 +111,7 @@ export function compileMenus(
   const declare = (layer: string, id: string, fields: Node["fields"]): void => {
     if (nodes.has(id)) throw new Error(`Addon "${layer}" redefines menu item id "${id}" already contributed by another addon.`);
     const setBy = Object.fromEntries(Object.keys(fields).map((field) => [field, layer]));
-    nodes.set(id, { id, owner: layer, index: nodes.size, fields, setBy, only: [] });
+    nodes.set(id, { id, owner: layer, declaredRoot: fields.parent == null, index: nodes.size, fields, setBy, only: [] });
   };
   for (const layer of layers) {
     if (isMenuDeclarationList(layer.menus)) {
@@ -205,6 +206,7 @@ function declareLegacy(
   item: BaseMenuItem,
   parent: string | undefined,
 ): void {
+  if ("app" in item) throw new Error(`Menu item "${item.id}" authors app; app identity is compiler-emitted.`);
   const id = item.id ?? item.route;
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
   const { id: _id, children, parentId, ...rest } = item;
@@ -264,12 +266,13 @@ function resolve(
   const survivors = (parent: string | undefined): Node[] =>
     (children.get(parent) ?? []).filter((node) => !removed.has(node.id));
 
-  // Only a root is an app: an app another layer included keeps its place, not the
-  // marker. An author nesting appRoot itself still fails tree validation.
+  // Included apps lose appRoot, but retain compiler-owned app identity unless
+  // flattened. An author nesting appRoot itself still fails tree validation.
   const emitted = (node: Node, drop: readonly Field[]): Record<string, unknown> => {
     const fields: Record<string, unknown> = { ...node.fields };
     for (const field of drop) delete fields[field];
     if (parentOf(node) !== undefined && node.setBy.parent !== node.owner) delete fields.appRoot;
+    if (node.declaredRoot && parentOf(node) !== undefined && !node.fields.flatten) fields.app = true;
     return fields;
   };
   const logicalItem = (node: Node): CompiledMenuItem => {

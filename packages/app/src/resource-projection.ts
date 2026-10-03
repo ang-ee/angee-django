@@ -321,6 +321,7 @@ function addMenuRouteResource(
       icon: item.iconName,
       menuId: item.id,
       ...(appRoot ? { appRoot: true } : {}),
+      ...(item.app === true ? { app: true } : {}),
       ...(item.description ? { description: item.description } : {}),
       ...(item.group ? { group: item.group } : {}),
       ...(item.status ? { status: item.status } : {}),
