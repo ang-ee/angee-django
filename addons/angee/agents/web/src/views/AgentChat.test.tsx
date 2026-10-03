@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { AppRuntimeProvider } from "@angee/ui";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -33,6 +33,20 @@ const props = {
 } as const;
 
 describe("agent chat composition", () => {
+  test("Settings opened from conversation options returns focus there on Escape", async () => {
+    const Provider = native();
+    render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} sessionId={undefined} /></AppRuntimeProvider></Provider>);
+    const options = await screen.findByRole("button", { name: "Conversation options" });
+    fireEvent.click(options);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Session settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Session settings" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(options));
+  });
+
   test("an explicit protocol the agent does not speak fails clearly", async () => {
     const Provider = native();
     render(<Provider><AppRuntimeProvider runtime={{}}><AgentChat {...props} protocolVersion={2} /></AppRuntimeProvider></Provider>);

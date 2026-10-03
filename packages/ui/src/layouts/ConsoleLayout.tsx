@@ -3,9 +3,11 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
+import { BreadcrumbBar } from "../chrome/BreadcrumbBar";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
+import { ChromePlaceProvider } from "../chrome/refine-menu";
 import { Chatter, useChatterPresentation } from "../communication/Chatter";
 import { ChatterProvider, useChatter, type ChatterPaneController } from "../communication/chatter-context";
 import { useUiT } from "../i18n";
@@ -18,6 +20,7 @@ import {
 } from "../lib/use-media-query";
 import type { CollapsiblePane } from "../page";
 import { useContainer } from "../runtime";
+import { useShellRegion } from "../chrome/shell-containers";
 import { Drawer } from "../ui/drawer";
 import { ControlBandProvider } from "./ControlBand";
 import { DrawerProvider } from "./drawer-context";
@@ -34,7 +37,7 @@ export interface ConsoleLayoutProps {
 }
 
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
-  return <ChatterProvider defaultCollapsed><ConsoleLayoutBody {...props} /></ChatterProvider>;
+  return <ChromePlaceProvider><ChatterProvider defaultCollapsed><ConsoleLayoutBody {...props} /></ChatterProvider></ChromePlaceProvider>;
 }
 
 function ConsoleLayoutBody({
@@ -43,6 +46,7 @@ function ConsoleLayoutBody({
 }: ConsoleLayoutProps): React.ReactElement {
   const { visible: showChatter } = useChatterPresentation();
   const notices = useContainer("shell#notices");
+  const showBreadcrumbs = useShellRegion("chrome.breadcrumbs");
   const [controlHost, setControlHost] =
     React.useState<HTMLDivElement | null>(null);
   const [statusHost, setStatusHost] =
@@ -101,6 +105,7 @@ function ConsoleLayoutBody({
                   "--rail-current-w": mobileViewport
                     ? "0px"
                     : railWidth ?? "var(--spacing-rail-w)",
+                  "--breadcrumbbar-current-h": showBreadcrumbs ? "var(--spacing-breadcrumbbar-h)" : "0px",
                 } as React.CSSProperties}
                 className={cn(
                   "console-grid h-dvh min-h-0 w-full min-w-0 max-w-full overflow-hidden bg-canvas text-fg",
@@ -143,6 +148,7 @@ function ConsoleLayoutBody({
                   showChatterToggle={showChatter}
                   showUserMenu
                 />
+                {showBreadcrumbs ? <BreadcrumbBar /> : null}
                 <div className="area-control min-w-0">
                   <div className="contents" data-console-notices>
                     <ContainerOutlet entries={notices} />

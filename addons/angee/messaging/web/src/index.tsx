@@ -76,7 +76,8 @@ const messagingMenu: readonly BaseMenuItem[] = [
     label: "Messaging",
     icon: "inbox",
     children: [
-      { id: "messaging.inbox", label: "Inbox", route: "messaging.inbox", icon: "inbox" },
+      // A plain message list. "Inbox" names Nexus's explorer and the PM suite's notifications.
+      { id: "messaging.inbox", label: "Messages", route: "messaging.inbox", icon: "inbox" },
       { id: "messaging.threads", label: "Threads", route: "messaging.threads", icon: "threads" },
       { id: "messaging.channels", label: "Channels", route: "messaging.channels", icon: "channel" },
     ],
@@ -126,7 +127,8 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   i18n: { messaging: enMessagingMessages },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   containers: {
-    // Connect verbs for each channel vendor, on the Channels list's toolbar.
+    // The Channels list's Connect menu: each vendor's child renders ActionTrigger or
+    // ConnectChannelAction, with any dialog it opens inside it so focus returns to the menu.
     "messaging.channels#toolbar": {},
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },

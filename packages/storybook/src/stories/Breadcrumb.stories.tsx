@@ -15,7 +15,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Trail: Story = {
   render: () => (
-    <div className="w-[42rem] overflow-hidden rounded-8 bg-rail p-3 text-on-rail">
+    <div className="w-[42rem] overflow-hidden rounded-8 bg-sheet p-3 text-fg">
       <Breadcrumb />
     </div>
   ),

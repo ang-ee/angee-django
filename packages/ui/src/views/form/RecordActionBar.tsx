@@ -7,8 +7,8 @@ import { DropdownMenu } from "../../ui/dropdown-menu";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
-import { RecordActionMenuItems, RecordActionTrigger } from "./RecordActionMenu";
-import { RecordActionMenuContext } from "../../ui/record-action-context";
+import { ActionMenu, ActionTrigger } from "../../toolbars/ActionMenu";
+import { ActionMenuContext } from "../../ui/action-menu-context";
 import type { ActionDescriptor, ActionResult } from "../page";
 import { useRuntimeViewAs } from "../../runtime";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
@@ -60,17 +60,16 @@ export function RecordActionBar({
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
-  const menu = React.useContext(RecordActionMenuContext);
+  const menu = React.useContext(ActionMenuContext);
   const chrome = useRecordChromeContextMaybe();
   const blocked = blockedByForm || menu?.blocked || chrome?.actionsBlocked || Boolean(preview.viewAs || preview.pending);
   const blockedRef = useLatestRef(blocked);
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
-  const actionsTriggerRef = React.useRef<HTMLElement>(null);
   // The open typed-args action form (F-a), or null. Set after any confirm passes;
   // the dialog owns collecting the args and firing the action's `submit`.
-  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor } | null>(
+  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor; fromMenu: boolean } | null>(
     null,
   );
   const actionMutation = useMutation<
@@ -136,7 +135,7 @@ export function RecordActionBar({
       // A typed-args action collects its args (and merges the record/selection
       // context) in the dialog, which fires `submit` — not the string-only prompt.
       if (action.args && action.submit) {
-        setFormAction({ action });
+        setFormAction({ action, fromMenu: menu !== null || action.placement !== "toolbar" });
         return;
       }
       let values: Record<string, string> = {};
@@ -150,7 +149,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, blockedRef, confirm, prompt, record],
+    [actionMutation, blockedRef, confirm, prompt, record, menu],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
@@ -173,100 +172,64 @@ export function RecordActionBar({
     formAction === null
   ) return null;
 
+  const formDialog = formAction ? (
+    <ActionFormDialog
+      key={formAction.action.id}
+      action={formAction.action}
+      context={{
+        record,
+        selectedIds: recordId !== null ? [recordId] : [],
+        refresh: async () => await reload() ?? null,
+      }}
+      open
+      onOpenChange={(open) => { if (!open) setFormAction(null); }}
+      onSucceeded={reload}
+    />
+  ) : null;
+  const deleteTrigger = visibleDeleteAction !== undefined ? (
+    <ActionTrigger variant="danger" glyph="trash"
+      disabled={blocked || visibleDeleteAction.isPending}
+      loading={visibleDeleteAction.isPending}
+      onClick={() => { if (!blockedRef.current) visibleDeleteAction.onDelete(); }}>
+      {t("actions.delete")}
+    </ActionTrigger>
+  ) : null;
+  const renderAction = (action: RecordActionDescriptor) => (
+    <ActionTrigger key={action.id} glyph={action.icon}
+      variant={action.danger ? "danger" : "secondary"}
+      disabled={disabled(action)} loading={pendingId === action.id}
+      onClick={() => void runAction(action)}>
+      {action.label}
+    </ActionTrigger>
+  );
+
   return (
     <>
-      {menu ? visibleActions.map((action) => (
-        <RecordActionTrigger key={action.id} glyph={action.icon}
-          variant={action.danger ? "danger" : "secondary"}
-          disabled={disabled(action)} loading={pendingId === action.id}
-          onClick={() => void runAction(action)}>
-          {action.label}
-        </RecordActionTrigger>
-      )) : <>
-      {toolbarActions.map((action, index) => (
-        <Button key={action.id} type="button" size="sm"
-          variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-          disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
-          {action.icon ? <Glyph name={action.icon} /> : null}
-          {action.label}
-        </Button>
-      ))}
-      {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null ? <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          render={
-            // A DropdownMenu.Item closes the menu on click, so the item's
-            // pendingId-disabled state is never seen. Drive the affordance from the
-            // trigger instead: while any action runs it shows loading and is
-            // disabled, so a slow non-navigating action gives feedback and can't be
-            // re-fired from a reopened menu.
-            <Button
-              ref={actionsTriggerRef}
-              type="button"
-              variant="ghost"
-              size="md"
-              loading={pendingId !== null}
-            >
-              <Glyph name="more-vertical" />
-              {t("list.actions")}
-            </Button>
-          }
-        />
-        <DropdownMenu.Portal keepMounted>
-          <DropdownMenu.Positioner sideOffset={6} align="start">
-            <DropdownMenu.Content className="w-52">
-              {visibleDeleteAction !== undefined ? (
-                <DropdownMenu.Item
-                  variant="danger"
-                  disabled={blocked || visibleDeleteAction.isPending}
-                  onClick={() => { if (!blockedRef.current) visibleDeleteAction.onDelete(); }}
-                >
-                  <Glyph name="trash" />
-                  {t("actions.delete")}
-                </DropdownMenu.Item>
-              ) : null}
-              {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
-                <DropdownMenu.Separator />
-              ) : null}
-              {menuActions.map((action) => (
-                <DropdownMenu.Item
-                  key={action.id}
-                  variant={action.danger ? "danger" : "default"}
-                  disabled={disabled(action)}
-                  onClick={() => void runAction(action)}
-                >
-                  {action.icon ? <Glyph name={action.icon} /> : null}
-                  {action.label}
-                </DropdownMenu.Item>
-              ))}
-              {contributedActions != null ? (
-                <RecordActionMenuItems
-                  blocked={blocked}
-                  finalFocusRef={actionsTriggerRef}
-                >
-                  {contributedActions}
-                </RecordActionMenuItems>
-              ) : null}
-            </DropdownMenu.Content>
-          </DropdownMenu.Positioner>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root> : null}
+      {menu ? <>
+        {deleteTrigger}
+        {visibleActions.map(renderAction)}
+        {contributedActions}
+        {formDialog}
+      </> : <>
+        {toolbarActions.map((action, index) => (
+          <Button key={action.id} type="button" size="sm"
+            variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
+            disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
+            {action.icon ? <Glyph name={action.icon} /> : null}
+            {action.label}
+          </Button>
+        ))}
+        {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
+          {deleteTrigger}
+          {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
+            <DropdownMenu.Separator />
+          ) : null}
+          {menuActions.map(renderAction)}
+          {contributedActions}
+          {formAction?.fromMenu ? formDialog : null}
+        </ActionMenu> : null}
+        {formAction && !formAction.fromMenu ? formDialog : null}
       </>}
-      {formAction ? (
-        <ActionFormDialog
-          key={formAction.action.id}
-          action={formAction.action}
-          context={{
-            record,
-            selectedIds: recordId !== null ? [recordId] : [],
-            refresh: async () => await reload() ?? null,
-          }}
-          open
-          onOpenChange={(open) => {
-            if (!open) setFormAction(null);
-          }}
-          onSucceeded={reload}
-        />
-      ) : null}
     </>
   );
 }

@@ -44,6 +44,7 @@ export const barVariants = tv({
     height: {
       none: "",
       topbar: "h-topbar-h",
+      breadcrumbs: "h-breadcrumbbar-h",
       control: "h-control-h",
       controlMin: "min-h-control-h",
       status: "h-7",

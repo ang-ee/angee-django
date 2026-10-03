@@ -90,12 +90,7 @@ function liveBridge(options: Partial<Parameters<typeof defineChannelBridgeAddon>
     key: "example",
     sequence: 22,
     connectAction: <span>Connect example</span>,
-    i18n: {
-      messaging: {
-        "channel.example.menu.label": "Example",
-        "channel.example.menu.description": "Link Example accounts",
-      },
-    },
+    i18n: { messaging: {} },
     ...options,
   });
 }
@@ -110,12 +105,7 @@ describe("defineChannelBridgeAddon live bridges", () => {
     const manifest = liveBridge({ instructionKey: "channel.example.scan" });
     expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
 
-    expect(manifest.menus?.[0]).toMatchObject({
-      id: "messaging.example",
-      label: "Example",
-      parentId: "messaging",
-      route: "messaging.channels",
-    });
+    expect(manifest.menus).toBeUndefined();
     expect(channelToolbar(manifest)).toEqual([{ id: `${VENDOR}.connect`, sequence: 22 }]);
 
     // On the vendor's own rows: its pairing verbs join integrate's, and its
@@ -209,12 +199,7 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Sync Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
       ...(recordActions ? { recordActions } : {}),
     });
 
@@ -238,29 +223,11 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
     const manifest = pollBridge();
     expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
 
-    expect(manifest.menus?.[0]).toMatchObject({
-      id: "messaging.example",
-      label: "Example",
-      route: "messaging.channels",
-      description: "Sync Example accounts",
-    });
+    expect(manifest.menus).toBeUndefined();
     expect(channelToolbar(manifest)).toEqual([{ id: `${VENDOR}.connect`, sequence: 22 }]);
     // Integrate's lifecycle verbs reach the vendor's rows unspecialized.
     const { toolbar, menu } = channelVerbs(manifest, "example");
     expect([...toolbar, ...menu].map((child) => child.owner)).toEqual(["integrate", "integrate", "integrate", "integrate"]);
   });
-
-  test("fails fast when required vendor menu copy is missing", () => {
-    expect(() =>
-      defineChannelPollBridgeAddon({
-        id: VENDOR,
-        key: "example",
-        sequence: 22,
-        connectAction: <span>Connect example</span>,
-        i18n: { messaging: { "channel.example.menu.label": "Example" } },
-      }),
-    ).toThrowError(
-      "Channel bridge example is missing i18n message channel.example.menu.description.",
-    );
-  });
 });
+

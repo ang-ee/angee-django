@@ -259,7 +259,6 @@ function ConsoleTestRuntime({
 
 describe("ConsoleLayout", () => {
   beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
     window.matchMedia = vi.fn((query: string): MediaQueryList => ({
       matches: query === "(min-width: 64rem)" && largeViewport,
       media: query,
@@ -290,15 +289,11 @@ describe("ConsoleLayout", () => {
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     const notesLink = within(rail).getByRole("link", { name: "Notes" });
     expect(notesLink.getAttribute("href")).toBe("/notes");
-    expect(notesLink.getAttribute("data-active")).toBe("false");
+    expect(notesLink.getAttribute("data-current")).toBe("true");
+    expect(notesLink.getAttribute("aria-current")).toBe("true");
     expect(within(rail).getByRole("link", { name: "Ops" })).toBeTruthy();
-    const notesDisclosure = within(rail).getByRole("button", {
-      name: "Collapse Notes",
-    });
-    expect(notesDisclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(document.getElementById(notesDisclosure.getAttribute("aria-controls")!))
-      .toBeTruthy();
-    expect(within(rail).getByRole("link", { name: "All notes" }).getAttribute("data-active")).toBe("true");
+    expect(within(rail).queryByRole("button", { name: "Collapse Notes" })).toBeNull();
+    expect(within(rail).queryByRole("link", { name: "All notes" })).toBeNull();
 
     // The rail is one scrolling list for the active domain place. Settings is
     // selected through the app chooser rather than duplicated in this tree.
@@ -308,11 +303,10 @@ describe("ConsoleLayout", () => {
     expect(within(rail).queryByRole("link", { name: "Settings" })).toBeNull();
     expect(within(rail).queryByRole("link", { name: "Admin" })).toBeNull();
 
-    // The top bar owns global actions and breadcrumbs. Section navigation stays
-    // in the rail rather than being duplicated here.
+    // The top bar owns the selected app's menus and the existing global actions.
     const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
-    expect(within(topBar).queryByText("All notes")).toBeNull();
-    expect(within(topBar).queryByText("Archived")).toBeNull();
+    expect(within(topBar).getByRole("link", { name: "All notes" }).getAttribute("aria-current")).toBe("page");
+    expect(within(topBar).getByRole("link", { name: "Archived" })).toBeTruthy();
     expect(within(topBar).queryByText("Ops")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Open command palette" }),
@@ -335,7 +329,8 @@ describe("ConsoleLayout", () => {
     })).toBeNull();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
-    expect(topBar.contains(breadcrumb)).toBe(true);
+    expect(topBar.contains(breadcrumb)).toBe(false);
+    expect(breadcrumb.closest("[data-console-breadcrumbs]")?.previousElementSibling).toBe(topBar);
     expect(within(breadcrumb).getByText("Notes").getAttribute("aria-current"))
       .toBe("page");
 
@@ -353,8 +348,8 @@ describe("ConsoleLayout", () => {
 
     // A second click on the already-active app icon re-expands the rail.
     fireEvent.click(within(rail).getByRole("link", { name: "Notes" }));
-    expect(await within(rail).findByRole("link", { name: "All notes" }))
-      .toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Collapse app navigation" })).toBeTruthy();
+    expect(within(rail).queryByRole("link", { name: "All notes" })).toBeNull();
   });
 
   test("swaps the expanded rail tree to the Settings place", async () => {
@@ -370,10 +365,14 @@ describe("ConsoleLayout", () => {
     expect(within(rail).getByRole("heading", { name: "Settings" })).toBeTruthy();
     expect(within(rail).getByRole("link", { name: "Back" }).getAttribute("href"))
       .toBe("/");
-    expect(within(rail).getByRole("button", { name: "Collapse Admin" })
-      .getAttribute("aria-expanded")).toBe("true");
-    expect(within(rail).getByRole("link", { name: "Overview" })).toBeTruthy();
-    expect(within(rail).getAllByRole("link", { name: "Settings" })).toHaveLength(1);
+    expect(within(rail).getByRole("link", { name: "Admin" })).toBeTruthy();
+    expect(within(rail).queryByRole("link", { name: "Overview" })).toBeNull();
+    const appMenu = screen.getByRole("navigation", { name: "Settings menu" });
+    fireEvent.click(within(appMenu).getByRole("button", { name: "Admin" }));
+    const settingsMenu = await screen.findByRole("menu");
+    expect(within(settingsMenu).getByRole("menuitem", { name: "Overview" })).toBeTruthy();
+    expect(within(settingsMenu).getByRole("menuitem", { name: "Settings" })).toBeTruthy();
+    fireEvent.keyDown(settingsMenu, { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: "Switch app" }));
     const chooser = await screen.findByRole("dialog", { name: "Switch app" });
@@ -387,7 +386,7 @@ describe("ConsoleLayout", () => {
       .toBeNull();
     const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
     expect(within(topBar).queryByText("Overview")).toBeNull();
-    expect(within(topBar).queryByText("Settings")).toBeNull();
+    expect(within(topBar).getByRole("navigation", { name: "Settings menu" })).toBeTruthy();
     const settingsRailToggle = await screen.findByRole("button", {
       name: "Collapse app navigation",
     });
@@ -410,9 +409,10 @@ describe("ConsoleLayout", () => {
     expect(screen.getByRole("navigation", { name: "Context explorer" }))
       .toBeTruthy();
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" }))
-      .getByRole("link", { name: "All notes" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Collapse primary panel" }))
-      .toBeTruthy();
+      .queryByRole("link", { name: "All notes" })).toBeNull();
+    const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
+    expect(within(topBar).getByRole("link", { name: "All notes" })).toBeTruthy();
+    expect(within(topBar).getByRole("button", { name: "Collapse primary panel" })).toBeTruthy();
   });
 
   test("keeps an explicit expanded preference collapsed below lg", async () => {

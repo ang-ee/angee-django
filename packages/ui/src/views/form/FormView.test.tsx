@@ -57,7 +57,7 @@ import {
   type FormField,
   type FormSubmitContext,
 } from "./FormView";
-import { RecordActionTrigger } from "./RecordActionMenu";
+import { ActionTrigger } from "../../toolbars/ActionMenu";
 import { useRecordChromeContext } from "../resource/record-chrome-context";
 import {
   Action,
@@ -1809,8 +1809,8 @@ describe("FormView", () => {
       undefined,
       undefined,
       formChildren({
-        "notes.Note#actions": { "notes.pause": { content: <RecordActionTrigger>Pause</RecordActionTrigger> } },
-        "notes.Note#actions-menu": { "notes.export": { content: <RecordActionTrigger>Export</RecordActionTrigger> } },
+        "notes.Note#actions": { "notes.pause": { content: <ActionTrigger>Pause</ActionTrigger> } },
+        "notes.Note#actions-menu": { "notes.export": { content: <ActionTrigger>Export</ActionTrigger> } },
       }),
     );
 
@@ -1982,16 +1982,16 @@ describe("FormView", () => {
       undefined,
       formChildren({
         "parties.Party#actions": {
-          "parties.pause": { permission: "write", content: <RecordActionTrigger>Pause</RecordActionTrigger> },
+          "parties.pause": { permission: "write", content: <ActionTrigger>Pause</ActionTrigger> },
         },
         "parties.Party#actions-menu": {
-          "parties.disconnect": { permission: "write", content: <RecordActionTrigger>Generic disconnect</RecordActionTrigger> },
+          "parties.disconnect": { permission: "write", content: <ActionTrigger>Generic disconnect</ActionTrigger> },
         },
         "notes.Note#actions-menu": {
           "whatsapp.disconnect": {
             variant: { of: "parties.disconnect", impl: "whatsapp" },
             permission: "write",
-            content: <RecordActionTrigger>WhatsApp disconnect</RecordActionTrigger>,
+            content: <ActionTrigger>WhatsApp disconnect</ActionTrigger>,
           },
         },
       }),

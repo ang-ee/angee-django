@@ -148,6 +148,10 @@ export interface DeveloperRail {
   enabled: boolean;
   /** The children the rail renders: hidden ones too in developer mode. */
   children: (item: ChromeMenuNode) => readonly ChromeMenuNode[];
+  /** The included apps the rail lists under an app (G-20), hidden ones too in developer mode. */
+  apps: (item: ChromeMenuNode) => readonly ChromeMenuNode[];
+  /** An app's own menus for the top bar (G-20), hidden ones too in developer mode. */
+  menus: (item: ChromeMenuNode) => readonly ChromeMenuNode[];
   /** The child whose subtree holds `pathname`, among those children. */
   activeChild: (item: ChromeMenuNode, pathname: string) => ChromeMenuNode | undefined;
   /** The item's visible label, marked when it is hidden. */
@@ -169,6 +173,8 @@ export function useDeveloperRail(): DeveloperRail {
     return {
       enabled,
       children: (item) => item.railChildren(enabled),
+      apps: (item) => (enabled ? item.railChildren(true).filter((child) => child.isApp) : item.appChildren()),
+      menus: (item) => (enabled ? item.railChildren(true).filter((child) => !child.isApp) : item.menuItems()),
       activeChild: (item, pathname) => item.activeTargetedChild(pathname, enabled),
       label: (item) => (enabled && item.hidden ? t("developer.hiddenItem", { label: item.displayLabel }) : item.displayLabel),
       describe: (item) => {

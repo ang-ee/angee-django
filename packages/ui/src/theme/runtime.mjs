@@ -19,7 +19,7 @@ export const THEME_TOKEN_NAMES = Object.freeze([
   "--ring", "--ring-danger", "--font-family-sans",
   "--font-family-mono", "--elevation-xs", "--elevation-sm", "--elevation-md",
   "--elevation-lg", "--elevation-popover", "--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12",
-  "--r-full", "--rail-w", "--topbar-h", "--controlpanel-h", "--chatter-w",
+  "--r-full", "--rail-w", "--topbar-h", "--breadcrumbbar-h", "--controlpanel-h", "--chatter-w",
   "--control-h-sm", "--control-h-md", "--control-h-lg",
 ]);
 

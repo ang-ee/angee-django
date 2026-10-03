@@ -403,6 +403,7 @@ export const enUiMessages: Record<string, string> = {
   "chrome.userFallback": "User",
   "chrome.signOut": "Sign out",
   "chrome.breadcrumb": "Breadcrumb",
+  "chrome.appMenu": "{label} menu",
   "chrome.topBar": "Workspace top bar",
   "chrome.switchToDarkTheme": "Switch to dark mode",
   "chrome.switchToLightTheme": "Switch to light mode",

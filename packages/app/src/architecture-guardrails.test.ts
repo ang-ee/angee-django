@@ -98,6 +98,8 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("FilterClauseEditor", "@angee/ui", "src/toolbars/FilterClauseEditor.tsx"),
   frameworkCriticalExport("schemaFieldMetadataWithVocabulary", "@angee/metadata", "src/artifact.ts"),
   frameworkCriticalExport("validateResourceViewPreset", "@angee/ui", "src/views/resource/model/favorites.ts"),
+  frameworkCriticalExport("ActionMenu", "@angee/ui", "src/toolbars/ActionMenu.tsx"),
+  frameworkCriticalExport("ActionTrigger", "@angee/ui", "src/toolbars/ActionMenu.tsx"),
   frameworkCriticalExport("RecordActionBar", "@angee/ui", "src/views/form/RecordActionBar.tsx"),
   frameworkCriticalExport("VisibilityControl", "@angee/ui", "src/widgets/visibility.tsx"),
   frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),

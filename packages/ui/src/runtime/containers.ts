@@ -32,6 +32,8 @@ export interface ContainerKinds {
   notices: ReactNode;
   /** Items in the user menu, between the theme item and sign-out. */
   "user-menu": ReactNode;
+  /** The console chrome's optional regions (`chrome.app-menu`, `chrome.breadcrumbs`); a region shows while its child does. */
+  regions: null;
   /** Non-modal drawers docked on the console's right or bottom edge. */
   "drawers-right": DockedDrawerContent;
   "drawers-bottom": DockedDrawerContent;

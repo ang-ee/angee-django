@@ -34,7 +34,7 @@ vi.mock("@angee/ui", () => ({
       aria-busy={action.id === "work-start-task" ? state.startPending : action.id === "work-return-to-triage" ? state.returnPending : false}
       onClick={() => { void action.run?.(); }}>{action.label}</button>)}</>
   ),
-  RecordActionTrigger: ({ loading, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
+  ActionTrigger: ({ loading, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button {...props} disabled={props.disabled || loading} aria-busy={loading} />
   ),
   ActionFormDialog: () => null,

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Alert, Badge, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, useStatusTone, textRoleVariants } from "@angee/ui";
+import { ActionMenu, ActionTrigger, Alert, Badge, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, useStatusTone, textRoleVariants } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -145,43 +145,29 @@ function AgentChatContent({
             </>
           }
           end={
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                aria-label={t("chat.conversationOptions")}
-                className={buttonVariants({ variant: "ghost", size: "iconSm" })}
-              >
-                <Glyph name="more-horizontal" />
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Positioner side="bottom" align="end" sideOffset={4}>
-                  <DropdownMenu.Content>
-                    <DropdownMenu.Item onClick={() => setSettingsOpen(true)}>
-                      <Glyph name="settings" />
-                      <span className="flex-1 truncate">{t("chat.settings")}</span>
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item onClick={reconnect}>
-                      <Glyph name="link" />
-                      <span className="flex-1 truncate">{t("chat.reconnect")}</span>
-                    </DropdownMenu.Item>
-                    {/* Clear is destructive → last, after a separator. */}
-                    <DropdownMenu.Separator />
-                    <DropdownMenu.Item variant="danger" onClick={clear}>
-                      <Glyph name="trash" />
-                      <span className="flex-1 truncate">{t("chat.clear")}</span>
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Positioner>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+            <ActionMenu label={null} aria-label={t("chat.conversationOptions")}
+              glyph="more-horizontal" size="iconSm" align="end">
+              <ActionTrigger glyph="settings" onClick={() => setSettingsOpen(true)}>
+                {t("chat.settings")}
+              </ActionTrigger>
+              <ActionTrigger glyph="link" onClick={reconnect}>
+                {t("chat.reconnect")}
+              </ActionTrigger>
+              {/* Clear is destructive → last, after a separator. */}
+              <DropdownMenu.Separator />
+              <ActionTrigger variant="danger" glyph="trash" onClick={clear}>
+                {t("chat.clear")}
+              </ActionTrigger>
+              <SettingsDialog
+                open={settingsOpen}
+                onOpenChange={setSettingsOpen}
+                modelHandle={effectiveModelHandle}
+                view={view}
+                mcpServers={mcpServers}
+                renderContext={renderContext}
+              />
+            </ActionMenu>
           }
-        />
-        <SettingsDialog
-          open={settingsOpen}
-          onOpenChange={setSettingsOpen}
-          modelHandle={effectiveModelHandle}
-          view={view}
-          mcpServers={mcpServers}
-          renderContext={renderContext}
         />
         {error !== null ? (
           <Alert tone="danger" className="m-3">

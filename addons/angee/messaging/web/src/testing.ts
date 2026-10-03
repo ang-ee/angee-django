@@ -1,29 +1,14 @@
-import { isMenuDeclarationList, type BaseAddon } from "@angee/app";
+import type { BaseAddon } from "@angee/app";
 import { containerChildren, expectValidBaseAddon } from "@angee/app/testing";
 
 import { CHANNEL_MODEL } from "./documents";
 
-
-/** Assert the navigation/connect contract shared by every channel bridge addon. */
+/** Assert the connect contract shared by every channel bridge addon. */
 export function expectValidChannelBridgeAddon(addon: BaseAddon): void {
   expectValidBaseAddon(addon);
-  const menus = isMenuDeclarationList(addon.menus) ? addon.menus : [];
-  if (menus.length !== 1) {
-    throw new Error(`Channel bridge "${addon.id}" must contribute one menu item.`);
-  }
-  const menu = menus[0]!;
-  if (
-    menu.route !== "messaging.channels"
-    || menu.parentId !== "messaging"
-    || menu.icon !== "channel"
-  ) {
-    throw new Error(
-      `Channel bridge "${addon.id}" must target the shared messaging channels menu.`,
-    );
-  }
   if (!containerChildren(addon, "messaging.channels#toolbar").some(([id]) => id === `${addon.id}.connect`)) {
     throw new Error(
-      `Channel bridge "${addon.id}" must contribute its connect action to the channels toolbar.`,
+      `Channel bridge "${addon.id}" must contribute its connect action to the channels' Connect menu.`,
     );
   }
 }

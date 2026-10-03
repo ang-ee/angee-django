@@ -14,7 +14,8 @@ import { usePlatformIntegrateOperatorT } from "./i18n";
 export function RestartNotice(): ReactNode {
   const t = usePlatformIntegrateOperatorT();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const visible = useChromeMenuTree().isSettingsActive(pathname);
+  const searchStr = useRouterState({ select: (state) => state.location.searchStr });
+  const visible = useChromeMenuTree().isSettingsActive(`${pathname}${searchStr}`);
   const routeHref = useRouteHref();
   const operationsHref = routeHref("operator.operations");
   const pending = useAuthoredQuery(PendingAddonChanges, undefined, {

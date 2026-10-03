@@ -37,7 +37,7 @@ export interface ChannelPollBridgeAddonOptions {
   sequence: number;
   /** Vendor-owned channel creation action. */
   connectAction: ReactNode;
-  /** Explicit messaging-namespace contribution, including vendor menu copy. */
+  /** Explicit messaging-namespace contribution. */
   i18n: { messaging: Record<string, string> };
   /** Vendor-owned record verbs, rendered only on this backend's channel rows. */
   recordActions?: readonly ChannelRecordAction[];
@@ -84,7 +84,6 @@ export function defineChannelBridgeAddon({
   return defineBaseAddon({
     id,
     i18n,
-    menus: [channelBridgeMenu(i18n.messaging, key)],
     containers: channelContainers(id, sequence, connectAction, key, recordActions, {
       // Pairing replaces Integration's resume and disconnect on this vendor's rows only.
       [`${id}.connect`]: { impl: key, sequence: 10, content: pairingAction("disconnected", "channel.pairing.connect", true) },
@@ -100,7 +99,7 @@ export function defineChannelBridgeAddon({
   });
 }
 
-/** Declare one poll channel vendor's navigation and connect contribution. */
+/** Declare one poll channel vendor's connect and record-action contributions. */
 export function defineChannelPollBridgeAddon({
   id,
   key,
@@ -112,7 +111,6 @@ export function defineChannelPollBridgeAddon({
   return defineBaseAddon({
     id,
     i18n,
-    menus: [channelBridgeMenu(i18n.messaging, key)],
     containers: channelContainers(id, sequence, connectAction, key, recordActions),
   });
 }
@@ -140,18 +138,6 @@ function channelContainers(
   } as ContainersDeclaration;
 }
 
-/** Emit one vendor entry under Messaging. */
-function channelBridgeMenu(i18n: Record<string, string>, key: string) {
-  return {
-    id: `messaging.${key}`,
-    label: vendorMenuMessage(i18n, key, "label"),
-    route: "messaging.channels",
-    parentId: "messaging",
-    icon: "channel",
-    description: vendorMenuMessage(i18n, key, "description"),
-  };
-}
-
 /** Default disconnect for live channels whose reusable pairing material remains. */
 function ChannelDisconnectAction() {
   const t = useMessagingT();
@@ -169,18 +155,4 @@ function ChannelDisconnectAction() {
       }}
     />
   );
-}
-
-/** Read required vendor menu copy from the vendor's messaging bundle. */
-function vendorMenuMessage(
-  i18n: Record<string, string>,
-  key: string,
-  field: "label" | "description",
-): string {
-  const messageKey = `channel.${key}.menu.${field}`;
-  const message = i18n[messageKey];
-  if (!message) {
-    throw new Error(`Channel bridge ${key} is missing i18n message ${messageKey}.`);
-  }
-  return message;
 }

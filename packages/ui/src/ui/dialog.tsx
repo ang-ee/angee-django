@@ -10,6 +10,7 @@ import type {
   DialogTitleProps as BaseDialogTitleProps,
   DialogTriggerProps as BaseDialogTriggerProps,
 } from "@base-ui/react/dialog";
+import { ActionMenuContext } from "./action-menu-context";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -93,20 +94,32 @@ export type DialogContentProps = BaseDialogPopupProps &
     className?: string;
   };
 
+/** A surface may supply return focus for its immediate dialog, across portals. */
+export const DialogReturnFocusContext =
+  React.createContext<BaseDialogPopupProps["finalFocus"]>(undefined);
+
 export const DialogContent = React.forwardRef<
   HTMLDivElement,
   DialogContentProps
 >(function DialogContent(
-  { className, placement = "default", size = "md", ...props },
+  { className, placement = "default", size = "md", finalFocus, children, ...props },
   ref,
 ) {
   const styles = dialogVariants({ placement, size });
+  const returnFocus = React.useContext(DialogReturnFocusContext);
   return (
     <BaseDialog.Popup
       ref={ref}
+      finalFocus={finalFocus ?? returnFocus}
       className={styles.content({ className })}
       {...props}
-    />
+    >
+      <DialogReturnFocusContext.Provider value={undefined}>
+        <ActionMenuContext.Provider value={null}>
+          {children}
+        </ActionMenuContext.Provider>
+      </DialogReturnFocusContext.Provider>
+    </BaseDialog.Popup>
   );
 });
 DialogContent.displayName = "DialogContent";
