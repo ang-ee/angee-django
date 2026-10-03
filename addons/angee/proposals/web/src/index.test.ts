@@ -53,7 +53,7 @@ describe("proposals addon manifest", () => {
       "proposals.rounds",
       "proposals.proposals",
     ]);
-    expect(proposals.slots?.map((slot) => slot.id)).toEqual([
+    expect(containerChildren(proposals.containers).map(([id]) => id)).toEqual([
       "proposals.responder",
       "proposals.opening",
       "proposals.people-rail",
@@ -64,10 +64,12 @@ describe("proposals addon manifest", () => {
       "proposals.round-people",
       "proposals.project-people",
       "proposals.project-approach",
-      "proposals.task-responder-share",
       "proposals.project-rounds",
+      "proposals.task-responder-share",
       "proposals.task-rounds",
     ]);
+    // The round's Share panel role and opening policy ride iam's model-scoped containers.
+    expect(Object.keys(proposals.containers ?? {}).slice(0, 2)).toEqual([`${ROUND_MODEL}#access-roles`, `${ROUND_MODEL}#access-visibility`]);
     expect(Object.keys(proposals.icons ?? {}).sort()).toEqual([
       "proposals-award",
       "proposals-open",
@@ -80,3 +82,9 @@ describe("proposals addon manifest", () => {
     ]);
   });
 });
+
+/** The manifest's container children, keyed by id, in declaration order. */
+function containerChildren(containers: object | undefined): [string, { content?: unknown }][] {
+  return Object.values(containers ?? {}).flatMap((entry) => (Array.isArray(entry) ? entry : [entry]) as Record<string, unknown>[])
+    .flatMap((entry) => Object.entries(entry).filter(([id]) => id.includes(".")) as [string, { content?: unknown }][]);
+}

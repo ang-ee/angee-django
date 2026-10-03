@@ -31,17 +31,6 @@ project_title:
   default: Angee
   help: Human title shown in the browser tab (index.html <title>).
 
-# Navigation and console defaults are host inputs, separate from addon identity.
-home:
-  type: str
-  default: ""
-  help: Home route name or absolute path; empty selects the first non-public route.
-
-confine_to:
-  type: str
-  default: ""
-  help: Menu root id for a single-app console; empty keeps all composed apps.
-
 # npm package name for the rendered web package. Scoped to the project so it does
 # not collide with framework workspace packages; defaults to the project name.
 package_name:

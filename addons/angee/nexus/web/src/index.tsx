@@ -1,6 +1,4 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
-import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { CalendarClock, History, Inbox, Radar, Share2 } from "lucide-react";
 
@@ -9,38 +7,10 @@ import { NetworkPane } from "./NetworkPane";
 import { NexusOverviewContribution } from "./NexusOverviewContribution";
 import { TimelinePane } from "./TimelinePane";
 
-// The personal explorer is a Nexus destination. Relationship analytics retain
-// their established placement alongside the Parties records they describe.
-const nexusMenu: readonly BaseMenuItem[] = [
-  { id: "nexus", label: "Nexus", route: "nexus.inbox", icon: "nexus-inbox" },
-  { id: "nexus.inbox", label: "Inbox", route: "nexus.inbox", parentId: "nexus", icon: "nexus-inbox" },
-  {
-    id: "nexus.graph",
-    label: "Graph",
-    route: "nexus.graph",
-    parentId: "parties",
-    icon: "network",
-  },
-  {
-    id: "nexus.ties",
-    label: "Ties",
-    route: "nexus.ties",
-    parentId: "parties",
-    icon: "radar",
-  },
-  {
-    id: "nexus.cadences",
-    label: "Cadences",
-    route: "nexus.cadences",
-    parentId: "parties",
-    icon: "cadence",
-  },
-];
-
 const nexus = defineBaseAddon({
   id: "nexus",
   routes: [
-    { name: "nexus.inbox", path: "/nexus/inbox", layout: "console", component: lazyRouteComponent(() => import("./InboxPage"), "InboxPage") },
+    { name: "nexus.inbox", path: "/nexus/inbox", layout: "console", menu: "nexus.inbox", component: lazyRouteComponent(() => import("./InboxPage"), "InboxPage") },
     {
       name: "nexus.graph",
       path: "/nexus/graph",
@@ -50,48 +20,63 @@ const nexus = defineBaseAddon({
     ...resourcePageRoutes("nexus.ties", "/nexus/ties", lazyRouteComponent(() => import("./TiesPage"), "TiesPage"), "nexus.Tie"),
     ...resourcePageRoutes("nexus.cadences", "/nexus/cadences", lazyRouteComponent(() => import("./CadencesPage"), "CadencesPage"), "nexus.Cadence"),
   ],
-  menus: nexusMenu,
+  menus: {
+    nexus: {
+      label: "Nexus",
+      route: "nexus.inbox",
+      icon: "nexus-inbox",
+      // Each included app keeps its own group, so its pages stay a level down.
+      include: ["messaging", "parties", "spaces", "posts"],
+    },
+    "nexus.inbox": { parent: "nexus", label: "Inbox", route: "nexus.inbox", icon: "nexus-inbox", sequence: 10 },
+    "nexus.graph": { parent: "nexus", label: "Graph", route: "nexus.graph", icon: "network", sequence: 20 },
+    "nexus.ties": { parent: "nexus", label: "Ties", route: "nexus.ties", icon: "radar", sequence: 30 },
+    "nexus.cadences": { parent: "nexus", label: "Cadences", route: "nexus.cadences", icon: "cadence", sequence: 40 },
+  },
   icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History, "nexus-inbox": Inbox },
   i18n: { nexus: enNexusMessages },
   // The cross-channel timeline rides the record chatter seam; the shell applies
   // each canonical model and record predicate before rendering the contribution.
-  chatter: [
-    {
-      id: "timeline",
-      sequence: 30,
-      model: "parties.Party",
-      when: (context) => context.view.kind === "record",
-      label: "Timeline",
-      icon: "timeline",
-      render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
+  containers: {
+    "parties.overview#items": {
+      "nexus.relationship-health": { sequence: 20, content: <NexusOverviewContribution /> },
     },
-    {
-      id: "network",
-      sequence: 31,
-      model: "parties.Party",
-      when: (context) => context.view.kind === "record",
-      label: "Network",
-      icon: "network",
-      render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
+    "parties.Party#aside": {
+      "nexus.timeline": {
+        sequence: 30,
+        content: {
+          label: "Timeline",
+          icon: "timeline",
+          aliases: ["timeline"],
+          when: (context) => context.view.kind === "record",
+          render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
+        },
+      },
+      "nexus.network": {
+        sequence: 31,
+        content: {
+          label: "Network",
+          icon: "network",
+          aliases: ["network"],
+          when: (context) => context.view.kind === "record",
+          render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
+        },
+      },
     },
-    {
-      id: "feed",
-      sequence: 32,
-      model: "parties.Circle",
-      when: (context) => context.view.kind === "record",
-      label: "Feed",
-      icon: "timeline",
-      render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
+    "parties.Circle#aside": {
+      "nexus.feed": {
+        sequence: 32,
+        content: {
+          label: "Feed",
+          icon: "timeline",
+          aliases: ["feed"],
+          when: (context) => context.view.kind === "record",
+          render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
+        },
+      },
     },
-  ],
-  slots: [
-    {
-      slot: PARTIES_OVERVIEW_SLOT,
-      id: "nexus.relationship-health",
-      sequence: 20,
-      content: <NexusOverviewContribution />,
-    },
-  ],
+  },
+
 });
 
 export default nexus;

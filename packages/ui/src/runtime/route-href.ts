@@ -58,6 +58,8 @@ export class UnknownRouteError extends Error {
  */
 export function createRouteHref(
   descriptors: readonly RuntimeRouteDescriptor[],
+  /** Routes composition made unavailable: `maybe` returns nothing for them; strict calls still build. */
+  options: { unavailable?: ReadonlySet<string> } = {},
 ): RouteHref {
   for (const descriptor of descriptors) validateRouteTemplate(descriptor);
   const routesByName = new Map(
@@ -105,6 +107,7 @@ export function createRouteHref(
 
   return Object.assign(resolve, {
     maybe(name: string, params?: RouteHrefParams, search?: RouteHrefSearch) {
+      if (options.unavailable?.has(name)) return undefined;
       try {
         return resolve(name, params, search);
       } catch (error) {

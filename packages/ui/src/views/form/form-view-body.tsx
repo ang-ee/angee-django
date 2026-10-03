@@ -15,6 +15,7 @@ import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Tabs } from "../../ui/tabs";
 import { Collapsible } from "../../ui/collapsible";
 import { renderGlyph } from "../../chrome/Glyph";
+import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
@@ -765,6 +766,7 @@ function BoundFieldRow({
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
   const effectiveReadOnly = Boolean(readOnly);
+  const developerTitle = useDeveloperFieldTitle();
   const composite = isCompositeFieldDescriptor(field);
   const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
   const displayedMessages = composite
@@ -775,7 +777,8 @@ function BoundFieldRow({
       invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
-      <FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}>
+      <FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
+        title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
       <div

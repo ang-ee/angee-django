@@ -1,11 +1,10 @@
 import { defineBaseAddon } from "@angee/app";
-import { USER_MENU_ITEMS_SLOT, DropdownMenu, Glyph } from "@angee/ui";
+import { DropdownMenu, Glyph } from "@angee/ui";
 import { lazyRouteComponent, useNavigate } from "@tanstack/react-router";
 import { createElement } from "react";
 import { Palette } from "lucide-react";
 import { enAppearanceMessages } from "./i18n";
 
-export const APPEARANCE_TOOLS_SLOT = "appearance.settings.tools";
 
 function AppearanceMenuItem() {
   const navigate = useNavigate();
@@ -17,8 +16,12 @@ function AppearanceMenuItem() {
 export default defineBaseAddon({
   id: "appearance",
   routes: [{ name: "appearance.settings", path: "/settings/appearance", component: lazyRouteComponent(() => import("./views/AppearanceSettingsPage"), "AppearanceSettingsPage") }],
-  menus: [{ id: "appearance", label: "Appearance", icon: "appearance", group: "platform", route: "appearance.settings" }],
+  // Personal: the user menu links here, so every perspective keeps it in Settings.
+  menus: [{ id: "appearance", label: "Appearance", icon: "appearance", group: "platform", personal: true, route: "appearance.settings" }],
   i18n: { appearance: enAppearanceMessages },
   icons: { appearance: Palette },
-  slots: [{ slot: USER_MENU_ITEMS_SLOT, id: "appearance.settings", content: createElement(AppearanceMenuItem) }],
+  containers: {
+    "shell#user-menu": { "appearance.settings": { sequence: 10, content: createElement(AppearanceMenuItem) } },
+    "appearance.settings#tools": {},
+  },
 });

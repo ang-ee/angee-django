@@ -1,22 +1,15 @@
 import { IntegrationSyncColumns } from "@angee/integrate";
-import {
-  Column,
-  List,
-  ResourceList,
-  SlotOutlet,
-  useSlot,
-} from "@angee/ui";
+import { Column, List, ResourceList, ContainerOutlet, useContainer } from "@angee/ui";
 import * as React from "react";
 
 import { MOUNT_MODEL } from "../documents";
 import { useStorageIntegrateT } from "../i18n";
-import { STORAGE_MOUNT_TOOLBAR_SLOT } from "../slots";
 import { mountForm } from "./MountForm";
 
 /** Local and future vendor-backed external storage mounts. */
 export function MountsPage(): React.ReactElement {
   const t = useStorageIntegrateT();
-  const toolbarEntries = useSlot(STORAGE_MOUNT_TOOLBAR_SLOT);
+  const toolbarEntries = useContainer("storage-integrate.mounts#toolbar");
   return (
     <ResourceList
       resource={MOUNT_MODEL}
@@ -24,7 +17,7 @@ export function MountsPage(): React.ReactElement {
       placement="inline"
       routed
       hideCreate
-      toolbarActions={<SlotOutlet entries={toolbarEntries} />}
+      toolbarActions={<ContainerOutlet entries={toolbarEntries} />}
     >
       <List resource={MOUNT_MODEL}>
         <Column field="display_name" header={t("mount.name")} />

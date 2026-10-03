@@ -14,26 +14,66 @@ import {
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { baseIcons } from "../chrome/icon-registry";
-import { SurfacePresentationProvider, type SurfacePresentation } from "../chrome/surface-policy";
 import {
   AppRuntimeProvider,
+  containersFromChildren,
   type AppRuntime,
+  type ChatterRoute,
+  type ChatterTabContent,
   type ChatterViewContext,
+  type ComposedContainers,
+  type ContainerChild,
+  type ContainerRule,
 } from "../runtime";
 import { Chatter, useChatterPresentation } from "./Chatter";
-import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
+import { CHATTER_CONTAINERS } from "./chatter-containers";
+import { ChatterProvider, useChatter, useChatterContent, type ChatterContent } from "./chatter-context";
 import { useRecordPeek } from "./record-peek";
 import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
 
 afterEach(() => cleanup());
 
+const NOTE_RECORD: ChatterRoute = { name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" };
+const NOTE_LIST: ChatterRoute = { name: "notes.all", path: "/records", viewType: "notes/note", modelLabel: "notes.Note" };
+
+type Tabs = Readonly<Record<string, ContainerChild<ChatterTabContent>>>;
+
+/**
+ * The composed aside: the framework's placeholder tabs (unless `framework` is
+ * false), extra children per address, and per-layer rules on `record#aside`.
+ */
+function aside(
+  children: Readonly<Record<string, Tabs>> = {},
+  { rules = [], framework = true }: { rules?: (Omit<ContainerRule, "exempt" | "rank"> & { rank?: number })[]; framework?: boolean } = {},
+): ComposedContainers {
+  const core = framework ? CHATTER_CONTAINERS : CHATTER_CONTAINERS.map(({ children: _children, ...container }) => container);
+  const base = containersFromChildren(core, {});
+  const added = containersFromChildren([], children);
+  return {
+    ...base,
+    children: Object.fromEntries([...new Set([...Object.keys(base.children), ...Object.keys(added.children)])]
+      .map((address) => [address, [...(base.children[address] ?? []), ...(added.children[address] ?? [])]])),
+    // Rules rank in the order given unless a test ranks them.
+    rules: rules.length ? { "record#aside": rules.map((rule, index) => ({ rank: index, ...rule, exempt: [] })) } : {},
+  };
+}
+
+const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<ChatterTabContent> =>
+  ({ content, ...(sequence !== undefined ? { sequence } : {}) });
+
+const onRoute = (...routes: string[]) => ({ apps: [], routes, perspective: null });
+
 describe("Chatter", () => {
-  test("route tabs admit defaults and contributions before rendering or counting", async () => {
+  test("a layer's only on the route narrows the tabs before they render or count", async () => {
     const excludedRender = vi.fn(() => <span>Excluded content</span>);
     const excludedCount = vi.fn(() => 9);
-    renderChatter({ surface: { chatter: { tabs: ["comments"] } }, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", recordParam: "id" }], chatter: [
-      { id: "agents", label: "Agents", useCount: excludedCount, render: excludedRender },
-    ] });
+    renderChatter({
+      containers: aside(
+        { "record#aside": { "agents.chat": tab({ label: "Agents", useCount: excludedCount, render: excludedRender }) } },
+        { rules: [{ layer: "notes", when: { route: "notes.record" }, only: ["chatter.comments"] }] },
+      ),
+      containerScope: onRoute("notes.record"),
+    });
     expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
@@ -41,112 +81,139 @@ describe("Chatter", () => {
     expect(excludedCount).not.toHaveBeenCalled();
   });
 
-  test("route selection can admit a conditional tab", async () => {
+  test("narrowing keeps a tab whose own when still decides", async () => {
     const hiddenRender = vi.fn(() => <span>Not yet visible</span>);
     renderChatter({
-      surface: { chatter: { tabs: ["activity", "conditional"] } },
-      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", recordParam: "id" }],
-      chatter: [{ id: "conditional", when: () => false, render: hiddenRender }],
+      containers: aside(
+        { "record#aside": { "notes.conditional": tab({ label: "Conditional", when: () => false, render: hiddenRender }) } },
+        { rules: [{ layer: "notes", only: ["chatter.activity", "notes.conditional"] }] },
+      ),
     });
     expect(await screen.findByRole("tab", { name: "Activity" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Conditional" })).toBeNull();
     expect(hiddenRender).not.toHaveBeenCalled();
   });
 
-  test("an empty route tab list removes the aside, including published tabs", () => {
-    render(chatterContentView(<PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />,
-      "local", { surface: { chatter: { tabs: [] } }, chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home" }] }));
-    expect(screen.queryByRole("complementary")).toBeNull();
+  test("a narrowing applies only where its condition holds", async () => {
+    const rules = [{ layer: "notes", when: { route: "notes.board" }, only: [] }];
+    renderChatter({ containers: aside({}, { rules }), containerScope: onRoute("notes.record") });
+    expect(await screen.findByText("Aside available")).toBeTruthy();
+    cleanup();
+    renderChatter({ containers: aside({}, { rules }), containerScope: onRoute("notes.board.card", "notes.board") });
+    expect(await screen.findByText("Aside hidden")).toBeTruthy();
   });
 
-  test("an aside with every selected tab excluded is absent", async () => {
-    renderChatter({ surface: { admit: { aside: [] }, chatter: { tabs: ["comments"] } } });
+  test("an empty only removes the record aside", async () => {
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", only: [] }] }) });
     expect(await screen.findByText("Aside hidden")).toBeTruthy();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  test("an empty ordered tab list removes the record aside", async () => {
-    renderChatter({ surface: { chatter: { tabs: [] } } });
+  test("an aside whose every tab a layer excepts is absent", async () => {
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["chatter.comments", "chatter.activity"] }] }) });
     expect(await screen.findByText("Aside hidden")).toBeTruthy();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  test("a route tab excluded by aside admission needs no active runtime entry", async () => {
-    renderChatter({ surface: { admit: { aside: ["comments"] }, chatter: { tabs: ["agents", "comments"] } } });
+  test("a hidden tab leaves its siblings; a later layer shows it again", async () => {
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", hide: ["chatter.activity"] }] }) });
     expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
+    cleanup();
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", hide: ["chatter.activity"] }, { layer: "product", show: ["chatter.activity"] }] }) });
+    expect(await screen.findByRole("tab", { name: "Activity" })).toBeTruthy();
   });
 
-  test("a published tab can satisfy the route list and aside admission", async () => {
-    render(chatterContentView(<PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />,
-      "local", { surface: { admit: { aside: ["local"] }, chatter: { tabs: ["local"] } } }));
+  test("page-published tabs show the aside on their own and take the same narrowing", async () => {
+    const published = <PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />;
+    render(chatterContentView(published, "local", { containers: aside() }));
     expect(await screen.findByRole("tab", { name: "Local" })).toBeTruthy();
     expect(screen.getByText("Local content")).toBeTruthy();
+    // Not a record view: the framework's record-level tabs stay off.
+    expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+    cleanup();
+    const rules = [{ layer: "notes", when: { route: "notes.home" }, only: [] }];
+    render(chatterContentView(published, "local", { containers: aside({}, { rules }), containerScope: onRoute("notes.home") }));
+    expect(screen.queryByRole("complementary")).toBeNull();
+    cleanup();
+    render(chatterContentView(published, "local", { containers: aside({}, { rules: [{ layer: "notes", hide: ["local"] }] }) }));
+    expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  test("unknown route tabs fail before a contribution's render or count hook", () => {
-    const excludedRender = vi.fn(() => null);
-    const excludedCount = vi.fn(() => 0);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect(() => render(chatterContentView(null, "comments", {
-        surface: { chatter: { tabs: ["typo"] } },
-        chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home" }],
-        chatter: [{ id: "known", render: excludedRender, useCount: excludedCount }],
-      }))).toThrow('unknown contribution id "typo"');
-      expect(excludedRender).not.toHaveBeenCalled();
-      expect(excludedCount).not.toHaveBeenCalled();
-    } finally { consoleError.mockRestore(); }
+  test("a chatterTab link naming a tab's earlier id selects it through its aliases", async () => {
+    renderChatter({
+      containers: aside({ "record#aside": {
+        "messaging.activity": tab({ label: "Messages", aliases: ["activity"], render: () => <span>Message activity</span> }, 15),
+      } }, { rules: [{ layer: "messaging", except: ["chatter.activity"] }] }),
+    }, { search: "?chatterTab=activity" });
+    const selected = await screen.findByRole("tab", { name: "Messages" });
+    await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
+    expect(screen.getByText("Message activity")).toBeTruthy();
+  });
+
+  test("a chatterTab link names a tab by its current id too", async () => {
+    renderChatter({ containers: aside() }, { search: "?chatterTab=chatter.activity" });
+    const selected = await screen.findByRole("tab", { name: "Activity" });
+    await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
+  });
+
+  test("setActiveTab and the default tab resolve an earlier id through the aliases", async () => {
+    function OpenSources() {
+      const { setActiveTab } = useChatter();
+      return <button type="button" onClick={() => setActiveTab("sources")}>Open sources</button>;
+    }
+    const containers = aside({ "record#aside": {
+      "messaging.comments": tab({ label: "Comments", aliases: ["comments"], render: () => <span>Comment thread</span> }, 10),
+      "messaging.activity": tab({ label: "Activity", aliases: ["activity"], render: () => <span>Activity log</span> }, 20),
+      "messaging.sources": tab({ label: "Sources", aliases: ["sources"], render: () => <span>Source threads</span> }, 30),
+    } }, { framework: false });
+    // Neither is the first tab, so an unresolved id would fall back to Comments.
+    renderChatter({ containers }, { defaultTab: "activity", children: <OpenSources /> });
+    const activity = await screen.findByRole("tab", { name: "Activity" });
+    expect(activity.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Activity log")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open sources" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Sources" }).getAttribute("aria-selected")).toBe("true"));
+    expect(await screen.findByText("Source threads")).toBeTruthy();
   });
 
   test("only renders the agents tab when an addon contributes it", async () => {
-    renderChatter({});
+    renderChatter({ containers: aside() });
 
     expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
 
     cleanup();
     renderChatter({
-      chatter: [{
-        id: "agents",
+      containers: aside({ "record#aside": { "agents.chat": tab({
         label: "Agents",
         icon: "agent",
         render: () => <span>Agents-owned empty state</span>,
-      }],
+      }) } }),
     });
 
-    expect(await screen.findByRole("tab", { name: "Agents" })).toBeTruthy();
-    expect(screen.getByText("Agents-owned empty state")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "Agents" }));
+    expect(await screen.findByText("Agents-owned empty state")).toBeTruthy();
   });
 
   test("prefers reactive contribution counts while preserving static counts", async () => {
     renderChatter({
-      chatterRoutes: [
-        {
-          name: "notes.record",
-          path: "/records/$id",
-          viewType: "notes/record",
-          modelLabel: "notes.Note",
-          recordParam: "id",
-        },
-      ],
-      chatter: [
-        {
-          id: "comments",
+      containers: aside({ "record#aside": {
+        "messaging.comments": tab({
           label: "Comments",
           icon: "comments",
           count: 2,
           useCount: useCommentsCount,
           render: (context) => <span>{context.view.sqid}</span>,
-        },
-        {
-          id: "activity",
+        }, 10),
+        "messaging.activity": tab({
           label: "Activity",
           icon: "activity",
           count: 5,
           render: () => <span>Activity panel</span>,
-        },
-      ],
+        }, 20),
+      } }, { framework: false }),
     });
 
     expect(await screen.findByRole("tab", { name: /Activity\s*5/ })).toBeTruthy();
@@ -156,47 +223,29 @@ describe("Chatter", () => {
     expect(commentsTab.textContent).not.toContain("2");
   });
 
-  test("scopes before rendering while canonical models include MTI subtypes", async () => {
+  test("model tabs follow the record's canonical and concrete models, scoped before rendering", async () => {
     const hiddenCount = vi.fn(() => 9);
     const hiddenRender = vi.fn(() => <span>Wrong model</span>);
     const blockedRender = vi.fn(() => <span>Blocked</span>);
     renderChatter({
-      chatterRoutes: [
-        {
-          name: "notes.record",
-          path: "/records/$id",
-          viewType: "notes/record",
-          modelLabel: "crm.Vip",
-          canonicalLabel: "parties.Party",
-          recordParam: "id",
+      chatterRoutes: [{ name: "crm.vip", path: "/records/$id", viewType: "crm/vip", modelLabel: "crm.Vip", canonicalLabel: "parties.Party", recordParam: "id" }],
+      containers: aside({
+        "notes.Note#aside": { "notes.wrong": tab({ label: "Wrong model", useCount: hiddenCount, render: hiddenRender }) },
+        "parties.Party#aside": {
+          "parties.blocked": tab({ label: "Blocked", when: () => false, render: blockedRender }),
+          "parties.history": tab({
+            label: "History",
+            when: (context) => context.view.kind === "record",
+            render: (context) => <span>History for {context.view.sqid}</span>,
+          }),
         },
-      ],
-      chatter: [
-        {
-          id: "wrong-model",
-          model: "notes.Note",
-          label: "Wrong model",
-          useCount: hiddenCount,
-          render: hiddenRender,
-        },
-        {
-          id: "blocked",
-          model: "parties.Party",
-          when: () => false,
-          label: "Blocked",
-          render: blockedRender,
-        },
-        {
-          id: "history",
-          model: "parties.Party",
-          when: (context) => context.view.kind === "record",
-          label: "History",
-          render: (context) => <span>History for {context.view.sqid}</span>,
-        },
-      ],
+        "crm.Vip#aside": { "crm.perks": tab({ label: "Perks", render: () => <span>Perks</span> }) },
+      }, { framework: false }),
     });
 
     const historyTab = await screen.findByRole("tab", { name: "History" });
+    // Unsequenced siblings across the model addresses resolve in id order.
+    expect(screen.getAllByRole("tab").map((node) => node.textContent)).toEqual(["Perks", "History"]);
     fireEvent.click(historyTab);
     expect(screen.getByText("History for rec_1")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Wrong model" })).toBeNull();
@@ -380,46 +429,44 @@ function useCommentsCount(
   return context.view.sqid === "rec_1" ? 7 : undefined;
 }
 
-type TestRuntime = Partial<AppRuntime> & { surface?: SurfacePresentation };
+type TestRuntime = Partial<AppRuntime>;
 
-function renderChatter(runtime: TestRuntime, record = true): void {
-  const { surface = {}, ...appRuntime } = runtime;
+function renderChatter(
+  runtime: TestRuntime,
+  { record = true, search = "", defaultTab = "agents", children }: { record?: boolean; search?: string; defaultTab?: string; children?: React.ReactNode } = {},
+): void {
   function VisibilityProbe() { return <span>{useChatterPresentation().visible ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const recordRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: record ? "/records/$id" : "/records",
     component: () => (
-      <SurfacePresentationProvider value={surface}>
-        <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }], ...appRuntime }}>
-          <ChatterProvider defaultTab="agents">
-            <VisibilityProbe />
-            <Chatter />
-          </ChatterProvider>
-        </AppRuntimeProvider>
-      </SurfacePresentationProvider>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [record ? NOTE_RECORD : NOTE_LIST], ...runtime }}>
+        <ChatterProvider defaultTab={defaultTab}>
+          <VisibilityProbe />
+          {children}
+          <Chatter />
+        </ChatterProvider>
+      </AppRuntimeProvider>
     ),
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([recordRoute]),
-    history: createMemoryHistory({ initialEntries: [record ? "/records/rec_1" : "/records"] }),
+    history: createMemoryHistory({ initialEntries: [`${record ? "/records/rec_1" : "/records"}${search}`] }),
   });
 
   render(<RouterProvider router={router} />);
 }
 
 function chatterContentView(children: React.ReactNode, defaultTab: string, runtime: TestRuntime = {}): React.ReactElement {
-  const { surface = {}, ...appRuntime } = runtime;
   return (
     <RouterContextProvider router={createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) })}>
-      <SurfacePresentationProvider value={surface}>
-        <AppRuntimeProvider runtime={{ icons: baseIcons, ...appRuntime }}>
-          <ChatterProvider defaultTab={defaultTab}>
-            {children}
-            <Chatter />
-          </ChatterProvider>
-        </AppRuntimeProvider>
-      </SurfacePresentationProvider>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, containers: aside(), ...runtime }}>
+        <ChatterProvider defaultTab={defaultTab}>
+          {children}
+          <Chatter />
+        </ChatterProvider>
+      </AppRuntimeProvider>
     </RouterContextProvider>
   );
 }
@@ -428,43 +475,44 @@ function renderChatterContent(children: React.ReactNode, defaultTab: string) {
   return render(chatterContentView(children, defaultTab));
 }
 
-
-test("unscoped contributions stay off pages without a record", async () => {
-  renderChatter({}, false);
+test("record-level tabs stay off pages without a record", async () => {
+  renderChatter({ containers: aside() }, { record: false });
   expect(await screen.findByText("Aside hidden")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
   cleanup();
-  renderChatter({ chatter: [{ id: "inbox", label: "Inbox", render: () => <span>Inbox content</span> }] }, false);
+  renderChatter({ containers: aside({ "record#aside": { "inbox.inbox": tab({ label: "Inbox", render: () => <span>Inbox content</span> }) } }) }, { record: false });
   expect(await screen.findByText("Aside hidden")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "Inbox" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
 });
 
-test("a hidden record route suppresses the aside before contributions execute", async () => {
+test("a route hiding the aside suppresses it before contributions execute", async () => {
   const renderTab = vi.fn(() => <span>Private panel</span>);
   renderChatter({
-    surface: { chatter: "hidden" },
-    chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }],
-    chatter: [{ id: "extra", render: renderTab }],
-  }, true);
+    containers: aside(
+      { "record#aside": { "notes.extra": tab({ render: renderTab }) } },
+      { rules: [{ layer: "notes", when: { route: "notes.record" }, only: [] }] },
+    ),
+    containerScope: onRoute("notes.record"),
+  });
   expect(await screen.findByText("Aside hidden")).toBeTruthy();
   expect(screen.queryByRole("tab")).toBeNull();
   expect(renderTab).not.toHaveBeenCalled();
 });
 
-test("a route can explicitly opt a non-record page into default chatter", async () => {
-  renderChatter({ surface: { chatter: { tabs: ["comments", "activity"] } }, chatterRoutes: [{ name: "notes.all", path: "/records", viewType: "notes/note" }] }, false);
+test("a model's own tabs show on its collection page", async () => {
+  renderChatter({ containers: aside({ "notes.Note#aside": { "notes.digest": tab({ label: "Digest", render: () => <span>Digest</span> }) } }) }, { record: false });
   expect(await screen.findByText("Aside available")).toBeTruthy();
-  expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Digest" })).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
 });
 
 test("record and non-record defaults follow the route", async () => {
-  renderChatter({}, false);
+  renderChatter({ containers: aside() }, { record: false });
   expect(await screen.findByText("Aside hidden")).toBeTruthy();
   cleanup();
-  renderChatter({}, true);
+  renderChatter({ containers: aside() });
   expect(await screen.findByText("Aside available")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
 });

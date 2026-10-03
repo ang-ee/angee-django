@@ -1,5 +1,4 @@
-import { AUTH_LOGIN_PASSWORD_HELP_SLOT, defineBaseAddon } from "@angee/app";
-import { FORM_VIEW_RECORD_CHROME_SLOT } from "@angee/ui";
+import { defineBaseAddon } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 
 import { DemoForgotPasswordHint } from "./demo-auth";
@@ -28,21 +27,16 @@ const notes = defineBaseAddon({
   menus: [{ id: "notes", label: "Notes", route: "notes.home", icon: "notes" }],
   i18n: { notes: enNotesMessages },
   // Notes contributes only its star; IAM contributes Share globally.
-  slots: [
-    {
-      slot: FORM_VIEW_RECORD_CHROME_SLOT,
-      id: "notes.record-chrome",
-      sequence: 10,
-      content: <RecordChrome />,
+  containers: {
+    "form#chrome": {
+      "notes.record-chrome": { sequence: 10, content: <RecordChrome /> },
     },
     // Example-only login help: the seeded demo credentials surface on the host's
-    // login page through the auth slot, so no host main.tsx wiring is needed.
-    {
-      slot: AUTH_LOGIN_PASSWORD_HELP_SLOT,
-      id: "notes.demo-logins",
-      content: <DemoForgotPasswordHint />,
+    // login page through its container, so no host main.tsx wiring is needed.
+    "auth.login#password-help": {
+      "notes.demo-logins": { content: <DemoForgotPasswordHint /> },
     },
-  ],
+  },
 });
 
 export default notes;

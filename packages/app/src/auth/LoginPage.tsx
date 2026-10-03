@@ -8,20 +8,21 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
-import { useRuntimeBrand, useSlot } from "@angee/ui/runtime";
+import { useContainer, useRuntimeBrand, type CoreContainer } from "@angee/ui/runtime";
 import { Glyph } from "@angee/ui/chrome/Glyph";
 import { ThemeLogo, useThemeLogoChoice } from "@angee/ui/theme";
 
 import { useUiT } from "@angee/ui/i18n";
 import { cn } from "@angee/ui/lib/cn";
-import { SlotOutlet, slotEntriesHaveContent } from "@angee/ui/lib/slot-outlet";
+import { ContainerOutlet, containerHasContent } from "@angee/ui/lib/container-outlet";
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
 
-export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
-export const AUTH_LOGIN_CARD_FOOTER_SLOT = "auth.login.card-footer";
-export const AUTH_LOGIN_PAGE_FOOTER_SLOT = "auth.login.page-footer";
-export const AUTH_LOGIN_PASSWORD_HELP_SLOT = "auth.login.password-help";
+/** The login page's containers: sign-in methods and password help. */
+export const LOGIN_CONTAINERS: readonly CoreContainer[] = [
+  { address: "auth.login#method" },
+  { address: "auth.login#password-help" },
+];
 
 const HERO_SLIDE_KEYS = ["intent", "agentNative", "composable"] as const;
 const LOGIN_BACKDROP_FADE_MS = 1_000;
@@ -39,7 +40,7 @@ export interface LoginPageProps {
   hero?: ReactNode | null;
   /** `undefined` renders the default card header, `null` leaves only `brand`, a node replaces it. */
   cardHeader?: ReactNode | null;
-  /** `undefined` renders the password-help slot when contributed, `null` suppresses it, a node replaces it. */
+  /** `undefined` renders the `auth.login#password-help` children, `null` suppresses them, a node replaces them. */
   passwordHelp?: ReactNode | null;
   showAtmosphere?: boolean;
   backgroundImageUrl?: string;
@@ -74,25 +75,17 @@ export function LoginPage({
   const branded = brand != null || runtimeBrand !== null;
   const name = runtimeBrand?.name ?? t("auth.productName");
   const identity = brand ?? <LoginIdentity name={name} />;
-  const methodSlot = useSlot(AUTH_LOGIN_METHOD_SLOT);
-  const cardFooterSlot = useSlot(AUTH_LOGIN_CARD_FOOTER_SLOT);
-  const pageFooterSlot = useSlot(AUTH_LOGIN_PAGE_FOOTER_SLOT);
-  const passwordHelpSlot = useSlot(AUTH_LOGIN_PASSWORD_HELP_SLOT);
-  const cardFooter = footer
-    ?? (slotEntriesHaveContent(cardFooterSlot)
-      ? <SlotOutlet entries={cardFooterSlot} />
-      : null);
-  const pageFooter = slotEntriesHaveContent(pageFooterSlot)
-    ? <SlotOutlet entries={pageFooterSlot} />
-    : null;
+  const methodChildren = useContainer("auth.login#method");
+  const passwordHelpChildren = useContainer("auth.login#password-help");
+  const cardFooter = footer ?? null;
   const formPasswordHelp = passwordHelp === null
     ? null
     : (passwordHelp
-      ?? (slotEntriesHaveContent(passwordHelpSlot)
-        ? <SlotOutlet entries={passwordHelpSlot} />
+      ?? (containerHasContent(passwordHelpChildren)
+        ? <ContainerOutlet entries={passwordHelpChildren} />
         : null));
   const loginMethods = methods === undefined
-    ? slotEntriesHaveContent(methodSlot) ? <SlotOutlet entries={methodSlot} /> : null
+    ? containerHasContent(methodChildren) ? <ContainerOutlet entries={methodChildren} /> : null
     : methods;
   const defaultHero = hero === undefined && runtimeBrand === null;
   const defaultAtmosphere = showAtmosphere ?? true;
@@ -177,11 +170,6 @@ export function LoginPage({
           {cardFooter ? (
             <div className="mt-6 rounded-6 border border-border-subtle bg-inset/70 px-4 py-3">
               {cardFooter}
-            </div>
-          ) : null}
-          {pageFooter ? (
-            <div className="mt-8 text-center text-xs text-fg-muted">
-              {pageFooter}
             </div>
           ) : null}
         </div>

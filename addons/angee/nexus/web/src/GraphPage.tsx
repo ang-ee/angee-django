@@ -174,7 +174,7 @@ export function GraphPage(): React.ReactElement {
                 routeHref={routeHref}
                 recordHref={recordHref}
                 openTimeline={(node) => {
-                  setActiveTab(isCircleNode(node) ? "feed" : "timeline");
+                  setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.timeline");
                   setCollapsed(false);
                   const path = nodePath(recordHref, node);
                   if (path) void navigate({ to: path });

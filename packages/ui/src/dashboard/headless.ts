@@ -7,8 +7,6 @@ import { JsonValueSchema, type JsonObject } from "../widgets/json-value";
 
 export const DASHBOARD_SCHEMA_VERSION = 1 as const;
 export const DASHBOARD_COLUMNS = 12;
-export const DASHBOARD_STORE_SLOT = "dashboard.store";
-export const DASHBOARD_WIDGET_KINDS_SLOT = "dashboard.widget-kinds";
 
 export const DASHBOARD_LIMITS = {
   columns: { min: 1, max: 24 },

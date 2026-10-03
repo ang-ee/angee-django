@@ -21,11 +21,15 @@ describe("addon brand ownership", () => {
     expect(composeAddons([{ id: "notes" }], canonicalizer).brand).toBeNull();
   });
 
-  test("refuses a second brand claim even when both values are identical", () => {
-    expect(() => composeAddons([
+  test("leaves two unrelated brand claims unbranded and says why", () => {
+    const composed = composeAddons([
       { id: "first", brand, icons: { "notebook-mark": mark } },
-      { id: "second", brand },
-    ], canonicalizer)).toThrow(/second.*brand/i);
+      { id: "second", shell: { brand } },
+    ], canonicalizer);
+    expect(composed.brand).toBeNull();
+    expect(composed.shell.diagnostics).toEqual([
+      "Unrelated products first, second declare a shell; pin one in ANGEE_UI.",
+    ]);
   });
 
   test.each([undefined, "not-a-component", { arbitrary: true }])(

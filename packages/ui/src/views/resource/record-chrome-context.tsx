@@ -1,21 +1,21 @@
 import type { ReactElement } from "react";
 import type { Row } from "@angee/metadata";
 
-import { makeContext, useSlot } from "../../runtime";
-import { SlotOutlet } from "../../lib/slot-outlet";
-import { FORM_VIEW_RECORD_CHROME_SLOT } from "../form/form-view-slots";
+import { useMemo } from "react";
+
+import { makeContext, useContainer, modelChain } from "../../runtime";
+import { ContainerOutlet } from "../../lib/container-outlet";
 
 /**
- * The record a `formViewRecordActionsSlot(...)` or `FORM_VIEW_RECORD_CHROME_SLOT`
- * contribution renders against. `FormView` provides it around both outlets, so a
- * contribution reads the open record and its id without re-deriving either from
- * the URL. Present only on a saved record — neither slot renders while creating.
+ * The record a `form#actions`, `form#actions-menu` or `form#chrome` child renders
+ * against. `FormView` provides it around those containers, so a child reads the
+ * open record and its id without re-deriving either from the URL. Present only on
+ * a saved record; none of them renders while creating.
  *
- * A record-verb slot key already settles the model, and the impl key settles the
- * row's `ImplClassField` value too, so a contribution there gates only on what
- * its key has not already decided (typically lifecycle) — never by re-probing the
- * record for the model or impl its key named. The chrome slot is global, so a
- * chrome contribution still gates on `resource` itself.
+ * A child at a model address already knows its model, and an `impl` child or a
+ * variant already knows the row's implementation, so it gates only on what its
+ * address has not decided (typically lifecycle). A `form#chrome` child shows on
+ * every form, so it still gates on `resource` itself.
  */
 export interface RecordChromeContext {
   /** The model the form renders — a global chrome contribution gates on it. */
@@ -38,24 +38,28 @@ export interface RecordChromeContext {
 
 const binding = makeContext<RecordChromeContext>("RecordChromeContext");
 
-/** Provides the record-chrome context around the record-chrome slot outlet. */
+/** Provides the record-chrome context around the record containers. */
 export const RecordChromeProvider = binding.Provider;
 
 /**
  * Read the saved-record toolbar context. Throws outside the provider — a
- * contribution always renders inside one of `FormView`'s record toolbar slots.
+ * child always renders inside one of `FormView`'s record toolbar containers.
  */
 export const useRecordChromeContext = binding.use;
 
 /** Read an enclosing saved record from a nested collection, when present. */
 export const useRecordChromeContextMaybe = binding.useMaybe;
 
-/** Shared outlet for saved forms and custom record surfaces. */
+/** Shared outlet for saved forms and custom record surfaces: the `form#chrome` children for this record's models. */
 export function RecordChrome({ value }: { value: RecordChromeContext }): ReactElement {
-  const entries = useSlot(FORM_VIEW_RECORD_CHROME_SLOT);
+  const models = useMemo(
+    () => modelChain(value.canonicalResource, value.resource),
+    [value.canonicalResource, value.resource],
+  );
+  const entries = useContainer("form#chrome", { models, row: value.record });
   return (
     <RecordChromeProvider value={value}>
-      <SlotOutlet entries={entries} />
+      <ContainerOutlet entries={entries} />
     </RecordChromeProvider>
   );
 }

@@ -1,34 +1,6 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Action,
-  Alert,
-  Column,
-  Facet,
-  Form,
-  List,
-  ListView,
-  LoadingPanel,
-  PrimaryPanePublisher,
-  ResourceList,
-  SectionEyebrow,
-  TreeView,
-  errorMessage,
-  slotContents,
-  useSlot,
-  useAuthoredResourceMutation,
-  useLatestRef,
-  useRouteHref,
-  useRouteSearch,
-  useToast,
-  updateRouteSearch,
-  type ActionDescriptor,
-  type DndPayload,
-  type ListColumn,
-  type RecordPanelContext,
-  type RecordTabDescriptor,
-  type StringIdRow,
-} from "@angee/ui";
+import { Action, Alert, Column, Facet, Form, List, ListView, LoadingPanel, PrimaryPanePublisher, ResourceList, SectionEyebrow, TreeView, errorMessage, containerContents, useContainer, useAuthoredResourceMutation, useLatestRef, useRouteHref, useRouteSearch, useToast, updateRouteSearch, type ActionDescriptor, type DndPayload, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { PersonCirclesList } from "./CircleMembershipList";
 import {
@@ -41,7 +13,6 @@ import { PartyAddresses } from "./PartyAddresses";
 import { usePartiesT } from "./i18n";
 import { usePartyContactActions } from "./party-contact-actions";
 
-import { PERSON_FORM_FIELDS_SLOT } from "./slots";
 import { personFields } from "./PersonForm";
 
 const MODEL = "parties.Person";
@@ -230,7 +201,7 @@ function peopleForm(
  * collections.
  */
 export function PeoplePage(): React.ReactElement {
-  const extraFields = slotContents(useSlot(PERSON_FORM_FIELDS_SLOT));
+  const extraFields = containerContents(useContainer("parties.person#fields"));
   const t = usePartiesT();
   const contactActions = usePartyContactActions();
   const navigate = useNavigate();

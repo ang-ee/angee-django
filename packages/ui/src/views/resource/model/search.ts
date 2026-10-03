@@ -1,6 +1,6 @@
 import { format } from "date-fns";
 import { stableSerialize } from "@angee/refine";
-import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, RESOURCE_VIEW_KINDS } from "./capabilities";
+import { CALENDAR_ANCHOR_FORMAT, defaultResourceViewPageSize, CALENDAR_VIEW_MODES, isResourceViewKind } from "./capabilities";
 import type { CalendarViewMode, ResourceViewKind } from "./capabilities";
 import { Filter, isResourceViewFilter } from "./filter";
 import { QueryParseError, GroupSpecsSchema } from "@angee/metadata";
@@ -243,10 +243,6 @@ export function resourceViewGroupsEqual(
 ): boolean {
   return left.field === right.field
     && left.granularity === right.granularity;
-}
-
-function isResourceViewKind(value: string): value is ResourceViewKind {
-  return RESOURCE_VIEW_KINDS.includes(value as ResourceViewKind);
 }
 
 function isCalendarViewMode(value: string): value is CalendarViewMode {

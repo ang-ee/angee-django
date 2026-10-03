@@ -32,7 +32,7 @@ export type {
   UseRenderComponentProps,
   UseRenderRenderProp,
 } from "./slot";
-export { SlotOutlet, slotContents, slotEntriesHaveContent } from "./slot-outlet";
+export { ContainerOutlet, containerContents, containerHasContent } from "./container-outlet";
 export {
   DND_MIME,
   writeDndPayload,

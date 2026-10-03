@@ -7,7 +7,7 @@ import { createRouteHref, type ChatterViewContext } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
 
-import { DecisionRunOrigin, workflowsChatter } from "./contributions";
+import { DecisionRunOrigin, decisionRunOrigin, workflowsRunsTab } from "./contributions";
 import { DecisionWaitingRunsDocument } from "./documents.console";
 
 vi.mock("@angee/decisions", async (importOriginal) => ({
@@ -74,21 +74,29 @@ test("failed origin reads show the shared error surface", async () => {
   expect(await screen.findByText("Waiting runs are unavailable.")).toBeTruthy();
 });
 
+const runsTab = workflowsRunsTab.content;
+
 test("the record contribution only mounts for identified records", () => {
   const context: ChatterViewContext = { pathname: "/notes/nte_7", params: { id: "nte_7" },
     route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", canonicalLabel: "notes.Note" },
     view: { kind: "record", type: "notes/note", sqid: "nte_7" },
   };
-  expect(workflowsChatter.when?.(context)).toBe(true);
-  expect(workflowsChatter.when?.({ ...context, view: { kind: "list", type: "notes/note" } })).toBe(false);
-  expect(workflowsChatter.when?.({ ...context, route: undefined })).toBe(false);
+  expect(runsTab.when?.(context)).toBe(true);
+  expect(runsTab.when?.({ ...context, view: { kind: "list", type: "notes/note" } })).toBe(false);
+  expect(runsTab.when?.({ ...context, route: undefined })).toBe(false);
   for (const model of ["Workflow", "WorkflowVersion", "WorkflowRun", "StepRun", "StepAttempt", "StepArtifact", "Trigger", "TriggerEvent"]) {
-    expect(workflowsChatter.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(false);
+    expect(runsTab.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(false);
   }
-  expect(workflowsChatter.render?.({ ...context, route: undefined })).toBeNull();
+  expect(runsTab.render?.({ ...context, route: undefined })).toBeNull();
 });
 
-test("the contextual contribution is labeled as runs", () => {
-  render(<>{workflowsChatter.label}</>);
+test("the contextual contribution is labeled as runs and still answers its old aside id", () => {
+  render(<>{runsTab.label}</>);
   expect(screen.getByText("Runs")).toBeTruthy();
+  expect(runsTab.aliases).toEqual(["workflows"]);
+  expect(workflowsRunsTab.sequence).toBe(40);
+});
+
+test("the decision origin child renders the waiting-run origin", () => {
+  expect(decisionRunOrigin).toMatchObject({ content: { type: DecisionRunOrigin } });
 });

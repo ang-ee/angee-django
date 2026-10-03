@@ -1,5 +1,5 @@
 // The rendered binding's runtime contracts. The DAG owner of the app-runtime
-// registry (`AppRuntime` + its `useWidget`/`useSlot`/`usePreviews`/`useT` lookups),
+// registry (`AppRuntime` + its `useWidget`/`useContainer`/`usePreviews`/`useT` lookups),
 // the context factory (`makeContext`), and the contribution contracts the render
 // surfaces consume (menus, slots, previews, widgets, forms). `@angee/app` mounts
 // the provider and builds addon manifests against these contracts.
@@ -10,6 +10,35 @@ export {
   usePreferenceSlice,
   type PreferenceSliceState,
 } from "./user-preferences";
+export {
+  EMPTY_CONTAINERS,
+  containerName,
+  containersFromChildren,
+  modelChain,
+  useDrawers,
+  resolveContainer,
+  useContainer,
+  type ComposedContainerChild,
+  type ComposedContainers,
+  type ContainerAlteration,
+  type ContainerChild,
+  type ContainerCondition,
+  type ContainerEntry,
+  type ContainerKinds,
+  type ContainerRule,
+  type ContainerScope,
+  type ContainersDeclaration,
+  type CoreContainer,
+  type ResolveContainerOptions,
+  type ResourceViewKindContent,
+  type DockedDrawerContent,
+} from "./containers";
+export {
+  applyDeveloperModeSearch,
+  useDeveloperMode,
+  useDeveloperModeSwitch,
+  useRuntimeComposition,
+} from "./developer-mode";
 export {
   AppRuntimeProvider,
   useAppRuntime,
@@ -29,10 +58,7 @@ export {
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
   readRuntimeRouteShortcuts,
-  useSlot,
-  useModelSlot,
   usePreviews,
-  useDrawers,
   useChatterRoutes,
   useT,
   useNamespaceT,
@@ -66,11 +92,11 @@ export {
   type RouteHrefSearchValue,
   type RuntimeRouteDescriptor,
 } from "./route-href";
-export { isModelScopedSlot, type RuntimeFormRegistration } from "./contracts";
+export { type RuntimeFormRegistration } from "./contracts";
 export type {
   AppVocabulary,
   RuntimeVocabulary,
-  ChatterContribution,
+  ChatterTabContent,
   ChatterRoute,
   ChatterView,
   ChatterViewContext,
@@ -79,9 +105,10 @@ export type {
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
-  ModelSlotTarget,
   PreviewContribution,
+  HiddenMenuItem,
+  RemovedMenuItem,
   RuntimeBrand,
-  SlotContribution,
+  RuntimeComposition,
   WidgetMap,
 } from "./contracts";

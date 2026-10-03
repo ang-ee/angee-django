@@ -314,11 +314,55 @@ def test_web_runtime_projects_addon_web_root_relative_to_runtime(
         {
             "app": "tests.addon",
             "label": "addon",
+            "dependsOn": [],
             "package": "@demo/addon",
             "root": "../../addon/web",
             "sourceRoot": "src",
         }
     ]
+
+
+def test_web_runtime_projects_package_ancestry_through_backend_only_addons() -> None:
+    """Each web package lists the web packages it depends on, transitively, by app name."""
+
+    base = make_addon(name="tests.base", web={"package": "@demo/base"})
+    bridge = make_addon(name="tests.bridge", depends_on=("tests.base",))
+    product = make_addon(name="tests.product", depends_on=("bridge",), web={"package": "@demo/product"})
+    unrelated = make_addon(name="tests.unrelated", web={"package": "@demo/unrelated"})
+
+    manifest = json.loads(WebRuntime((base, bridge, product, unrelated)).manifest_json())
+
+    assert {entry["app"]: entry["dependsOn"] for entry in manifest["addonPackages"]} == {
+        "tests.base": [],
+        "tests.product": ["tests.base"],
+        "tests.unrelated": [],
+    }
+
+
+def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
+    """Nexus alone pulls in every app whose menu it includes, already in the test host."""
+
+    configs = AppGraph().resolve(("angee.nexus",))
+    assert {config.name for config in configs if addon_manifest(config) is not None} <= {
+        config.name for config in apps.get_app_configs()
+    }
+    manifest = WebRuntime(configs).manifest
+    nexus = next(entry for entry in manifest["addonPackages"] if entry["app"] == "angee.nexus")
+    assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
+
+
+def test_web_runtime_carries_the_deployment_ui_layer() -> None:
+    """``ANGEE_UI`` reaches the web runtime as the last layer; unknown keys fail composition."""
+
+    addon = make_addon(name="tests.addon", web={"package": "@demo/addon"})
+    ui = {"shell": {"home": "addon.home", "perspective": None}}
+
+    assert json.loads(WebRuntime((addon,), ui=ui).manifest_json())["deployment"] == ui
+    assert "deployment" not in json.loads(WebRuntime((addon,), ui={}).manifest_json())
+    with pytest.raises(ImproperlyConfigured, match="unknown keys \\['rail'\\]"):
+        WebRuntime((addon,), ui={"rail": {}})
+    with pytest.raises(ImproperlyConfigured, match="must be a mapping"):
+        WebRuntime((addon,), ui=["shell"])
 
 
 def test_web_runtime_projects_external_codegen_entries() -> None:

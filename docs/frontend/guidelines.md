@@ -204,11 +204,13 @@ shared UI copy through an addon bundle.
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
   described under [Package Layering](#package-layering).
-- **Product identity is declared once.** At most one addon declares
-  `brand: { name, mark }`, with `mark` a registered glyph; composition rejects a
-  second claim. Rail, login, public mark and document title read it through
-  `useRuntimeBrand`; shell components hard-code no identity. See
-  [`AddonManifest.brand`](../../packages/app/src/define-addon.ts).
+- **Products declare the shell.** Home, brand (`{ name, mark }`, with `mark` a
+  registered glyph) and the selected perspective are `shell` facts layered
+  along addon dependencies: a dependent overrides its dependencies, unrelated
+  products fall back to the framework default, and the deployment's `ANGEE_UI`
+  applies last. Hosts pass no product facts. Rail, login, public mark and
+  document title read the brand through `useRuntimeBrand`; shell components
+  hard-code no identity. See [`resolveShell`](../../packages/app/src/shell.ts).
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native
@@ -226,9 +228,9 @@ shared UI copy through an addon bundle.
   `resourcePageRoutes` names record children `${collectionName}.record` by
   default; use `detailName` only when preserving a deliberate established name.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
-  (widgets, i18n, icons, forms, slots, previews, and menu declarations); never
+  (widgets, i18n, icons, forms, containers, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
-  `useSlot` read the composed `AppRuntime`; menu declarations project into refine
+  `useContainer` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
 - **Custom resource widget keys use `namespace.addon.widgetName`.** Keep namespace
   segments lowercase (digits and underscores are allowed); use camelCase for a
@@ -259,14 +261,12 @@ shared UI copy through an addon bundle.
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
   tabs and composer intact. Chatter stays in the shell's right pane. Consumers
-  do not mount their own chatter. The inherited app and route `surface`
-  declaration owns contribution admission and aside visibility; the shell
-  applies it before mounting tabs. Only named slot, aside and drawer lists
-  restrict contributions; omitted addresses retain their defaults, including
-  in a confined app. Public and sign-in routes are unfiltered. App-keyed route
-  scopes can narrow a route owned by another addon. A tab without a model scope
-  appears only on record routes. See the [route policy](../../packages/app/src/route-policy.ts) and
-  [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+  do not mount their own chatter. Its tabs are `record#aside` and
+  `<model>#aside` children, narrowed by the layers for the current app and
+  route before tabs mount (see [Chatter](#chatter)); a container nobody narrows
+  keeps all its children, including in a confined app. Public and sign-in
+  routes belong to no app. A tab declared at `record#aside` appears only on
+  record views. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
@@ -278,47 +278,45 @@ shared UI copy through an addon bundle.
   indeterminate `LoadingPanel`), which wraps every non-root match in Suspense
   inside its layout's `<Outlet/>`, so the chrome stays mounted. Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
-  around a route's `<Outlet/>`. Lighter manifest content (slot/section content,
+  around a route's `<Outlet/>`. Lighter manifest content (container children,
   forms, glyphs) stays eager. Keep a registered form and its descriptor in an
   eager form module when its routed page is lazy; the manifest must not import or
   re-export the page module. A page may import its form, and form callers import
   the form module directly. A heavy optional surface may use `React.lazy` inside
   the shared `LazyBoundary` when its dependency tree otherwise enters the boot
   bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
-  and its transport slots defer assistant-ui, streamdown and its code renderer
-  until chat opens; their slot declarations and context remain eager so addon
-  composition stays synchronous. A transport or context shared
+  defers assistant-ui, streamdown and its code renderer until chat opens; its
+  `record#aside` child and context remain eager so addon composition stays
+  synchronous. A transport or context shared
   by pages and shell contributions declares
   `layoutProviders` on `defineBaseAddon`, keyed by layout and contribution id.
   The layout mounts these providers once inside its authenticated schema context,
   above chrome and routed content; page and drawer wrappers are unnecessary.
 - One component tree. Extend or register; do not fork.
-- **Slots are additive extension points.** Use them before copying a component.
-  Console-wide notices contribute to `CONSOLE_NOTICE_SLOT` from `@angee/ui`;
-  `ConsoleLayout` renders it below navigation and above page controls. The
-  contributing addon owns visibility, permissions, status, and actions, and
-  composes the existing `Banner` surface.
-  A slot entry is uniquely keyed by `(slot, model?, impl?, id)` and a second addon claiming one
-  **collides** at composition — it is never a silent override decided by addon
-  array order. So an addon contributes only to a key it owns. To vary a
-  contribution per row, key it on the fact the row already carries (an
-  `ImplClassField` value), never on a probe of the record inside the component: a
-  contribution that inspects the row to decide whether it should have rendered is
-  contributed to the wrong key. **Record-verb slots resolve canonical → model →
-  model+impl by specificity** (`formViewRecordActionsSlot`), a more specific entry
-  replacing the same id from a less specific one, then order by `sequence`. That
-  is how the addon owning an MTI parent contributes a verb once for every subtype,
-  and how two vendors specialize the same verb on one model without colliding.
-  Contributing a vendor's verb to a *model-scoped* key the vendor does not own
+- **Containers are additive extension points.** Add a child before copying a
+  component; [Containers](#containers) owns the rules. Console-wide notices are
+  `shell#notices` children; `ConsoleLayout` renders them below navigation and
+  above page controls. The contributing addon owns visibility, permissions,
+  status, and actions, and composes the existing `Banner` surface.
+  A child id is namespaced by its addon and declared once per address; a second
+  declaration **fails** at composition — it is never a silent override decided
+  by addon array order. To vary a child per row, key it on the fact the row
+  already carries (an `ImplClassField` value, through `impl` or `variant`), never
+  on a probe of the record inside the component: a child that inspects the row
+  to decide whether it should have rendered is declared in the wrong place.
+  **Record verbs resolve kind → canonical model → concrete model**: a child of
+  `form#actions` shows on every form, one of an MTI parent's `#actions` on each
+  subtype, and a `variant` stands in for its original on one implementation's
+  rows only. That is how the addon owning an MTI parent contributes a verb once
+  for every subtype, and how two vendors specialize the same verb on one model
+  without colliding. Removing another addon's verb from a model instead
   displaces it for every row of that model and caps the model at one vendor.
 - Tokens beat color props and one-off variants. Theme by overriding tokens.
 - Implementation inspection reuses field-owned choice metadata. Platform owns
   the registered-type catalogue and source viewer; configured records and domain
-  contracts stay with their addon. Contribute those panels through the shared
-  [`ImplementationDetails`](../../packages/ui/src/views/relation/implementation-details.tsx)
-  model slot, so an addon need not depend on the optional Settings explorer.
-  Render declared configuration with the existing FormSpec descriptors, and keep
-  absent defaults distinct from explicit `false`, zero, or empty values.
+  contracts stay with their addon. Render declared configuration with the
+  existing FormSpec descriptors, and keep absent defaults distinct from explicit
+  `false`, zero, or empty values.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
   — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
   (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
@@ -527,30 +525,30 @@ shared UI copy through an addon bundle.
   Use `fill` for record-width bars and pass the slot's available `containerWidth`
   when it is known. Enum labels for status controls and cells resolve through
   `canonicalOptionValue`, regardless of GraphQL read casing.
-- **Contribute a saved-record tab from the data view** through
-  `formViewSectionsSlot(resource)` with a direct `<Tab>` declaration. Canonical
-  parent sections are inherited by concrete child forms; contribute once at the
-  owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
+- **Contribute a saved-record tab from the data view** as a `<model>#sections`
+  child holding a direct `<Tab>` declaration. Canonical parent sections are
+  inherited by concrete child forms; contribute once at the owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
   which evaluates the loaded record; fields omitted by a child projection are
   read from the canonical resource. Use `useRecordChromeContext()` inside
   the panel to scope an embedded `ListView` with resource filters. The model's
   Hasura resource owns filter/order/group/facet capabilities; the list owns
   controls, paging and `rowActions`, including confirmations for generated action
   callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
-  Declare section and verb ids in the app's `surface.admit.slots` for
-  `form-view.sections` and `form-view.record-actions`; app-keyed route scopes
-  can narrow either list. Omitting a slot keeps all its contributions and `[]`
-  keeps none. [FormView](../../packages/ui/src/views/form/form-view-surface.ts)
-  selects required fields from the route-projected contributions; authored
-  fields and passive chrome remain host-owned.
-- **Record verbs compose the shared action owner.** A slot contribution may render
-  [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
+  A product narrows a form's sections and verbs per app or route with `only`
+  under `when` on `form#sections`, `form#actions` and `form#actions-menu`; a
+  container nobody narrows keeps all its children and `only: []` keeps none.
+  [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
+  required fields from the resolved children; authored fields and passive chrome
+  remain host-owned.
+- **Record verbs compose the shared action owner.** A verb in the toolbar is a
+  `#actions` child and one in the overflow menu a `#actions-menu` child; either
+  may render [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
   carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
-  and record-action slot contributions declare a projected `permission` when
-  their verbs require one; unavailable verbs are omitted.
-- **Record rails reuse form fields.** Contribute a `FormView.RailGroup` through
-  `FormView.railSlot(model)` with standard field descriptors and optional
+  and record-verb children declare a projected `permission` when their verbs
+  require one; unavailable verbs are omitted.
+- **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
+  `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
   save state; unreadable rows stay absent. The rail follows the active record
   tab and stacks beneath the body in a narrow container.
@@ -560,7 +558,8 @@ shared UI copy through an addon bundle.
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
 - **Human decision subjects opt into the generic tab.** Compose
-  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/RecordDecisions.tsx);
+  [`decisionRecordTab()`](../../addons/angee/decisions/web/src/RecordDecisions.tsx)
+  as a `<model>#sections` child under your own id (`"<addon>.decisions"`);
   [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
   subject identity, while each subject addon owns successor admission.
 - A relation field is a link, not a dead end. A routed collection page tags its
@@ -584,6 +583,14 @@ shared UI copy through an addon bundle.
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
+- Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
+  Contributions use `ActionTrigger` to adapt between a toolbar button and a native
+  menu item and report pending state to the menu trigger. Render menu-opened
+  dialogs inside the menu: the shared owner keeps them mounted after it closes
+  and returns focus to its toolbar trigger. `DialogContent` resets menu context
+  for its body, so nested dialogs return to their own triggers. Pages supply
+  domain labels through i18n and alignment through `align`; selection menus keep
+  their own native controls.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
@@ -612,10 +619,9 @@ shared UI copy through an addon bundle.
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
   widget that cannot accept it; compose the shared `rows` widget for decision
-  forms with fixed-size tables. Decision-specific presentation contributes
-  `decisionContent(kind, Component)` through the decisions fragment's content
-  slot, with one component per kind; the inbox owns the form and its React Hook
-  Form context.
+  forms with fixed-size tables. Decision-specific presentation is a
+  `decisions#content` child built with `decisionContent(kind, Component)`, one
+  per kind; the inbox owns the form and its React Hook Form context.
 - Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
@@ -634,8 +640,7 @@ shared UI copy through an addon bundle.
   + the control's `aria-labelledby`.
 - **Share is shared record chrome.** IAM contributes the generic
   [ManageAccessDialog](../../packages/ui/src/views/access/ManageAccessDialog.tsx)
-  through `FORM_VIEW_RECORD_CHROME_SLOT` and the existing
-  `RESOURCE_VIEW_UTILITIES_SLOT`. Models declare `rebac_grantable`; pages inherit
+  as a `form#chrome` child and a `resource#utilities` child. Models declare `rebac_grantable`; pages inherit
   Share from their resource metadata. Saved custom record surfaces compose
   `RecordChrome`, as forms do. List actions use the enclosing saved record when
   present, otherwise the collection owner's selected ids. Subject pickers read
@@ -667,6 +672,250 @@ shared UI copy through an addon bundle.
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
 - No Python view DSL, no frontend metadata hidden in backend decorators.
+
+## Containers
+
+A container is a named, ordered list on a node that the node's owner renders:
+a form's sections, a record's chatter tabs, the user menu. An entry in it is a
+child. Addons extend each other's pages by adding, moving, removing, hiding or
+narrowing children, layered along addon dependencies as menus are. The
+[compiler](../../packages/app/src/containers.ts) validates and layers the
+addons' declarations at composition; the contracts and `useContainer` live in
+[`@angee/ui/runtime`](../../packages/ui/src/runtime/containers.ts).
+
+### Addresses, kinds and inheritance
+
+A container's address is `node#name`; one child is `node#name/id`. The
+framework's record containers sit at a kind-level node and also take a model
+node: a child of `form#sections` shows on every model's form, a child of
+`projects.Task#sections` only on Task's. A record renders the kind address,
+then its canonical (MTI parent) model's address, then its concrete model's,
+merged into one order, so a child of `parties.Party#aside` also shows on
+Party's MTI children. Model spellings are canonicalized at composition.
+
+The name after `#` types the entry. Each owner adds its name and content type to
+the `ContainerKinds` interface, so a `#aside` child carries
+`ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
+`#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
+There are no per-kind constructor functions; an addon helper returns a plain
+child (`recordPagesTab()`, `decisionContent(kind, Component)`). A new
+container name is added by declaration merging, as
+[IAM](../../addons/angee/iam/web/src/ShareAccess.tsx) does:
+
+```ts
+declare module "@angee/ui/runtime" {
+  interface ContainerKinds {
+    "access-roles": React.ComponentType<AccessRoleOwnerProps>;
+  }
+}
+```
+
+### Authoring
+
+An addon declares one `containers` dict keyed by address. A key in the addon's
+own namespace (`<id>.…`) declares a child; a second declaration of an id at one
+address fails. From [work](../../addons/angee/work/web/src/index.tsx):
+
+```tsx
+containers: {
+  [`${TASK_MODEL}#sections`]: {
+    "work.task-fields": { sequence: 40, content: taskWorkFormSection },
+  },
+  [`${TASK_MODEL}#actions`]: {
+    "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
+  },
+},
+```
+
+A child carries `content` and, optionally, `sequence` and `before`/`after`
+(its position), `permission` (a projected record permission the row must hold,
+checked by owners rendering for one record), `requiredFields` (readable fields
+it consumes, which the form selects), `impl`, `variant` and `key`.
+
+Any other key alters a child an addon this one depends on declared:
+`sequence`, `before` and `after` move it (at the address it was declared at),
+`remove: true` takes it out at composition, `hide: true` hides it at render and
+`hide: false` shows again what a dependency hid. The framework's own children
+are every addon's to adjust. Two unrelated layers setting one field fail.
+[Messaging](../../addons/angee/messaging/web/src/index.tsx) replaces the
+framework's placeholder chatter tabs this way:
+
+```tsx
+"record#aside": {
+  "chatter.comments": { remove: true },
+  "chatter.activity": { remove: true },
+  "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
+  // messaging.activity, messaging.sources …
+},
+```
+
+An addon declares a container of its own by naming an address on its own node,
+with no children or with its own: `"messaging.channels#toolbar": {}`. Two
+entry keys apply only there. `unique: "key"` makes every child carry a `key`
+and fails two children with one key: `decisions#content` renders one
+presentation per decision kind
+([decisions](../../addons/angee/decisions/web/src/index.ts)). `models: true`
+makes the container model-scoped: IAM declares `iam#access-roles`, and
+[proposals](../../addons/angee/proposals/web/src/record-rounds.tsx) adds
+children at `proposals.Round#access-roles`; the owner passes the record's
+models to `useContainer`. A model-scoped name belongs to one kind.
+
+Unknown addresses, unknown children, unknown keys and ids outside the
+addon's namespace fail composition at app boot; `pnpm run test` composes the
+full addon set.
+
+### Narrowing and `when`
+
+`only: [ids]` keeps the listed children and `except: [ids]` drops them;
+`only: []` keeps none. Narrowing applies at render and per layer: each layer's
+`only` intersects with what it inherits and never filters children the
+layer's own dependents add. Narrowing an addon's container requires depending
+on that addon; the framework's containers are open to every addon.
+
+`when: { app, route, perspective }` limits an entry's render verbs (`only`,
+`except` and `hide`) to some pages. `route` matches the route or any route
+below it, `app` the active app, and `perspective` the selected perspective
+while the console is confined; each takes one id or a list. An array of
+entries holds conditional alternatives:
+
+```ts
+// A product layered on its dependencies.
+containers: {
+  "form#chrome": { only: ["iam.share-record"] },
+  "shell#drawers-bottom": { only: [] },
+  "record#aside": [
+    { only: ["messaging.comments", "messaging.activity", "storage.files"] },
+    { only: [], when: { route: "projects.my-work" } },
+  ],
+},
+```
+
+Children are declared unconditionally; declaring, moving or removing under
+`when` fails. A container has no hide of its own: hide its children, or narrow
+it with `only: []`. `hide: false` undoes a `hide`, never an `only`. The
+deployment's `ANGEE_UI.containers` is a last layer that depends on every addon:
+it alters and narrows, and declares nothing.
+
+### Variants and `impl`
+
+Vary a child per row by the implementation the row carries (its
+`ImplClassField` value). A child with `impl: "<key>"` shows only on rows of
+that implementation. A child with `variant: { of, impl }` stands in for the
+child `of` on rows of that implementation and leaves the original on other
+rows. A variant inherits its original's admission: an `only` that drops the
+original drops its variants, and a `hide` of the original hides them. Where
+the row lacks the variant's `permission`, the original stays. Two variants of
+one child for one `impl` fail composition. The
+[channel bridges](../../addons/angee/messaging/web/src/channel-bridge-addon.tsx)
+are the reference: each vendor's verbs are `impl` children, and its pairing
+verbs are variants of Integration's resume and disconnect:
+
+```tsx
+[`${CHANNEL_MODEL}#actions-menu`]: {
+  [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, content: disconnectAction },
+},
+```
+
+Owners pass the row's implementations where they render for one record; the
+form's `#actions` and `#actions-menu` do.
+
+Record verbs are `#actions` children. The one exception is an inline action
+form rendered inside the record, such as a decision answered on its own page:
+its submit button must share the form's React Hook Form state, which a container
+child cannot reach, so `ActionFormDialog` with `inline` portals that button into
+the toolbar through `RecordChromeContext.toolbarHost`
+([record chrome context](../../packages/ui/src/views/resource/record-chrome-context.tsx)).
+
+### Framework containers
+
+| Address | Children | Content |
+|---|---|---|
+| `form#sections` | `Group`, `Action` and `Tab` declarations on a record form | `ReactNode` |
+| `form#rail` | `FormView.RailGroup` beside a saved record's tabs | `ReactNode` |
+| `form#actions` | record verbs in a saved form's toolbar | `ReactNode` |
+| `form#actions-menu` | record verbs in a saved form's overflow menu | `ReactNode` |
+| `form#chrome` | passive record chrome at the toolbar's right edge | `ReactNode` |
+| `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
+| `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
+| `record#aside` | chatter tabs | `ChatterTabContent` |
+| `shell#notices` | notices below the console navigation | `ReactNode` |
+| `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
+| `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
+| `auth.login#method` | sign-in methods on the login page | `ReactNode` |
+| `auth.login#password-help` | password help on the login page | `ReactNode` |
+
+The `form`, `resource` and `record` containers also take model addresses. The
+declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
+and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
+Addons own theirs, such as `messaging.channels#toolbar`,
+`parties.overview#items`, `appearance.settings#tools`, `decisions#content`,
+`decisions#origin` and `iam#access-visibility`.
+
+### Chatter
+
+The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
+`record#aside` tab shows on record views; a model-level tab shows on that
+model's pages and may narrow itself further with its content's `when`. A
+`ChatterTabContent` carries `label`, `icon` and `render`, and optionally
+`when`, `count`/`useCount`, `panelClassName` and `aliases`. The framework
+declares placeholder `chatter.comments` and `chatter.activity` tabs until an
+addon that supplies the real ones removes them, as messaging does. Tab ids are
+namespaced like every child; `aliases` keeps a tab's former id working in
+`?chatterTab=` links for one release.
+
+Tabs a page publishes with `useChatterContent` are runtime children of the same
+container. They follow the composed tabs and take the same narrowing. To keep
+the aside off a route, narrow `record#aside` with `only: []` under
+`when: { route }`. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+
+### Resource views
+
+`resource#views` holds the view kinds a collection's switcher offers. The
+framework declares the built-in kinds under the bare ids URLs and saved views
+already carry: `list`, `board`, `calendar`, `gantt` and `dashboard`. An addon
+contributes a kind as a `<model>#views` child with a namespaced id. Its
+`ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
+`capabilities` (which collection controls apply while it is active) and
+`render`, a component receiving `{ resource }` that reads the collection's
+filter and state through `useResourceView()`. `?view=` selects a kind by id,
+and presets and favourites name it. Whether a built-in kind can run on a page
+(calendar, Gantt and dashboard need declared sources) stays the kind's
+capability check; whether a
+kind is offered is the container's, so layers narrow kinds per model with
+`only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
+
+### Rendering and testing
+
+An owner reads its container with `useContainer(address, { models, row, impls,
+extra })`: the children in order, narrowed for the current app, route and
+perspective, with variants applied and `permission` checked when a `row` is
+given. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
+children in order, `containerContents` returns them as keyed nodes for a
+parser, and `containerHasContent` lets the host omit an empty wrapper.
+`useDrawers(edge)` reads one drawer edge; `resolveContainer` is the same
+resolution outside React.
+
+Stories and tests place children straight into the runtime with
+`containersFromChildren(core, { [address]: { [id]: child } })`, with no
+layering, and pass the result as the runtime's `containers` (and a
+`containerScope` when a `when` rule matters). Pass the owner's declaration list
+as `core` (`FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`,
+`SHELL_CONTAINERS`) so its containers and the framework's own children exist:
+
+```tsx
+const containers = containersFromChildren(RESOURCE_CONTAINERS, {
+  "notes.Note#utilities": { "notes.capture": { content: <button type="button">Capture</button> } },
+});
+render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value={value} /></AppRuntimeProvider>);
+```
+
+### Developer mode
+
+Developer mode's composition dialog lists container narrowing (each layer's
+`only`, `except`, `hide` and `when` per address), removed children with the
+layer that removed them, and the layers behind each child's fields. The same
+facts are on `createApp(...).explain.containers`; see the
+[app package](../../packages/app/README.md).
 
 ## Form save contracts
 
@@ -714,9 +963,7 @@ Hard-won traps — the wise learn from others' mistakes
   transport UI in the addon contributing the schema fields; a base fragment must
   codegen without optional dependents. Every agent uses the one
   [ACP runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts), selecting the
-  SDK version from its endpoint. `AGENT_CHAT_SLOT` remains the seam for
-  [runtime-owned transports](../../addons/angee/agents/web/src/chat-slot.ts)
-  contributed by their owning addon.
+  SDK version from its endpoint.
 - **Agent sessions are URL selections, created on intent.** The
   [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
   owns `?session=` through route search; the ACP runtime restores known/newest
@@ -883,30 +1130,45 @@ Hard-won traps — the wise learn from others' mistakes
   an update mutation. Delete affordances are
   schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
   omit record and bulk delete instead of requiring a delete-only `crud(...)`.
-- **An addon contributes one menu root.** The app rail is the one navigation
-  column: compact domain icons collapse into, and expand in place as, their
-  descendant accordion tree. A root with `group:"platform"` contributes to the
+- **An addon contributes one menu root.** The app rail renders apps and their
+  included, non-flattened sub-apps, at most two levels. The selected app's own
+  items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
+  bar; deeper items use the shared dropdown menu and labelled groups.
+  [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
+  `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
   shared **Settings place** instead: the rail and chooser expose one synthetic
   Settings entry, and the expanded rail swaps to the platform tree with a back
   header. Settings and the expansion toggle sit below the scrolling list, and
   the rail is viewport-sticky so both remain reachable. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
-  an app with children or Settings opens its menu temporarily in the shell's
-  shared navigation drawer. Mobile uses the same drawer through the top-bar
-  navigation button. Temporary navigation never changes the desktop expansion
+  a root with visible included apps opens those sub-apps temporarily in the
+  shell's shared navigation drawer; leaf apps and sub-apps navigate directly.
+  Settings opens its platform roots in that drawer. Mobile uses it through the
+  top-bar navigation button. Temporary navigation never changes the desktop expansion
   preference (`railLinkToggleProps` in `chrome/app-rail-model.ts` owns link
   activation; modified clicks keep the browser default). Workbench primary
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
-  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
-  app roots: explicit `appRoot` declarations win, otherwise every root is an app,
-  and `appRoot` on a non-root item throws. A branded single-root rail shows the
-  brand and that root's children instead of the app chooser.
-  A route referenced by more than one menu item must set `route.menu` (the owning
-  item's id) or the chrome derivation throws "referenced by multiple menu items" —
-  or make the root route-less so it inherits its target through a descendant and the
-  leaf is the route's sole reference.
+  `ChromeMenuNode.isApp` identifies non-platform roots and included apps.
+  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) selects the
+  rail-root candidates: explicit `appRoot` declarations win, otherwise it returns
+  all roots; the rail filters platform roots, anchors and hidden nodes.
+  `appRoot` on a non-root item throws. An included app drops `appRoot` and
+  receives compiler-emitted `app: true`; authors do not declare that field.
+  A branded single-root rail shows the brand and included apps instead of the
+  app chooser. Addons rearrange
+  other addons' menus only through the `menus` dict's declared verbs (include,
+  flatten, remove, hide, only, position), along their dependencies; see
+  [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
+  another addon's items.
+  `route.menu` identifies a route's owning item when references are ambiguous.
+  Ambiguous root ownership still throws under a perspective; confinement does
+  not choose an owner for the route. `useChromePlace()` shares one memoized
+  `MenuTree.match(pathname, searchStr)` across the rail and top bar.
+  Chrome currently selects the nearest visible app on that match's
+  trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
+  sheet strip below the top bar; pane toggles stay in the top bar.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and
   temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
@@ -951,7 +1213,7 @@ Hard-won traps — the wise learn from others' mistakes
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
-  justify/text live once; `TopBar` (including its inline Breadcrumb)/`ControlBand`/`PageToolbar`/
+  justify/text live once; `TopBar`/`BreadcrumbBar`/`ControlBand`/`PageToolbar`/
   `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
   bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
   recipe so the bars stay in lockstep.
@@ -976,9 +1238,6 @@ Hard-won traps — the wise learn from others' mistakes
   `SplitPanes` split region; an *Aside* is page side content (`PageAside`); *primary*/
   *secondary* are the Workbench sidebars; a *Panel* is a content `Card`. Don't reuse
   one term for another's concept across components, props, or slots.
-- **Layout slot ids use the `@angee/ui.*` symbol namespace.** Register new slots as
-  `Symbol.for("@angee/ui.<name>-slot")` (see `layouts/slots.ts`); the legacy
-  rendered-binding prefix is retired.
 
 - **Message projections have one owner.** A peer addon that lists messages spreads
   the fragments messaging exports (sender, parts + file + mime, reaction groups,

@@ -5,4 +5,4 @@ name = "angee.nexus"
 description = "Relationship intelligence — interaction rollups, gravity/fading, and the cross-channel person timeline over parties and messaging"
 keywords = ["nexus", "contacts", "relationships", "timeline"]
 category = "Data"
-depends_on = ["angee.parties", "angee.messaging"]
+depends_on = ["angee.parties", "angee.messaging", "angee.spaces", "angee.posts"]

@@ -6,21 +6,28 @@ import hashlib
 import importlib
 import logging
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from django.apps import apps
+from django.core.management.base import CommandError
 from django.db import connection, connections, migrations, models
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.backends.dummy.base import DatabaseWrapper as DummyDatabaseWrapper
 from django.db.backends.sqlite3.base import DatabaseWrapper
 from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
 from django.db.migrations.writer import MigrationWriter
+from django.db.models.functions import Lower
 
 from angee.base.fields import StateField
-from angee.compose.migrations import RuntimeMigrations
+from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
 from angee.storage.models import Folder
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -264,6 +271,151 @@ class Migration(migrations.Migration):
         assert "cutover migration" in str(error.value)
         assert (runtime_dir / "integrate_vcs" / "migrations" / "0001_adopt_legacy.py").exists()
         assert not (runtime_dir / "resources" / "migrations" / "0003_delete_legacy.py").exists()
+
+
+def _donor_states() -> tuple[ProjectState, ProjectState, MigrationGraph]:
+    """History with legacy donor columns, current models without them, and its graph."""
+
+    def task(*donated: tuple[str, models.Field]) -> ModelState:
+        fields = [("id", models.AutoField(primary_key=True)), ("title", models.CharField(max_length=20))]
+        return ModelState("probe", "Task", [*fields, *donated])
+
+    history, current = ProjectState(), ProjectState()
+    for state in (history, current):
+        state.add_model(ModelState("probe", "Target", [("id", models.AutoField(primary_key=True))]))
+        state.add_model(ModelState("probe", "Link", [
+            ("id", models.AutoField(primary_key=True)),
+            ("task", models.ForeignKey("probe.Task", models.CASCADE, related_name="+")),
+            ("target", models.ForeignKey("probe.Target", models.CASCADE, related_name="+")),
+        ]))
+    history.add_model(task(
+        ("round", models.ForeignKey("probe.Target", models.SET_NULL, null=True, related_name="+")),
+        ("kind", models.CharField(max_length=20, default="")),
+        ("data", models.JSONField(default=dict)),
+        ("version", models.PositiveIntegerField(default=0)),
+        ("admins_only", models.BooleanField(default=False)),
+        ("tags", models.ManyToManyField("probe.Target", related_name="+")),
+        # Stored elsewhere or derived: neither refuses its removal.
+        ("linked", models.ManyToManyField("probe.Target", through="probe.Link", related_name="+")),
+        ("slug", models.GeneratedField(
+            expression=Lower("title"), output_field=models.CharField(max_length=20), db_persist=True,
+        )),
+    ))
+    current.add_model(task())
+    graph = MigrationGraph()
+    graph.add_node(("probe", "0001_initial"), migrations.Migration("0001_initial", "probe"))
+    return history, current, graph
+
+
+@pytest.mark.parametrize(("field", "value", "storage"), [
+    (None, None, None),
+    ("round", "target", "column probe_task.round_id"),
+    ("kind", "kept", "column probe_task.kind"),
+    ("data", {"kept": True}, "column probe_task.data"),
+    ("version", 3, "column probe_task.version"),
+    ("admins_only", True, "column probe_task.admins_only"),
+    ("tags", "target", "table probe_task_tags"),
+])
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_autodetected_column_drop_requires_every_row_empty(field, value, storage) -> None:
+    """NULL or the declared default is empty; any other stored value refuses the drop."""
+
+    history, current, graph = _donor_states()
+    target_model, task_model, link_model = (
+        history.apps.get_model("probe", name) for name in ("Target", "Task", "Link")
+    )
+    with connection.schema_editor() as editor:
+        for model in (target_model, task_model, link_model):
+            editor.create_model(model)
+    target = target_model._base_manager.create()
+    task, _ = (task_model._base_manager.create(title=title) for title in ("first", "second"))
+    link_model._base_manager.create(task=task, target=target)
+    if field == "tags":
+        task.tags.add(target)
+    elif field is not None:
+        task_model._base_manager.filter(pk=task.pk).update(**{field: target if value == "target" else value})
+
+    guard = DropGuardAutodetector(history, current)
+    if field is None:
+        (migration,) = guard.changes(graph=graph)["probe"]
+        assert sorted(operation.name for operation in migration.operations) == [
+            "admins_only", "data", "kind", "linked", "round", "slug", "tags", "version",
+        ]
+        return
+    with pytest.raises(CommandError) as refused:
+        guard.changes(graph=graph)
+    message = str(refused.value)
+    assert message.startswith(
+        f"unsafe autodetected column drop: probe.task.{field}: {storage} holds data in 1 row(s) on database 'default'. "
+    )
+    assert "[[migrations]]" in message
+
+
+@pytest.mark.parametrize(("name", "wrapper"), [
+    ("missing/db.sqlite3", DatabaseWrapper),
+    ("", DummyDatabaseWrapper),
+], ids=["unreachable", "unconfigured"])
+@pytest.mark.django_db
+def test_column_drop_is_refused_when_no_database_can_prove_it_empty(tmp_path, name, wrapper) -> None:
+    """Changes without a drop need no database; an unprovable drop writes nothing."""
+
+    history, current, graph = _donor_states()
+    added = current.clone()
+    added.add_field("probe", "task", "note", models.TextField(default=""), preserve_default=True)
+    with _default_database(str(tmp_path / name) if name else "", wrapper):
+        assert DropGuardAutodetector(current, added).changes(graph=graph)
+        unprovable = r"probe\.task\.kind: cannot prove column probe_task\.kind empty on database 'default' \("
+        with pytest.raises(CommandError, match=unprovable):
+            DropGuardAutodetector(history, current).changes(graph=graph)
+
+
+@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_declared_cutover_migration_owns_a_populated_column_drop(runtime_migration_probe, declared: bool) -> None:
+    """A materialized addon cutover removes the field, so nothing is autodetected."""
+
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    declarations = []
+    if declared:
+        _write_module(
+            source_root / "runtime_migrations" / "retire_old_name.py",
+            """from django.db import migrations
+def applies(project_state):
+    model = project_state.models.get(("resources", "legacy"))
+    return model is not None and "old_name" in model.fields
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.RemoveField(model_name="legacy", name="old_name")]
+""",
+        )
+        declarations.append(
+            dict(name="retire_old_name", app_label="resources", module="runtime_migrations.retire_old_name"),
+        )
+    write_addon_manifest(addon, migrations=declarations)
+    importlib.invalidate_caches()
+    history = MigrationLoader(None, ignore_no_migrations=True).project_state()
+    legacy = history.apps.get_model("resources", "Legacy")
+    with connection.schema_editor() as editor:
+        editor.create_model(legacy)
+    legacy._base_manager.create(old_name="kept")
+    current = history.clone()
+    current.remove_field("resources", "legacy", "old_name")
+
+    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources",))
+    written = materializer.materialize(apps=current.apps)
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    guard = DropGuardAutodetector(loader.project_state(), current)
+    if declared:
+        assert [path.name for path in written] == ["0002_retire_old_name.py"]
+        assert guard.changes(graph=loader.graph) == {}
+    else:
+        assert written == ()
+        with pytest.raises(
+            CommandError, match=r"resources\.legacy\.old_name: column resources_legacy\.old_name holds data in 1 row",
+        ):
+            guard.changes(graph=loader.graph)
 
 
 def test_applicable_declarations_are_planned_sequentially(runtime_migration_probe) -> None:
@@ -919,14 +1071,14 @@ def _upgrade_states(label):
     return old, current
 
 
-@pytest.fixture
-def isolated_upgrade_database():
-    """Replay real constraint names without colliding with the source test apps."""
+@contextmanager
+def _default_database(name: str, wrapper: type[BaseDatabaseWrapper] = DatabaseWrapper) -> Iterator[None]:
+    """Swap the default alias to a separate SQLite (or dummy) database."""
     original = connections["default"]
-    database = DatabaseWrapper({
+    database = wrapper({
         **original.settings_dict,
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
+        "ENGINE": wrapper.__module__.rpartition(".")[0],
+        "NAME": name,
         "OPTIONS": {},
         "TIME_ZONE": None,
     }, alias="default")
@@ -936,6 +1088,13 @@ def isolated_upgrade_database():
     finally:
         database.close()
         connections["default"] = original
+
+
+@pytest.fixture
+def isolated_upgrade_database():
+    """Replay real constraint names without colliding with the source test apps."""
+    with _default_database(":memory:"):
+        yield
 
 
 @pytest.mark.parametrize("label,schema_nullable", [

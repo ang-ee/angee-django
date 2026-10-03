@@ -1,4 +1,4 @@
-import { Tab, formViewRecordActionsSlot, formViewSectionsSlot, type BaseMenuItem } from "@angee/ui";
+import { Tab, type BaseMenuItem } from "@angee/ui";
 import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
@@ -129,49 +129,31 @@ const integrate = defineBaseAddon({
   // integration subtype's form inherits them. Connecting means a real
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
-  slots: [
-    {
-      ...formViewSectionsSlot(INTEGRATION_MODEL),
-      id: INTEGRATION_STREAMS_TAB_ID,
-      sequence: 30,
-      content: (
-        <Tab
-          id="streams"
-          label={{ namespace: "integrate", key: "streams.title", fallback: enIntegrateMessages["streams.title"] }}
-          requiredFields={["stream_count"]}
-          visibleWhen={integrationHasStreams}
-        >
-          <IntegrationStreamsPane />
-        </Tab>
-      ),
+  containers: {
+    [`${INTEGRATION_MODEL}#sections`]: {
+      [INTEGRATION_STREAMS_TAB_ID]: {
+        sequence: 30,
+        content: (
+          <Tab
+            id="streams"
+            label={{ namespace: "integrate", key: "streams.title", fallback: enIntegrateMessages["streams.title"] }}
+            requiredFields={["stream_count"]}
+            visibleWhen={integrationHasStreams}
+          >
+            <IntegrationStreamsPane />
+          </Tab>
+        ),
+      },
     },
-    {
-      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
-      id: INTEGRATION_PAUSE_ACTION_ID,
-      sequence: 11,
-      content: <PauseIntegrationAction />,
+    [`${INTEGRATION_MODEL}#actions`]: {
+      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, content: <PauseIntegrationAction /> },
+      [INTEGRATION_RESUME_ACTION_ID]: { sequence: 12, content: <ResumeIntegrationAction /> },
     },
-    {
-      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
-      id: INTEGRATION_RESUME_ACTION_ID,
-      sequence: 12,
-      content: <ResumeIntegrationAction />,
+    [`${INTEGRATION_MODEL}#actions-menu`]: {
+      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, content: <DisconnectIntegrationAction /> },
+      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, content: <TestConnectionAction /> },
     },
-    {
-      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
-      id: INTEGRATION_DISCONNECT_ACTION_ID,
-      sequence: 13,
-      recordActionPlacement: "menu",
-      content: <DisconnectIntegrationAction />,
-    },
-    {
-      ...formViewRecordActionsSlot(INTEGRATION_MODEL),
-      id: INTEGRATION_TEST_CONNECTION_ACTION_ID,
-      sequence: 14,
-      recordActionPlacement: "menu",
-      content: <TestConnectionAction />,
-    },
-  ],
+  },
   icons: {
     connect: Cable,
     integration: Link2,

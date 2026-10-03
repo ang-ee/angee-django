@@ -1,9 +1,8 @@
 import * as React from "react";
-import { Field, Form, Group, registerForm, slotContents, useSlot, type RegisteredFormProps } from "@angee/ui";
+import { Field, Form, Group, registerForm, containerContents, useContainer, type RegisteredFormProps } from "@angee/ui";
 
 import { usePartiesT } from "./i18n";
 import { usePartyContactActions } from "./party-contact-actions";
-import { PERSON_FORM_FIELDS_SLOT } from "./slots";
 
 const MODEL = "parties.Person";
 
@@ -31,7 +30,7 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
 /** Canonical Person create/edit form reused by routed and polymorphic relation flows. */
 export function PersonForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
-  const extraFields = slotContents(useSlot(PERSON_FORM_FIELDS_SLOT));
+  const extraFields = containerContents(useContainer("parties.person#fields"));
   const contactActions = usePartyContactActions();
   return <Form {...props} resource={MODEL}>
     {personFields(t, extraFields)}

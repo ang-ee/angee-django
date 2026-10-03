@@ -149,7 +149,8 @@ class Runtime:
             sources[root / "models.py"] = render_models(
                 self.composition, label, runtime_module=self.runtime_module,
             )
-        sources.update(WebRuntime(self.addons, runtime_dir=self.runtime_dir).render_sources())
+        web = WebRuntime(self.addons, runtime_dir=self.runtime_dir, ui=getattr(settings, "ANGEE_UI", None))
+        sources.update(web.render_sources())
         sources.update(extension_source_map(self.addons, field_owners=self.composition.field_gate_owners()))
         return sources
 

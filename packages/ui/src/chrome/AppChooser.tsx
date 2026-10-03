@@ -4,7 +4,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -33,7 +33,7 @@ import {
   SETTINGS_MENU_ENTRY_DESCRIPTOR,
   pathMatchesTarget,
 } from "./menu-tree";
-import { useChromeMenuItems } from "./refine-menu";
+import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
 
 export interface AppChooserItem {
   id: string;
@@ -64,34 +64,30 @@ export interface AppChooserProps {
   triggerLabel?: string;
 }
 
-export function AppChooser({
+export function AppChooser({ menuItems, ...props }: AppChooserProps): ReactElement {
+  return <ChromePlaceProvider menuItems={menuItems}><AppChooserBody {...props} /></ChromePlaceProvider>;
+}
+
+function AppChooserBody({
   activeId,
   align = "start",
   className,
   defaultOpen = false,
   items,
-  menuItems,
   searchPlaceholder,
   side = "right",
   sideOffset = 8,
   title,
   trigger,
   triggerLabel,
-}: AppChooserProps): ReactElement {
+}: Omit<AppChooserProps, "menuItems">): ReactElement {
   const t = useUiT();
   const resolvedSearchPlaceholder = searchPlaceholder ?? t("chrome.searchApps");
   const resolvedTitle = title ?? t("chrome.switchApp");
   const resolvedTriggerLabel = triggerLabel ?? t("chrome.switchApp");
-  const runtimeItems = useChromeMenuItems();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
+  const { tree: menuTree, pathname, match } = useChromePlace();
   const [open, setOpen] = useState(defaultOpen);
   const [query, setQuery] = useState("");
-  const menuTree = useMemo(
-    () => MenuTree.from(menuItems ?? runtimeItems),
-    [menuItems, runtimeItems],
-  );
   const resolvedItems = useMemo(
     () => items ?? appChooserItemsFromMenuTree(menuTree, t("chrome.settings")),
     [items, menuTree, t],
@@ -101,11 +97,12 @@ export function AppChooser({
     [query, resolvedItems],
   );
   const groups = useMemo(() => appChooserGroups(visibleItems), [visibleItems]);
-  const activeMenuRoot = menuTree.activeAppRoot(pathname);
+  const activeMenuRoot = match?.trail[0];
   const currentId = activeId ?? (items === undefined
-    ? menuTree.isSettingsActive(pathname)
+    ? activeMenuRoot?.group === "platform"
       ? SETTINGS_MENU_ENTRY_DESCRIPTOR.id
       : activeMenuRoot?.id
+    // Explicit chooser items are app destinations, without a menu trail or preset selection.
     : resolvedItems.find((item) => pathMatchesTarget(pathname, item.to))?.id);
 
   return (

@@ -34,7 +34,7 @@ vi.mock("@angee/messaging", () => ({
   },
 }));
 
-import { RecordNotesStream, recordNotesContribution } from "./RecordNotesStream";
+import { RecordNotesStream, recordNotesTab } from "./RecordNotesStream";
 import { KnowledgeRecordNotes, KnowledgeUpdatePageBody, KnowledgeVault } from "./data/documents";
 
 const target = { modelLabel: "example.Record", recordId: "rec_1" };
@@ -127,10 +127,15 @@ test("empty stream keeps the host hint", () => {
   expect(screen.getByText("Visible to the invited team")).toBeTruthy();
 });
 
-test("contribution renders the same role-scoped stream", () => {
-  const contribution = recordNotesContribution({ id: "record-notes", label: "Notes", role: "notes",
+test("the tab renders the same role-scoped stream", () => {
+  const tab = recordNotesTab({ label: "Notes", role: "notes",
     vault: "vlt_1", heading: { label: "Manager notes", hint: "For managers" } });
+  expect(tab.sequence).toBe(40);
+  const contribution = tab.content;
+  expect(contribution).toMatchObject({ label: "Notes", icon: "notes" });
   expect(contribution.when?.(context)).toBe(true);
+  expect(contribution.when?.({ ...context, view: { kind: "list", type: "example/record" } })).toBe(false);
+  expect(recordNotesTab({ label: "Notes", role: "notes", vault: "vlt_1", when: () => false }).content.when?.(context)).toBe(false);
   render(<>{contribution.render?.(context)}</>);
   expect(screen.getByText("Manager notes")).toBeTruthy();
   expect(screen.getByText(/First note: Details/)).toBeTruthy();

@@ -21,6 +21,7 @@ export {
 } from "./Breadcrumb";
 export { DocumentTitle } from "./DocumentTitle";
 export { ViewAsBanner, ViewAsPicker } from "./ViewAs";
+export { DeveloperMenu, DeveloperModeMenuItem, useDeveloperFieldTitle } from "./DeveloperMode";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
 export {
   AppRailTree,
@@ -54,19 +55,11 @@ export {
   type SpotlightProps,
 } from "./Spotlight";
 export { Systray, type SystrayProps } from "./Systray";
-export {
-  SurfacePresentationProvider,
-  useSurfacePresentation,
-  useSurfaceAdmission,
-  isSurfaceSlotAdmitted,
-  admittedAsideTabs,
-  type SurfaceAdmission,
-  type SurfacePresentation,
-} from "./surface-policy";
 export { TopBar, type TopBarProps } from "./TopBar";
 export {
   TopMenuTabs,
   type TopMenuTabsProps,
   type TopMenuTab,
 } from "./TopMenuTabs";
-export { USER_MENU_ITEMS_SLOT, UserMenu, type UserMenuProps } from "./UserMenu";
+export { UserMenu, type UserMenuProps } from "./UserMenu";
+export { SHELL_CONTAINERS } from "./shell-containers";

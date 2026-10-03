@@ -101,5 +101,5 @@ test("transport errors offer the shared reload action", async () => {
   render(QueryError.render());
   await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy(), { timeout: 10000 });
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-  expect(screen.queryByText("Record not found")).toBeNull();
+  expect(screen.queryByText("Record unavailable")).toBeNull();
 }, 15000);

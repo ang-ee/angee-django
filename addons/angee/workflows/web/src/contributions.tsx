@@ -1,7 +1,7 @@
-import { DECISION_ORIGIN_SLOT, useDecisionContent } from "@angee/decisions";
+import { useDecisionContent } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
-import { lazy } from "react";
-import { ErrorBanner, LazyBoundary, LoadingPanel, MetaSection, TextLink, useRouteHref, type ChatterContribution, type SlotContribution } from "@angee/ui";
+import { lazy, type ReactNode } from "react";
+import { ErrorBanner, LazyBoundary, LoadingPanel, MetaSection, TextLink, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 
 import { DecisionWaitingRunsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -32,14 +32,16 @@ export function DecisionRunOrigin() {
 function RunsTabLabel() { return useWorkflowsT()("runs.title"); }
 
 /** The shell owns record selection and tab lifetime; the runs owner owns the collection. */
-export const workflowsChatter: ChatterContribution = {
-  id: "workflows", sequence: 40, icon: "versions", label: <RunsTabLabel />,
-  when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && !route?.canonicalLabel?.startsWith("workflows."),
-  render: ({ view, route }) => view.sqid && route?.canonicalLabel ? <LazyBoundary pending={<LoadingPanel />}><RunsList embedded baseFilter={{
-    subject_model: { exact: route.canonicalLabel }, subject_id: { exact: view.sqid },
-  }} /></LazyBoundary> : null,
+export const workflowsRunsTab: ContainerChild<ChatterTabContent> = {
+  sequence: 40,
+  content: {
+    icon: "versions", label: <RunsTabLabel />, aliases: ["workflows"],
+    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && !route?.canonicalLabel?.startsWith("workflows."),
+    render: ({ view, route }) => view.sqid && route?.canonicalLabel ? <LazyBoundary pending={<LoadingPanel />}><RunsList embedded baseFilter={{
+      subject_model: { exact: route.canonicalLabel }, subject_id: { exact: view.sqid },
+    }} /></LazyBoundary> : null,
+  },
 };
 
-export const decisionRunOrigin: SlotContribution = {
-  slot: DECISION_ORIGIN_SLOT, id: "workflows.run", content: <DecisionRunOrigin />,
-};
+/** The run a decision waits in, as a `decisions#origin` child. */
+export const decisionRunOrigin: ContainerChild<ReactNode> = { content: <DecisionRunOrigin /> };

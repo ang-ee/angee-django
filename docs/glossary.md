@@ -11,10 +11,15 @@ the smallest accurate statement.
 deterministic product surface. It owns the seams, not the concerns.
 
 **Addon** — the unit of capability. An addon declares a contract (source models,
-operations, routes, slots, resources) that the composer assembles into a project.
+operations, routes, containers, resources) that the composer assembles into a project.
 Everything that gives a product a capability, including its API protocol, is an
 addon. The framework core is not. **Addon** is also the user-facing name;
-**App** is reserved for a domain root in the product rail.
+**App** is reserved for a domain root or an included, non-flattened app in the
+product rail.
+
+**Sub-app** — an app included beneath another app without flattening. The rail
+shows root apps and their sub-apps at most two levels; each app's own menu items
+belong in the top bar.
 
 **Framework core** — Angee's composition language and loom: the data contract,
 composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
@@ -311,13 +316,32 @@ names the technical models, resources, routes, and APIs behind it.
 `iam` is the technical addon, route, model, and i18n namespace.
 
 **`defineAddon`** — the frontend entry point an addon uses to contribute routes,
-views, slots, and other UI to the composition.
+views, container children, and other UI to the composition.
 
 **`createApp`** — the frontend entry point the host uses to compose addons into the
 running app.
 
-**Slot** — an additive extension point in the component tree. Contribute to a slot
-before copying or forking a component.
+**Shell** — the app's home, brand and selected perspective. Product addons
+declare it (`shell`); a dependent overrides its dependencies, and the
+deployment's `ANGEE_UI` pins it last.
+
+**Perspective** — a named confinement: the console shows one menu root and sends
+other console routes home. Declared by an addon, selected by the shell.
+
+**Aggregator** — an addon that places other addons' apps under its own menu root
+(`include`), like the `angee.pm` suite. A **flattened** include shows the app's
+items as the aggregator's own while the app keeps its routes and words.
+
+**Layer** — one composed addon manifest, ordered by its addon dependencies; the
+deployment layer comes last. Menus, containers and the shell resolve layer by
+layer.
+
+**Container** — a named, ordered list on a node that the node's owner renders,
+addressed `node#name` (`form#sections`, `projects.Task#actions`,
+`record#aside`). Its entries are **children**, one addressed
+`node#name/id`. An addon declares children in its own namespace and alters or
+narrows its dependencies' children. Add a child before copying or forking a
+component.
 
 **Token** — a semantic styling value (Tailwind). Theme by overriding tokens rather
 than passing color props or one-off variants.
@@ -344,6 +368,7 @@ a theme rather than a template.
 state, owned by `@angee/ui`.
 
 **Settings place** — the one synthetic console destination that groups all menu
-roots declared with `group:"platform"`. It is the last entry after a separator in
-the rail's single scrolling list, plus one chooser entry; inside it, the expanded
-rail shows the contributing platform trees and a back header.
+roots declared with `group:"platform"`. Its rail entry sits below the scrolling
+list; the chooser exposes one Settings entry. Inside it, the expanded rail shows
+the contributing platform roots and a back header; their menu items live in the
+top bar.

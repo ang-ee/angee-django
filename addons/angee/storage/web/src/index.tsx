@@ -3,7 +3,7 @@
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
-import { Tab, formViewSectionsSlot, useRecordChromeContext, useRecordPeekContext } from "@angee/ui";
+import { Tab, useRecordChromeContext, useRecordPeekContext } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
@@ -53,22 +53,28 @@ const storage = defineBaseAddon({
   routes: storageRoutes,
   menus: storageMenu,
   forms: { "storage.File": fileForm, "storage.Folder": folderForm },
-  slots: [{
-    ...formViewSectionsSlot("storage.File"),
-    id: "storage.file-preview",
-    sequence: 10,
-    content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
-  }],
+  containers: {
+    "storage.File#sections": {
+      "storage.file-preview": {
+        sequence: 10,
+        content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
+      },
+    },
+    "record#aside": {
+      "storage.files": {
+        sequence: 35,
+        content: {
+          label: "Files",
+          icon: "file",
+          aliases: ["files"],
+          when: (context) => context.view.kind === "record" && Boolean(context.route?.modelLabel && context.view.sqid),
+          useCount: useRecordFilesCount,
+          render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
+        },
+      },
+    },
+  },
   i18n: { storage: enStorageMessages },
-  chatter: [{
-    id: "files",
-    sequence: 35,
-    label: "Files",
-    icon: "file",
-    when: (context) => context.view.kind === "record" && Boolean(context.route?.modelLabel && context.view.sqid),
-    useCount: useRecordFilesCount,
-    render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
-  }],
   icons: {
     drive: HardDrive,
     image: Image,

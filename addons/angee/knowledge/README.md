@@ -6,25 +6,26 @@ unbinding use the existing role-keyed mutations, which require write access to
 both the page and target record. A record owner must still contribute its own
 `knowledge/record_binding` read arm; the binding grants no access by itself.
 
-The rendered addon exports `recordPagesContribution({ id, label, role, when,
-sequence })`. A product addon can add a second tab with a specific binding
-role and a route predicate, for example:
+The tab is the `record#aside/knowledge.pages` child. The rendered addon exports
+`recordPagesTab({ label, role, sequence, when, aliases })`, which returns a
+chatter tab child. A product addon can add a second tab with a specific binding
+role on its own model's aside, for example:
 
 ```tsx
-chatter: [recordPagesContribution({
-  id: "reference-pages",
-  label: "Reference pages",
-  role: "reference",
-  when: (context) => context.route?.modelLabel === "example.Record",
-})],
+containers: {
+  "notes.Note#aside": {
+    "notes.reference-pages": recordPagesTab({ label: "Reference pages", role: "reference" }),
+  },
+},
 ```
 
 The configured role is passed to the same binding query and write controls.
-The record owner continues to own the permission arm and any route tab policy.
+The record owner continues to own the permission arm and any narrowing of the
+aside.
 
 For dated, role-scoped notes, use `RecordNotesStream({ target, role, vault,
-heading, composer })` in a record section or `recordNotesContribution({ id,
-label, role, vault, heading, composer, when })` in chatter. `vault` is the public
+heading, composer })` in a record section or `recordNotesTab({ label, role,
+vault, heading, composer, sequence, when })` as an aside child. `vault` is the public
 vault id. The stream reads page content through the binding query and offers its
 inline composer only when the record can be bound and that vault projects `write`.
 It creates a note page, writes its markdown body, then binds it under `role`.

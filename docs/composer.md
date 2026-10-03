@@ -57,6 +57,7 @@ below.
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Atomic writes, drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/fs.py) |
 | Addon migration materialization and dependency projection | [`RuntimeMigrations`](../angee/compose/migrations.py), [`AddonDependencyGroup`](../angee/compose/dependencies.py) |
+| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column in `makemigrations` |
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
@@ -256,6 +257,18 @@ read-only filesystem probe. After a successful build, normal `makemigrations` ma
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
+`makemigrations` never drops a column that still holds data. `angee.compose`
+gives Django's `makemigrations` and `migrate` the shared
+[`DropGuardAutodetector`](../angee/compose/migrations.py), which refuses an
+autodetected `RemoveField` before any file is written when a row differs from
+the field's empty value (NULL, or a non-null field's default) in a database that
+may receive the migration, or when such a database cannot be checked. Empty
+columns drop automatically, so toggling a layer in development stays free.
+Retire populated data with a cutover: an addon runtime migration, declared by an
+addon that stays installed, that preserves or retires the data and removes the
+field. Build materializes it first, so the reviewed removal is never
+autodetected.
+
 Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) for
 the upgrade floor, carried-forward history, and consumer reset authorization.
 
@@ -266,7 +279,8 @@ Keep that post-build boundary; native command loaders and cache invalidation
 allow subsequent database preparation, checks and schema output to share the
 initialized registry. Each command retains its own transactions and failures
 stop later steps. Provision runs `makemigrations --noinput`; missing required
-migration defaults fail immediately so they can be authored before retrying.
+migration defaults and populated column drops fail immediately so their defaults
+or cutovers can be authored before retrying.
 
 ### Composed addon dependencies
 
@@ -349,8 +363,12 @@ error. Discovery does not inspect Python ASTs to predict runtime exports.
 
 `WebRuntime` reads `[web]` declarations, falling back to `web/package.json` for the
 conventional package. It renders `runtime/web/manifest.json` and Tailwind sources
-without importing GraphQL schemas. The frontend codegen owner consumes that
-manifest and SDL to produce `runtime/gql/` and `runtime/web/app.ts`.
+without importing GraphQL schemas. Each package entry lists, as `dependsOn`, the
+web packages its addon depends on transitively (`angee.addons.addon_ancestors`),
+and the deployment's `ANGEE_UI` setting rides along as `deployment`. The frontend
+codegen owner consumes that manifest and SDL to produce `runtime/gql/` and
+`runtime/web/app.ts`, attaching each manifest's ancestry as web ids and appending
+the deployment as the last layer.
 The generated web module exposes `loadComposedSchemas()` for parallel fetches of
 the emitted schema metadata JSON assets. The rendered host passes this loader to
 `@angee/app`'s `bootApp`; it awaits metadata before synchronous `createApp`

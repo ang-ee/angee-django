@@ -1,0 +1,136 @@
+import type { RuntimeBrand } from "@angee/ui/runtime";
+
+import { DEPLOYMENT_LAYER_ID, layerAncestry, mostSpecific, type Layer } from "./layers";
+
+export { DEPLOYMENT_LAYER_ID };
+
+/** Shell facts a product addon declares; a dependent overrides its dependencies field by field. */
+export interface ShellDeclaration {
+  /** Where `/` lands: a route name or an absolute path. */
+  home?: string;
+  brand?: RuntimeBrand;
+  /** The selected perspective id; `null` keeps the full console. */
+  perspective?: string | null;
+}
+
+/** A named confinement: the console shows one menu root and redirects other console routes home. */
+export interface PerspectiveDeclaration {
+  /** The menu root the rail, palette and route guard are confined to. */
+  root: string;
+  /**
+   * Where `/` lands when the deployment pins this perspective. A product that
+   * selects it keeps its own `shell.home`; this is the fallback.
+   */
+  home?: string;
+}
+
+/** The layer facts `resolveShell` reads from each composed manifest. */
+export interface ShellLayer extends Layer {
+  shell?: ShellDeclaration;
+  /** @deprecated Declare `shell.brand`. */
+  brand?: RuntimeBrand;
+  perspectives?: Readonly<Record<string, PerspectiveDeclaration>>;
+}
+
+export interface ResolvedShell {
+  home?: string;
+  brand: RuntimeBrand | null;
+  perspective: ({ id: string } & PerspectiveDeclaration) | null;
+  /** The layer that supplied each resolved field. */
+  provenance: Readonly<Partial<Record<keyof ShellDeclaration, string>>>;
+  /** Why a declared field fell back to the framework default. */
+  diagnostics: readonly string[];
+}
+
+const SHELL_FIELDS = ["home", "brand", "perspective"] as const;
+
+/**
+ * Resolve home, brand and perspective from the composed layers.
+ *
+ * One product is selected atomically: among the addons declaring a shell, the
+ * one no other declarer depends on. Its own declaration and its ancestors'
+ * merge field by field, the nearest declarer winning. Unrelated products, or
+ * unrelated ancestors of the selected product setting one field, fall back to
+ * the framework default instead of failing; the deployment layer applies last.
+ */
+export function resolveShell(
+  layers: readonly ShellLayer[],
+  ancestors: ReadonlyMap<string, ReadonlySet<string>> = layerAncestry(layers),
+): ResolvedShell {
+  const perspectives = new Map<string, PerspectiveDeclaration>();
+  for (const layer of layers) {
+    for (const [id, perspective] of Object.entries(layer.perspectives ?? {})) {
+      if (perspectives.has(id)) throw new Error(`Addon "${layer.id}" redefines perspective "${id}".`);
+      if (!perspective.root?.trim()) throw new Error(`Perspective "${id}" of addon "${layer.id}" declares no menu root.`);
+      perspectives.set(id, perspective);
+    }
+  }
+  const declarations = new Map<string, ShellDeclaration>();
+  for (const layer of layers) {
+    if (layer.brand && layer.shell?.brand) {
+      throw new Error(`Addon "${layer.id}" declares both brand and shell.brand; keep shell.brand.`);
+    }
+    const shell = layer.brand ? { ...layer.shell, brand: layer.brand } : layer.shell;
+    if (shell?.brand && (!shell.brand.name.trim() || !shell.brand.mark.trim())) {
+      throw new Error(`Addon "${layer.id}" declares an empty brand name or mark.`);
+    }
+    if (shell && Object.keys(shell).length) declarations.set(layer.id, shell);
+  }
+
+  const resolved: { [K in keyof ShellDeclaration]?: ShellDeclaration[K] } = {};
+  const provenance: Partial<Record<keyof ShellDeclaration, string>> = {};
+  const diagnostics: string[] = [];
+  const deployment = declarations.get(DEPLOYMENT_LAYER_ID);
+  declarations.delete(DEPLOYMENT_LAYER_ID);
+  const products = mostSpecific([...declarations.keys()], ancestors);
+  if (products.length > 1) {
+    diagnostics.push(`Unrelated products ${products.join(", ")} declare a shell; pin one in ANGEE_UI.`);
+  } else if (products.length === 1) {
+    const product = products[0]!;
+    const chain = [...declarations.keys()].filter((id) => id === product || ancestors.get(product)!.has(id));
+    for (const field of SHELL_FIELDS) {
+      const winners = mostSpecific(chain.filter((id) => declarations.get(id)![field] !== undefined), ancestors);
+      if (winners.length > 1) {
+        diagnostics.push(`Unrelated layers ${winners.join(", ")} set shell.${field}; ${product} or ANGEE_UI decides.`);
+      } else if (winners.length === 1) {
+        assign(resolved, field, declarations.get(winners[0]!)![field]);
+        provenance[field] = winners[0]!;
+      }
+    }
+  }
+  for (const field of SHELL_FIELDS) {
+    if (deployment?.[field] === undefined) continue;
+    assign(resolved, field, deployment[field]);
+    provenance[field] = DEPLOYMENT_LAYER_ID;
+  }
+
+  let perspective: ResolvedShell["perspective"] = null;
+  if (typeof resolved.perspective === "string") {
+    const declared = perspectives.get(resolved.perspective);
+    if (!declared) throw new Error(`Shell selects unknown perspective "${resolved.perspective}".`);
+    perspective = { id: resolved.perspective, ...declared };
+  }
+  // A pinned perspective brings its home; one a product selects defers to the
+  // product chain's shell.home, so a product layered on a bundle can move home.
+  const pinned = provenance.perspective === DEPLOYMENT_LAYER_ID ? perspective?.home : undefined;
+  const home = deployment?.home ?? pinned ?? resolved.home ?? perspective?.home;
+  if (deployment?.home === undefined && perspective?.home !== undefined && home === perspective.home
+    && (pinned !== undefined || resolved.home === undefined)) {
+    provenance.home = provenance.perspective!;
+  }
+  return {
+    ...(home !== undefined ? { home } : {}),
+    brand: resolved.brand ?? null,
+    perspective,
+    provenance,
+    diagnostics,
+  };
+}
+
+function assign<K extends keyof ShellDeclaration>(
+  target: { [F in keyof ShellDeclaration]?: ShellDeclaration[F] },
+  field: K,
+  value: ShellDeclaration[K],
+): void {
+  target[field] = value;
+}

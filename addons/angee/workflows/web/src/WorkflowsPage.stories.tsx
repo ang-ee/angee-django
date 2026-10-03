@@ -5,7 +5,7 @@ import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storyboo
 import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { WorkflowsPage } from "./WorkflowsPage";
-import { workflowsChatter } from "./contributions";
+import { workflowsRunsTab } from "./contributions";
 import { workflowFixture, workflowVersionFixture } from "./catalogue/testing";
 import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture, stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture } from "./testing";
 import { triggerFixture, triggerResourceFixture } from "./trigger-testing";
@@ -75,7 +75,7 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
   }, [unavailable, queryError, onRequest, writer]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows"
     initialEntry={list ? "/workflows" : "/workflows/wfl_review"} runtime={runtime} resourceName="workflows.Workflow" resourceLabel="Workflows" operationDocuments={documents}>
-    {record ? workflowsChatter.render?.({ pathname: "/notes/nte_7", params: { id: "nte_7" },
+    {record ? workflowsRunsTab.content.render?.({ pathname: "/notes/nte_7", params: { id: "nte_7" },
       route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", canonicalLabel: "notes.Note" },
       view: { kind: "record", type: "notes/note", sqid: "nte_7" },
     }) : <WorkflowsPage />}

@@ -1,11 +1,11 @@
 import * as React from "react";
 
-import { SlotOutlet } from "../../lib/slot-outlet";
-import { makeContext, useSlot, type SlotContribution } from "../../runtime";
+import { ContainerOutlet } from "../../lib/container-outlet";
+import { useModelMetadata } from "@angee/metadata";
+
+import { makeContext, modelChain, useContainer, type ComposedContainerChild } from "../../runtime";
 import { useRecordChromeContextMaybe, type RecordChromeContext } from "./record-chrome-context";
 import type { ResourceViewFilter } from "./resource-view-model";
-
-export const RESOURCE_VIEW_UTILITIES_SLOT = "resource-view.utilities";
 
 export interface ResourceViewUtilityContext {
   resource: string;
@@ -28,19 +28,11 @@ export function useResourceViewUtilityContext(): ResourceViewUtilityContext {
   return ResourceViewUtilityContextBinding.use();
 }
 
-export function useResourceViewUtilities(resource: string): readonly SlotContribution[] {
-  const entries = useSlot(RESOURCE_VIEW_UTILITIES_SLOT);
-  return React.useMemo(() => {
-    const result = entries.filter((entry) => entry.model === undefined || entry.model === resource);
-    const ids = new Set<string>();
-    for (const entry of result) {
-      if (ids.has(entry.id)) {
-        throw new Error(`Resource view utility "${entry.id}" is contributed more than once for "${resource}".`);
-      }
-      ids.add(entry.id);
-    }
-    return result;
-  }, [entries, resource]);
+/** The `resource#utilities` children for one collection's model and its MTI parent. */
+export function useResourceViewUtilities(resource: string): readonly ComposedContainerChild[] {
+  const canonical = useModelMetadata(resource)?.resource.canonicalLabel;
+  const models = React.useMemo(() => modelChain(canonical, resource), [canonical, resource]);
+  return useContainer("resource#utilities", { models });
 }
 
 export function ResourceViewUtilities({
@@ -58,17 +50,7 @@ export function ResourceViewUtilities({
   if (entries.length === 0) return null;
   return (
     <ResourceViewUtilityContextBinding.Provider value={context}>
-      <SlotOutlet entries={entries} />
+      <ContainerOutlet entries={entries} />
     </ResourceViewUtilityContextBinding.Provider>
   );
-}
-
-export function resourceViewUtilitiesSlot(model?: string): {
-  slot: typeof RESOURCE_VIEW_UTILITIES_SLOT;
-  model?: string;
-} {
-  return {
-    slot: RESOURCE_VIEW_UTILITIES_SLOT,
-    ...(model ? { model } : {}),
-  };
 }

@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  Column,
+  Field,
   pageChildren,
   pageElementProps,
   parsePageColumns,
@@ -15,13 +17,16 @@ vi.mock("../i18n", () => ({
   useTagsT: () => (key: string) => key,
 }));
 
+// The page is called as a plain function to read its declarations, so its container reads are stubbed per address.
+const contributed = vi.hoisted(() => ({ byAddress: {} as Record<string, readonly { content: unknown }[]> }));
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useSlot: () => [],
+    useContainer: (address: string) => contributed.byAddress[address] ?? [],
   };
 });
+afterEach(() => { contributed.byAddress = {}; });
 
 import { TagsPage } from "./TagsPage";
 
@@ -54,5 +59,16 @@ describe("TagsPage", () => {
       "color",
       "is_archived",
     ]);
+  });
+
+  test("places scope contributions from tags.tags#columns and #fields beside the base declarations", () => {
+    contributed.byAddress = {
+      "tags.tags#columns": [{ content: <Column field="scope" /> }],
+      "tags.tags#fields": [{ content: <Field name="scope" /> }],
+    };
+    const { listChildren, formChildren } = pageDeclarationChildren();
+
+    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "color", "scope", "updated_at"]);
+    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "color", "scope", "is_archived"]);
   });
 });

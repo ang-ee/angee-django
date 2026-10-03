@@ -23,5 +23,6 @@ definition storage/file {
 
 The model owner decides record read/write permissions. Storage checks the
 effective arm before accepting a record upload, and the tab uses the existing
-`file_upload_begin` record target with `visibility: RECORD`. Record routes can
-admit `files` through their chatter tab policy when they opt into the aside.
+`file_upload_begin` record target with `visibility: RECORD`. The tab is the
+`record#aside/storage.files` child (`?chatterTab=files` still selects it); a product
+narrowing `record#aside` with `only` keeps it by listing `storage.files`.

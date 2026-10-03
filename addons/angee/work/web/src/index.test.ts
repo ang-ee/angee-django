@@ -64,7 +64,7 @@ describe("work addon manifest", () => {
       "work.boards-hub",
       "work.cycles-hub",
     ]);
-    expect(work.slots?.map((slot) => slot.id)).toEqual([
+    expect(containerChildren(work.containers).map(([id]) => id)).toEqual([
       "work.manager",
       "work.people-rail",
       "work.project-team",
@@ -85,3 +85,9 @@ describe("work addon manifest", () => {
     ]);
   });
 });
+
+/** The manifest's container children, keyed by id, in declaration order. */
+function containerChildren(containers: object | undefined): [string, { content?: unknown }][] {
+  return Object.values(containers ?? {}).flatMap((entry) => (Array.isArray(entry) ? entry : [entry]) as Record<string, unknown>[])
+    .flatMap((entry) => Object.entries(entry).filter(([id]) => id.includes(".")) as [string, { content?: unknown }][]);
+}

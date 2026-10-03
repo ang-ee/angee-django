@@ -1,11 +1,10 @@
 import * as React from "react";
-import { Column, ResourceList, List, SlotOutlet, useSlot } from "@angee/ui";
+import { ActionMenu, Column, ContainerOutlet, ResourceList, List, containerHasContent, useContainer } from "@angee/ui";
 import { IntegrationSyncColumns } from "@angee/integrate";
 
 import { channelForm } from "./ChannelForm";
 import { CHANNEL_MODEL } from "./documents";
 import { useMessagingT } from "./i18n";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 /**
  * Connected message channels. Channels are created through bespoke connect flows
@@ -14,12 +13,16 @@ import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
  */
 export function ChannelsPage(): React.ReactElement {
   const t = useMessagingT();
-  const toolbarEntries = useSlot(MESSAGING_CHANNEL_TOOLBAR_SLOT);
+  const toolbarEntries = useContainer("messaging.channels#toolbar");
   return (
     <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={
-      <SlotOutlet entries={toolbarEntries} />
+      containerHasContent(toolbarEntries) ? (
+        <ActionMenu label={t("channel.connect.menu")} glyph="plus" variant="primary" size="sm">
+          <ContainerOutlet entries={toolbarEntries} />
+        </ActionMenu>
+      ) : null
     }>
-      <List resource={CHANNEL_MODEL}>
+      <List resource={CHANNEL_MODEL} defaultGroups={{ list: { field: "backend_class" } }}>
         <Column field="display_name" header={t("channel.name")} />
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtime_status" widget="colorDot" />

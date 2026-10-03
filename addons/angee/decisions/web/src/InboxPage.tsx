@@ -14,7 +14,7 @@ import { parseFormSpecPayload } from "@angee/ui";
 import { DecisionContext } from "./DecisionContext";
 import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.console";
 import { useDecisionsT } from "./i18n";
-import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./slots";
+import { DecisionContentOutlet, DecisionContentProvider, DecisionOriginOutlet, useDecisionContentEntries } from "./content";
 
 /** Start with my open seats; server-owned authority also finds delegated seats. */
 export function InboxPage(): ReactElement {
@@ -173,7 +173,7 @@ function DecisionAnswer({ schema, resolution }: { schema: unknown; resolution: u
   </section>;
 }
 
-/** Lazy retained context composes consumer slots in the record tab and action form. */
+/** Lazy retained context composes content children in the record tab and action form. */
 function DecisionDetails({ recordId, editing = false }: Pick<RecordPanelContext, "recordId"> & { editing?: boolean }): ReactElement {
   const t = useDecisionsT();
   const query = useAuthoredQuery(DecisionDocument, { id: recordId }, { models: DECISION_MODELS });

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { composeAddons } from "@angee/app";
 import { refineResourceName, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
@@ -11,7 +12,6 @@ import {
   ToastProvider,
   baseIcons,
   defaultWidgets,
-  formViewSectionsSlot,
   RECORD_TAB_SEARCH_KEY,
   routeSearchParam,
   updateRouteSearch,
@@ -86,6 +86,10 @@ const resources = [...[INTEGRATION_MODEL, "messaging.Channel", CHILD_MODEL].map(
 })];
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://integration-streams" });
+const STREAMS_ADDRESS = `${INTEGRATION_MODEL}#sections`;
+const composedContainers = composeAddons([integrate], { canonicalModelLabel: (model) => model }).containers;
+// Only integrate's Streams section: its lifecycle verbs are not this suite's subject.
+const containers = { ...composedContainers, children: { [STREAMS_ADDRESS]: composedContainers.children[STREAMS_ADDRESS] ?? [] } };
 const CursorSummary = integrationSyncCursorWidget.read;
 
 beforeEach(() => {
@@ -120,7 +124,6 @@ function renderIntegration(resource = INTEGRATION_MODEL, streamCount: number | n
       } } };
     }),
   } satisfies RefineTestDataProvider;
-  const target = formViewSectionsSlot(INTEGRATION_MODEL);
   const router = createRouter({
     routeTree: createRootRoute({
       validateSearch: (search: Record<string, unknown>) => search,
@@ -131,7 +134,7 @@ function renderIntegration(resource = INTEGRATION_MODEL, streamCount: number | n
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{
           widgets: { ...defaultWidgets, ...integrate.widgets },
           icons: { ...baseIcons, ...integrate.icons },
-          slots: (integrate.slots ?? []).filter((entry) => entry.slot === target.slot),
+          containers,
         }}>
           <FormView resource={resource} id={saved ? "bridge_1" : null}
             recordTab={routeSearchParam(search, RECORD_TAB_SEARCH_KEY)}

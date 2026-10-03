@@ -3,7 +3,7 @@ import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Badge, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
-  ImplementationDetails, InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs,
+  InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs,
   deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId,
 } from "@angee/ui";
 
@@ -109,7 +109,6 @@ export function ImplementationDetail(): ReactElement {
               </DetailSection>
             </Tabs.Panel>
           </Tabs>
-          <ImplementationDetails value={{ model: implementation.model, field: implementation.field, choice: implementation }} />
         </>
       ) : null}
     </DetailSurface>

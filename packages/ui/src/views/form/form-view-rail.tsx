@@ -1,7 +1,7 @@
 import * as React from "react";
 import { holdsPermission, type ModelMetadata, type Row } from "@angee/metadata";
 
-import type { SlotContribution } from "../../runtime";
+import type { ComposedContainerChild } from "../../runtime";
 import { pageChildren, type FieldDescriptor } from "../page";
 
 export interface RecordRailField {
@@ -21,17 +21,20 @@ export interface RecordRailGroupProps {
   fields?: readonly RecordRailField[];
   /** A capability owner may place a richer panel after its field rows. */
   content?: React.ReactNode;
+  /** The contributing child's permission, required alongside the group's own. */
+  childPermission?: string;
 }
 
-/** Declaration consumed from the model-scoped record rail slot. */
+/** Declaration consumed from the record rail container (`form#rail`, `<model>#rail`). */
 export function RecordRailGroup(_props: RecordRailGroupProps): null {
   return null;
 }
 
-export function recordRailGroups(entries: readonly SlotContribution[]): readonly RecordRailGroupProps[] {
+export function recordRailGroups(entries: readonly ComposedContainerChild[]): readonly RecordRailGroupProps[] {
+  // A child's permission gates every group it declares, together with the group's own.
   const groups = entries.flatMap((entry) => pageChildren(entry.content as React.ReactNode).flatMap((child) =>
     React.isValidElement<RecordRailGroupProps>(child) && child.type === RecordRailGroup
-      ? [child.props]
+      ? [entry.permission === undefined ? child.props : { ...child.props, childPermission: entry.permission }]
       : [],
   ));
   const seen = new Set<string>();
@@ -51,6 +54,7 @@ export function visibleRecordRailGroups(
   if (!record) return [];
   return groups.flatMap((group) => {
     if (group.permission && !holdsPermission(record, group.permission)) return [];
+    if (group.childPermission && !holdsPermission(record, group.childPermission)) return [];
     const fields = (group.fields ?? []).filter(({ field, permission }) =>
       !field.hidden
       && (!permission || holdsPermission(record, permission))

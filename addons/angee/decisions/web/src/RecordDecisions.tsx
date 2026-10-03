@@ -1,8 +1,5 @@
 import type { ResourceFilter } from "@angee/metadata";
-import {
-  ListView, Tab,
-  formViewSectionsSlot, useRecordChromeContext,
-} from "@angee/ui";
+import { ListView, Tab, useRecordChromeContext } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import { useDecisionsT } from "./i18n";
@@ -31,10 +28,13 @@ function DecisionsLabel(): ReactElement {
   return <>{t("decisions.label")}</>;
 }
 
-/** An addon opts a subject model into the generic Decision.subject tab. */
-export function decisionRecordTab(resource: string) {
+/**
+ * The generic Decision.subject tab, for a subject model's `#sections`: an addon
+ * opts its model in under its own id, `"<addon>.decisions"`.
+ */
+export function decisionRecordTab() {
   return {
-    ...formViewSectionsSlot(resource), id: `decisions.subject.${resource}`, sequence: 50,
+    sequence: 50,
     content: <Tab id="decisions" label={<DecisionsLabel />}><RecordDecisions /></Tab>,
   };
 }

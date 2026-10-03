@@ -36,6 +36,7 @@ import {
   resourceViewKindCapabilities,
 } from "../views/resource/resource-view-model";
 import { groupFieldLabel } from "../views/resource/resource-view-list-body";
+import { useResourceViewKindContent, useResourceViewKinds } from "../views/resource/resource-view-kinds";
 import { labelText } from "../views/resource/resource-view-utils";
 import {
   FilterClauseEditor,
@@ -163,18 +164,6 @@ export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKi
   onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
 }
 
-/** Per-kind switcher chrome — the label key + glyph, keyed by kind. */
-const RESOURCE_VIEW_KIND_SWITCHER: Record<
-  ResourceViewKind,
-  { labelKey: string; icon: string }
-> = {
-  list: { labelKey: "resourceToolbar.listView", icon: "list" },
-  board: { labelKey: "resourceToolbar.boardView", icon: "grid-2x2" },
-  calendar: { labelKey: "resourceToolbar.calendarView", icon: "calendar" },
-  gantt: { labelKey: "resourceToolbar.ganttView", icon: "chart-gantt" },
-  dashboard: { labelKey: "resourceToolbar.dashboardView", icon: "chart-no-axes-combined" },
-};
-
 const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
 const PRIMARY_GROUP_GRANULARITIES = new Set<ResourceViewGroupGranularity>([
   "year",
@@ -249,7 +238,7 @@ export function ResourceToolbar({
   const resolvedCreateLabel = createLabel ?? t("resourceToolbar.create");
   // The active kind's applicability gates the data controls: the calendar shows
   // none of filter/pager/group-by; a surface that names no kind keeps them all.
-  const capabilities = resourceViewKindCapabilities(view);
+  const capabilities = resourceViewKindCapabilities(view, useResourceViewKindContent(view)?.capabilities);
   const groupControls =
     capabilities.grouping &&
     (groupOptions !== undefined ||
@@ -1068,6 +1057,7 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
   onFavoriteSelect,
 }: ResourceViewSwitcherProps<TView>): ReactElement | null {
   const t = useUiT();
+  const viewKinds = useResourceViewKinds();
   const options = mode === "layout"
     ? [
         {
@@ -1081,11 +1071,15 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
           icon: "layout-grid",
         },
       ]
-    : (kinds ?? DEFAULT_SWITCHER_KINDS).map((kind) => ({
-        value: kind as TView,
-        label: t(RESOURCE_VIEW_KIND_SWITCHER[kind].labelKey),
-        icon: RESOURCE_VIEW_KIND_SWITCHER[kind].icon,
-      }));
+    : (kinds ?? DEFAULT_SWITCHER_KINDS).flatMap((kind) => {
+        // The collection's `#views` declare each kind's label and glyph.
+        const content = viewKinds.get(kind);
+        return content ? [{
+          value: kind as TView,
+          label: content.labelKey ? t(content.labelKey) : content.label ?? kind,
+          icon: content.icon,
+        }] : [];
+      });
   if (mode === "resource" && options.length <= 1) return null;
   return (
     <div

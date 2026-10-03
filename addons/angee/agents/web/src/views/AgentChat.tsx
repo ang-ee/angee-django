@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Alert, Badge, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, SlotOutlet, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, optionToken, useStatusTone, textRoleVariants, useModelSlot } from "@angee/ui";
+import { ActionMenu, ActionTrigger, Alert, Badge, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, useStatusTone, textRoleVariants } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -19,7 +19,7 @@ import { code } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
 import { useAcpRuntime, type AcpRuntime } from "../useAcpRuntime";
-import { AGENT_CHAT_SLOT, AgentChatProvider, useAgentChatContext, type AgentChatProps } from "../chat-slot";
+import { AgentChatProvider, useAgentChatContext, type AgentChatProps } from "../chat-context";
 import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";
@@ -41,25 +41,19 @@ import type { AgentChatView, McpServerConfig } from "../documents";
  * loads or for a default agent not yet in the list.
  */
 export function AgentChat(props: AgentChatProps): React.ReactElement {
-  const target = React.useMemo(() => ({
-    slot: AGENT_CHAT_SLOT,
-    model: "agents.Agent",
-    impl: optionToken(props.runtimeClass),
-  }), [props.runtimeClass]);
-  const entries = useModelSlot(target);
   if (props.runtimeClass === undefined) {
     return <div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />;
   }
   return (
     <AgentChatProvider value={props}>
       <LazyBoundary pending={<div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />}>
-        {entries.length > 0 ? <SlotOutlet entries={entries} /> : <AcpAgentChat />}
+        <AcpAgentChat />
       </LazyBoundary>
     </AgentChatProvider>
   );
 }
 
-/** The default chat for every ACP endpoint; runtime-owned transports may fill the slot. */
+/** The chat for every agent: each speaks ACP. */
 export function AcpAgentChat({ protocolVersion }: { protocolVersion?: 1 | 2 } = {}): React.ReactElement {
   const props = useAgentChatContext();
   const runtimeState = useAcpRuntime({ agentId: props.agentId, view: props.view, knownSessionId: props.sessionId,
@@ -151,43 +145,29 @@ function AgentChatContent({
             </>
           }
           end={
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                aria-label={t("chat.conversationOptions")}
-                className={buttonVariants({ variant: "ghost", size: "iconSm" })}
-              >
-                <Glyph name="more-horizontal" />
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Positioner side="bottom" align="end" sideOffset={4}>
-                  <DropdownMenu.Content>
-                    <DropdownMenu.Item onClick={() => setSettingsOpen(true)}>
-                      <Glyph name="settings" />
-                      <span className="flex-1 truncate">{t("chat.settings")}</span>
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item onClick={reconnect}>
-                      <Glyph name="link" />
-                      <span className="flex-1 truncate">{t("chat.reconnect")}</span>
-                    </DropdownMenu.Item>
-                    {/* Clear is destructive → last, after a separator. */}
-                    <DropdownMenu.Separator />
-                    <DropdownMenu.Item variant="danger" onClick={clear}>
-                      <Glyph name="trash" />
-                      <span className="flex-1 truncate">{t("chat.clear")}</span>
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Positioner>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+            <ActionMenu label={null} aria-label={t("chat.conversationOptions")}
+              glyph="more-horizontal" size="iconSm" align="end">
+              <ActionTrigger glyph="settings" onClick={() => setSettingsOpen(true)}>
+                {t("chat.settings")}
+              </ActionTrigger>
+              <ActionTrigger glyph="link" onClick={reconnect}>
+                {t("chat.reconnect")}
+              </ActionTrigger>
+              {/* Clear is destructive → last, after a separator. */}
+              <DropdownMenu.Separator />
+              <ActionTrigger variant="danger" glyph="trash" onClick={clear}>
+                {t("chat.clear")}
+              </ActionTrigger>
+              <SettingsDialog
+                open={settingsOpen}
+                onOpenChange={setSettingsOpen}
+                modelHandle={effectiveModelHandle}
+                view={view}
+                mcpServers={mcpServers}
+                renderContext={renderContext}
+              />
+            </ActionMenu>
           }
-        />
-        <SettingsDialog
-          open={settingsOpen}
-          onOpenChange={setSettingsOpen}
-          modelHandle={effectiveModelHandle}
-          view={view}
-          mcpServers={mcpServers}
-          renderContext={renderContext}
         />
         {error !== null ? (
           <Alert tone="danger" className="m-3">

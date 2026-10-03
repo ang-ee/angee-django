@@ -71,12 +71,6 @@ export {
   type RelationCreateConfig,
 } from "./relation/RelationPicker";
 export {
-  IMPLEMENTATION_DETAIL_SLOT,
-  ImplementationDetails,
-  useImplementationDetailContext,
-  type ImplementationDetailContext,
-} from "./relation/implementation-details";
-export {
   MutationDialog,
   type MutationDialogParseValues,
   type MutationDialogProps,
@@ -109,7 +103,6 @@ export {
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
 export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
-export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   useActionForm,
   type UseActionFormOptions,
@@ -253,13 +246,7 @@ export {
   SectionHeading,
   RecordRailGroup,
   acknowledgeFormSubmit,
-  FORM_VIEW_RECORD_ACTIONS_SLOT,
-  FORM_VIEW_RECORD_CHROME_SLOT,
-  FORM_VIEW_RAIL_SLOT,
-  FORM_VIEW_SECTIONS_SLOT,
-  formViewRailSlot,
-  formViewRecordActionsSlot,
-  formViewSectionsSlot,
+  FORM_CONTAINERS,
   type FormViewProps,
   type SectionHeadingProps,
   type RecordRailField,
@@ -391,9 +378,7 @@ export {
 export * from "./resource/resource-view-model";
 export * from "./resource/resource-view-context";
 export {
-  RESOURCE_VIEW_UTILITIES_SLOT,
   ResourceViewUtilities,
-  resourceViewUtilitiesSlot,
   useResourceViewUtilities,
   useResourceViewUtilityContext,
   type ResourceViewUtilityContext,
@@ -457,3 +442,10 @@ export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
 export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";
 export { GanttLane, type GanttLaneDetails, type GanttLanePerson } from "./gantt/gantt-lane";
 export type { GanttViewSpec } from "./resource/resource-view-types";
+export {
+  RESOURCE_CONTAINERS,
+  ResourceViewKindsProvider,
+  useOfferedResourceViewKinds,
+  useResourceViewKindContent,
+  useResourceViewKinds,
+} from "./resource/resource-view-kinds";

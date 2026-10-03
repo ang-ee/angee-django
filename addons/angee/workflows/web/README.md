@@ -19,9 +19,10 @@ the stack traces returned by the backend's field policy.
 Trigger enablement uses the same action confirmation surface to show prospective
 principal grants and workflow run readers from the server's authorized preview.
 
-Workflows contributes the waiting run to the decisions origin slot. Records gain
-a separate Workflows chatter tab scoped by model label and public ID. The existing
-activity feed has no contribution slot, so these runs are not merged into that feed.
+Workflows contributes the waiting run as a `decisions#origin` child. Records gain
+a separate Workflows chatter tab (`record#aside/workflows.runs`) scoped by model
+label and public ID. The existing activity feed takes no contributed entries, so
+these runs are not merged into that feed.
 Routed `ResourceList` declarations own collection state, filters, grouping, paging
 and the `Form` record frame. Catalogue versions and the shared runs list render in
 record tabs; contextual run collections reuse that same runs declaration.
