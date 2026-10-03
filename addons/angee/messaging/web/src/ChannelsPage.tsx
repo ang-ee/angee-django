@@ -19,7 +19,7 @@ export function ChannelsPage(): React.ReactElement {
     <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={
       <SlotOutlet entries={toolbarEntries} />
     }>
-      <List resource={CHANNEL_MODEL}>
+      <List resource={CHANNEL_MODEL} defaultGroups={{ list: { field: "backend_class" } }}>
         <Column field="display_name" header={t("channel.name")} />
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtime_status" widget="colorDot" />

@@ -56,23 +56,13 @@ describe("defineChannelBridgeAddon live bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Link Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
       instructionKey: "channel.example.scan",
     });
     const recordSlot = formViewRecordActionsSlot(CHANNEL_MODEL, "example");
     expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
 
-    expect(manifest.menus?.[0]).toMatchObject({
-      id: "messaging.example",
-      label: "Example",
-      parentId: "messaging",
-      route: "messaging.channels",
-    });
+    expect(manifest.menus).toBeUndefined();
     expect(manifest.slots).toMatchObject([
       {
         slot: MESSAGING_CHANNEL_TOOLBAR_SLOT,
@@ -113,12 +103,7 @@ describe("defineChannelBridgeAddon live bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Link Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
       instructionKey: "channel.example.scan",
       disconnectAction: override,
     });
@@ -132,12 +117,7 @@ describe("defineChannelBridgeAddon live bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Link Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
     });
 
     render(manifest.slots?.[1]?.content as React.ReactElement);
@@ -157,12 +137,7 @@ describe("defineChannelBridgeAddon live bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Link Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
     });
     const pairing = manifest.slots?.slice(1, 4).map((entry) =>
       (entry.content as React.ReactElement<{
@@ -197,12 +172,7 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Sync Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
       recordActions: [
         { id: "messaging-integrate-example.credential", sequence: 20, content: <span>Update credential</span> },
       ],
@@ -222,21 +192,11 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
       key: "example",
       sequence: 22,
       connectAction: <span>Connect example</span>,
-      i18n: {
-        messaging: {
-          "channel.example.menu.label": "Example",
-          "channel.example.menu.description": "Sync Example accounts",
-        },
-      },
+      i18n: { messaging: {} },
     });
     expect(() => expectValidChannelBridgeAddon(manifest)).not.toThrow();
 
-    expect(manifest.menus?.[0]).toMatchObject({
-      id: "messaging.example",
-      label: "Example",
-      route: "messaging.channels",
-      description: "Sync Example accounts",
-    });
+    expect(manifest.menus).toBeUndefined();
     expect(manifest.slots?.map(({ slot, id, sequence }) => ({ slot, id, sequence }))).toEqual([
       {
         slot: MESSAGING_CHANNEL_TOOLBAR_SLOT,
@@ -244,19 +204,5 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
         sequence: 22,
       },
     ]);
-  });
-
-  test("fails fast when required vendor menu copy is missing", () => {
-    expect(() =>
-      defineChannelPollBridgeAddon({
-        id: "messaging-integrate-example",
-        key: "example",
-        sequence: 22,
-        connectAction: <span>Connect example</span>,
-        i18n: { messaging: { "channel.example.menu.label": "Example" } },
-      }),
-    ).toThrowError(
-      "Channel bridge example is missing i18n message channel.example.menu.description.",
-    );
   });
 });
