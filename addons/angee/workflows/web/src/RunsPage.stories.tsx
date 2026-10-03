@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
@@ -6,7 +6,7 @@ import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
+import { runFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture, stepDecisionResourceFixture } from "./testing";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
 
@@ -54,11 +54,12 @@ const runtime = {
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
 export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
-  run, steps, children, evidence = [], onRequest }: {
+  run, steps, children, evidence = [], onRequest, content }: {
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
   onRequest?: (request: RunRequest) => void;
+  content?: ReactNode;
 }) {
   const schemas = useMemo(() => {
     let current = run ?? runFixture();
@@ -114,6 +115,10 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
         return jsonResponse({ data: { steprun: currentSteps.slice(offset, offset + limit), steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
       }
       if (query.includes("steprun_aggregate")) return jsonResponse({ data: { steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
+      if (/\bdecisions(?:\s*\(|\s*\{)/.test(query)) return jsonResponse({ data: {
+        decisions: [{ id: "dcn_review", kind: "review", verdict: "PENDING", resolved_at: null }],
+        decisions_aggregate: { aggregate: { count: 1 } },
+      } });
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [{
         key: { status: current.status, origin: current.origin, version__workflow_id: current.version?.workflow?.id,
           version__workflow__name: current.version?.workflow?.name },
@@ -126,12 +131,12 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, runEvidenceResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
-      triggerEventResourceFixture, watchResourceFixture,
+      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
     initialEntry={list ? "/workflows/runs" : "/workflows/runs/wfr_review"} runtime={runtime}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>
-    <RunsPage />
+    {content ?? <RunsPage />}
   </RoutedRuntimeFixture>;
 }

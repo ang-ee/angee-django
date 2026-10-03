@@ -4,9 +4,33 @@ import { afterEach, beforeAll, expect, test } from "vitest";
 
 import { Recovery, Waiting, RunStory, type RunRequest } from "./RunsPage.stories";
 import { runFixture, stepRunFixture } from "./testing";
+import { StepRuns } from "./StepRuns";
 
 beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(cleanup);
+
+test("node-scoped step evidence keeps the run filter and selects parent plus item rows", async () => {
+  const requests: RunRequest[] = [];
+  render(<RunStory content={<StepRuns runId="wfr_review" nodeKeys={["inspect", "inspect.body"]} />}
+    onRequest={(request) => requests.push(request)} />);
+  await screen.findByRole("button", { name: "Open Inspect source" });
+  expect(requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where).toEqual({ _and: [
+    { run: { _eq: "wfr_review" } }, { node_key: { _in: ["inspect", "inspect.body"] } },
+  ] });
+});
+
+test("step checkpoint and linked decisions compose the existing form and list", async () => {
+  const requests: RunRequest[] = [];
+  render(<RunStory onRequest={(request) => requests.push(request)} />);
+  const step = await openStep();
+  expect(await within(step).findByText("Checkpoint")).toBeTruthy();
+  await waitFor(() => expect(step.textContent).toContain("page-2"));
+  fireEvent.click(within(step).getByRole("tab", { name: "Decisions" }));
+  expect(await within(step).findByText("review")).toBeTruthy();
+  expect(requests.find(({ query }) => /\bdecisions\s*\(/.test(query))?.variables.where).toEqual({ _and: [
+    { group__step_run: { _eq: "wsr_inspect" } },
+  ] });
+});
 
 async function action(label: string, scope: HTMLElement = document.body) {
   if (label === "Reprocess run") {

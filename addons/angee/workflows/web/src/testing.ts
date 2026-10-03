@@ -1,5 +1,6 @@
 import { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
+import { decisionResourceFixture } from "@angee/decisions/testing";
 
 import type { Run, StepRun } from "./testing/documents.console";
 
@@ -13,6 +14,7 @@ const origins = [
   { value: "REPROCESS", description: "Reprocess" },
   { value: "TRIGGER", description: "Trigger" },
 ];
+const stepStates = [{ value: "READY", description: "Ready" }, ...runStates, { value: "SKIPPED", description: "Skipped" }];
 const statusValues = runStates.map(({ value }) => ({ from: value, to: value.toLowerCase() }));
 
 export function retainedField(name: string, scalar = "String"): DataResourceFieldMetadata {
@@ -98,18 +100,26 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   capabilities: ["list", "detail"],
   recordRepresentation: "node_label",
   fields: [
-    ...["id", "node_key", "node_label", "outcome", "outcome_label", "waiting_kind", "wait_reason"].map((name) => retainedField(name)),
+    ...["id", "node_key", "node_label", "outcome", "outcome_label", "waiting_kind", "wait_reason", "failure_reason",
+      "deadline_at", "wake_at", "created_at", "updated_at"].map((name) => retainedField(name)),
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
-    ...["rank", "map_index", "map_settled", "map_total", "attempt"].map((name) => retainedField(name, "Int")),
+    ...["rank", "map_index", "map_settled", "map_total", "attempt", "page_index", "retries"].map((name) => retainedField(name, "Int")),
     ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
-    ...["input", "output"].map((name) => retainedField(name, "JSON")),
-    { ...retainedField("status"), kind: "enum", values: runStates },
+    ...["input", "output", "state"].map((name) => retainedField(name, "JSON")),
+    { ...retainedField("status"), kind: "enum", values: stepStates },
   ],
   roots: { list: "steprun", detail: "steprun_by_pk", aggregate: "steprun_aggregate" },
   typeNames: { filter: "steprun_bool_exp", order: "steprun_order_by" },
   query: testResourceQuery({ fields: {
     ...Object.fromEntries(["id", "run", "node_key", "node_label", "status", "outcome", "outcome_label", "attempt", "waiting_kind", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["state", "page_index", "failure_reason", "retries", "deadline_at", "wake_at", "created_at", "updated_at"]
+      .map((name) => [name, testQueryField(name)])),
+    status: testQueryField("status", { kind: "enum", values: stepStates,
+      filter: { field: "status", scalar: "String", values: stepStates,
+        valueMap: stepStates.map(({ value }) => ({ from: value, to: value.toLowerCase() })), operators: ["exact", "inList"] } }),
+    node_key: testQueryField("node_key", {
+      filter: { field: "node_key", scalar: "String", values: [], operators: ["exact", "inList"] } }),
     rank: testQueryField("rank", { scalar: "Int", sort: { field: "rank" } }),
     map_index: testQueryField("map_index", { scalar: "Int", sort: { field: "map_index" } }),
     is_mapped: testQueryField("is_mapped", { scalar: "Boolean" }),
@@ -123,11 +133,11 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
 
 export const attemptResourceFixture = testDataResource("workflows.StepAttempt", {
   recordRepresentation: "number",
-  fields: [retainedField("number", "Int"), ...["id", "step_run", "result", "started_at", "finished_at", "error", "stacktrace"].map((name) => retainedField(name))],
+  fields: [retainedField("number", "Int"), retainedField("page_index", "Int"), ...["id", "step_run", "result", "started_at", "finished_at", "error", "stacktrace"].map((name) => retainedField(name))],
   capabilities: ["list", "detail"], roots: { list: "stepattempt", detail: "stepattempt_by_pk", aggregate: "stepattempt_aggregate" },
   typeNames: { filter: "stepattempt_bool_exp", order: "stepattempt_order_by" },
   query: testResourceQuery({ fields: Object.fromEntries(
-    ["id", "step_run", "number", "result", "started_at", "finished_at", "error", "stacktrace"]
+    ["id", "step_run", "number", "page_index", "result", "started_at", "finished_at", "error", "stacktrace"]
       .map((name) => [name, testQueryField(name, { sort: { field: name } })]),
   ) }),
 });
@@ -153,6 +163,16 @@ export const watchResourceFixture = testDataResource("workflows.StepWatch", {
   query: testResourceQuery({ fields: Object.fromEntries(
     ["id", "step_run", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
   ) }),
+});
+
+/** The workflows-owned decision filter extends the decisions fixture's query contract. */
+export const stepDecisionResourceFixture = testDataResource("decisions.Decision", {
+  ...decisionResourceFixture,
+  query: testResourceQuery({ ...decisionResourceFixture.query, fields: {
+    ...decisionResourceFixture.query.fields,
+    "group.step_run": testQueryField("group.step_run", { kind: "relation", scalar: "ID",
+      filter: { field: "group__step_run", scalar: "ID", values: [], operators: ["exact"] } }),
+  } }),
 });
 
 export const runSubjectFixture = testDataResource("notes.Note", {
@@ -196,7 +216,9 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     can_retry: true, requires_duplicate_acknowledgement: false,
     status: "FAILED", outcome: "error", outcome_label: "Needs attention", attempt: 1, waiting_kind: null, wait_reason: "", awaited_run: null,
     input: { reference: "R-7" }, output: {},
-    attempts: [{ id: "wsa_inspect", number: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
+    state: { cursor: "page-2" }, page_index: 1, failure_reason: "The operation did not finish.", retries: 0,
+    deadline_at: null, wake_at: null, created_at: "2026-09-29T09:00:00Z", updated_at: "2026-09-29T09:01:00Z",
+    attempts: [{ id: "wsa_inspect", number: 1, page_index: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
     artifacts: [{ id: "wfa_note", label: "Retained note", record_model: "notes.Note", record_id: "nte_7" }],
     watches: [],
