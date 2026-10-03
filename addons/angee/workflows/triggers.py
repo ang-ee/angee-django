@@ -33,7 +33,7 @@ from rebac.resources import model_for_resource_type
 from angee.base.errors import exception_text
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
-from angee.base.impl import ImplBase
+from angee.base.impl import ImplBase, resolve_all_impl_classes
 from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label
 from angee.base.permissions import rebac_relation_label
 from angee.base.refs import canonical_record_target
@@ -161,12 +161,27 @@ class TriggerSource(ImplBase):
 
     Signal adapters and explicit bulk writers call ``dispatch(model, record)``
     inside their write transaction to feed admission and watches together.
+    A registered subclass of a registered source refines it under another key
+    and shares its native event: the base alone connects and dispatches.
     """
     registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
     model_label: ClassVar[str] = ""
     scope_fields: ClassVar[tuple[str, ...]] = ()
     """Trigger fields whose edits invalidate its contributed grants."""
+
+    @classmethod
+    def registered(cls) -> tuple[type[TriggerSource], ...]:
+        """Return this source and its registered refinements in key order."""
+        return tuple(source for source in resolve_all_impl_classes(TriggerSource) if issubclass(source, cls))
+
+    @classmethod
+    def connect_registered(cls) -> None:
+        """Connect each native event once, through the source no other one refines."""
+        sources = cls.registered()
+        for source in sources:
+            if not any(issubclass(source, base) for base in sources if base is not source):
+                source.connect()
 
     @classmethod
     def choice(cls) -> Any:
@@ -199,10 +214,9 @@ class TriggerSource(ImplBase):
     @classmethod
     def check_watch_model(cls, model: Any) -> None:
         """Require a registered native source capable of observing this model."""
-        field = apps.get_model("workflows", "Trigger")._meta.get_field("source")
-        for key in field.registered_keys():
+        for source in TriggerSource.registered():
             try:
-                field.resolve_class(key).validate_model(model)
+                source.validate_model(model)
             except ValidationError:
                 continue
             return
@@ -212,8 +226,10 @@ class TriggerSource(ImplBase):
     def dispatch(cls, model: Any, record: Any) -> None:
         """Capture once under the record lock, never taking a waiting run's lock.
 
-        Locking also covers autocommit saves whose UPDATE preceded post_save.
-        A savepoint contains capture failures without undoing the source write.
+        One native event feeds the ledger of this source and of each registered
+        refinement, then the watches. Locking also covers autocommit saves whose
+        UPDATE preceded post_save. A savepoint contains capture failures without
+        undoing the source write.
         """
         try:
             with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
@@ -222,7 +238,9 @@ class TriggerSource(ImplBase):
                 records = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
                 if lock_if_supported(records, no_key=True).first() is None:
                     return
-                apps.get_model("workflows", "TriggerEvent").objects.record_change(model, record, source=cls.key)
+                events = apps.get_model("workflows", "TriggerEvent").objects
+                for source in cls.registered():
+                    events.record_change(model, record, source=source.key)
                 apps.get_model("workflows", "StepWatch").objects.record_change(record)
         except Exception:
             logger.exception("Workflow source capture failed.")
@@ -243,7 +261,11 @@ class TriggerSource(ImplBase):
 
     @classmethod
     def connect(cls) -> None:
-        """Connect a native source signal during AppConfig.ready, if needed."""
+        """Connect a native source signal during AppConfig.ready, if needed.
+
+        ``connect_registered`` calls this for the source that owns the event,
+        never for its registered refinements.
+        """
 
 
 class RecordChanged(TriggerSource):
