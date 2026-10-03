@@ -61,28 +61,52 @@ describe("app resource projection", () => {
     expect(chrome.match("/tags")?.item.id).toBe("tags.all");
   });
 
-  test("included app identity survives navigation projection and the refine chrome bridge", () => {
+  test("the full console lifts platform nodes, retaining logical ownership and included app identity through the refine bridge", () => {
     const compiled = compileMenus([
-      { id: "desk", menus: { desk: { route: "desk.home" }, "desk.incoming": { parent: "desk", route: "desk.incoming" } } },
-      { id: "suite", dependsOn: ["desk"], menus: { suite: { include: ["desk"] } } },
+      { id: "mail", menus: {
+        mail: {},
+        "mail.messages": { parent: "mail", route: "mail.messages" },
+        "mail.channels": { parent: "mail", route: "mail.channels", group: "platform" },
+      } },
+      { id: "suite", dependsOn: ["mail"], menus: { suite: { include: ["mail"] } } },
     ]);
+    const routes = [
+      { name: "mail.messages", path: "/mail/messages", layout: "console" },
+      { name: "mail.channels", path: "/mail/channels", layout: "console", resource: "mail.Channel" },
+      { name: "mail.channels.record", path: "/mail/channels/$id", layout: "console", parent: "mail.channels" },
+    ];
     const href = createRouteHref(routes);
     const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href));
-    const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href));
-    const projected = refineRouteResourceProjection(routes, logical, navigation).resources;
-    const desk = projected.find((item) => item.meta?.menuId === "desk")!;
-    const incoming = projected.find((item) => item.meta?.menuId === "desk.incoming")!;
-    expect(desk.meta).toMatchObject({ app: true, parent: "menu:suite" });
-    expect(desk.meta?.appRoot).toBeUndefined();
-    expect(incoming.meta?.app).toBeUndefined();
-    const refineNode = (resource: typeof desk, children: TreeMenuItem[] = []): TreeMenuItem => ({
+    const projection = new AppRouteProjection(routes, logical, undefined, {
+      navigation: MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href)),
+    });
+    expect(projection.navigationTree.settingsMenuItems().map(({ id }) => id)).toEqual(["mail.channels"]);
+    expect(projection.navigationTree.byId.get("mail")?.menuItems().map(({ id }) => id)).toEqual(["mail.messages"]);
+    expect(projection.navigationTree.railPlace("/mail/channels/one")).toMatchObject({ scope: "settings", activeRootId: "mail.channels" });
+    expect(logical.trailFor("mail.channels").map(({ id }) => id)).toEqual(["suite", "mail", "mail.channels"]);
+    expect(projection.rootFor(routes[1]!)).toBe("suite");
+    expect(projection.resourceRoutes()["mail.Channel"]).toEqual({ collection: "mail.channels", record: { name: "mail.channels.record", param: "id" } });
+    expect(projection.unavailable.size).toBe(0);
+    expect(compiled.provenance["mail.channels"]?.group).toBe("mail");
+
+    const projected = refineRouteResourceProjection(routes, logical, projection.navigationTree).resources;
+    const mail = projected.find((item) => item.meta?.menuId === "mail")!;
+    const messages = projected.find((item) => item.meta?.menuId === "mail.messages")!;
+    expect(mail.meta).toMatchObject({ app: true, parent: "menu:suite" });
+    expect(mail.meta?.appRoot).toBeUndefined();
+    expect(messages.meta?.app).toBeUndefined();
+    const refineNode = (resource: typeof mail, children: TreeMenuItem[] = []): TreeMenuItem => ({
       name: resource.name, key: resource.identifier ?? resource.name,
       label: resource.meta?.label, route: resource.list as string, meta: resource.meta, children,
     });
     const suite = projected.find((item) => item.meta?.menuId === "suite")!;
-    const chrome = MenuTree.from(chromeMenuItemsFromRefine([refineNode(suite, [refineNode(desk, [refineNode(incoming)])])]));
-    expect(chrome.byId.get("desk")?.isApp).toBe(true);
-    expect(chrome.match("/desk/incoming")?.app?.id).toBe("desk");
+    const channels = projected.find((item) => item.meta?.menuId === "mail.channels")!;
+    const chrome = MenuTree.from(chromeMenuItemsFromRefine([
+      refineNode(suite, [refineNode(mail, [refineNode(messages)])]), refineNode(channels),
+    ]));
+    expect(chrome.byId.get("mail")?.isApp).toBe(true);
+    expect(chrome.match("/mail/messages")?.app?.id).toBe("mail");
+    expect(chrome.trailFor("mail.channels").map(({ id }) => id)).toEqual(["mail.channels"]);
   });
   test("normalizes relative record paths before href and chatter projection", () => {
     const normalized = resolveRoutePaths([
@@ -125,6 +149,32 @@ describe("app resource projection", () => {
     expect(projection.navigationTree.settingsMenuItems().map((item) => item.id)).toEqual(["desk.settings", "appearance"]);
     expect(projection.allows(routes.find((route) => route.name === "appearance")!, "/settings/appearance")).toBe(true);
     expect(projection.allows(routes.find((route) => route.name === "platform")!, "/settings/platform")).toBe(false);
+  });
+
+  test("the app trail lists every app a page sits in, flattened ones too (G-8)", () => {
+    const compiled = compileMenus([
+      { id: "projects", menus: [{ id: "projects", children: [{ id: "projects.tasks", route: "projects.tasks" }] }] },
+      { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
+      { id: "pm", dependsOn: ["projects", "messaging"], menus: { pm: { include: [{ id: "projects", flatten: true }, "messaging"] } } },
+      { id: "look", menus: { look: { route: "look.page", group: "platform" } } },
+    ]);
+    const appRoutes: readonly BaseAddonRoute[] = [
+      { name: "projects.tasks", path: "/projects/tasks" },
+      { name: "messaging.messages", path: "/messaging" },
+      { name: "look.page", path: "/settings/look" },
+    ];
+    const tree = MenuTree.from(resolveMenuRouteTargets(compiled.logical, createRouteHref(appRoutes)) as readonly ChromeMenuItem[]);
+    const projection = new AppRouteProjection(appRoutes, tree);
+    expect(projection.appTrail("/projects/tasks/t1")).toEqual(["pm", "projects"]);
+    expect(projection.appTrail("/messaging")).toEqual(["pm", "messaging"]);
+    expect(projection.appTrail("/elsewhere")).toEqual([]);
+    // A Settings root is no app.
+    expect(projection.appTrail("/settings/look")).toEqual([]);
+    // Under a confinement the root's own apps count; a page another root owns sits in the root alone.
+    const confined = new AppRouteProjection(appRoutes, tree, "pm");
+    expect(confined.appTrail("/projects/tasks")).toEqual(["pm", "projects"]);
+    expect(confined.appTrail("/settings/look")).toEqual(["pm"]);
+    expect(tree.appIds()).toEqual(new Set(["projects", "messaging", "pm"]));
   });
 
   test("confineTo supplies the app scope even without an explicit appRoot marker", () => {

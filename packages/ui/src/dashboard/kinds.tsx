@@ -1,10 +1,10 @@
 import * as React from "react";
-import { Link } from "@tanstack/react-router";
 import { rowPublicId, useModelMetadata } from "@angee/metadata";
 import * as v from "valibot";
 import { MetricTile } from "../fragments/MetricStrip";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { InlineEmpty } from "../fragments/InlineEmpty";
+import { NavLink } from "../ui/nav-link";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { widgetColumns, type DashboardWidgetKind, type DashboardWidgetRenderProps, type WidgetColumn } from "./headless";
@@ -98,7 +98,7 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
                 : undefined;
               return <TableRow key={id ?? index} interactive={Boolean(href)}>{columns.map(({ path, column }, columnIndex) => (
                 <TableCell key={path} className="max-w-64 truncate">
-                  {href && columnIndex === 0 ? <Link to={href} className="block truncate focus-visible:focus-ring">{cellContent(column, row, uiT)}</Link> : cellContent(column, row, uiT)}
+                  {href && columnIndex === 0 ? <NavLink href={href} className="block truncate focus-visible:focus-ring">{cellContent(column, row, uiT)}</NavLink> : cellContent(column, row, uiT)}
                 </TableCell>
               ))}</TableRow>;
             })}

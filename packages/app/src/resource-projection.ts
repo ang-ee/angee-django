@@ -183,7 +183,7 @@ export class AppRouteProjection {
     options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
   ) {
     const navigation = options.navigation ?? menuTree;
-    this.navigationTree = confineTo === undefined ? navigation : navigation.confineTo(confineTo);
+    this.navigationTree = confineTo === undefined ? navigation.withSettingsPlace() : navigation.confineTo(confineTo);
     this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
     const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
@@ -260,6 +260,22 @@ export class AppRouteProjection {
 
   activeMenu(pathname: string, routeName?: string, search?: string): MenuMatch | undefined {
     return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  }
+
+  /** The logical root a page sits in; lifting a node into Settings does not change it. */
+  activeApp(pathname: string, routeName?: string, search?: string): string | undefined {
+    return this.confineTo ?? this.menuTree.match(pathname, search, false, this.menuAnchor(routeName)?.id)?.trail[0]?.id;
+  }
+
+  /**
+   * The apps a container `when: { app }` matches on this path, outermost first:
+   * every app on its menu trail. Under a confinement only the root's own count;
+   * a page another root owns (a Settings link) sits in the root alone.
+   */
+  appTrail(pathname: string, routeName?: string, search?: string): readonly string[] {
+    const trail = this.menuTree.appTrail(pathname, search, this.menuAnchor(routeName)?.id).map((item) => item.id);
+    if (this.confineTo === undefined) return trail;
+    return trail[0] === this.confineTo ? trail : [this.confineTo];
   }
 
   /** Collection defaults are inherited by its record children. */

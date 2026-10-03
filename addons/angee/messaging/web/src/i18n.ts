@@ -190,7 +190,7 @@ export const enMessagingMessages: Record<string, string> = {
     "The live session stops and the account is released. Reusable pairing material is retained so you can reconnect without linking again.",
   "channel.pairing.done": "Done",
 
-  // MessagesPage — the inbox list + detail.
+  // MessagesPage — the Messages list + detail.
   "messages.channel": "Channel",
   "messages.title": "Subject",
   "messages.noSubject": "(No subject)",
@@ -204,7 +204,7 @@ export const enMessagingMessages: Record<string, string> = {
   "messages.hide": "Hide",
   "messages.remove": "Remove",
   "messages.removeTitle": "Remove message?",
-  "messages.removeBody": "It is hidden from the inbox until restored.",
+  "messages.removeBody": "It is hidden from Messages until restored.",
   "messages.restore": "Restore",
 
   // RecordActivityPane — the Activity chatter tab.

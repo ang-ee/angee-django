@@ -367,8 +367,8 @@ a theme rather than a template.
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
 
-**Settings place** — the one synthetic console destination that groups all menu
-roots declared with `group:"platform"`. Its rail entry sits below the scrolling
-list; the chooser exposes one Settings entry. Inside it, the expanded rail shows
+**Settings place** — the one synthetic destination in every console that groups
+every menu node declared with `group:"platform"`, at any depth. Its rail entry
+sits below the scrolling list; the chooser exposes one Settings entry. Inside it, the expanded rail shows
 the contributing platform roots and a back header; their menu items live in the
 top bar.

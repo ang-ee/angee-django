@@ -1,7 +1,7 @@
 import * as React from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
-  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
+  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, TextLink, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
@@ -29,12 +29,13 @@ export function AgentSessionsPage(): React.ReactElement {
   const statusTone = useStatusTone();
   const t = useAgentsT();
   const navigate = useNavigate();
+  const router = useRouter();
   const routeHref = useRouteHref();
   const selectedId = useRouteRecordId() ?? null;
   const search = useRouteSearch();
   const selectedSessionId = routeSearchParam(search, "session") || undefined;
   const navigateSession = React.useCallback((id: string, replace = false) => {
-    void navigate({ to: ".", search: updateRouteSearch({ session: id }), replace });
+    void navigate({ to: ".", search: updateRouteSearch({ session: id }), replace, state: true });
   }, [navigate]);
   const agentsHref = routeHref("agents.agents");
   const sessionHref = React.useCallback(
@@ -99,10 +100,10 @@ export function AgentSessionsPage(): React.ReactElement {
         label={t("sessions.railLabel")}
         className="h-auto max-h-[40%] shrink-0"
         action={
-          <Link className={buttonVariants({ variant: "ghost", size: "sm" })} to={agentsHref}>
+          <TextLink className={buttonVariants({ variant: "ghost", size: "sm" })} href={agentsHref}>
             <Glyph name="plus" />
             {t("sessions.new")}
-          </Link>
+          </TextLink>
         }
       >
         {agents.map((agent) => (
@@ -116,14 +117,14 @@ export function AgentSessionsPage(): React.ReactElement {
               />
             }
             handle={agent.model?.name ?? undefined}
-            render={<Link to={sessionHref(agent.id)} search={updateRouteSearch({ session: undefined })} />}
+            render={<TextLink href={router.buildLocation({ to: sessionHref(agent.id), search: updateRouteSearch({ session: undefined })(search) }).href} />}
           >
             {agent.name}
           </SessionRailItem>
         ))}
       </SessionRail>
     );
-  }, [agentsHref, loading, agents, selectedId, sessionHref, statusTone, t]);
+  }, [agentsHref, loading, agents, selectedId, sessionHref, statusTone, t, router, search]);
   // Loading: a skeleton conversation pane beside the skeleton rail rows above.
   if (loading) {
     return (
@@ -146,9 +147,9 @@ export function AgentSessionsPage(): React.ReactElement {
           title={t("agent.noRunningAgent")}
           description={t("agent.chatUnavailable")}
           actions={
-            <Link className={buttonVariants({ variant: "primary", size: "sm" })} to={agentsHref}>
+            <TextLink className={buttonVariants({ variant: "primary", size: "sm" })} href={agentsHref}>
               {t("agent.setupAssistant")}
-            </Link>
+            </TextLink>
           }
           fill
         />

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { InAppLinkProvider } from "../../lib/in-app-link";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DashboardView } from "./DashboardView";
@@ -42,14 +43,13 @@ describe("DashboardView", () => {
   test("preserves a metric deep link and its client-side navigation handler", () => {
     const onNavigate = vi.fn();
     render(
-      <DashboardView>
+      <InAppLinkProvider navigate={onNavigate}><DashboardView>
         <Metric
           label="Users"
           value={128}
           href="/iam/users"
-          onNavigate={onNavigate}
         />
-      </DashboardView>,
+      </DashboardView></InAppLinkProvider>,
     );
 
     const link = screen.getByRole("link", { name: /Users/ });

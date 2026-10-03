@@ -37,6 +37,7 @@ import {
 } from "../resource/model-metadata-defaults";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
+import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import {
   addFieldSelection,
   fieldErrorMessages,
@@ -251,12 +252,25 @@ export function useFormViewSurface({
     () => modelChain(canonicalResource, modelLabel),
     [canonicalResource, modelLabel],
   );
-  const sectionEntries = useContainer<React.ReactNode>("form#sections", { models });
-  // The record projection reads every verb's fields, whichever implementation the row turns out to be.
+  // The record projection reads every candidate's fields, whichever implementation the row turns
+  // out to be; sections and the rail then show, per record, the children that record admits.
+  const sectionEntries = useContainer<React.ReactNode>("form#sections", { models, projection: true });
   const primaryActionFieldEntries = useContainer("form#actions", { models, projection: true });
   const menuActionFieldEntries = useContainer("form#actions-menu", { models, projection: true });
   const chromeFieldEntries = useContainer("form#chrome", { models, projection: true });
-  const railEntries = useContainer<React.ReactNode>("form#rail", { models });
+  const railEntries = useContainer<React.ReactNode>("form#rail", { models, projection: true });
+  const sectionAdmits = useContainerAdmission("form#sections", models, dataResource?.implFields);
+  const railAdmits = useContainerAdmission("form#rail", models, dataResource?.implFields);
+  const rowDependentSections = React.useMemo(() => rowDependentChildren(sectionEntries), [sectionEntries]);
+  // A create form knows no implementation: originals stand and the row-decided children that
+  // need one leave the form, fields and all, so their required fields and defaults stay out too.
+  const creating = id == null;
+  const formSectionEntries = React.useMemo(
+    () => creating
+      ? sectionEntries.filter((entry) => !rowDependentSections.has(entry.id) || sectionAdmits(entry.id, null))
+      : sectionEntries,
+    [creating, rowDependentSections, sectionAdmits, sectionEntries],
+  );
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -279,14 +293,20 @@ export function useFormViewSurface({
     () =>
       // Contributed groups and tabs keep the container's order (its sequences and
       // before/after); a non-decreasing sequence interleaves them with the page's own groups at 0.
-      sectionEntries.reduce<{ floor: number; declarations: ContributedFormDeclaration[] }>(({ floor, declarations }, entry, entryOrder) => {
+      formSectionEntries.reduce<{ floor: number; declarations: ContributedFormDeclaration[] }>(({ floor, declarations }, entry, entryOrder) => {
         const sequence = Math.max(floor, entry.sequence ?? 0);
+        // A child the row decides (an `impl` child, a variant or its original) shows on the records that admit it.
+        const rowDependent = rowDependentSections.has(entry.id);
         return { floor: sequence, declarations: [...declarations,
           ...parsePageGroups(entry.content as React.ReactNode).map(
             (group, childOrder) => ({
               kind: "group" as const,
               // A contribution's permission gates every group and tab it declares.
-              group: entry.permission === undefined ? group : { ...group, permission: entry.permission },
+              group: {
+                ...group,
+                ...(entry.permission !== undefined ? { permission: entry.permission } : {}),
+                ...(rowDependent ? { containerChild: entry.id } : {}),
+              },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -294,15 +314,17 @@ export function useFormViewSurface({
           ...parsePageTabs(entry.content as React.ReactNode).map(
             (tab, childOrder) => ({
               kind: "tab" as const,
-              tab: entry.permission === undefined ? tab : { ...tab, visibleWhen: (record: Row) =>
-                holdsPermission(record, entry.permission!) && (tab.visibleWhen?.(record) ?? true) },
+              tab: entry.permission === undefined && !rowDependent ? tab : { ...tab, visibleWhen: (record: Row) =>
+                (entry.permission === undefined || holdsPermission(record, entry.permission))
+                && (!rowDependent || sectionAdmits(entry.id, record))
+                && (tab.visibleWhen?.(record) ?? true) },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
           ),
         ] };
       }, { floor: Number.NEGATIVE_INFINITY, declarations: [] }).declarations,
-    [sectionEntries],
+    [formSectionEntries, rowDependentSections, sectionAdmits],
   );
   const contributedGroups = React.useMemo(
     () =>
@@ -318,12 +340,16 @@ export function useFormViewSurface({
       ),
     [contributedDeclarations],
   );
+  // Section actions keep the child they came from, so the record decides the row-dependent ones.
   const contributedActions = React.useMemo(
     () =>
-      sectionEntries.flatMap((entry) =>
-        parsePageActions(entry.content as React.ReactNode),
+      formSectionEntries.flatMap((entry) =>
+        parsePageActions(entry.content as React.ReactNode).map((action) => ({
+          action,
+          ...(rowDependentSections.has(entry.id) ? { containerChild: entry.id } : {}),
+        })),
       ),
-    [sectionEntries],
+    [formSectionEntries, rowDependentSections],
   );
   // A canonical section may depend on a parent field omitted by a child's
   // projection. Read that field from its declared owner, never select invalid
@@ -377,10 +403,7 @@ export function useFormViewSurface({
     ],
     [baseGroups, contributedGroupSequences],
   );
-  const declaredActions = React.useMemo(
-    () => [...(overrideActions ?? actions ?? childActions), ...contributedActions],
-    [actions, childActions, overrideActions, contributedActions],
-  );
+  const pageActions = overrideActions ?? actions ?? childActions;
   const resolvedFields = React.useMemo(
     () =>
       withModeLockedFields(
@@ -417,6 +440,19 @@ export function useFormViewSurface({
       actions: [],
     }))),
     [regularFormFields, railGroups],
+  );
+  // `formFields` registers every candidate so any record's values load; one record's form is the
+  // groups no row decides plus the row-decided children it admits. Its layout and its save read these.
+  const regularFormFieldsFor = React.useCallback(
+    (record: Row | null) => flattenedFormFields(resolvedFields, resolvedGroups.filter((group) =>
+      group.containerChild === undefined || sectionAdmits(group.containerChild, record))),
+    [resolvedFields, resolvedGroups, sectionAdmits],
+  );
+  const formFieldsFor = React.useCallback(
+    (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record), railGroups
+      .filter((group) => group.containerChild === undefined || (record != null && railAdmits(group.containerChild, record)))
+      .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
+    [railAdmits, railGroups, regularFormFieldsFor],
   );
   const defaultSlugSource = React.useMemo(
     () => formFields.find((field) => field.title)?.name,
@@ -499,6 +535,7 @@ export function useFormViewSurface({
     dataResource,
     modelMetadata,
     formFields,
+    formFieldsFor,
     fieldByName,
     refineFields,
     defaultValues,
@@ -515,8 +552,8 @@ export function useFormViewSurface({
     readOnly,
   });
   const visibleRailGroups = React.useMemo(
-    () => visibleRecordRailGroups(railGroups, save.displayRecord, modelMetadata),
-    [railGroups, save.displayRecord, modelMetadata],
+    () => visibleRecordRailGroups(railGroups, save.displayRecord, modelMetadata, railAdmits),
+    [railGroups, save.displayRecord, modelMetadata, railAdmits],
   );
   const canonicalTabSelection = React.useMemo(
     () => refineFieldsFromPaths(["id", ...canonicalTabFields]),
@@ -553,13 +590,22 @@ export function useFormViewSurface({
   const fieldLayout = React.useMemo(
     () =>
       formViewFieldLayout(
-        regularFormFields,
+        // Title, status and body come from this record's own fields, never a group it does not show.
+        regularFormFieldsFor(save.displayRecord),
         resolvedFields,
         resolvedGroups,
         modelMetadata,
         isCreate,
       ),
-    [isCreate, modelMetadata, regularFormFields, resolvedFields, resolvedGroups],
+    [isCreate, modelMetadata, regularFormFieldsFor, resolvedFields, resolvedGroups, save.displayRecord],
+  );
+  const declaredActions = React.useMemo(
+    () => [
+      ...pageActions,
+      ...contributedActions.flatMap(({ action, containerChild }) =>
+        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord) ? [action] : []),
+    ],
+    [contributedActions, pageActions, save.displayRecord, sectionAdmits],
   );
   const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
@@ -581,15 +627,16 @@ export function useFormViewSurface({
         isCreate,
       );
       const permitted = groupSections.filter((section) =>
-        section.permission === undefined
-        || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)));
+        (section.permission === undefined
+          || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)))
+        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord)));
       const stacked = permitted.filter((section) => section.label == null);
       const tabbedSections = permitted
         .filter((section) => section.label != null)
         .sort(compareFormSections);
       return [...stacked, ...tabbedSections];
     },
-    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord],
+    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, sectionAdmits],
   );
   const subtitleParts = React.useMemo(
     () =>

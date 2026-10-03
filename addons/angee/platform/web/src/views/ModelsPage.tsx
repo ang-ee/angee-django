@@ -2,10 +2,11 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
+  TextLink,
   Code, ListView, textRoleVariants, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import { LinkedChips, TextRouteLink } from "../lib/cells";
+import { LinkedChips } from "../lib/cells";
 import { platformScopeSearch } from "../lib/paths";
 
 // The `platform.Model` Hasura resource row (`hasura_pydantic_resource`,
@@ -35,9 +36,9 @@ function columns(
       header: t("col.model"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <TextRouteLink href={routeHref("platform.models.record", { id: row.id })} className="font-medium">
+          <TextLink href={routeHref("platform.models.record", { id: row.id })} className="font-medium">
             {row.model_name}
-          </TextRouteLink>
+          </TextLink>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
         </span>
       ),
@@ -47,9 +48,9 @@ function columns(
       header: t("col.addon"),
       render: (row) =>
         row.addon_id ? (
-          <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon_id })}>
+          <TextLink href={routeHref("platform.addons.record", { id: row.addon_id })}>
             {row.addon_label}
-          </TextRouteLink>
+          </TextLink>
         ) : (
           row.addon_label
         ),
@@ -63,7 +64,7 @@ function columns(
       field: "field_count",
       header: t("col.fields"),
       render: (row) => (
-        <TextRouteLink
+        <TextLink
           href={routeHref(
             "platform.fields",
             undefined,
@@ -71,7 +72,7 @@ function columns(
           )}
         >
           {row.field_count}
-        </TextRouteLink>
+        </TextLink>
       ),
     },
     { field: "relation_count", header: t("col.relations") },

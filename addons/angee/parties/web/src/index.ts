@@ -1,5 +1,4 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
@@ -8,41 +7,6 @@ import { organizationForm } from "./OrganizationForm";
 import { personForm } from "./PersonForm";
 import { partyForm } from "./PartyForm";
 import { partyPickerWidget } from "./PartyPicker";
-
-// One rail root ("Parties") whose children are the People and Organizations
-// pages. The root is route-less and inherits its target from the first child.
-const partiesMenu: readonly BaseMenuItem[] = [
-  {
-    id: "parties",
-    label: "Parties",
-    icon: "parties",
-    children: [
-      { id: "parties.overview", label: "Overview", route: "parties.overview", icon: "overview" },
-      { id: "parties.people", label: "People", route: "parties.people", icon: "parties" },
-      {
-        id: "parties.organizations",
-        label: "Organizations",
-        route: "parties.organizations",
-        icon: "organization",
-      },
-      { id: "parties.circles", label: "Circles", route: "parties.circles", icon: "circle" },
-      {
-        id: "parties.relationships",
-        label: "Relationships",
-        route: "parties.relationships",
-        icon: "relationship",
-      },
-      { id: "parties.handles", label: "Handles", route: "parties.handles", icon: "handle" },
-      { id: "parties.review", label: "Review", route: "parties.review", icon: "user-check" },
-      {
-        id: "parties.directories",
-        label: "Directories",
-        route: "parties.directories",
-        icon: "address-book",
-      },
-    ],
-  },
-];
 
 const parties = defineBaseAddon({
   id: "parties",
@@ -98,7 +62,18 @@ const parties = defineBaseAddon({
     },
     ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
   ],
-  menus: partiesMenu,
+  menus: {
+    // The route-less root lands on the first visible child, People.
+    parties: { label: "Parties", icon: "parties" },
+    "parties.overview": { parent: "parties", label: "Overview", route: "parties.overview", icon: "overview", hide: true },
+    "parties.people": { parent: "parties", label: "People", route: "parties.people", icon: "parties", sequence: 10 },
+    "parties.organizations": { parent: "parties", label: "Organizations", route: "parties.organizations", icon: "organization", sequence: 20 },
+    "parties.circles": { parent: "parties", label: "Circles", route: "parties.circles", icon: "circle", sequence: 30 },
+    "parties.relationships": { parent: "parties", label: "Relationships", route: "parties.relationships", icon: "relationship", hide: true },
+    "parties.handles": { parent: "parties", label: "Handles", route: "parties.handles", icon: "handle", hide: true },
+    "parties.review": { parent: "parties", label: "Review", route: "parties.review", icon: "user-check", sequence: 40 },
+    "parties.directories": { parent: "parties", label: "Contact directories", route: "parties.directories", icon: "address-book", group: "platform" },
+  },
   icons: {
     parties: Users,
     overview: LayoutDashboard,

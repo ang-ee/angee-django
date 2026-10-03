@@ -2,6 +2,7 @@ import * as React from "react";
 import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
+import { useInAppNavigator } from "../../lib/in-app-link";
 import { useUiT } from "../../i18n";
 import { useValueStable } from "../../lib/use-value-stable";
 import { useStatusTone } from "../../widgets/use-status-tone";
@@ -35,6 +36,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
 }: LinkedGanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
   const navigate = useNavigate();
+  const navigateInApp = useInAppNavigator();
   const resolveTone = useStatusTone();
   const { resourceView, modelMetadata, columns, onListStateChange } = surfaceProps;
   const linked = gantt.linked;
@@ -120,16 +122,19 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     const row = rows.find((candidate) => rowPublicId(candidate, laneResource) === id);
     if (!row) return;
     if (onRowClick) onRowClick(row);
-    else if (rowHref) void navigate({ to: rowHref(row) });
-  }, [rows, laneResource, onRowClick, rowHref, navigate]);
+    else if (rowHref) {
+      const href = rowHref(row);
+      if (navigateInApp) navigateInApp(href);
+      else void navigate({ href });
+    }
+  }, [rows, laneResource, onRowClick, rowHref, navigate, navigateInApp]);
   const renderResourceContent = React.useCallback((resource: GanttResource) => {
     const row = rows.find((candidate) => rowPublicId(candidate, laneResource) === resource.id);
     if (!row) return null;
     const details = projection.detailsByLane.get(resource.id) ?? { title: resource.title };
     return <GanttLane details={{ ...details, href: details.href ?? rowHref?.(row) }}
-      onOpen={onRowClick ? () => onRowClick(row) : undefined}
-      onNavigate={(href) => void navigate({ to: href })} />;
-  }, [rows, laneResource, projection.detailsByLane, rowHref, onRowClick, navigate]);
+      onOpen={onRowClick ? () => onRowClick(row) : undefined} />;
+  }, [rows, laneResource, projection.detailsByLane, rowHref, onRowClick]);
   const selectedIds = Object.keys(resourceView.state.rowSelection).filter((id) => resourceView.state.rowSelection[id]);
   return <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className}
     error={list.error} onRetry={refetch} loadingFooter={fetching}

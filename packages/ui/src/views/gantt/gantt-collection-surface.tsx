@@ -5,6 +5,7 @@ import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
 import { dateFromUnknown } from "../../widgets/date-format";
 import { errorFromUnknown } from "../../data/errors";
+import { useInAppNavigator } from "../../lib/in-app-link";
 import { useUiT } from "../../i18n";
 import { toneColorVar } from "../../lib/tones";
 import { useValueStable } from "../../lib/use-value-stable";
@@ -43,6 +44,7 @@ export function GanttCollectionSurface<TRow extends Row>({
 }: GanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
   const navigate = useNavigate();
+  const navigateInApp = useInAppNavigator();
   const resolveTone = useStatusTone();
   const { resourceView, modelMetadata, columns, onListStateChange } = surfaceProps;
   const groupStack = surfaceProps.groupStack ?? resourceView.state.groupStack;
@@ -199,14 +201,18 @@ export function GanttCollectionSurface<TRow extends Row>({
   const onDateChange = React.useCallback((date: Date) => resourceView.setAnchor(calendarDateToAnchor(date)), [resourceView.setAnchor]);
   const renderResourceContent = React.useCallback((resource: GanttResource) => {
     const details = projection.detailsByLane.get(resource.id);
-    return <GanttLane details={details ?? { title: resource.title }} onNavigate={(href) => void navigate({ to: href })} />;
-  }, [projection.detailsByLane, navigate]);
+    return <GanttLane details={details ?? { title: resource.title }} />;
+  }, [projection.detailsByLane]);
   const handleEventClick = React.useCallback((event: GanttEvent) => {
     const row = rows.find((candidate) => rowPublicId(candidate) === event.id);
     if (!row) return;
     if (onRowClick) onRowClick(row);
-    else if (rowHref) void navigate({ to: rowHref(row) });
-  }, [rows, onRowClick, rowHref, navigate]);
+    else if (rowHref) {
+      const href = rowHref(row);
+      if (navigateInApp) navigateInApp(href);
+      else void navigate({ href });
+    }
+  }, [rows, onRowClick, rowHref, navigate, navigateInApp]);
   return (
     <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className} error={list.error ?? projection.error} onRetry={refetch} loadingFooter={fetching}
       summary={projection.skipped ? t("gantt.skipped", { count: projection.skipped }) : undefined}>

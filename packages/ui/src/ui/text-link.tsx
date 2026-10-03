@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useInAppLinkClick } from "../lib/in-app-link";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 
@@ -41,7 +42,6 @@ export type TextLinkProps = Omit<
     asChild?: boolean;
     className?: string;
     disabled?: boolean;
-    onNavigate?: (href: string) => void;
     render?: UseRenderRenderProp<TextLinkState>;
   };
 
@@ -54,7 +54,6 @@ export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(
       disabled = false,
       href,
       onClick,
-      onNavigate,
       rel,
       render,
       target,
@@ -68,13 +67,14 @@ export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(
       : undefined;
     const external = target === "_blank";
 
+    const followLink = useInAppLinkClick(href, onClick);
+
     function handleClick(event: React.MouseEvent<HTMLElement>): void {
       if (disabled) {
         event.preventDefault();
         return;
       }
-      onClick?.(event as React.MouseEvent<HTMLAnchorElement>);
-      handleClientNavigation(event, href, onNavigate);
+      followLink(event);
     }
 
     return useRender<TextLinkState, HTMLElement>({
@@ -100,19 +100,3 @@ export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(
   },
 );
 TextLink.displayName = "TextLink";
-
-function handleClientNavigation(
-  event: React.MouseEvent<HTMLElement>,
-  href: string | undefined,
-  onNavigate: ((href: string) => void) | undefined,
-): void {
-  if (!href || !onNavigate || href.startsWith("#")) return;
-  if (event.defaultPrevented || event.button !== 0) return;
-  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-
-  const target = event.currentTarget.getAttribute("target");
-  if (target && target !== "_self") return;
-
-  event.preventDefault();
-  onNavigate(href);
-}

@@ -1,4 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import { createRouteHref } from "@angee/ui";
 import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { describe, expect, test } from "vitest";
 
@@ -24,18 +25,23 @@ describe("messaging addon manifest", () => {
     expect((messaging.routes ?? []).map((route) => route.name)).toEqual([
       "messaging.publicWebforms",
       "messaging.publicWebform",
-      "messaging.inbox",
-      "messaging.inbox.record",
+      "messaging.messages",
+      "messaging.messages.record",
       "messaging.threads",
       "messaging.threads.record",
       "messaging.channels",
       "messaging.channels.record",
     ]);
-    expect(messaging.menus?.[0]?.children?.map((item) => item.id)).toEqual([
-      "messaging.inbox",
-      "messaging.threads",
-      "messaging.channels",
-    ]);
+    expect(messaging.menus["messaging.channels"]).toMatchObject({ parent: "messaging", group: "platform" });
+    expect(messaging.menus["messaging.messages"]).toMatchObject({ label: "Messages", route: "messaging.messages", sequence: 10 });
+    expect(messaging.menus["messaging.threads"]?.sequence).toBe(20);
+  });
+
+  test("builds message list and record links from the renamed route claims", () => {
+    const routeHref = createRouteHref(messaging.routes ?? []);
+    expect(routeHref("messaging.messages")).toBe("/messaging/messages");
+    expect(routeHref("messaging.messages.record", { id: "message 1" })).toBe("/messaging/messages/message%201");
+    expect(messaging.routes?.find((route) => route.resource === "messaging.Message")?.name).toBe("messaging.messages");
   });
 
   test("passes the app's submit key into the built-in Comments tab", () => {

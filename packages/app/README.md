@@ -78,9 +78,10 @@ an existing resource, using either `resource` or `recordModel`. Canonical claims
 remain unique. A same-model route may declare `recordMatch` for its records;
 `useResourceRecordHref` and `useResourceRecordHrefLookup` select a matching route,
 then the canonical route. Explicit route names use `useRouteHref()`.
-Descendant menus with `group: "platform"` appear in the confined app's Settings;
-their explicit `route`/`params` targets admit those owner records and descendants,
-while other records in the foreign app remain outside the confinement.
+In a confined app, explicit Settings `route`/`params` targets admit those owner
+records and descendants, while other records in the foreign app remain outside
+the confinement. See the [frontend guideline](../../docs/frontend/guidelines.md)
+for the shared Settings place.
 
 ## App vocabulary and shipped views
 

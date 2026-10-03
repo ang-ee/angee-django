@@ -1,5 +1,4 @@
 import { useState, type ReactElement, type ReactNode, type Ref } from "react";
-import { useNavigate } from "@tanstack/react-router";
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
@@ -192,7 +191,10 @@ export function RelationPicker({
             <Glyph decorative name="pencil" />
           </Button>
         ) : null}
-        {followHref ? <FollowRecordLink href={followHref} /> : null}
+        {followHref ? <TextLink href={followHref} aria-label={t("relation.follow")} variant="muted"
+          className="inline-flex size-icon-btn-md shrink-0 items-center justify-center rounded-6 transition-colors hover:bg-inset focus-visible:focus-ring [&_.glyph]:size-4">
+          <Glyph decorative name="arrow-up-right" />
+        </TextLink> : null}
       </div>
       <RelationRecordDialog
         dialog={dialog}
@@ -207,29 +209,5 @@ export function RelationPicker({
         onEdited={onEdited}
       />
     </>
-  );
-}
-
-/**
- * The "follow" arrow beside a relation picker: a client-side navigation to the
- * selected record's detail page. A separate component so its router hook runs
- * only when a follow target exists (router-less renders pass no `followHref`).
- */
-function FollowRecordLink({ href }: { href: string }): ReactElement {
-  const t = useUiT();
-  const navigate = useNavigate();
-  return (
-    // A real `<a href>` (via `TextLink`) so cmd/middle-click opens the record in
-    // a new tab and the control reads as a link to AT; a plain click does SPA
-    // navigation through `onNavigate`.
-    <TextLink
-      href={href}
-      onNavigate={(to) => void navigate({ to })}
-      aria-label={t("relation.follow")}
-      variant="muted"
-      className="inline-flex size-icon-btn-md shrink-0 items-center justify-center rounded-6 transition-colors hover:bg-inset focus-visible:focus-ring [&_.glyph]:size-4"
-    >
-      <Glyph decorative name="arrow-up-right" />
-    </TextLink>
   );
 }

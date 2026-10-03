@@ -1,6 +1,7 @@
 import { createContext, useContext, useId, useState, type ReactElement } from "react";
 import { Link, useLinkProps, useRouterState } from "@tanstack/react-router";
 
+import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT, type UiTranslate } from "../i18n";
 import { toneGlyph } from "../lib/tones";
 import { tv } from "../lib/variants";
@@ -290,9 +291,9 @@ function MenuLink({
   const rail = useRail();
   const current = active.selected === item.id;
   const toggleProps = railLinkToggleProps(item.target, pathname, onActiveToggle, true);
+  const hrefOptions = useHrefLinkOptions(item.target);
   const linkProps = useLinkProps({
-    to: item.target,
-    href: item.target,
+    ...hrefOptions,
     ...toggleProps,
   });
   if (!item.target) return null;

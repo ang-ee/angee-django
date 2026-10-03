@@ -14,6 +14,7 @@ import type {
 
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
+import { useInAppLinkClick } from "../lib/in-app-link";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE } from "./popover";
 import { textRoleVariants } from "./text";
@@ -279,15 +280,18 @@ export function createStyledMenuParts(
 
   const LinkItem = React.forwardRef<Element, MenuLinkItemProps>(
     function MenuLinkItem(
-      { className, inset = false, variant = "default", ...props },
+      { className, inset = false, variant = "default", href, onClick, ...props },
       ref,
     ) {
       const styles = recipe({ inset, variant });
+      const handleClick = useInAppLinkClick(href, onClick);
       return (
         <BaseMenu.LinkItem
           ref={ref}
           className={styles.item({ className })}
           {...props}
+          href={href}
+          onClick={handleClick}
         />
       );
     },

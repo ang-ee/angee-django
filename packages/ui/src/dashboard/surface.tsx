@@ -1,7 +1,6 @@
 import * as React from "react";
 import { DndContext, useDraggable, type DragEndEvent } from "@dnd-kit/core";
 import { useModelMetadata } from "@angee/metadata";
-import { Link } from "@tanstack/react-router";
 import { useAppRuntime, useResourceRoute, useRouteHref } from "../runtime/runtime";
 import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
@@ -10,6 +9,7 @@ import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "../chrome/Glyph";
 import { Input } from "../ui/input";
+import { NavLink } from "../ui/nav-link";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { InlineEmpty } from "../fragments/InlineEmpty";
 import { PageHeader } from "../page/PageHeader";
@@ -521,13 +521,13 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
       <header className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1", !editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" && "pr-9")}>
         <div id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1"}>
           <SectionHeading
-            label={!editing && fullViewHref ? <Link to={fullViewHref} className="hover:underline">{visibleTitle}</Link> : visibleTitle}
+            label={!editing && fullViewHref ? <NavLink href={fullViewHref} className="hover:underline">{visibleTitle}</NavLink> : visibleTitle}
             count={count == null ? undefined : `· ${count}`}
             hint={typeof widget.options.hint === "string" ? `· ${widget.options.hint}` : undefined}
             audience={typeof widget.options.audience === "string" ? widget.options.audience : undefined}
           />
         </div>
-        {!editing && fullViewHref ? <Link to={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} className="shrink-0 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring"><Glyph name="arrow-up-right" size={14} /></Link> : null}
+        {!editing && fullViewHref ? <NavLink href={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} className="shrink-0 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring"><Glyph name="arrow-up-right" size={14} /></NavLink> : null}
         {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
         {editing ? (
           <Input

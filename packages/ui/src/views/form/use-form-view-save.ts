@@ -120,6 +120,12 @@ export interface UseFormViewSaveProps {
   dataResource: DataResourceMetadata | null;
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
+  /**
+   * The fields one record's form saves, when they depend on the record: the
+   * groups of the container children it admits (an `impl` child, a variant in
+   * its original's place). `formFields` holds every candidate.
+   */
+  formFieldsFor?: (record: Row | null) => readonly FieldDescriptor[];
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
   refineFields: Fields;
   defaultValues?: Record<string, unknown>;
@@ -178,6 +184,7 @@ export function useFormViewSave({
   dataResource,
   modelMetadata,
   formFields,
+  formFieldsFor,
   fieldByName,
   refineFields,
   defaultValues,
@@ -635,7 +642,8 @@ export function useFormViewSave({
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      const data = mutationData(value, formFields, {
+      // The record's own fields: where an original and its variant both declare one, the admitted declaration saves.
+      const data = mutationData(value, formFieldsFor?.(displayRecord) ?? formFields, {
         dirtyFields: dirtyFields as Record<string, unknown>,
         fieldMetadata: modelMetadata?.fields,
         isCreate,
@@ -691,8 +699,10 @@ export function useFormViewSave({
     [
       clearErrors,
       dataResource,
+      displayRecord,
       fieldByName,
       formFields,
+      formFieldsFor,
       formReadOnly,
       isCreate,
       previewBlockedRef,
