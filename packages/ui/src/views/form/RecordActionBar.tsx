@@ -69,7 +69,7 @@ export function RecordActionBar({
   const toast = useToast();
   // The open typed-args action form (F-a), or null. Set after any confirm passes;
   // the dialog owns collecting the args and firing the action's `submit`.
-  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor } | null>(
+  const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor; fromMenu: boolean } | null>(
     null,
   );
   const actionMutation = useMutation<
@@ -135,7 +135,7 @@ export function RecordActionBar({
       // A typed-args action collects its args (and merges the record/selection
       // context) in the dialog, which fires `submit` — not the string-only prompt.
       if (action.args && action.submit) {
-        setFormAction({ action });
+        setFormAction({ action, fromMenu: menu !== null || action.placement !== "toolbar" });
         return;
       }
       let values: Record<string, string> = {};
@@ -149,7 +149,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, blockedRef, confirm, prompt, record],
+    [actionMutation, blockedRef, confirm, prompt, record, menu],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
@@ -172,68 +172,64 @@ export function RecordActionBar({
     formAction === null
   ) return null;
 
+  const formDialog = formAction ? (
+    <ActionFormDialog
+      key={formAction.action.id}
+      action={formAction.action}
+      context={{
+        record,
+        selectedIds: recordId !== null ? [recordId] : [],
+        refresh: async () => await reload() ?? null,
+      }}
+      open
+      onOpenChange={(open) => { if (!open) setFormAction(null); }}
+      onSucceeded={reload}
+    />
+  ) : null;
+  const deleteTrigger = visibleDeleteAction !== undefined ? (
+    <ActionTrigger variant="danger" glyph="trash"
+      disabled={blocked || visibleDeleteAction.isPending}
+      loading={visibleDeleteAction.isPending}
+      onClick={() => { if (!blockedRef.current) visibleDeleteAction.onDelete(); }}>
+      {t("actions.delete")}
+    </ActionTrigger>
+  ) : null;
+  const renderAction = (action: RecordActionDescriptor) => (
+    <ActionTrigger key={action.id} glyph={action.icon}
+      variant={action.danger ? "danger" : "secondary"}
+      disabled={disabled(action)} loading={pendingId === action.id}
+      onClick={() => void runAction(action)}>
+      {action.label}
+    </ActionTrigger>
+  );
+
   return (
     <>
-      {menu ? visibleActions.map((action) => (
-        <ActionTrigger key={action.id} glyph={action.icon}
-          variant={action.danger ? "danger" : "secondary"}
-          disabled={disabled(action)} loading={pendingId === action.id}
-          onClick={() => void runAction(action)}>
-          {action.label}
-        </ActionTrigger>
-      )) : <>
-      {toolbarActions.map((action, index) => (
-        <Button key={action.id} type="button" size="sm"
-          variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-          disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
-          {action.icon ? <Glyph name={action.icon} /> : null}
-          {action.label}
-        </Button>
-      ))}
-      {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
-        {visibleDeleteAction !== undefined ? (
-          <DropdownMenu.Item
-            variant="danger"
-            disabled={blocked || visibleDeleteAction.isPending}
-            onClick={() => { if (!blockedRef.current) visibleDeleteAction.onDelete(); }}
-          >
-            <Glyph name="trash" />
-            {t("actions.delete")}
-          </DropdownMenu.Item>
-        ) : null}
-        {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
-          <DropdownMenu.Separator />
-        ) : null}
-        {menuActions.map((action) => (
-          <DropdownMenu.Item
-            key={action.id}
-            variant={action.danger ? "danger" : "default"}
-            disabled={disabled(action)}
-            onClick={() => void runAction(action)}
-          >
+      {menu ? <>
+        {deleteTrigger}
+        {visibleActions.map(renderAction)}
+        {contributedActions}
+        {formDialog}
+      </> : <>
+        {toolbarActions.map((action, index) => (
+          <Button key={action.id} type="button" size="sm"
+            variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
+            disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
             {action.icon ? <Glyph name={action.icon} /> : null}
             {action.label}
-          </DropdownMenu.Item>
+          </Button>
         ))}
-        {contributedActions}
-      </ActionMenu> : null}
+        {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
+          {deleteTrigger}
+          {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
+            <DropdownMenu.Separator />
+          ) : null}
+          {menuActions.map(renderAction)}
+          {contributedActions}
+          {formAction?.fromMenu ? formDialog : null}
+        </ActionMenu> : null}
+        {formAction && !formAction.fromMenu ? formDialog : null}
       </>}
-      {formAction ? (
-        <ActionFormDialog
-          key={formAction.action.id}
-          action={formAction.action}
-          context={{
-            record,
-            selectedIds: recordId !== null ? [recordId] : [],
-            refresh: async () => await reload() ?? null,
-          }}
-          open
-          onOpenChange={(open) => {
-            if (!open) setFormAction(null);
-          }}
-          onSucceeded={reload}
-        />
-      ) : null}
     </>
   );
 }

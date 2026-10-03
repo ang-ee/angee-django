@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  ActionMenu,
+  ActionTrigger,
   Button,
   DashboardSurface,
   DropdownMenu,
@@ -156,58 +158,45 @@ function StoredDashboardPage({ target, registry, store }: {
                     record: { id: state.persistedId, displayName: state.name, name: state.name },
                     formReadOnly: !state.capabilities.canEdit,
                   }} />
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger
-                      render={(
-                        <Button type="button" variant="ghost" size="sm" disabled={pending}>
-                          <Glyph name="more-horizontal" fallbackName="more-vertical" />
-                          {t("common.moreActions")}
-                        </Button>
-                      )}
-                    />
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Positioner sideOffset={6} align="end">
-                        <DropdownMenu.Content className="w-52">
-                  {href && preferences.available ? (
-                    <>
-                      <DropdownMenu.Item onClick={() => {
-                        setPending(true);
-                        setError(null);
-                        void preferences.patchPreferences((current) => {
-                          const shortcuts = readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId);
-                          if (!pinned) shortcuts.push({ id: shortcutId, label: state.name, path: href, icon: "dashboard" });
-                          return { ...current, [ROUTE_SHORTCUTS_PREFERENCE_KEY]: shortcuts };
-                        }).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-                      }}>
-                        <Glyph name="star" />{pinned ? t("common.unpin") : t("common.pin")}
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item onClick={() => {
-                        setPending(true);
-                        setError(null);
-                        void preferences.patchPreferences((current) => ({
-                          ...current,
-                          [HOME_PATH_PREFERENCE_KEY]: isHome ? null : href,
-                        })).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-                      }}>
-                        <Glyph name="home" />{isHome ? t("common.unsetHome") : t("common.setAsHome")}
-                      </DropdownMenu.Item>
-                    </>
-                  ) : null}
-                  <DropdownMenu.Item onClick={() => void duplicate()}>
-                    <Glyph name="copy" />{t("common.duplicate")}
-                  </DropdownMenu.Item>
-                  {target.scope === "personal" && state.capabilities.canArchive ? (
-                    <>
-                      <DropdownMenu.Separator />
-                      <DropdownMenu.Item variant="danger" onClick={() => void archive()}>
-                        <Glyph name="archive" />{t("common.archive")}
-                      </DropdownMenu.Item>
-                    </>
-                  ) : null}
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Positioner>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                  <ActionMenu label={t("common.moreActions")} glyph="more-horizontal"
+                    size="sm" align="end" blocked={pending} loading={pending}>
+                    {href && preferences.available ? (
+                      <>
+                        <ActionTrigger glyph="star" onClick={() => {
+                          setPending(true);
+                          setError(null);
+                          void preferences.patchPreferences((current) => {
+                            const shortcuts = readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId);
+                            if (!pinned) shortcuts.push({ id: shortcutId, label: state.name, path: href, icon: "dashboard" });
+                            return { ...current, [ROUTE_SHORTCUTS_PREFERENCE_KEY]: shortcuts };
+                          }).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
+                        }}>
+                          {pinned ? t("common.unpin") : t("common.pin")}
+                        </ActionTrigger>
+                        <ActionTrigger glyph="home" onClick={() => {
+                          setPending(true);
+                          setError(null);
+                          void preferences.patchPreferences((current) => ({
+                            ...current,
+                            [HOME_PATH_PREFERENCE_KEY]: isHome ? null : href,
+                          })).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
+                        }}>
+                          {isHome ? t("common.unsetHome") : t("common.setAsHome")}
+                        </ActionTrigger>
+                      </>
+                    ) : null}
+                    <ActionTrigger glyph="copy" onClick={() => void duplicate()}>
+                      {t("common.duplicate")}
+                    </ActionTrigger>
+                    {target.scope === "personal" && state.capabilities.canArchive ? (
+                      <>
+                        <DropdownMenu.Separator />
+                        <ActionTrigger variant="danger" glyph="archive" onClick={() => void archive()}>
+                          {t("common.archive")}
+                        </ActionTrigger>
+                      </>
+                    ) : null}
+                  </ActionMenu>
                 </>
               ) : null}
             />

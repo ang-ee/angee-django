@@ -132,6 +132,14 @@ describe("ChannelsPage", () => {
     expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
   });
 
+  test("omits Connect when toolbar entries contain no renderable content", () => {
+    pageMocks.slotEntries = [
+      { slot: MESSAGING_CHANNEL_TOOLBAR_SLOT, id: "empty", content: [null, false, undefined, []] },
+    ];
+    renderPage();
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+  });
+
   test("lists every contributed vendor in sequence order and retains its dialog after closing the menu", async () => {
     // Deliberately scramble manifest order; composition owns slot ordering.
     pageMocks.slotEntries = composeAddons([

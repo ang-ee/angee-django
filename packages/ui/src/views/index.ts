@@ -108,7 +108,6 @@ export {
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
 export { useWatch, type ResolverResult } from "react-hook-form";
-export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   useActionForm,
   type UseActionFormOptions,
