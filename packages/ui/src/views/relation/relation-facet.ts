@@ -61,13 +61,12 @@ export function useRelationFacets(
     filters: facets.flatMap((facet) => (result.facets[facet.field]?.options ?? []).flatMap((option) => {
       const filter = facet.axis.drill({ key: option.key });
       const label = facetOptionLabel(facet, option, metadata, t);
-      return filter ? [{ id: `${facet.field}:${option.value}`, label, chipLabel: label, filter }] : [];
+      return filter ? [{ id: facet.axis.bucketId({ key: option.key }), label, chipLabel: label, filter }] : [];
     })),
     filterFields: facets.map((facet) => ({
       id: facet.field, field: facet.field, label: facet.label, type: "selection" as const,
-      options: (result.facets[facet.field]?.options ?? []).map((option) => ({
-        value: option.value, label: facetOptionLabel(facet, option, metadata, t),
-      })),
+      options: (result.facets[facet.field]?.options ?? []).flatMap((option) =>
+        option.value === null ? [] : [{ value: option.value, label: facetOptionLabel(facet, option, metadata, t) }]),
     })),
     groupOptions: facets.flatMap((facet) => facet.groupOption ? [facet.groupOption] : []),
   }), [facets, metadata, result.facets, t]);
@@ -79,7 +78,7 @@ function facetOptionLabel(
   metadata: ReturnType<typeof useModelMetadata>,
   t: ReturnType<typeof useUiT>,
 ): string {
-  return metadata?.fields[facet.field]?.kind === "enum"
+  return facet.axis.bucketIdentity({ key: option.key }) === null || metadata?.fields[facet.field]?.kind === "enum"
     ? groupLabel(facet.axis.bucketLabel({ key: option.key }), { field: facet.field }, metadata, t("list.emptyValue"), t)
     : option.label;
 }

@@ -492,7 +492,9 @@ export class GroupAxis {
   }
   bucketIdentity(bucket: GroupBucket): FilterPrimitive {
     const key = this.groupBy().valueKey;
-    const value = bucket.key?.[key];
+    const raw = bucket.key?.[key];
+    const mapped = !this.extraction && this.declaration.server?.valueMap?.find((entry) => Object.is(entry.from, raw));
+    const value = mapped ? mapped.to : raw;
     if (value === undefined) return fail(`groups.${this.field}`, `bucket is missing key "${key}"`);
     if (value === null || (this.extraction?.rangeKey && value === "")) return null;
     if (this.extraction && typeof value !== "number") return dateGroup(value, this.extraction.name, `groups.${this.field}`);
@@ -508,6 +510,10 @@ export class GroupAxis {
     if (value === undefined) return fail(`groups.${this.field}`, `bucket is missing label key "${key}"`);
     if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
     return fail(`groups.${this.field}`, "bucket label must be a scalar");
+  }
+  /** Typed identities keep null, empty strings and literal "null" distinct. */
+  bucketId(bucket: GroupBucket): string {
+    return `${this.field}:${JSON.stringify(this.bucketIdentity(bucket))}`;
   }
   private canonicalValue(value: FilterPrimitive): FilterPrimitive {
     const field = this.query.fields[this.field];

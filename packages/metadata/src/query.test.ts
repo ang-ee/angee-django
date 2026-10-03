@@ -294,6 +294,42 @@ describe("ResourceQuery", () => {
       query.matches({ state: "IN_REVIEW" }, { state: { exact: "in_review" } }),
     ).toBe(true);
   });
+  test("decodes choice buckets and keeps blank, null and real values distinct", () => {
+    const query = ResourceQuery.from(testDataResource("parties.Party", {
+      query: testResourceQuery({
+        fields: { tax_country: testQueryField("tax_country", {
+          kind: "enum", values: [{ value: "", description: null }, { value: "DE", description: "Germany" }],
+        }) },
+        axes: { tax_country: {
+          field: "tax_country", kind: "column", identityPath: "tax_country", paths: ["tax_country"], extractions: [],
+          server: { input: "TAX_COUNTRY", key: "tax_country", valueMap: [{ from: "BLANK_2", to: "" }] },
+          drill: { kind: "value", field: "tax_country", valueKey: "tax_country", nullMode: "isNull",
+            valueMap: [{ from: "BLANK_2", to: "" }] },
+        } },
+      }),
+    }));
+    const axis = query.axis("tax_country");
+    const blank = { key: { tax_country: "BLANK_2" } };
+    const absent = { key: { tax_country: null } };
+    const real = { key: { tax_country: "DE" } };
+    expect(axis.bucketIdentity(blank)).toBe("");
+    expect(axis.bucketLabel(blank)).toBe("");
+    expect(axis.bucketIdentity(absent)).toBeNull();
+    expect(axis.bucketLabel(absent)).toBeNull();
+    expect(axis.bucketLabel(real)).toBe("DE");
+    expect(query.toWhere(axis.drill(blank))).toEqual({ tax_country: { _eq: "" } });
+    expect(query.toWhere(axis.drill(absent))).toEqual({ tax_country: { _is_null: true } });
+    expect(query.toWhere(axis.drill(real))).toEqual({ tax_country: { _eq: "DE" } });
+    expect(new Set([axis.bucketId(blank), axis.bucketId(absent), axis.bucketId({ key: { tax_country: "null" } })]).size).toBe(3);
+    expect(query.matches({ tax_country: "" }, axis.drill(blank))).toBe(true);
+    expect(query.matches({ tax_country: null }, axis.drill(blank))).toBe(false);
+
+    const summary = ResourceQuery.fromContract({ ...query.contract,
+      axes: { tax_country: { ...query.axes.tax_country!, drill: null } },
+    }).axis("tax_country");
+    expect(summary.bucketLabel(blank)).toBe("");
+    expect(summary.drill(blank)).toBeUndefined();
+  });
   test("requires selected values and distinguishes absent JSON keys from omitted selections", () => {
     const query = ResourceQuery.from(resource());
     expect(() => query.matches({}, { body: { isNull: true } })).toThrow(

@@ -3,6 +3,7 @@
 import { renderHook } from "@testing-library/react";
 import type { ResourceFacetOption } from "@angee/refine";
 import { ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { extractFacet, groupDimension } from "@angee/refine";
 import { testDataResource } from "@angee/metadata/testing";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -105,13 +106,13 @@ describe("useScalarFacets", () => {
     });
     expect(result.current.filters).toEqual([
       {
-        id: "status:DRAFT",
+        id: 'status:"DRAFT"',
         label: "Draft",
         chipLabel: "Draft",
         filter: { status: { exact: "DRAFT" } },
       },
       {
-        id: "status:ACTIVE",
+        id: 'status:"ACTIVE"',
         label: "Active",
         chipLabel: "Active",
         filter: { status: { exact: "ACTIVE" } },
@@ -119,7 +120,7 @@ describe("useScalarFacets", () => {
       {
         // A free-text scalar value renders verbatim — only enum-typed fields
         // get their member names prettified.
-        id: "source:api",
+        id: 'source:"api"',
         label: "api",
         chipLabel: "api",
         filter: { source: { exact: "api" } },
@@ -164,6 +165,39 @@ describe("useScalarFacets", () => {
           where: {},
         },
       },
+    ]);
+  });
+
+  test("shows separate blank and null country facets with exact drill filters", () => {
+    const contract = ResourceQuery.forRows({ fields: {
+      tax_country: { kind: "enum", values: [{ value: "" }, { value: "DE", description: "Germany" }] },
+    } }).contract;
+    contract.fields.tax_country!.filter = { field: "tax_country", scalar: "String", values: [], operators: ["exact", "isNull"] };
+    contract.axes.tax_country!.server = { input: "TAX_COUNTRY", key: "tax_country", valueMap: [{ from: "BLANK", to: "" }] };
+    contract.axes.tax_country!.drill = { kind: "value", field: "tax_country", valueKey: "tax_country", nullMode: "isNull",
+      valueMap: [{ from: "BLANK", to: "" }] };
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("parties.Party", {
+      query: contract,
+      fields: [{ name: "tax_country", kind: "enum", values: contract.fields.tax_country!.values,
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    })]).labels["parties.Party"]!;
+    const facet = extractFacet({ parties_groups: [
+      { key: { tax_country: "BLANK" }, aggregate: { count: 2 } },
+      { key: { tax_country: null }, aggregate: { count: 1 } },
+      { key: { tax_country: "DE" }, aggregate: { count: 3 } },
+    ], totalCount: 3 }, "parties_groups", { id: "tax_country", dimensions: [groupDimension("TAX_COUNTRY", "tax_country")] });
+    dataMocks.facets.mockReturnValue(resourceFacets({ tax_country: facet.options }));
+    const { result } = renderHook(() => useScalarFacets("parties.Party", [], metadata));
+    expect(result.current.filters).toEqual([
+      { id: 'tax_country:""', label: "No value", chipLabel: "No value", filter: { tax_country: { exact: "" } } },
+      { id: "tax_country:null", label: "No value", chipLabel: "No value", filter: { tax_country: { isNull: true } } },
+      { id: 'tax_country:"DE"', label: "Germany", chipLabel: "Germany", filter: { tax_country: { exact: "DE" } } },
+    ]);
+    expect(result.current.filters.map((option) => ResourceQuery.from(metadata).toWhere(option.filter))).toEqual([
+      { tax_country: { _eq: "" } }, { tax_country: { _is_null: true } }, { tax_country: { _eq: "DE" } },
+    ]);
+    expect(result.current.filterFields[0]!.options).toEqual([
+      { value: "", label: "No value" }, { value: "DE", label: "Germany" },
     ]);
   });
 });

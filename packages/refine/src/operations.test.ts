@@ -419,6 +419,21 @@ describe("Hasura custom operations", () => {
       ],
     });
   });
+  test("retains blank and null facet buckets without admitting missing keys", () => {
+    const facet = extractFacet({
+      choices_groups: [
+        { key: { choice: "BLANK" }, aggregate: { count: 2 } },
+        { key: { choice: null }, aggregate: { count: 1 } },
+        { key: { choice: "DE" }, aggregate: { count: 3 } },
+        { key: {}, aggregate: { count: 1 } },
+      ], totalCount: 4,
+    }, "choices_groups", { id: "choice", dimensions: [groupDimension("CHOICE", "choice")] });
+    expect(facet.options).toEqual([
+      { value: "BLANK", label: "BLANK", count: 2, key: { choice: "BLANK" } },
+      { value: null, label: "", count: 1, key: { choice: null } },
+      { value: "DE", label: "DE", count: 3, key: { choice: "DE" } },
+    ]);
+  });
 });
 
 function target(root: string) {

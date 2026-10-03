@@ -94,16 +94,22 @@ export function useScalarFacets<TRow extends object>(
           field: facet.field,
           label: facet.label,
           type: "selection",
-          options: result.options.map((option) => ({
-            value: option.value,
-            label: scalarFacetOptionLabel(
-              facet,
-              option,
-              metadata,
-              t("list.emptyValue"),
-              t,
-            ),
-          })),
+          options: result.options.flatMap((option) => {
+            const filter = ResourceQuery.from(metadata!).axis(facet.field).drill({ key: option.key });
+            const comparisons = filter?.[facet.field];
+            if (!comparisons || typeof comparisons !== "object" || !("exact" in comparisons)
+              || typeof comparisons.exact !== "string") return [];
+            return [{
+              value: comparisons.exact,
+              label: scalarFacetOptionLabel(
+                facet,
+                option,
+                metadata,
+                t("list.emptyValue"),
+                t,
+              ),
+            }];
+          }),
         }];
       }),
     [facetQuery.facets, facets, metadata, t],
@@ -127,7 +133,7 @@ function scalarFilterOption(
 ): ResourceToolbarFilterOption {
   const label = scalarFacetOptionLabel(facet, option, metadata, emptyValueLabel, t);
   return {
-    id: `${facet.field}:${option.value}`,
+    id: ResourceQuery.from(metadata!).axis(facet.field).bucketId({ key: option.key }),
     label,
     chipLabel: label,
     filter: ResourceQuery.from(metadata!).axis(facet.field).drill({ key: option.key })!,

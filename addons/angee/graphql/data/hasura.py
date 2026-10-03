@@ -67,7 +67,6 @@ from angee.data.metadata import (
     DataQueryDrill,
     DataQueryExtraction,
     DataQueryServerAxis,
-    DataQueryValueMap,
     DataResourceFieldMetadata,
     DataResourceRoots,
     DataResourceSubtitleMetadata,
@@ -1789,7 +1788,6 @@ def _hasura_group_bucket_filter(
         kind="value",
         field=filter_field,
         value_key=key,
-        value_map=_enum_value_map_for_field(field),
     )
 
 
@@ -1843,22 +1841,6 @@ def _group_filter_field(path: str, filterable: tuple[str, ...]) -> str | None:
         if candidate in filterable:
             return candidate
     return None
-
-
-def _enum_value_map_for_field(
-    field: models.Field[Any, Any],
-) -> tuple[DataQueryValueMap, ...]:
-    choices_enum = getattr(field, "choices_enum", None)
-    members = getattr(choices_enum, "__members__", None)
-    if not members:
-        return ()
-    return tuple(
-        DataQueryValueMap(
-            from_value=str(name),
-            to_value=str(member.value),
-        )
-        for name, member in members.items()
-    )
 
 
 def _hasura_aggregate_measures(

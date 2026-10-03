@@ -158,7 +158,7 @@ export function FilterClauseEditor({ fields, onSubmit, value, onChange, submitLa
   return <div ref={editorRef} className={cn("grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs", className)}>
     <FilterClauseRow fields={fields} value={current} onChange={change} onSubmit={submit} error={error} readOnly={readOnly} />
     {field && !readOnly ? <Button type="button" size="sm" variant="secondary" className="justify-center"
-      disabled={needsValue(operator) && current.value.trim() === ""} onClick={submit}>
+      disabled={needsValue(operator) && current.value.trim() === "" && !isDeclaredSelection(field, current.value, operator)} onClick={submit}>
       {submitLabel ?? t("resourceToolbar.add")}
     </Button> : null}
   </div>;
@@ -187,6 +187,7 @@ function inputType(field: FilterClauseField): string {
   return field.type === "number" || field.type === "date" ? field.type : field.type === "datetime" ? "datetime-local" : "text";
 }
 function coerceValue(field: FilterClauseField, value: string, operator: FilterClauseOperator): FilterValue | undefined {
+  if (isDeclaredSelection(field, value, operator)) return value;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   if (structuredOperand(operator)) return jsonValueFromUnknown(JSON.parse(trimmed));
@@ -196,4 +197,9 @@ function coerceValue(field: FilterClauseField, value: string, operator: FilterCl
   }
   if (field.type === "boolean") return trimmed === "true" ? true : trimmed === "false" ? false : undefined;
   return trimmed;
+}
+
+function isDeclaredSelection(field: FilterClauseField, value: string, operator: FilterClauseOperator): boolean {
+  return !structuredOperand(operator) && field.type === "selection"
+    && Boolean(field.options?.some((option) => option.value === value));
 }
