@@ -43,16 +43,18 @@ describe("decision stories with native router, queries, and generated mutations"
     unmount();
     render(Settled.render());
     await screen.findByText(/Already reviewed/);
+    expect(screen.getAllByRole("heading", { name: "Decision" })).toHaveLength(1);
     for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.getByText(label)).toBeTruthy();
   });
 
-  test("pending decisions show their core facts even without a requester or expiry", async () => {
+  test("pending decisions show kind and status once, with a heading over their assignees", async () => {
     render(PendingWithoutFacts.render());
     await screen.findByRole("heading", { name: "Review" });
     expect(screen.queryByText("Requester")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Decision" })).toBeTruthy();
-    expect(screen.getByText("Kind")).toBeTruthy();
-    expect(screen.getByText("Status")).toBeTruthy();
+    expect(screen.queryByText("Kind")).toBeNull();
+    expect(screen.queryByText("Status")).toBeNull();
+    expect(screen.getAllByRole("heading", { name: "Review" })).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { name: "Decision" })).toHaveLength(1);
     // The GraphQL enum member name reads back through its option label.
     expect(screen.queryByText("PENDING")).toBeNull();
     expect(screen.getByText("Assignees")).toBeTruthy();

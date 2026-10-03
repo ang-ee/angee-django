@@ -26,7 +26,6 @@ export const enDecisionsMessages = {
   "decision.unavailable": "This decision is unavailable.",
   "decision.requester": "Requester",
   "decision.assignees": "Assignees",
-  "decision.status": "Status",
   "decision.answer": "Answer",
   "decision.expiry": "Expires",
   "decision.resolver": "Resolved by",

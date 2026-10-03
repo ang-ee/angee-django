@@ -14,17 +14,18 @@ export { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 export default defineBaseAddon({
   id: "workflows",
   routes: [
-    ...resourcePageRoutes("workflows.runs", "/workflows/runs", lazyRouteComponent(() => import("./RunsPage"), "RunsPage"), RUN_MODEL),
+    ...resourcePageRoutes("workflows.runs", "/workflows/runs", lazyRouteComponent(() => import("./RunsPage"), "RunsPage"), RUN_MODEL, { menu: "workflows.runs" }),
     ...resourcePageRoutes("workflows.catalogue", "/workflows", lazyRouteComponent(() => import("./WorkflowsPage"), "WorkflowsPage"), WORKFLOW_MODEL),
     ...resourcePageRoutes("workflows.triggers", "/workflows/triggers", lazyRouteComponent(() => import("./TriggersPage"), "TriggersPage"), TRIGGER_MODEL),
     ...resourcePageRoutes("workflows.trigger-events", "/workflows/trigger-events", lazyRouteComponent(() => import("./TriggerEventsPage"), "TriggerEventsPage"), TRIGGER_EVENT_MODEL),
   ],
   menus: {
     // Decisions is workflows' human-review inbox; it lives under Workflows.
-    workflows: { label: "Workflows", icon: "versions", include: ["decisions"] },
-    "workflows.runs": { parent: "workflows", label: "Runs", icon: "activity", route: "workflows.runs" },
-    "workflows.catalogue": { parent: "workflows", label: "Workflows", icon: "versions", route: "workflows.catalogue" },
-    "workflows.triggers": { parent: "workflows", label: "Triggers", icon: "activity", route: "workflows.triggers" },
+    workflows: { label: "Workflows", icon: "versions", include: [{ id: "decisions", flatten: true }] },
+    "workflows.runs": { parent: "workflows", label: "Runs", icon: "activity", route: "workflows.runs", sequence: 10 },
+    "workflows.studio": { parent: "workflows", label: "Studio", icon: "versions", sequence: 30 },
+    "workflows.catalogue": { parent: "workflows.studio", label: "Workflows", icon: "versions", route: "workflows.catalogue" },
+    "workflows.triggers": { parent: "workflows.studio", label: "Triggers", icon: "activity", route: "workflows.triggers" },
   },
   containers: {
     "record#aside": { "workflows.runs": workflowsRunsTab },
