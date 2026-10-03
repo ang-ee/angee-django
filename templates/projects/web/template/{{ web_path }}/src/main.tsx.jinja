@@ -26,12 +26,6 @@ const create = (schemas: Awaited<ReturnType<typeof loadComposedSchemas>>) => cre
   },
   schemas,
   defaultSchema: "console",
-{% if home %}
-  home: {{ home | tojson }},
-{% endif %}
-{% if confine_to %}
-  confineTo: {{ confine_to | tojson }},
-{% endif %}
   appearance,
 });
 

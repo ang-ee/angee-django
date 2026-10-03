@@ -363,8 +363,12 @@ error. Discovery does not inspect Python ASTs to predict runtime exports.
 
 `WebRuntime` reads `[web]` declarations, falling back to `web/package.json` for the
 conventional package. It renders `runtime/web/manifest.json` and Tailwind sources
-without importing GraphQL schemas. The frontend codegen owner consumes that
-manifest and SDL to produce `runtime/gql/` and `runtime/web/app.ts`.
+without importing GraphQL schemas. Each package entry lists, as `dependsOn`, the
+web packages its addon depends on transitively (`angee.addons.addon_ancestors`),
+and the deployment's `ANGEE_UI` setting rides along as `deployment`. The frontend
+codegen owner consumes that manifest and SDL to produce `runtime/gql/` and
+`runtime/web/app.ts`, attaching each manifest's ancestry as web ids and appending
+the deployment as the last layer.
 The generated web module exposes `loadComposedSchemas()` for parallel fetches of
 the emitted schema metadata JSON assets. The rendered host passes this loader to
 `@angee/app`'s `bootApp`; it awaits metadata before synchronous `createApp`

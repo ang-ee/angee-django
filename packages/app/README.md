@@ -8,15 +8,26 @@ The rendered host calls `bootApp({ target, loadSchemas, create })` to load
 generated metadata before composition. `create` receives the loaded schemas and
 returns the app to mount. See the [frontend guidelines](../../docs/frontend/guidelines.md).
 
-An addon may declare `brand: { name, mark }` once, with a registered glyph as its
-mark. The host owns `home` and `confineTo`: `createApp({ ..., home: "requests.all",
-confineTo: "requests" })` projects that menu root into the rail and command
-palette and redirects console routes owned by other roots to home with replacement.
-Unowned console routes (account, profile, preferences) remain reachable. Unknown
-roots and homes outside the selected root fail composition. Public layouts remain
-available; the server still owns access. The project template exposes `home`,
-`confine_to` answers. Addons cannot claim the `ui` translation
-namespace, which belongs to the rendered package.
+Products declare the shell. An addon's `shell: { home, brand, perspective }`
+names where `/` lands, its `{ name, mark }` identity (the mark a registered
+glyph) and the selected perspective; `perspectives: { id: { root, home? } }`
+declares named confinements. A perspective projects its menu root into the rail
+and command palette and redirects console routes owned by other roots to home
+with replacement. Unowned console routes (account, profile, preferences) remain
+reachable, public layouts remain available, and the server still owns access.
+Unknown perspectives or roots, and homes outside the selected root, fail
+composition.
+
+Shell facts layer along `dependsOn`, which the composed runtime fills from
+`addon.toml`: among the addons declaring a shell, the one no other declarer
+depends on is the product, and its own fields override its dependencies' field
+by field. Unrelated products, or unrelated ancestors setting one field, fall
+back to the framework default (no brand, no perspective, the first console
+route) and record why in `composed.shell.diagnostics`. The deployment's
+`ANGEE_UI` setting (`{ shell, perspectives }`) applies last; `perspective: null`
+keeps the full console. `createApp`'s `home` and `confineTo` inputs and the
+top-level `brand` field remain as deprecated overrides. Addons cannot claim the
+`ui` translation namespace, which belongs to the rendered package.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims

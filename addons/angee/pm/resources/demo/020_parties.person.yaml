@@ -1,0 +1,9 @@
+_meta:
+  model: parties.Person
+rows:
+  - xref: manager_person
+    fields:
+      display_name: Demo Manager
+      given_name: Demo
+      family_name: Manager
+      user: pm.manager

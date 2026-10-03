@@ -67,6 +67,40 @@ describe("angee-web-codegen", () => {
     );
   });
 
+  it("attaches addon ancestry and appends the deployment layer", async () => {
+    const runtime = join(root, "runtime");
+    const web = join(root, "web");
+    const manifestDir = join(runtime, "web");
+    await mkdir(manifestDir, { recursive: true });
+    for (const pkg of ["@demo/base", "@demo/product"]) {
+      const entryDir = join(web, "node_modules", pkg, "src");
+      await mkdir(entryDir, { recursive: true });
+      await writeFile(join(entryDir, "..", "package.json"), JSON.stringify({ name: pkg, exports: {} }));
+      await writeFile(join(entryDir, "index.ts"), "export default {};\n");
+    }
+    await writeFile(
+      join(manifestDir, "manifest.json"),
+      JSON.stringify({
+        schema: 1,
+        addonPackages: [
+          { package: "@demo/base", sourceRoot: "src", app: "demo.base", dependsOn: [] },
+          { package: "@demo/product", sourceRoot: "src", app: "demo.product", dependsOn: ["demo.base"] },
+        ],
+        codegen: [],
+        documentRoots: [],
+        deployment: { shell: { perspective: null } },
+      }),
+    );
+
+    await run("node", [CODEGEN, "--runtime", runtime, "--web-root", web]);
+
+    const appModule = await readFile(join(manifestDir, "app.ts"), "utf8");
+    expect(appModule).toContain(
+      'export const composedAddons = [addon0, { ...addon1, dependsOn: [addon0.id] }, '
+      + '{ id: "deployment", ...{"shell":{"perspective":null}}, dependsOn: [addon0.id, addon1.id] }] as const;',
+    );
+  });
+
   it("emits URL imports and a parallel schema metadata loader", async () => {
     const runtime = join(root, "runtime");
     const web = join(root, "web");

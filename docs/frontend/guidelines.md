@@ -204,11 +204,13 @@ shared UI copy through an addon bundle.
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
   described under [Package Layering](#package-layering).
-- **Product identity is declared once.** At most one addon declares
-  `brand: { name, mark }`, with `mark` a registered glyph; composition rejects a
-  second claim. Rail, login, public mark and document title read it through
-  `useRuntimeBrand`; shell components hard-code no identity. See
-  [`AddonManifest.brand`](../../packages/app/src/define-addon.ts).
+- **Products declare the shell.** Home, brand (`{ name, mark }`, with `mark` a
+  registered glyph) and the selected perspective are `shell` facts layered
+  along addon dependencies: a dependent overrides its dependencies, unrelated
+  products fall back to the framework default, and the deployment's `ANGEE_UI`
+  applies last. Hosts pass no product facts. Rail, login, public mark and
+  document title read the brand through `useRuntimeBrand`; shell components
+  hard-code no identity. See [`resolveShell`](../../packages/app/src/shell.ts).
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native

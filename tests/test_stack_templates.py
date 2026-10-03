@@ -775,25 +775,16 @@ def test_project_template_defaults_to_local_addon_installer() -> None:
     assert "ANGEE_ADDON_INSTALLER_BACKEND" not in settings
 
 
-def test_project_web_confinement_answer_renders_only_when_set() -> None:
+def test_project_web_host_leaves_home_and_confinement_to_the_composed_shell() -> None:
+    """Products declare home and perspective; the rendered host passes neither."""
+
     project = ROOT / "templates" / "projects" / "web"
     answers = yaml.safe_load((project / "copier.yml").read_text())
     template = (project / "template" / "{{ web_path }}" / "src" / "main.tsx.jinja").read_text()
-    inputs = {name: answers[name]["default"] for name in ("home", "confine_to")}
-    for confine_to in (inputs["confine_to"], "requests", 'requests"\\draft'):
-        values = {**inputs, "confine_to": confine_to}
-        rendered = _render_conditionals(template, values)
-        rendered = re.sub(
-            r"\{\{\s*(\w+)\s*\|\s*tojson\s*\}\}",
-            lambda match: json.dumps(values[match.group(1)]),
-            rendered,
-        )
-        assert "{{" not in rendered
-        assert "{%" not in rendered
-        if confine_to:
-            assert f"confineTo: {json.dumps(confine_to)}," in rendered
-        else:
-            assert "confineTo:" not in rendered
+
+    assert not {"home", "confine_to"} & answers.keys()
+    assert "home:" not in template
+    assert "confineTo" not in template
 
 
 def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> None:
