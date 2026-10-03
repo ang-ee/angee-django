@@ -10,6 +10,7 @@ import type {
   DialogTitleProps as BaseDialogTitleProps,
   DialogTriggerProps as BaseDialogTriggerProps,
 } from "@base-ui/react/dialog";
+import { useActionMenuFinalFocus } from "./action-menu-context";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -97,13 +98,15 @@ export const DialogContent = React.forwardRef<
   HTMLDivElement,
   DialogContentProps
 >(function DialogContent(
-  { className, placement = "default", size = "md", ...props },
+  { className, placement = "default", size = "md", finalFocus, ...props },
   ref,
 ) {
   const styles = dialogVariants({ placement, size });
+  const menuFinalFocus = useActionMenuFinalFocus();
   return (
     <BaseDialog.Popup
       ref={ref}
+      finalFocus={finalFocus ?? menuFinalFocus}
       className={styles.content({ className })}
       {...props}
     />

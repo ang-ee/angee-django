@@ -16,7 +16,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { DialogForm } from "../../fragments/DialogForm";
 import { RecordActionBar } from "./RecordActionBar";
-import { RecordActionTrigger } from "./RecordActionMenu";
+import { ActionTrigger } from "../../toolbars/ActionMenu";
 import { createUiTestProviders } from "../../testing";
 import { RecordChromeProvider } from "../resource/record-chrome-context";
 import { AppRuntimeProvider } from "../../runtime";
@@ -356,9 +356,9 @@ function DialogActionProbe({
       onOpenChange={setOpen}
       title="Credential form"
       trigger={
-        <RecordActionTrigger ref={onTriggerRef} data-testid="credential-trigger">
+        <ActionTrigger ref={onTriggerRef} data-testid="credential-trigger">
           Update credential
-        </RecordActionTrigger>
+        </ActionTrigger>
       }
     >
       <label htmlFor="username">Username</label>

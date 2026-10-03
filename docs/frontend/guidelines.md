@@ -586,6 +586,10 @@ shared UI copy through an addon bundle.
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
+- Toolbar and record menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
+  Contributions use `ActionTrigger` to adapt between a toolbar button and a native
+  menu item. The shared owner keeps dialogs mounted after the menu closes and
+  returns focus to its toolbar trigger; pages supply domain labels through i18n.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
