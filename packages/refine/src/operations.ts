@@ -152,7 +152,8 @@ export interface FacetRequestSpec extends GroupByRequestOptions {
 }
 
 export interface ResourceFacetOption {
-  value: string;
+  /** Raw bucket token; SQL null stays distinct from an empty string. */
+  value: string | null;
   label: string;
   count: number;
   key: Record<string, unknown>;
@@ -550,9 +551,9 @@ function facetResult(
         facet.dimensions[0]?.key ??
         facet.dimensions[0]?.input;
       const value = valueKey ? stringValue(key[valueKey]) : null;
-      if (value === null) return [];
+      if (value === null && (!valueKey || key[valueKey] !== null)) return [];
       const labelKey = facet.labelKey ?? valueKey;
-      const label = labelKey ? (stringValue(key[labelKey]) ?? value) : value;
+      const label = (labelKey ? stringValue(key[labelKey]) : value) ?? value ?? "";
       return [{ value, label, count: bucket.count, key }];
     }),
   };

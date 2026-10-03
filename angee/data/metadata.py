@@ -83,7 +83,7 @@ class DataResourceFieldMetadata:
 
 @dataclass(frozen=True, slots=True)
 class DataQueryValueMap:
-    """One backend-owned enum bucket rewrite into an accepted filter value."""
+    """One schema-owned enum rewrite into a row or filter value domain."""
 
     from_value: Annotated[Any, Field(serialization_alias="from")]
     to_value: Annotated[Any, Field(serialization_alias="to")]
@@ -126,6 +126,8 @@ class DataQueryServerAxis:
     key: str
     label_input: str | None = None
     label_key: str | None = None
+    value_map: tuple[DataQueryValueMap, ...] = ()
+    """Translate emitted bucket symbols into the row's value domain."""
 
 
 @dataclass(frozen=True, slots=True)
