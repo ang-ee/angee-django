@@ -55,7 +55,7 @@ export interface CompiledMenus {
    * left out of the rail kept with `hidden`, so the palette and admission keep them.
    */
   navigation: readonly ChromeMenuItem[];
-  /** Removed nodes, subtrees included: the routes they referenced, the removing layer, where they sat, their label. */
+  /** Removed nodes, subtrees included: the routes they referenced, the removing layer, where they showed, their label. */
   removed: readonly { id: string; route?: string; by: string; parent?: string; label?: string }[];
   /** Surviving nodes left out of the rail, by a `hide` or by a layer's `only`. */
   hidden: readonly { id: string; by: string; reason: "hide" | "only" }[];
@@ -257,7 +257,11 @@ function resolve(
   const removed = new Map<string, CompiledMenus["removed"][number]>();
   const collectRemoved = (node: Node, by: string): void => {
     if (removed.has(node.id)) return;
-    const parent = parentOf(node);
+    // Where it showed: the nearest ancestor that is not flattened into its own parent.
+    let parent = parentOf(node);
+    while (parent !== undefined && nodes.get(parent)!.fields.flatten && parentOf(nodes.get(parent)!) !== undefined) {
+      parent = parentOf(nodes.get(parent)!);
+    }
     removed.set(node.id, {
       id: node.id,
       ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}),
