@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { InAppLinkProvider } from "../lib/in-app-link";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { MetricStrip, MetricTile } from "./MetricStrip";
@@ -38,10 +39,10 @@ describe("MetricStrip", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  test("a tile with href is a link and routes via onNavigate on a plain click", () => {
+  test("a tile with href is a link and routes through the provider on a plain click", () => {
     const onNavigate = vi.fn();
     render(
-      <MetricTile label="Fields" value={12} href="/fields?model=Note" onNavigate={onNavigate} />,
+      <InAppLinkProvider navigate={onNavigate}><MetricTile label="Fields" value={12} href="/fields?model=Note" /></InAppLinkProvider>,
     );
     const link = screen.getByRole("link");
     expect(link.getAttribute("href")).toBe("/fields?model=Note");

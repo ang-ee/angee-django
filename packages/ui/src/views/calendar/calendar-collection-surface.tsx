@@ -85,7 +85,7 @@ export function CalendarCollectionSurface({
   const handleEventClick = React.useCallback(
     (occurrence: Occurrence) => {
       // A marker with a source-declared route navigates; one without is inert.
-      if (occurrence.to) void navigate({ to: occurrence.to });
+      if (occurrence.to) void navigate({ href: occurrence.to });
     },
     [navigate],
   );

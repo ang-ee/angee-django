@@ -2,7 +2,7 @@ import * as React from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import type { Row as TableRowModel } from "@tanstack/react-table";
-import { useNavigate } from "@tanstack/react-router";
+import { useInAppLinkClick } from "../../../lib/in-app-link";
 import { type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
@@ -257,26 +257,7 @@ function BoardCardFrame({
   onRecordOpen?: () => void;
   children: React.ReactNode;
 }): React.ReactElement {
-  const navigate = useNavigate();
-  const handleLinkClick = React.useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      if (
-        !href
-        || event.defaultPrevented
-        || event.button !== 0
-        || event.metaKey
-        || event.ctrlKey
-        || event.shiftKey
-        || event.altKey
-      ) {
-        return;
-      }
-      event.preventDefault();
-      onRecordOpen?.();
-      void navigate({ to: href });
-    },
-    [href, navigate, onRecordOpen],
-  );
+  const handleLinkClick = useInAppLinkClick(href, undefined, { onFollow: onRecordOpen });
   if (href) {
     return (
       <a href={href} className={BOARD_CARD_SHELL_CLASS} onClick={handleLinkClick}>

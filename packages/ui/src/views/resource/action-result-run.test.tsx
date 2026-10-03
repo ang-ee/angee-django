@@ -86,7 +86,7 @@ describe("useActionResultRun", () => {
     expect(mocks.toast.success).toHaveBeenCalledWith({
       title: "Item created.",
     });
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/example/items/item_9" });
+    expect(mocks.navigate).toHaveBeenCalledWith({ href: "/example/items/item_9" });
     expect(mocks.toast.danger).not.toHaveBeenCalled();
   });
 

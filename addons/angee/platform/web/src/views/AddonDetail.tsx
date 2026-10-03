@@ -4,7 +4,7 @@ import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecord
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
-import { LinkedChips, useRouteNavigate } from "../lib/cells";
+import { LinkedChips } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
 
 export function AddonDetail(): ReactElement {
@@ -13,7 +13,6 @@ export function AddonDetail(): ReactElement {
   const routeHref = useRouteHref();
   const { addon, dependsOn, dependedBy, modelLabels, isFetching: fetching } =
     usePlatformAddon(id);
-  const go = useRouteNavigate();
 
   return (
     <DetailSurface
@@ -55,7 +54,6 @@ export function AddonDetail(): ReactElement {
                       platformScopeSearch({ addon: addon.id }),
                     )
                   : undefined,
-                onNavigate: go,
               },
               {
                 label: t("col.fields"),
@@ -68,7 +66,6 @@ export function AddonDetail(): ReactElement {
                       platformScopeSearch({ addon: addon.id }),
                     )
                   : undefined,
-                onNavigate: go,
               },
               {
                 label: t("col.resources"),

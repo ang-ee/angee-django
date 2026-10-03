@@ -227,6 +227,15 @@ shared UI copy through an addon bundle.
   fails fast on invalid declarations. Keep query-string codecs addon-local.
   `resourcePageRoutes` names record children `${collectionName}.record` by
   default; use `detailName` only when preserving a deliberate established name.
+- In-app anchors compose the [in-app link owner](../../packages/ui/src/lib/in-app-link.tsx),
+  mounted by `createApp`; plain clicks route automatically and provider-less links
+  stay native. Never pass `onNavigate` merely to call the router, or put a
+  query-bearing href in TanStack `to`; use `navigate({ href })` or the owner's
+  chrome href conversion.
+- [Breadcrumb history](../../packages/ui/src/chrome/Breadcrumb.tsx) lives in TanStack
+  location `state.trail`: console content links carry the current nested trail,
+  earlier crumbs truncate it, browser Back restores it, and chrome navigation
+  starts fresh. Menu destinations show no strip.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, containers, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
@@ -1140,14 +1149,28 @@ Hard-won traps — the wise learn from others' mistakes
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
-  bar; deeper items use the shared dropdown menu and labelled groups.
+  bar; deeper items use the shared dropdown menu and labelled groups. The bar
+  leads with the app's name (or Settings) as a title, set apart from its menus
+  and never marked current. The breadcrumb strip under the bar appears only for
+  nested navigation, a record and deeper
+  ([`useNestedBreadcrumbItems`](../../packages/ui/src/chrome/Breadcrumb.tsx)):
+  a menu destination is already named by the bar, so the trail starts at the
+  current menu page, with the list's return link.
+  The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
+  measures the ordered menus followed by developer removed markers, and excess
+  entries go into More. The current trail's menu keeps the last visible slot;
+  when no entries fit, More holds them all and is marked current when it holds
+  the current page. A route-less menu with one child is the same link in the row
+  and in More. Icon-only rail links show supplementary name tooltips; developer
+  descriptions follow the name.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
   `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
   contributes to the shared **Settings place** in every console: the rail and
   chooser expose one synthetic Settings entry, and the expanded rail swaps to
   the platform tree with a back header. Settings and the expansion toggle sit
   below the scrolling list, and the rail is viewport-sticky so both remain
-  reachable. At desktop widths, a
+  reachable. The expanded desktop
+  header also composes the same expansion toggle. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
   a root with visible included apps opens those sub-apps temporarily in the

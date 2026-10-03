@@ -120,7 +120,7 @@ describe("CalendarCollectionSurface", () => {
   test("navigates only for an occurrence carrying a source-declared route", () => {
     renderSurface(surfaceProps());
     mocks.calendarProps?.onEventClick?.(OCC_WITH_ROUTE);
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/calendar/cev_a" });
+    expect(mocks.navigate).toHaveBeenCalledWith({ href: "/calendar/cev_a" });
 
     mocks.navigate.mockClear();
     mocks.calendarProps?.onEventClick?.(OCC_NO_ROUTE);

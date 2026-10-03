@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
+import { InAppLinkProvider } from "../../lib/in-app-link";
 import { RecordReference } from "./RecordReference";
 
 const resource = testDataResource("notes.Note", {
@@ -22,20 +25,35 @@ const runtime = {
   routesByResource: { "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } } },
 };
 
-test("reads the metadata representation and follows the registered record route", async () => {
+/** Render inside a router, as every console surface is. */
+function renderInRouter(ui: ReactNode) {
+  const root = createRootRoute({ component: () => <InAppLinkProvider navigate={(href, options) => { void router.navigate({ href, ...options }); }}>{ui}</InAppLinkProvider> });
+  const router = createRouter({
+    routeTree: root.addChildren(["/home", "/notes/$id"].map((path) => createRoute({ getParentRoute: () => root, path }))),
+    history: createMemoryHistory({ initialEntries: ["/home"] }),
+  });
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
+test("reads the metadata representation and follows the registered record route in-app", async () => {
   const getOne = vi.fn(async () => ({ data: { id: "note-1", title: "Review notes" } }));
-  render(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
+  const router = renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
     <RecordReference model="notes.Note" id="note-1" />
   </AppRuntimeProvider></Provider>);
-  expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/note-1");
+  const link = await screen.findByRole("link", { name: "Review notes" });
+  expect(link.getAttribute("href")).toBe("/notes/note-1");
   expect(getOne).toHaveBeenCalledWith(expect.objectContaining({
     resource: "notes", id: "note-1", meta: expect.objectContaining({ fields: ["id", "title"] }),
   }));
+  // The router follows the link; a plain anchor would reload the whole console.
+  expect(fireEvent.click(link)).toBe(false);
+  await waitFor(() => expect(router.state.location.pathname).toBe("/notes/note-1"));
 });
 
 test("keeps the identity readable when a record cannot be read or routed", async () => {
   const getOne = vi.fn(async () => ({ data: null }));
-  render(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={{}}>
+  renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={{}}>
     <RecordReference model="notes.Note" id="note-missing" />
   </AppRuntimeProvider></Provider>);
   await waitFor(() => expect(getOne).toHaveBeenCalledOnce());
@@ -43,13 +61,13 @@ test("keeps the identity readable when a record cannot be read or routed", async
   expect(screen.queryByRole("link")).toBeNull();
 });
 
-test("uses a supplied label without a record read and retains the owning surface's open action", () => {
+test("uses a supplied label without a record read and retains the owning surface's open action", async () => {
   const getOne = vi.fn();
   const open = vi.fn();
-  render(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
+  renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
     <RecordReference model="notes.Note" id="note-1" label="Retained note" onOpen={open} />
   </AppRuntimeProvider></Provider>);
-  fireEvent.click(screen.getByRole("button", { name: "Retained note" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Retained note" }));
   expect(open).toHaveBeenCalledOnce();
   expect(getOne).not.toHaveBeenCalled();
   expect(screen.queryByRole("link")).toBeNull();

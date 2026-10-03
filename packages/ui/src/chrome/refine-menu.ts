@@ -83,6 +83,11 @@ export function useChromePlace(): ChromePlace {
   return place;
 }
 
+/** The console's place when one is provided; leaf chrome such as the breadcrumb also renders without it. */
+export function useOptionalChromePlace(): ChromePlace | null {
+  return useContext(ChromePlaceContext);
+}
+
 export function chromeMenuItemsFromRefine(
   menuItems: readonly TreeMenuItem[],
 ): readonly ChromeMenuItem[] {

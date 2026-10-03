@@ -58,7 +58,7 @@ export function TopBar({
       {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
       {showAppMenu ? <AppMenu /> : null}
-      <div className="min-w-2 flex-1" />
+      <div className="ml-auto min-w-2" />
       <CommandPalette />
       <DeveloperMenu />
       {showUserMenu ? (

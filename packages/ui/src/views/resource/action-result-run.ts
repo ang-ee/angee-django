@@ -84,7 +84,7 @@ export function useActionResultRun(
       toast.success({ title: outcome.message });
       const target = outcome.id ? targetRecordHref?.(outcome.id) : undefined;
       if (target) {
-        void navigate({ to: target });
+        void navigate({ href: target });
       }
       return outcome;
     },

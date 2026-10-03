@@ -84,7 +84,7 @@ describe("developer mode", () => {
     renderChrome();
     // The top bar (G-20) carries the app's own menus, hidden ones marked and removed ones struck through.
     expect(await screen.findByRole("link", { name: "Archive (hidden)" })).toBeTruthy();
-    expect(screen.getByText("Board — removed by suite")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Board — removed by suite" })).toBeTruthy();
     // A menu whose children were all removed opens to show them.
     fireEvent.click(screen.getByRole("button", { name: "Reports" }));
     expect(await screen.findByText("Old reports — removed by suite")).toBeTruthy();

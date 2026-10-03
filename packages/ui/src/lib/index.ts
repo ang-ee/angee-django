@@ -49,3 +49,4 @@ export {
   type UseDropTargetOptions,
   type UseFileDropTargetOptions,
 } from "./dnd";
+export { InAppLinkProvider, useInAppNavigator, useInAppLinkClick, type InAppNavigator } from "./in-app-link";

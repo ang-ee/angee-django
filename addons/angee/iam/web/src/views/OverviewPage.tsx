@@ -1,6 +1,5 @@
 import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { useNavigate } from "@tanstack/react-router";
 
 import {
   formSubmitError, Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, mutationDialogValueCodecs, textRoleVariants, titleCase, useAuthoredResourceMutation, useRouteHref, type DescriptorField } from "@angee/ui";
@@ -26,11 +25,7 @@ const PEEK_LIMIT = 6;
  */
 export function OverviewPage(): ReactElement {
   const t = useIamT();
-  const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const navigateToMetric = (href: string): void => {
-    void navigate({ to: href });
-  };
   const overviewVars = useMemo<IAMOverviewVariables>(
     () => ({ peekLimit: PEEK_LIMIT }),
     [],
@@ -86,12 +81,12 @@ export function OverviewPage(): ReactElement {
 
   return (
     <DashboardView className="p-1">
-      <Metric label={t("overview.metric.users")} value={overviewFacts?.user_count} format="count" loading={loading} icon="users" href={routeHref("iam.users")} onNavigate={navigateToMetric} />
-      <Metric label={t("overview.metric.roles")} value={overviewFacts?.role_count} format="count" loading={loading} icon="auth" tone="brand" href={routeHref("iam.roles")} onNavigate={navigateToMetric} />
-      <Metric label={t("overview.metric.grants")} value={overviewFacts?.grant_count} format="count" loading={loading} icon="check" tone="success" href={routeHref("iam.grants")} onNavigate={navigateToMetric} />
-      <Metric label={t("overview.metric.relationships")} value={overviewFacts?.relationship_count} format="count" loading={loading} icon="share" tone="info" href={routeHref("iam.relationships")} onNavigate={navigateToMetric} />
-      <Metric label={t("overview.metric.privileged")} value={overviewFacts?.privileged_grant_count} format="count" loading={loading} icon="auth" tone="warning" detail={t("overview.metric.privilegedDetail")} href={routeHref("iam.grants")} onNavigate={navigateToMetric} />
-      <Metric label={t("overview.metric.unassigned")} value={overviewFacts?.unassigned_user_count} format="count" loading={loading} icon="users" tone="danger" detail={t("overview.metric.unassignedDetail")} href={routeHref("iam.users")} onNavigate={navigateToMetric} />
+      <Metric label={t("overview.metric.users")} value={overviewFacts?.user_count} format="count" loading={loading} icon="users" href={routeHref("iam.users")} />
+      <Metric label={t("overview.metric.roles")} value={overviewFacts?.role_count} format="count" loading={loading} icon="auth" tone="brand" href={routeHref("iam.roles")} />
+      <Metric label={t("overview.metric.grants")} value={overviewFacts?.grant_count} format="count" loading={loading} icon="check" tone="success" href={routeHref("iam.grants")} />
+      <Metric label={t("overview.metric.relationships")} value={overviewFacts?.relationship_count} format="count" loading={loading} icon="share" tone="info" href={routeHref("iam.relationships")} />
+      <Metric label={t("overview.metric.privileged")} value={overviewFacts?.privileged_grant_count} format="count" loading={loading} icon="auth" tone="warning" detail={t("overview.metric.privilegedDetail")} href={routeHref("iam.grants")} />
+      <Metric label={t("overview.metric.unassigned")} value={overviewFacts?.unassigned_user_count} format="count" loading={loading} icon="users" tone="danger" detail={t("overview.metric.unassignedDetail")} href={routeHref("iam.users")} />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-6">

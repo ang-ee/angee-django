@@ -12,14 +12,14 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppRuntimeProvider } from "../runtime";
+import { AppRuntimeProvider, type AppRuntime } from "../runtime";
 import { AppRail } from "./AppRail";
 import { AppMenu } from "./AppMenu";
 import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 import { ChromePlaceProvider } from "./refine-menu";
 
 const media = vi.hoisted(() => ({ large: false }));
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
 
 vi.mock("../lib/use-media-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/use-media-query")>()),
@@ -60,6 +60,71 @@ const menuItems: readonly ChromeMenuItem[] = [
 ];
 
 describe("AppRail intermediate navigation", () => {
+  test("the top collapse toggle shares the footer control and disappears in icon mode", async () => {
+    media.large = true;
+    renderRail();
+    const toggles = await screen.findAllByRole("button", { name: "Collapse app navigation" });
+    expect(toggles).toHaveLength(2);
+    expect(toggles[0]!.parentElement?.textContent).toContain("Apps");
+    expect(toggles[0]!.getAttribute("aria-controls")).toBe(toggles[1]!.getAttribute("aria-controls"));
+    fireEvent.click(toggles[0]!);
+    const footer = await screen.findByRole("button", { name: "Expand app navigation" });
+    expect(screen.queryByRole("button", { name: "Collapse app navigation" })).toBeNull();
+    expect(document.activeElement).toBe(footer);
+    fireEvent.click(footer);
+    expect(await screen.findAllByRole("button", { name: "Collapse app navigation" })).toHaveLength(2);
+  });
+
+  test.each([
+    ["app", "Projects", false],
+    ["sub-app", "Desk", true],
+    ["shortcut", "Saved project", false],
+    ["Settings", "Settings", false],
+    ["brand", "Projects", true],
+  ])("icon-only %s tooltip supplements the link's accessible name", async (_kind, label, confined) => {
+    media.large = false;
+    renderRail({}, confined);
+    const link = await screen.findByRole("link", { name: label });
+    fireEvent.mouseEnter(link);
+    fireEvent.mouseMove(link);
+    const tooltipText = (content: string, element: Element | null) => Boolean(element?.closest("[data-base-ui-portal]")) && content.startsWith(label);
+    const tooltip = await screen.findByText(tooltipText);
+    expect(tooltip.textContent).toContain(label);
+    expect(link.getAttribute("aria-label")).toBe(label);
+    expect(screen.getByRole("link", { name: label })).toBe(link);
+    expect(screen.getAllByText(tooltipText)).toHaveLength(1);
+  });
+
+  test("expanded app, sub-app, shortcut and Settings links have no supplementary name tooltips", async () => {
+    media.large = true;
+    renderRail();
+    for (const label of ["Projects", "Desk", "Saved project", "Settings"]) {
+      const link = await screen.findByRole("link", { name: label });
+      expect(link.hasAttribute("data-base-ui-tooltip-trigger")).toBe(false);
+    }
+  });
+
+  test.each([
+    ["Projects", "projects", false, false],
+    ["Projects", "projects", false, true],
+    ["Desk", "desk", true, false],
+    ["Projects", "projects", true, false],
+  ])("icon tooltips retain %s and hints before developer description %s (confined: %s, default: %s)", async (label, id, confined, defaultApp) => {
+    media.large = false;
+    renderRail({ userPreferences: { available: true, preferences: {
+      developerMode: true, "chrome.rail": { defaultItemId: defaultApp ? "projects" : null },
+    }, patchPreferences: async () => undefined } }, confined);
+    const link = await screen.findByRole("link", { name: label });
+    fireEvent.mouseEnter(link);
+    fireEvent.mouseMove(link);
+    const hint = !confined ? defaultApp
+      ? "Projects — default app; drag to reorder"
+      : "Projects — drag to reorder; long press to set as default" : label;
+    const tooltipLabel = `${hint} · ${id}`;
+    expect((await screen.findByText(tooltipLabel)).closest("[data-base-ui-portal]")).toBeTruthy();
+    expect(screen.getAllByText(tooltipLabel)).toHaveLength(1);
+  });
+
   test("the rail and top bar share one memoized full-tree match, including preset changes", async () => {
     media.large = true;
     const tree = MenuTree.from([{ id: "m", label: "Messaging", to: "/m", children: [
@@ -128,9 +193,10 @@ describe("AppRail intermediate navigation", () => {
     const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/desk" })]),
       history: createMemoryHistory({ initialEntries: ["/desk"] }) });
     render(<RouterProvider router={router} />);
-    const collapse = await screen.findByRole("button", { name: "Collapse app navigation" });
+    const [collapse] = await screen.findAllByRole("button", { name: "Collapse app navigation" });
+    expect(collapse!.classList.contains("ml-auto")).toBe(true);
     expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
-    fireEvent.click(collapse);
+    fireEvent.click(collapse!);
     await screen.findByRole("button", { name: "Expand app navigation" });
     expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
     expect(screen.getByRole("link", { name: "Desk brand" })).toBeTruthy();
@@ -244,3 +310,20 @@ describe("AppRail intermediate navigation", () => {
     await waitFor(() => expect(notes.getAttribute("aria-current")).toBe("page"));
   });
 });
+
+function renderRail(runtime: Partial<AppRuntime> = {}, confined = false) {
+  function Host() {
+    const [preferences, setPreferences] = useState<Record<string, unknown>>({
+      "chrome.routeShortcuts": [{ id: "saved", label: "Saved project", path: "/projects/all/1" }],
+    });
+    return <AppRuntimeProvider runtime={{
+      ...(confined ? { confineTo: "projects" } : {}),
+      userPreferences: { available: true, preferences, patchPreferences: async (patch) => setPreferences(patch) },
+      ...runtime,
+    }}><AppRail menuItems={confined ? MenuTree.from(menuItems).confineTo("projects").roots : menuItems} /></AppRuntimeProvider>;
+  }
+  const root = createRootRoute({ component: Host });
+  const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/projects" })]),
+    history: createMemoryHistory({ initialEntries: ["/projects"] }) });
+  render(<RouterProvider router={router} />);
+}

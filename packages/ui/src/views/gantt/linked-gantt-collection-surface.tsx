@@ -120,16 +120,15 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     const row = rows.find((candidate) => rowPublicId(candidate, laneResource) === id);
     if (!row) return;
     if (onRowClick) onRowClick(row);
-    else if (rowHref) void navigate({ to: rowHref(row) });
+    else if (rowHref) void navigate({ href: rowHref(row) });
   }, [rows, laneResource, onRowClick, rowHref, navigate]);
   const renderResourceContent = React.useCallback((resource: GanttResource) => {
     const row = rows.find((candidate) => rowPublicId(candidate, laneResource) === resource.id);
     if (!row) return null;
     const details = projection.detailsByLane.get(resource.id) ?? { title: resource.title };
     return <GanttLane details={{ ...details, href: details.href ?? rowHref?.(row) }}
-      onOpen={onRowClick ? () => onRowClick(row) : undefined}
-      onNavigate={(href) => void navigate({ to: href })} />;
-  }, [rows, laneResource, projection.detailsByLane, rowHref, onRowClick, navigate]);
+      onOpen={onRowClick ? () => onRowClick(row) : undefined} />;
+  }, [rows, laneResource, projection.detailsByLane, rowHref, onRowClick]);
   const selectedIds = Object.keys(resourceView.state.rowSelection).filter((id) => resourceView.state.rowSelection[id]);
   return <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className}
     error={list.error} onRetry={refetch} loadingFooter={fetching}

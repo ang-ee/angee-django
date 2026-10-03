@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "@tanstack/react-router";
 import { type Table as TableModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
@@ -7,6 +6,7 @@ import { EmptyState } from "../../../fragments/EmptyState";
 import { useUiT } from "../../../i18n";
 import { cn } from "../../../lib/cn";
 import { Button, buttonVariants, type ButtonVariant } from "../../../ui/button";
+import { NavLink } from "../../../ui/nav-link";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
 import { TableCell, TableRow } from "../../../ui/table";
 import { textRoleVariants } from "../../../ui/text";
@@ -157,17 +157,10 @@ function renderListEmptyAction(
     </>
   );
   if (action.href) {
-    if (isInternalHref(action.href)) {
-      return (
-        <Link className={buttonVariants({ variant })} to={action.href}>
-          {content}
-        </Link>
-      );
-    }
     return (
-      <a className={buttonVariants({ variant })} href={action.href}>
+      <NavLink className={buttonVariants({ variant })} href={action.href}>
         {content}
-      </a>
+      </NavLink>
     );
   }
   return (
@@ -175,8 +168,4 @@ function renderListEmptyAction(
       {content}
     </Button>
   );
-}
-
-function isInternalHref(href: string): boolean {
-  return href.startsWith("/") && !href.startsWith("//");
 }
