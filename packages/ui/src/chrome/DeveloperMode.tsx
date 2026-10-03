@@ -91,7 +91,10 @@ function CompositionDialog({ onClose }: { onClose: () => void }): ReactElement {
         <Dialog.Backdrop />
         <Dialog.Content size="lg" placement="center">
           <Dialog.Header>
-            <Dialog.Title>{t("developer.composition")}</Dialog.Title>
+            <div className="flex items-start gap-3">
+              <Dialog.Title className="min-w-0 flex-1">{t("developer.composition")}</Dialog.Title>
+              <Dialog.Close />
+            </div>
           </Dialog.Header>
           <Dialog.Body className="space-y-3 text-xs">
             <DeveloperSummary />
