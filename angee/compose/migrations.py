@@ -1,4 +1,4 @@
-"""Materialize addon-owned Django migrations into composed runtime apps."""
+"""Materialize addon-owned Django migrations and guard autodetected drops."""
 
 from __future__ import annotations
 
@@ -14,11 +14,18 @@ from typing import Any, cast
 
 from django.apps import AppConfig
 from django.apps.registry import Apps
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management.base import CommandError
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
 from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.operations.fields import RemoveField
 from django.db.migrations.operations.models import DeleteModel
 from django.db.migrations.state import ProjectState
+from django.db.models.expressions import DatabaseDefault
 
 from angee.addons import addon_manifest
 from angee.fs import write_atomic
@@ -529,3 +536,93 @@ class RuntimeMigrations:
             )
         )
         return "".join(lines)
+
+
+class DropGuardAutodetector(MigrationAutodetector):
+    """Django's autodetector, refusing to drop a column that still holds data.
+
+    ``makemigrations`` detects changes before writing, so a refusal leaves no
+    migration file behind; ``migrate`` shares the autodetector, so its pending
+    model-changes notice reports the same refusal.
+
+    A column holds data when some row differs from the field's empty value: NULL
+    for a nullable field, otherwise ``Field.get_default()`` (callable defaults
+    evaluated; a database default has no comparable value, so every row counts).
+    An auto-created many-to-many table holds data when it has any row; an explicit
+    through model and a generated column store nothing of their own. Every
+    database that may receive the migration, selected like Django's history
+    consistency check, must prove the column empty; an unreachable or
+    unconfigured database cannot, so the drop is refused.
+
+    A reviewed drop is an addon runtime migration: ``angee build`` materializes it
+    into the history first, so its removal is never autodetected here.
+    """
+
+    def changes(
+        self,
+        graph: MigrationGraph,
+        trim_to_apps: set[str] | None = None,
+        convert_apps: set[str] | None = None,
+        migration_name: str | None = None,
+    ) -> dict[str, list[Migration]]:
+        """Return Django's changes, or refuse when a removed column holds data."""
+
+        changes = super().changes(graph, trim_to_apps, convert_apps, migration_name)
+        refusals = [
+            refusal
+            for app_label, app_migrations in sorted(changes.items())
+            for migration in app_migrations
+            for operation in migration.operations
+            if isinstance(operation, RemoveField)
+            for refusal in self._populated(app_label, operation)
+        ]
+        if refusals:
+            raise CommandError(
+                "unsafe autodetected column drop: " + "; ".join(refusals)
+                + ". A column is dropped automatically only when every database that may receive the "
+                "migration proves it empty (NULL for a nullable field, otherwise the field's default). "
+                "Declare a cutover migration that preserves or retires this data and removes the field "
+                "in an installed addon's addon.toml [[migrations]], then run `angee build` before makemigrations."
+            )
+        return changes
+
+    def _populated(self, app_label: str, operation: RemoveField) -> Iterator[str]:
+        """Describe each target database where the removed field's storage holds data."""
+
+        model = self.from_state.apps.get_model(app_label, operation.model_name)
+        field = model._meta.get_field(operation.name)
+        if field.many_to_many:
+            through = field.remote_field.through
+            if not through._meta.auto_created:
+                return
+            rows, table, column = through._base_manager.all(), through._meta.db_table, None
+        elif field.concrete and not field.generated:
+            empty = None if field.null else field.get_default()
+            rows = model._base_manager.all()
+            if empty is None:
+                rows = rows.exclude(**{f"{field.attname}__isnull": True})
+            elif not isinstance(empty, DatabaseDefault):
+                rows = rows.exclude(**{field.attname: empty})
+            table, column = model._meta.db_table, field.column
+        else:
+            return
+        storage = f"table {table}" if column is None else f"column {table}.{column}"
+        name = f"{model._meta.label_lower}.{field.name}"
+        aliases = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
+        for alias in sorted(aliases):
+            if not router.allow_migrate_model(alias, model):
+                continue
+            connection = connections[alias]
+            introspection = connection.introspection
+            try:
+                with connection.cursor() as cursor:
+                    present = table in introspection.table_names(cursor) and (
+                        column is None
+                        or column in {info.name for info in introspection.get_table_description(cursor, table)}
+                    )
+                count = rows.using(alias).count() if present else 0
+            except (DatabaseError, ImproperlyConfigured) as error:
+                yield f"{name}: cannot prove {storage} empty on database {alias!r} ({error})"
+                continue
+            if count:
+                yield f"{name}: {storage} holds data in {count} row(s) on database {alias!r}"
