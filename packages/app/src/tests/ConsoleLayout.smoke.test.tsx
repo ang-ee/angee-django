@@ -315,15 +315,17 @@ describe("ConsoleLayout", () => {
     expect(within(topBar).queryByRole("button", { name: "Notifications" }))
       .toBeNull();
     expect(within(topBar).queryByRole("button", { name: "Help" })).toBeNull();
-    // The expansion toggle is pinned at the rail's foot — outside the top bar
-    // and outside the scrolling list, so it can never scroll away.
-    const railToggle = await screen.findByRole("button", {
+    // Header and footer controls stay outside the top bar and scrolling list.
+    const railToggles = await screen.findAllByRole("button", {
       name: "Collapse app navigation",
     });
-    expect(railToggle.getAttribute("aria-expanded")).toBe("true");
-    expect(topBar.contains(railToggle)).toBe(false);
-    expect(rail.contains(railToggle)).toBe(false);
-    expect(railToggle.closest("aside")).toBe(rail.closest("aside"));
+    expect(railToggles).toHaveLength(2);
+    for (const toggle of railToggles) {
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(topBar.contains(toggle)).toBe(false);
+      expect(rail.contains(toggle)).toBe(false);
+      expect(toggle.closest("aside")).toBe(rail.closest("aside"));
+    }
     expect(within(topBar).queryByRole("button", {
       name: "Collapse primary panel",
     })).toBeNull();
@@ -339,7 +341,7 @@ describe("ConsoleLayout", () => {
     expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
 
-    fireEvent.click(railToggle);
+    fireEvent.click(railToggles[1]!);
     expect(await screen.findByRole("button", {
       name: "Expand app navigation",
     })).toBeTruthy();
@@ -348,7 +350,7 @@ describe("ConsoleLayout", () => {
 
     // A second click on the already-active app icon re-expands the rail.
     fireEvent.click(within(rail).getByRole("link", { name: "Notes" }));
-    expect(await screen.findByRole("button", { name: "Collapse app navigation" })).toBeTruthy();
+    expect(await screen.findAllByRole("button", { name: "Collapse app navigation" })).toHaveLength(2);
     expect(within(rail).queryByRole("link", { name: "All notes" })).toBeNull();
   });
 
@@ -387,11 +389,14 @@ describe("ConsoleLayout", () => {
     const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
     expect(within(topBar).queryByText("Overview")).toBeNull();
     expect(within(topBar).getByRole("navigation", { name: "Settings menu" })).toBeTruthy();
-    const settingsRailToggle = await screen.findByRole("button", {
+    const settingsRailToggles = await screen.findAllByRole("button", {
       name: "Collapse app navigation",
     });
-    expect(topBar.contains(settingsRailToggle)).toBe(false);
-    expect(settingsRailToggle.closest("aside")).toBe(rail.closest("aside"));
+    expect(settingsRailToggles).toHaveLength(2);
+    for (const toggle of settingsRailToggles) {
+      expect(topBar.contains(toggle)).toBe(false);
+      expect(toggle.closest("aside")).toBe(rail.closest("aside"));
+    }
     expect(within(topBar).queryByRole("button", {
       name: "Collapse primary panel",
     })).toBeNull();

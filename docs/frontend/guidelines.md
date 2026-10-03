@@ -1123,12 +1123,18 @@ Hard-won traps — the wise learn from others' mistakes
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
   bar; deeper items use the shared dropdown menu and labelled groups.
+  The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
+  measures the ordered menus followed by developer removed markers, and excess
+  entries go into More. The current trail's menu keeps the last visible slot;
+  when no entries fit, the app name labels the dropdown. Icon-only rail links
+  show supplementary name tooltips; developer descriptions take precedence.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
   `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
   shared **Settings place** instead: the rail and chooser expose one synthetic
   Settings entry, and the expanded rail swaps to the platform tree with a back
   header. Settings and the expansion toggle sit below the scrolling list, and
-  the rail is viewport-sticky so both remain reachable. At desktop widths, a
+  the rail is viewport-sticky so both remain reachable. The expanded desktop
+  header also composes the same expansion toggle. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
   a root with visible included apps opens those sub-apps temporarily in the

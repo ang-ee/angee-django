@@ -72,6 +72,7 @@ describe("work addon manifest", () => {
       "work.task-triage-actions",
     ]);
     expect(Object.keys(work.icons ?? {}).sort()).toEqual([
+      "work",
       "work-accept",
       "work-board",
       "work-cycle",

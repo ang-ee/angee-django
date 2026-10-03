@@ -1,10 +1,9 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ComponentPropsWithRef, ReactElement, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { cn } from "../lib/cn";
 
-export interface AppBrandProps {
-  className?: string;
+export interface AppBrandProps extends Omit<ComponentPropsWithRef<"a">, "children"> {
   compact?: boolean;
   mark?: ReactNode;
   name: string;
@@ -17,6 +16,7 @@ export function AppBrand({
   mark,
   name,
   to = "/",
+  ...props
 }: AppBrandProps): ReactElement {
   return (
     <Link
@@ -27,6 +27,7 @@ export function AppBrand({
         "flex h-7 min-w-0 items-center gap-2 rounded-6 px-2 text-sm font-semibold text-on-rail outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring",
         className,
       )}
+      {...props}
     >
       {mark != null ? <span className="grid size-4 shrink-0 place-content-center text-brand [&>svg]:size-4">
         {mark}

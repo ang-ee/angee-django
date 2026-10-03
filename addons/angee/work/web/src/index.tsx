@@ -11,12 +11,13 @@ import {
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   ArchiveRestore,
-  Briefcase,
   CalendarClock,
   CheckCircle2,
   GitBranch,
   Inbox,
   Kanban,
+  LampDesk,
+  ListTodo,
   Play,
   XCircle,
 } from "lucide-react";
@@ -112,7 +113,7 @@ const workMenu: readonly BaseMenuItem[] = [
   {
     id: "work",
     label: "Work",
-    icon: "work-queue",
+    icon: "work",
     children: [
       {
         id: "work.queues",
@@ -166,7 +167,8 @@ const work = defineBaseAddon({
     },
   },
   icons: {
-    "work-queue": Briefcase,
+    work: ListTodo,
+    "work-queue": LampDesk,
     "work-board": Kanban,
     "work-cycle": CalendarClock,
     "work-triage": Inbox,

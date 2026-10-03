@@ -41,12 +41,12 @@ describe("ConsoleLayout breadcrumb strip", () => {
     expect(screen.getByRole("navigation", { name: "Desk menu" })).toBeTruthy();
   });
 
-  test("mobile retains the navigation drawer and the horizontally scrolling app menu", async () => {
+  test("mobile retains the navigation drawer without a horizontally scrolling app menu", async () => {
     viewport.mobile = true;
     renderConsole();
     const header = await screen.findByRole("banner", { name: "Workspace top bar" });
     const menu = within(header).getByRole("navigation", { name: "Desk menu" });
-    expect(menu.classList.contains("overflow-x-auto")).toBe(true);
+    expect(menu.classList.contains("overflow-x-auto")).toBe(false);
     fireEvent.click(within(header).getByRole("button", { name: "Primary navigation" }));
     const drawer = await screen.findByRole("dialog", { name: "Primary navigation" });
     await waitFor(() => expect(within(drawer).getByRole("link", { name: "Desk" })).toBeTruthy());

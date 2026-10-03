@@ -381,6 +381,7 @@ export const enUiMessages: Record<string, string> = {
   "chrome.searchApps": "Search apps…",
   "chrome.searchAppsLabel": "Search apps",
   "chrome.apps": "Apps",
+  "chrome.more": "More",
   "chrome.settings": "Settings",
   "chrome.back": "Back",
   "chrome.expandItem": "Expand {label}",

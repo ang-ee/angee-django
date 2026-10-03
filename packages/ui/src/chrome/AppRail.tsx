@@ -213,13 +213,18 @@ function AppRailBody({
         )}
       >
         {singleApp ? (
-          <AppBrand name={singleApp.brand.name} mark={<Glyph name={singleApp.brand.mark} size={16} />}
-            to={singleApp.root.target} compact={!expanded} />
+          <Tooltip label={rail.describe(singleApp.root) ?? (!expanded ? singleApp.brand.name : undefined)} side="right">
+            <AppBrand name={singleApp.brand.name} mark={<Glyph name={singleApp.brand.mark} size={16} />}
+              to={singleApp.root.target} compact={!expanded} />
+          </Tooltip>
         ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi" />}
         {expanded && !singleApp ? (
-          <span className="min-w-0 truncate text-13 font-semibold text-on-rail-hi">
+          <span className="min-w-0 flex-1 truncate text-13 font-semibold text-on-rail-hi">
             {t("chrome.apps")}
           </span>
+        ) : null}
+        {expanded && largeViewport && !drawerMode ? (
+          <RailExpansionToggle controls={navId} expanded={expanded} onToggle={toggleFromActiveLink} />
         ) : null}
       </div>
       <nav
@@ -250,11 +255,13 @@ function AppRailBody({
               {singleApp.root.appChildren().map((item) => item.target ? (
                 <RailSettingsItem key={item.id} active={selectedSubAppId === item.id} currentPage={pageId === item.id} expanded={false}
                   icon={item.iconName} label={rail.label(item)} to={item.target} pathname={pathname}
+                  description={rail.describe(item)}
                   onActiveToggle={onActiveToggle} />
               ) : null)}
             </div>
           ) : (
             <SortableRail
+              rail={rail}
               items={items}
               activeRootId={settingsActive ? undefined : activeRootId ?? undefined}
               pageId={pageId}
@@ -311,7 +318,7 @@ function AppRailBody({
             buttonRef={footerToggleRef}
             controls={navId}
             expanded={expanded}
-            onToggle={toggleExpanded}
+            onToggle={toggleFromActiveLink}
           />
         </div>
       ) : null}
@@ -349,7 +356,7 @@ function RailExpansionToggle({
   expanded,
   onToggle,
 }: {
-  buttonRef: Ref<HTMLButtonElement>;
+  buttonRef?: Ref<HTMLButtonElement>;
   controls: string;
   expanded: boolean;
   onToggle: () => void;
@@ -383,6 +390,7 @@ function RailSettingsItem({
   expanded,
   icon,
   label,
+  description,
   to,
   pathname,
   onActiveToggle,
@@ -393,6 +401,7 @@ function RailSettingsItem({
   expanded: boolean;
   icon: string;
   label: string;
+  description?: string | undefined;
   to: string;
   pathname: string;
   onActiveToggle?: (() => void) | undefined;
@@ -420,12 +429,13 @@ function RailSettingsItem({
   );
   return (
     <div className={cn("flex w-full", expanded ? "px-2" : "justify-center")}>
-      {expanded ? link : <Tooltip label={label} side="right">{link}</Tooltip>}
+      <Tooltip label={description ?? (!expanded ? label : undefined)} side="right">{link}</Tooltip>
     </div>
   );
 }
 
 function SortableRail({
+  rail,
   activeRootId,
   pageId,
   defaultItemId,
@@ -437,6 +447,7 @@ function SortableRail({
   onItemLongPress,
   onOrderChange,
 }: {
+  rail: ReturnType<typeof useDeveloperRail>;
   activeRootId: string | undefined;
   pageId?: string;
   defaultItemId: string | null;
@@ -626,6 +637,7 @@ function SortableRail({
             );
             return (
             <RailItem
+              rail={rail}
               key={item.id}
               item={item}
               active={activeRootId === item.id}
@@ -671,6 +683,7 @@ function SortableRail({
 }
 
 function RailItem({
+  rail,
   active,
   currentPage,
   ariaExpanded,
@@ -684,6 +697,7 @@ function RailItem({
   onLongPressEnd,
   onLongPressStart,
 }: {
+  rail: ReturnType<typeof useDeveloperRail>;
   active: boolean;
   currentPage: boolean;
   ariaExpanded?: boolean | undefined;
@@ -732,7 +746,7 @@ function RailItem({
     "aria-pressed": _dragPressed,
     ...dragAttributes
   } = sortable.attributes;
-  const label = item.displayLabel;
+  const label = rail.label(item);
   const title = defaultApp
     ? t("chrome.defaultRailItemHint", { label })
     : t("chrome.railItemHint", { label });
@@ -746,7 +760,7 @@ function RailItem({
           && "z-10 scale-[1.02] opacity-95 shadow-lg ring-1 ring-brand/50",
       )}
     >
-      <Tooltip label={title} side="right">
+      <Tooltip label={rail.describe(item) ?? title} side="right">
         <a
           {...linkProps}
           aria-label={label}

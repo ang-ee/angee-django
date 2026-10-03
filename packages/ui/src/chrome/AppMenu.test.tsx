@@ -1,13 +1,14 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppRuntimeProvider, type AppRuntime, type RuntimeComposition } from "../runtime";
 import { AppMenu } from "./AppMenu";
 import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.sessionStorage.clear(); });
 
 const menus: readonly ChromeMenuItem[] = [{ id: "suite", label: "Suite", to: "/suite", children: [
   { id: "suite.inbox", label: "Inbox", to: "/suite/inbox" },
@@ -25,6 +26,76 @@ const menus: readonly ChromeMenuItem[] = [{ id: "suite", label: "Suite", to: "/s
 ] }];
 
 describe("AppMenu", () => {
+  test("moves narrow-width entries into More in order and restores them on resize", async () => {
+    const resize = mockOverflow(1000);
+    renderMenu("/desk");
+    const nav = await screen.findByRole("navigation", { name: "Desk menu" });
+    expect(within(nav).queryByRole("button", { name: "More" })).toBeNull();
+    resize(300);
+    expect(within(nav).getAllByRole("link").map((item) => item.textContent)).toEqual(["Desk", "Notes"]);
+    fireEvent.click(within(nav).getByRole("button", { name: "More" }));
+    const popup = await screen.findByRole("menu");
+    expect(within(popup).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open notes", "Reports", "Daily", "Year"]);
+    expect(within(popup).getByRole("group", { name: "Reports" })).toBeTruthy();
+    fireEvent.keyDown(popup, { key: "Escape" });
+    resize(1000);
+    expect(within(nav).queryByRole("button", { name: "More" })).toBeNull();
+    expect(within(nav).getByRole("button", { name: "Reports" })).toBeTruthy();
+    expect(nav.className).not.toContain("overflow-x-auto");
+  });
+
+  test("swaps the current trail's menu into the last visible slot, including a hidden deep link", async () => {
+    mockOverflow(400);
+    const items: readonly ChromeMenuItem[] = [{ id: "desk", label: "Desk", to: "/desk", children: [
+      { id: "a", label: "A", to: "/a" },
+      { id: "b", label: "B", to: "/b" },
+      { id: "c", label: "C", to: "/c" },
+      { id: "reports", label: "Reports", to: "/reports", children: [
+        { id: "daily", label: "Daily", to: "/reports/daily" },
+        { id: "secret", label: "Secret", hidden: true, to: "/secret" },
+      ] },
+    ] }];
+    renderMenu("/secret", items);
+    const nav = await screen.findByRole("navigation", { name: "Desk menu" });
+    expect(within(nav).getByRole("button", { name: "Reports" }).getAttribute("aria-current")).toBe("true");
+    expect(within(nav).queryByRole("link", { name: "B" })).toBeNull();
+    fireEvent.click(within(nav).getByRole("button", { name: "More" }));
+    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["B", "C"]);
+  });
+
+  test("developer removed markers overflow first and remain disabled in declaration order", async () => {
+    const resize = mockOverflow(500);
+    const composition: RuntimeComposition = {
+      shell: { brand: null, perspective: null, provenance: {}, diagnostics: [] }, effective: { home: "/desk", confineTo: null },
+      menus: { provenance: {}, hidden: [], unavailable: {}, diagnostics: [], removed: [
+        { id: "old-a", label: "Old A", parent: "desk", by: "suite" },
+        { id: "old-b", label: "Old B", parent: "desk", by: "suite" },
+      ] },
+    };
+    renderMenu("/desk", menus, { composition, userPreferences: {
+      available: true, preferences: { developerMode: true }, patchPreferences: async () => undefined,
+    } });
+    const nav = await screen.findByRole("navigation", { name: "Desk menu" });
+    // Four developer-visible menus fit; only the removed markers spill at this width.
+    resize(600);
+    expect(within(nav).getByRole("link", { name: "Hidden (hidden)" })).toBeTruthy();
+    expect(within(nav).queryByRole("link", { name: /removed by/ })).toBeNull();
+    fireEvent.click(within(nav).getByRole("button", { name: "More" }));
+    const entries = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+    expect(entries.map((item) => item.textContent)).toEqual(["Old A — removed by suite", "Old B — removed by suite"]);
+    expect(entries.every((item) => item.getAttribute("aria-disabled") === "true")).toBe(true);
+  });
+
+  test("with no room the app name labels the only dropdown", async () => {
+    mockOverflow(190);
+    renderMenu("/desk");
+    const nav = await screen.findByRole("navigation", { name: "Desk menu" });
+    expect(within(nav).queryByRole("link")).toBeNull();
+    fireEvent.click(within(nav).getByRole("button", { name: "Desk" }));
+    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent))
+      .toEqual(["Notes", "Open notes", "Reports", "Daily", "Year"]);
+  });
+
   test("selects the nearest included app and renders its links with aria-current", async () => {
     const router = renderMenu("/desk/notes");
     const nav = await screen.findByRole("navigation", { name: "Desk menu" });
@@ -117,9 +188,9 @@ describe("AppMenu", () => {
   });
 });
 
-function renderMenu(initial: string, items: readonly ChromeMenuItem[] = menus) {
+function renderMenu(initial: string, items: readonly ChromeMenuItem[] = menus, runtime: Partial<AppRuntime> = {}) {
   const tree = MenuTree.from(items);
-  const root = createRootRoute({ component: () => <><AppMenu menuItems={tree} /><Outlet /></> });
+  const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={runtime}><AppMenu menuItems={tree} /><Outlet /></AppRuntimeProvider> });
   const paths = new Set(["/unowned", ...[...tree.byId.values()].flatMap((item) => item.path ? [item.path] : [])]);
   const router = createRouter({
     routeTree: root.addChildren([...paths].map((path) => createRoute({ getParentRoute: () => root, path,
@@ -129,4 +200,29 @@ function renderMenu(initial: string, items: readonly ChromeMenuItem[] = menus) {
   });
   render(<RouterProvider router={router} />);
   return router;
+}
+
+/** Real DOM geometry is supplied by ResizeObserver; every intrinsic entry is 100px here. */
+function mockOverflow(initialWidth: number) {
+  let width = initialWidth;
+  const observers = new Map<ResizeObserverCallback, Set<Element>>();
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    return { width: this.matches("nav") ? width : this.closest("[inert]") ? 100 : 0 } as DOMRect;
+  });
+  vi.stubGlobal("ResizeObserver", class {
+    targets = new Set<Element>();
+    constructor(readonly callback: ResizeObserverCallback) { observers.set(callback, this.targets); }
+    observe(target: Element) { this.targets.add(target); }
+    unobserve(target: Element) { this.targets.delete(target); }
+    disconnect() { observers.delete(this.callback); }
+  });
+  return (next: number) => act(() => {
+    width = next;
+    for (const [callback, targets] of observers) {
+      callback([...targets].filter((target) => target.matches("nav")).map((target) => ({
+        target, contentRect: { width } as DOMRectReadOnly,
+        borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [],
+      })), {} as ResizeObserver);
+    }
+  });
 }
