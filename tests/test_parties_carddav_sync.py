@@ -22,15 +22,15 @@ import httpcore
 import httpx
 import pytest
 import vobject
-from defusedxml.common import DefusedXmlException
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.http import HttpClient, PinnedTransport
+from angee.integrate.http import HttpClient, PinnedTransport, ResponseTooLargeError
 from angee.integrate.states import (
+    ConflictKeep,
     DiscrepancyKind,
     DiscrepancyStatus,
     LinkStatus,
@@ -57,7 +57,14 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend, CardDavError, _parse_vcard, _xml
+from angee.parties_integrate_carddav import backend as carddav_backend
+from angee.parties_integrate_carddav.backend import (
+    _DAV_RESPONSE_CAP,
+    CardDavDirectoryBackend,
+    CardDavError,
+    _parse_vcard,
+    _xml,
+)
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, make_integration
 
@@ -459,7 +466,7 @@ def test_selected_push_projects_only_requested_contacts(
         )
     keys = frozenset() if selected == "empty" else frozenset({choices[selected][0]})
     expected = set() if selected in {"empty", "bound-alias"} else {choices[selected][1].pk}
-    projected = set()
+    projected: set[int] = set()
     manager_class = type(Party.objects)
     project_contacts = manager_class.project_contacts
 
@@ -529,9 +536,9 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     assert "Concurrent remote edit" in replica.server.cards[_HREF][0]
 
 
-@pytest.mark.parametrize("keep", ["remote", "local"])
+@pytest.mark.parametrize("keep", [ConflictKeep.REMOTE, ConflictKeep.LOCAL])
 def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
-    replica: Replica, keep: str
+    replica: Replica, keep: ConflictKeep
 ) -> None:
     person, link = replica.baseline()
     original_version = link.remote_version
@@ -865,8 +872,268 @@ def test_remote_xml_rejects_entity_expansion_before_parsing_resources() -> None:
         b'<!ENTITY repeated "&seed;&seed;&seed;&seed;">]>'
         b'<d:multistatus xmlns:d="DAV:"><d:response><d:href>&repeated;</d:href></d:response></d:multistatus>'
     )
-    with pytest.raises(DefusedXmlException):
+    with pytest.raises(ElementTree.ParseError, match="document type"):
         _xml(payload)
+
+
+@pytest.mark.parametrize("padding_bytes", [0, 128 * 1024])
+def test_remote_xml_parses_normal_multistatus(padding_bytes: int) -> None:
+    payload = (
+        b'<d:multistatus xmlns:d="DAV:"><d:response><d:href>/contacts/ada.vcf</d:href>'
+        b'</d:response>'
+        + b" " * padding_bytes
+        + b'<d:sync-token>opaque-token</d:sync-token></d:multistatus>'
+    )
+    root = _xml(payload)
+    assert root.tag == "{DAV:}multistatus"
+    assert root.findtext("d:response/d:href", namespaces=_NAMESPACES) == "/contacts/ada.vcf"
+    assert root.findtext("d:sync-token", namespaces=_NAMESPACES) == "opaque-token"
+
+
+@pytest.mark.parametrize("prefix_bytes", [0, 64 * 1024 - 8])
+def test_remote_xml_stops_feeding_at_document_type_refusal(
+    monkeypatch: pytest.MonkeyPatch, prefix_bytes: int,
+) -> None:
+    """Count real Expat feeds, including a declaration crossing a feed boundary."""
+
+    parser_factory = ElementTree.XMLParser
+    fed_sizes: list[int] = []
+    closed = False
+
+    class CountingParser:
+        def __init__(self, **kwargs: Any) -> None:
+            self.parser = parser_factory(**kwargs)
+
+        def feed(self, data: bytes) -> None:
+            fed_sizes.append(len(data))
+            self.parser.feed(data)
+
+        def close(self) -> ElementTree.Element:
+            nonlocal closed
+            closed = True
+            return self.parser.close()
+
+    monkeypatch.setattr(carddav_backend.ElementTree, "XMLParser", CountingParser)
+    payload = (
+        b" " * prefix_bytes
+        + b'<!DOCTYPE multistatus [<!ENTITY value "expanded">]>'
+        + b'<d:multistatus xmlns:d="DAV:">'
+        + b"&value;" * (128 * 1024)
+        + b"</d:multistatus>"
+    )
+    with pytest.raises(ElementTree.ParseError, match="document type"):
+        _xml(payload)
+    assert fed_sizes == [64 * 1024] * (1 if prefix_bytes == 0 else 2)
+    assert sum(fed_sizes) < len(payload)
+    assert not closed
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        '<!DOCTYPE multistatus>',
+        '<!DOCTYPE multistatus [<!ENTITY value "expanded">]>',
+        '<!DOCTYPE multistatus [<!ENTITY value SYSTEM "file:///etc/passwd">]>',
+        '<!DOCTYPE multistatus SYSTEM "https://dav.example/external.dtd">',
+    ],
+    ids=["doctype", "internal-entity", "external-entity", "external-dtd"],
+)
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-16-le", "utf-16-be"])
+def test_remote_xml_refuses_document_types(declaration: str, encoding: str) -> None:
+    payload = f'{declaration}<d:multistatus xmlns:d="DAV:"/>'.encode(encoding)
+    with pytest.raises(ElementTree.ParseError, match="document type"):
+        _xml(payload)
+
+
+@pytest.mark.parametrize("status", [207, 403])
+def test_refused_xml_preserves_committed_sync_state(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, status: int,
+) -> None:
+    person, link = replica.baseline()
+    cursor = dict(replica.stream.cursor)
+    generation = replica.stream.generation
+    revisions = RecordRevision.objects.filter(link=link).count()
+    payload = b'<!DOCTYPE error><d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>'
+    monkeypatch.setattr(replica.server, "handle_request", lambda request: httpx.Response(status, content=payload))
+
+    with pytest.raises(ElementTree.ParseError if status == 207 else CardDavError):
+        replica.pull()
+
+    replica.stream.refresh_from_db()
+    person.refresh_from_db()
+    assert replica.stream.cursor == cursor
+    assert replica.stream.generation == generation
+    assert person.notes == "Original"
+    assert RecordRevision.objects.filter(link=link).count() == revisions
+
+
+@pytest.mark.parametrize("declared_length", [False, True])
+def test_oversized_dav_response_preserves_committed_sync_state(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, declared_length: bool,
+) -> None:
+    person, link = replica.baseline()
+    cursor = dict(replica.stream.cursor)
+    revisions = RecordRevision.objects.filter(link=link).count()
+    reads = 0
+    closed = False
+
+    class OversizedStream(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            nonlocal reads
+            for _ in range(_DAV_RESPONSE_CAP // 65536 + 2):
+                reads += 1
+                yield b" " * 65536
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    headers = {"Content-Length": str(_DAV_RESPONSE_CAP + 1)} if declared_length else {}
+    monkeypatch.setattr(
+        replica.server, "handle_request",
+        lambda request: httpx.Response(207, headers=headers, stream=OversizedStream()),
+    )
+    with pytest.raises(CardDavError, match="byte limit") as refused:
+        replica.pull()
+
+    assert isinstance(refused.value.__cause__, ResponseTooLargeError)
+    assert reads == (0 if declared_length else _DAV_RESPONSE_CAP // 65536 + 1)
+    assert closed
+    replica.stream.refresh_from_db()
+    person.refresh_from_db()
+    assert replica.stream.cursor == cursor
+    assert person.notes == "Original"
+    assert RecordRevision.objects.filter(link=link).count() == revisions
+    replica.directory.record_sync_error(refused.value, now=timezone.now())
+    assert replica.directory.sync_error == "CardDAV response exceeds the byte limit."
+
+
+def test_discovery_falls_back_after_oversized_principal_response(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_request = replica.server.handle_request
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == _BASE:
+            return httpx.Response(207, headers={"Content-Length": str(_DAV_RESPONSE_CAP + 1)})
+        return original_request(request)
+
+    monkeypatch.setattr(replica.server, "handle_request", handler)
+    assert [book.href for book in replica.backend.discover()] == [_BOOK]
+    assert requested_urls[:2] == [_BASE, f"{_BASE}.well-known/carddav"]
+
+
+def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(carddav_backend, "_DAV_RESPONSE_CAP", 4096)
+    replica.server.store(_HREF, _card(notes="x" * 3000))
+    for uid in ("grace", "katherine", "linus"):
+        replica.server.store(f"{_BOOK}{uid}.vcf", _card(uid=uid, name=uid, notes="x" * 3000))
+    replica.server.requests.clear()
+
+    result = replica.pull()
+
+    assert result.count == 4 and result.exhausted
+    assert Person.objects.count() == RecordRevision.objects.count() == 4
+    assert not SyncDiscrepancy.objects.exists()
+    assert replica.stream.cursor == {"sync_token": replica.server.token}
+    batches = [
+        len(ElementTree.fromstring(body).findall("d:href", _NAMESPACES))
+        for method, _, _, body in replica.server.requests if method == "REPORT" and "multiget" in body
+    ]
+    assert batches == [4, 2, 1, 1, 2, 1, 1]
+    assert replica.pull().count == 0
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_commit(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, existing: bool,
+) -> None:
+    previous_person = replica.baseline()[0] if existing else None
+    monkeypatch.setattr(carddav_backend, "_DAV_RESPONSE_CAP", 4096)
+    replica.server.store(_HREF, _card(notes="x" * 5000))
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    result = replica.pull()
+
+    assert result.count == 1 and result.exhausted
+    assert result.discrepancy_ids
+    assert Person.objects.get(source_uid="grace").display_name == "Grace Hopper"
+    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
+    link = RecordLink.objects.get(pk=discrepancy.link_id)
+    assert link.status == LinkStatus.DISCREPANT
+    assert link.metadata["href"] == _HREF
+    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
+    assert discrepancy.code == "vcard_response_too_large"
+    assert discrepancy.source_hash
+    assert replica.stream.cursor == {"sync_token": replica.server.token}
+    if previous_person is not None:
+        previous_person.refresh_from_db()
+        assert previous_person.notes == "Original"
+    else:
+        assert link.target_object_id is None
+
+    [record] = replica.backend.read_keys(replica.stream, [link.external_key])
+    assert record.external_key == link.external_key
+    assert record.source_payload == {"href": _HREF, "error": "vcard_response_too_large"}
+    assert record.source_hash == discrepancy.source_hash
+    assert replica.pull().count == 0
+
+    replica.server.store(_HREF, _card(notes="Now fits"))
+    assert replica.pull().count == 1
+    link.refresh_from_db()
+    discrepancy.refresh_from_db()
+    assert link.status == LinkStatus.CURRENT
+    assert discrepancy.status == DiscrepancyStatus.RESOLVED
+    assert Person.objects.get(pk=link.target_object_id).notes == "Now fits"
+    assert Person.objects.count() == 2
+    assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+@pytest.mark.parametrize("operation", ["baseline", "reconcile"])
+def test_oversized_listing_fails_explicitly_without_advancing_or_marking_absences(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    person, link = replica.baseline()
+    if operation == "baseline":
+        replica.stream = SyncStream.objects.bump_generation(replica.stream)
+    else:
+        assert reconcile_stream(replica.stream, replica.backend, page_bound=1) == 0
+        replica.stream.refresh_from_db()
+        assert replica.stream.reconcile_state["after"]
+    cursor = dict(replica.stream.cursor)
+    checkpoint = dict(replica.stream.reconcile_state)
+    generation = replica.stream.generation
+    original_request = replica.server.handle_request
+    listing_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal listing_requests
+        if request.method == "PROPFIND" and str(request.url) == _BOOK and request.headers["depth"] == "1":
+            listing_requests += 1
+            return httpx.Response(207, headers={"Content-Length": str(_DAV_RESPONSE_CAP + 1)})
+        return original_request(request)
+
+    monkeypatch.setattr(replica.server, "handle_request", handler)
+    with pytest.raises(CardDavError, match="listing.*use smaller address books") as refused:
+        if operation == "baseline":
+            replica.pull()
+        else:
+            reconcile_stream(replica.stream, replica.backend)
+    assert listing_requests == 1
+    replica.stream.refresh_from_db()
+    link.refresh_from_db()
+    person.refresh_from_db()
+    assert replica.stream.cursor == cursor
+    assert replica.stream.reconcile_state == checkpoint
+    assert replica.stream.generation == generation
+    assert link.status == LinkStatus.CURRENT
+    assert person.notes == "Original"
+    replica.directory.record_sync_error(refused.value, now=timezone.now())
+    assert replica.directory.sync_error == str(refused.value)
 
 
 @pytest.mark.parametrize("uri", ["http://127.0.0.1/avatar.png", "https://photos.example/avatar.png"])

@@ -13,6 +13,7 @@ used.
 
 from __future__ import annotations
 
+import gzip
 import socket
 from collections.abc import Iterator
 from typing import Any
@@ -22,7 +23,15 @@ import httpx
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.integrate.http import HttpClient, PinnedTransport, _PinnedBackend, _without_host
+from angee.integrate.http import (
+    HttpClient,
+    OutboundBudget,
+    OutboundBudgetState,
+    PinnedTransport,
+    ResponseTooLargeError,
+    _PinnedBackend,
+    _request_headers,
+)
 
 URL = "https://dav.example.test/path?x=1"
 
@@ -160,9 +169,9 @@ def test_httpclient_surfaces_os_error_when_unreachable(monkeypatch: pytest.Monke
 def test_caller_host_header_is_stripped() -> None:
     """A caller-supplied Host header is removed (case-insensitively) so httpx sets the URL host."""
 
-    assert _without_host({"Host": "evil.example.com", "X-Test": "1"}) == {"X-Test": "1"}
-    assert _without_host({"host": "evil.example.com"}) == {}
-    assert _without_host(None) == {}
+    assert dict(_request_headers({"Host": "evil.example.com", "X-Test": "1"}, capped=False)) == {"x-test": "1"}
+    assert dict(_request_headers({"host": "evil.example.com"}, capped=False)) == {}
+    assert dict(_request_headers(None, capped=False)) == {}
 
 
 def test_pinned_transport_installs_the_pinned_backend() -> None:
@@ -173,12 +182,14 @@ def test_pinned_transport_installs_the_pinned_backend() -> None:
     assert isinstance(PinnedTransport(allow_private=False)._pool._network_backend, _PinnedBackend)
 
 
-def test_download_capped_stops_streaming_after_the_byte_cap(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("operation", ["request", "download"])
+def test_capped_read_stops_streaming_after_the_byte_cap(
+    monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
     """An unknown-length response is closed after the cap without reading its tail."""
 
     reads = 0
+    closed = False
 
     class CountingStream(httpx.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:
@@ -186,6 +197,10 @@ def test_download_capped_stops_streaming_after_the_byte_cap(
             for _index in range(20):
                 reads += 1
                 yield b"abcd"
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
 
     def transport(*, allow_private: bool) -> httpx.MockTransport:
         assert allow_private is False
@@ -198,19 +213,19 @@ def test_download_capped_stops_streaming_after_the_byte_cap(
 
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
-    assert (
-        HttpClient().download_capped(
-            URL,
-            cap=5,
-            headers={"Authorization": "Bearer token"},
-        )
-        is None
-    )
+    headers = {"Authorization": "Bearer token"}
+    if operation == "request":
+        with pytest.raises(ResponseTooLargeError, match="byte limit"):
+            HttpClient().request("REPORT", URL, max_bytes=5, headers=headers)
+    else:
+        assert HttpClient().download_capped(URL, cap=5, headers=headers) is None
     assert reads < 20
+    assert closed
 
 
-def test_download_capped_rejects_declared_oversize_before_reading(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("operation", ["request", "download"])
+def test_capped_read_rejects_declared_oversize_before_reading(
+    monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
     """Content-Length rejects an oversized response before its stream is consumed."""
 
@@ -234,8 +249,163 @@ def test_download_capped_rejects_declared_oversize_before_reading(
 
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
-    assert HttpClient().download_capped(URL, cap=5) is None
+    if operation == "request":
+        with pytest.raises(ResponseTooLargeError, match="byte limit"):
+            HttpClient().request("PROPFIND", URL, max_bytes=5)
+    else:
+        assert HttpClient().download_capped(URL, cap=5) is None
     assert reads == 0
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_capped_request_returns_decoded_body_and_response_facts(
+    monkeypatch: pytest.MonkeyPatch, compressed: bool,
+) -> None:
+    body = b"<multistatus/>"
+    headers = {"ETag": '"version"', "Content-Type": "application/xml"}
+    if compressed:
+        headers["Content-Encoding"] = "gzip"
+    monkeypatch.setattr(
+        HttpClient, "transport_factory",
+        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(
+            207,
+            headers=headers,
+            stream=httpx.ByteStream(gzip.compress(body) if compressed else body),
+            extensions={"http_version": b"HTTP/1.1"},
+        ))),
+    )
+    response = HttpClient().request("REPORT", URL, body=b"<sync/>", max_bytes=len(body))
+    assert response.content == body
+    assert response.status_code == 207
+    assert response.headers["etag"] == '"version"'
+    assert response.headers["content-type"] == "application/xml"
+    assert response.url == URL
+    assert response.request.method == "REPORT"
+    assert response.request.content == b"<sync/>"
+    assert response.http_version == "HTTP/1.1"
+    assert response.is_closed
+    assert response.elapsed.total_seconds() >= 0
+
+
+@pytest.mark.parametrize("operation", ["request", "download"])
+def test_capped_read_refuses_decoded_compressed_overflow(
+    monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    wire = gzip.compress(b" " * 1000)
+    assert len(wire) < 100
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(
+            200,
+            headers={"Content-Encoding": "gzip", "Content-Length": str(len(wire))},
+            stream=httpx.ByteStream(wire),
+        )
+
+    monkeypatch.setattr(
+        HttpClient, "transport_factory",
+        staticmethod(lambda **_: httpx.MockTransport(handler)),
+    )
+    if operation == "request":
+        with pytest.raises(ResponseTooLargeError, match="byte limit") as refused:
+            HttpClient().request("REPORT", URL, max_bytes=100)
+        assert isinstance(refused.value, ValidationError)
+    else:
+        assert HttpClient().download_capped(URL, cap=100) is None
+
+
+@pytest.mark.parametrize("operation", ["request", "bounded", "download"])
+@pytest.mark.parametrize("encoding_header", [None, "Accept-Encoding", "accept-encoding"])
+def test_capped_reads_request_identity_encoding_without_changing_caller_headers(
+    monkeypatch: pytest.MonkeyPatch, operation: str, encoding_header: str | None,
+) -> None:
+    headers = {"X-Test": "1", "Host": "other.example"}
+    if encoding_header is not None:
+        headers[encoding_header] = "gzip"
+    original_headers = dict(headers)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept-encoding"] == "identity"
+        assert request.headers["host"] == "dav.example.test"
+        assert request.headers["x-test"] == "1"
+        return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    client = HttpClient()
+    if operation == "request":
+        assert client.request("REPORT", URL, max_bytes=10, headers=headers).content == b"ok"
+    elif operation == "bounded":
+        result = client.download_bounded(URL, budget=OutboundBudget(bytes=10), headers=headers)
+        assert result is not None and result.content == b"ok"
+    else:
+        assert client.download_capped(URL, cap=10, headers=headers) == b"ok"
+    assert headers == original_headers
+
+
+def test_uncapped_request_preserves_requested_content_encoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept-encoding"] == "gzip"
+        return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    assert HttpClient().request("GET", URL, headers={"accept-encoding": "gzip"}).content == b"ok"
+
+
+@pytest.mark.parametrize("method,status", [("HEAD", 200), ("GET", 204), ("GET", 304)])
+def test_capped_request_ignores_declared_length_for_bodyless_responses(
+    monkeypatch: pytest.MonkeyPatch, method: str, status: int,
+) -> None:
+    monkeypatch.setattr(
+        HttpClient, "transport_factory",
+        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(
+            status, headers={"Content-Length": "1000"}, stream=httpx.ByteStream(b""),
+        ))),
+    )
+    response = HttpClient().request(method, URL, max_bytes=5)
+    assert response.status_code == status
+    assert response.content == b""
+    assert response.headers["content-length"] == "1000"
+
+
+def test_capped_download_retains_shared_byte_accounting(monkeypatch: pytest.MonkeyPatch) -> None:
+    budget = OutboundBudget(bytes=5)
+    state = OutboundBudgetState(budget)
+    monkeypatch.setattr(
+        HttpClient, "transport_factory",
+        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(200, content=b"abc"))),
+    )
+    result = HttpClient().download_bounded(URL, budget=budget, budget_state=state)
+    assert result is not None and result.content == b"abc"
+    assert state.bytes == 3
+    assert HttpClient().download_bounded(URL, budget=budget, budget_state=state) is None
+    assert state.requests == 2
+    assert state.bytes == 3
+
+
+@pytest.mark.parametrize("max_bytes", [0, -1])
+def test_capped_request_requires_positive_limit(max_bytes: int) -> None:
+    with pytest.raises(ValueError, match="max_bytes must be positive"):
+        HttpClient().request("REPORT", URL, max_bytes=max_bytes)
+
+
+@pytest.mark.parametrize("follow_redirects", [False, True])
+def test_capped_request_refuses_oversized_redirect_before_next_hop(
+    monkeypatch: pytest.MonkeyPatch, follow_redirects: bool,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(302, headers={"Location": "/target"}, stream=httpx.ByteStream(b"oversized"))
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    with pytest.raises(ResponseTooLargeError, match="byte limit"):
+        HttpClient().request(
+            "REPORT", URL, max_bytes=5,
+            follow_redirects=follow_redirects,
+            same_origin_redirects=0 if follow_redirects else 3,
+        )
+    assert len(requests) == 1
 
 
 def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,7 +456,10 @@ def test_redirect_not_followed_by_default_and_host_is_the_url_host(monkeypatch: 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])
 @pytest.mark.parametrize("method", ["PROPFIND", "REPORT", "PUT", "DELETE"])
-def test_same_origin_redirect_preserves_request(monkeypatch: pytest.MonkeyPatch, status: int, method: str) -> None:
+@pytest.mark.parametrize("max_bytes", [None, 5])
+def test_same_origin_redirect_preserves_request(
+    monkeypatch: pytest.MonkeyPatch, status: int, method: str, max_bytes: int | None,
+) -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -304,6 +477,7 @@ def test_same_origin_redirect_preserves_request(monkeypatch: pytest.MonkeyPatch,
         body=b"<propfind/>",
         headers={"Authorization": "Basic test", "Depth": "1", "If-Match": '"v1"'},
         same_origin_redirects=3,
+        max_bytes=max_bytes,
     )
     assert response.status_code == 207
     assert [str(request.url) for request in requests] == ["https://dav.example/start", "https://dav.example/target"]

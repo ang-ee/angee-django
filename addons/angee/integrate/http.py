@@ -55,6 +55,10 @@ class RedirectOriginError(ValidationError):
     """A redirect would send the request to a different origin."""
 
 
+class ResponseTooLargeError(ValidationError):
+    """The decoded response body exceeds the caller's byte limit."""
+
+
 def same_origin(first: str | httpx.URL, second: str | httpx.URL) -> bool:
     """Compare normalized URL origins, including effective ports and excluding credentials."""
 
@@ -253,6 +257,9 @@ class HttpClient:
         Redirects are followed manually so every location re-enters URL parsing,
         DNS validation and the pinned transport while request and hop counts remain
         visible. ``iter_bytes`` enforces the cap after content decoding.
+        Identity encoding is requested; if ignored, httpx may allocate a decoded
+        network chunk before the cap is checked. See :meth:`request` for the
+        residual decoder-memory bound.
         """
 
         if max_bytes is not None and max_bytes < 1:
@@ -263,7 +270,6 @@ class HttpClient:
         if state.budget != budget:
             raise ValueError("A shared outbound budget state must use the supplied budget.")
         current = url
-        response_bytes = 0
         response_redirects = 0
         redirect_limit = budget.redirects if max_redirects is None else max_redirects
         while True:
@@ -279,7 +285,7 @@ class HttpClient:
                 with client.stream(
                     "GET",
                     current,
-                    headers=_without_host(headers),
+                    headers=_request_headers(headers, capped=True),
                     follow_redirects=False,
                 ) as response:
                     if response.status_code in {301, 302, 303, 307, 308}:
@@ -292,30 +298,15 @@ class HttpClient:
                         continue
                     if not response.is_success:
                         return None
-                    chunks: list[bytes] = []
                     remaining_bytes = budget.bytes - state.bytes
                     if remaining_bytes <= 0:
                         return None
                     response_limit = min(remaining_bytes, max_bytes) if max_bytes is not None else remaining_bytes
-                    declared_length = response.headers.get("content-length")
-                    if declared_length is not None:
-                        try:
-                            if int(declared_length) > response_limit:
-                                return None
-                        except ValueError:
-                            pass
-                    for chunk in response.iter_bytes(
-                        chunk_size=min(_DOWNLOAD_CHUNK_BYTES, response_limit + 1),
-                    ):
-                        if state.remaining_seconds() <= 0:
-                            return None
-                        response_bytes += len(chunk)
-                        state.bytes += len(chunk)
-                        if response_bytes > response_limit or state.bytes > budget.bytes:
-                            return None
-                        chunks.append(chunk)
+                    content = _read_capped(response, max_bytes=response_limit, state=state)
+                    if content is None:
+                        return None
                     return DownloadResult(
-                        content=b"".join(chunks),
+                        content=content,
                         final_url=str(response.url),
                         content_type=response.headers.get("content-type", ""),
                         status_code=response.status_code,
@@ -353,6 +344,7 @@ class HttpClient:
         allow_private: bool = False,
         follow_redirects: bool = False,
         same_origin_redirects: int = 0,
+        max_bytes: int | None = None,
         timeout: int = HTTP_TIMEOUT_SECONDS,
     ) -> httpx.Response:
         """Send one pinned request to ``url`` and return the response.
@@ -363,15 +355,40 @@ class HttpClient:
         retaining the method, body and headers. A changed origin raises
         ``RedirectOriginError`` before sending credentials. It is exclusive with native ``follow_redirects``;
         a missing location or exhausted hop bound returns the redirect response.
+        ``max_bytes`` caps each decoded response body, including redirect hops,
+        raising ``ResponseTooLargeError`` on overflow. Capped reads request
+        ``Accept-Encoding: identity``. If a server still encodes its response,
+        httpx decodes a whole network chunk before the cap is checked: the cap
+        bounds accepted decoded content, not peak decoder memory.
         """
 
         if same_origin_redirects < 0 or (same_origin_redirects and follow_redirects):
             raise ValueError("same_origin_redirects must be nonnegative and exclusive with follow_redirects.")
-        with httpx.Client(transport=self.transport_factory(allow_private=allow_private), timeout=timeout) as client:
+        if max_bytes is not None and max_bytes < 1:
+            raise ValueError("max_bytes must be positive when provided.")
+
+        def read_response(response: httpx.Response) -> None:
+            """Enforce the cap before httpx buffers a response or follows its redirect."""
+
+            if max_bytes is not None:
+                content = _read_capped(response, max_bytes=max_bytes)
+                if content is None:
+                    raise ResponseTooLargeError("HTTP response exceeds the byte limit.")
+                # httpx.read() has no cap or public body-cache setter. Store
+                # the decoded cache it owns, preserving the native response.
+                response._content = content
+
+        with httpx.Client(
+            transport=self.transport_factory(allow_private=allow_private),
+            timeout=timeout,
+            event_hooks={"response": [read_response]} if max_bytes is not None else None,
+        ) as client:
             for hop in range(same_origin_redirects + 1):
                 parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
                 response = client.request(
-                    method, url, headers=_without_host(headers), content=body, follow_redirects=follow_redirects
+                    method, url,
+                    headers=_request_headers(headers, capped=max_bytes is not None),
+                    content=body, follow_redirects=follow_redirects,
                 )
                 if (
                     hop == same_origin_redirects
@@ -385,6 +402,40 @@ class HttpClient:
                     raise RedirectOriginError("Redirects must retain the request origin.")
                 url = str(destination)
         return response
+
+
+def _read_capped(
+    response: httpx.Response,
+    *,
+    max_bytes: int,
+    state: OutboundBudgetState | None = None,
+) -> bytes | None:
+    """Read decoded bytes within the cap and optional operation budget; refuse overflow."""
+
+    has_body = (
+        response.request.method != "HEAD"
+        and response.status_code not in {204, 304}
+        and not response.is_informational
+    )
+    declared_length = response.headers.get("content-length") if has_body else None
+    if declared_length is not None:
+        try:
+            if int(declared_length) > max_bytes:
+                return None
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    response_bytes = 0
+    for chunk in response.iter_bytes(chunk_size=min(_DOWNLOAD_CHUNK_BYTES, max_bytes + 1)):
+        if state is not None:
+            if state.remaining_seconds() <= 0:
+                return None
+            state.bytes += len(chunk)
+        response_bytes += len(chunk)
+        if response_bytes > max_bytes:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class HttpClientMixin:
@@ -402,10 +453,14 @@ class HttpClientMixin:
         return HttpClient()
 
 
-def _without_host(headers: dict[str, str] | None) -> dict[str, str]:
-    """Return ``headers`` without any ``Host`` entry so it cannot displace the URL host."""
+def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx.Headers:
+    """Keep the URL's Host and request identity encoding for capped response reads."""
 
-    return {name: value for name, value in (headers or {}).items() if name.lower() != "host"}
+    result = httpx.Headers(headers)
+    result.pop("Host", None)
+    if capped:
+        result["Accept-Encoding"] = "identity"
+    return result
 
 
 def _as_os_error(exc: Exception) -> OSError:
