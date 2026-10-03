@@ -21,14 +21,15 @@ from dataclasses import replace
 from datetime import date, datetime
 from typing import Any, ClassVar
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
 import vobject
-from defusedxml import ElementTree
 from django.apps import apps
 
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.http import RedirectOriginError, same_origin
+from angee.integrate.errors import IntegrationError
+from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, same_origin
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
@@ -46,6 +47,15 @@ _NS = {
     "card": "urn:ietf:params:xml:ns:carddav",
 }
 _MULTIGET_CHUNK = 100
+_DAV_RESPONSE_CAP = 16 * 1024 * 1024
+"""Limit accepted DAV bodies to 16 MiB before XML tree construction.
+
+A card whose inline photo is as large as the fetched-photo limit (``_PHOTO_CAP``) is about 6.7 MiB once
+base64-encoded, so the cap admits such a card with room to spare while bounding the memory of one parse.
+Multigets split to fit; oversized singletons are quarantined.
+"""
+_XML_FEED_BYTES = 64 * 1024
+"""Bound each Expat feed so a document type refusal stops before the rest of the body."""
 _PHOTO_CAP = 5 * 1024 * 1024
 # vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
 _NO_YEAR_SENTINEL = 1604
@@ -76,6 +86,10 @@ _TOKEN_BODY = (
 
 class CardDavError(Exception):
     """Raised when the CardDAV server returns an unexpected response."""
+
+
+class CardDavResponseTooLargeError(CardDavError, IntegrationError):
+    """A DAV response exceeded the limit; its message is safe for operator telemetry."""
 
 
 class CardDavDirectoryBackend(DirectoryBackend):
@@ -311,9 +325,12 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 body=body.encode("utf-8"),
                 allow_private=True,
                 same_origin_redirects=3,
+                max_bytes=_DAV_RESPONSE_CAP,
             )
         except RedirectOriginError as error:
             raise CardDavError(error.message) from error
+        except ResponseTooLargeError as error:
+            raise CardDavResponseTooLargeError("CardDAV response exceeds the byte limit.") from error
         if response.status_code == 412:
             raise RemoteRejected()
         if cursor_request:
@@ -380,9 +397,18 @@ class CardDavDirectoryBackend(DirectoryBackend):
         return token
 
     def _list_vcard_hrefs(self, collection: str) -> list[str]:
-        """Return the hrefs of the vCard resources in ``collection`` (Depth:1)."""
+        """Return a complete Depth:1 inventory; refuse oversized, unsplittable listings.
 
-        response = self._request("PROPFIND", collection, _LISTING_BODY, depth="1", cursor_request=True)
+        Baseline and reconciliation absence decisions require the entire inventory.
+        A refused listing preserves their checkpoints and requires smaller books.
+        """
+
+        try:
+            response = self._request("PROPFIND", collection, _LISTING_BODY, depth="1", cursor_request=True)
+        except CardDavResponseTooLargeError as error:
+            raise CardDavResponseTooLargeError(
+                "The complete CardDAV address-book listing exceeds the response byte limit; use smaller address books."
+            ) from error
         hrefs: set[str] = set()
         for resp in _xml(response.content).findall("d:response", _NS):
             href = urljoin(collection, _href(resp))
@@ -431,7 +457,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         collection: str,
         hrefs: list[str],
     ) -> dict[str, ParsedContact | RecordChange | None]:
-        """Read each requested href or its explicit tombstone; never skip bad cards."""
+        """Split oversized responses and quarantine oversized or invalid single cards."""
 
         if not hrefs:
             return {}
@@ -442,7 +468,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
             + "".join(f"<d:href>{escape(href)}</d:href>" for href in hrefs)
             + "</card:addressbook-multiget>"
         )
-        response = self._request("REPORT", collection, body, depth="1", cursor_request=True)
+        try:
+            response = self._request("REPORT", collection, body, depth="1", cursor_request=True)
+        except CardDavResponseTooLargeError:
+            if len(hrefs) > 1:
+                middle = len(hrefs) // 2
+                return {
+                    **self._multiget(collection, hrefs[:middle]),
+                    **self._multiget(collection, hrefs[middle:]),
+                }
+            href = hrefs[0]
+            return {href: _quarantined(href, {"href": href, "error": "vcard_response_too_large"})}
         contacts: dict[str, ParsedContact | RecordChange | None] = {}
         for resp in _xml(response.content).findall("d:response", _NS):
             href = urljoin(collection, _href(resp))
@@ -461,13 +497,10 @@ class CardDavDirectoryBackend(DirectoryBackend):
                     raise ValueError("The address object is not a vCard.")
                 contact = _parse_vcard(card, etag=etag, href=href, raw=data)
             except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
-                payload = {"href": href, "source_digest": canonical_json_sha256(data), "error": "invalid_vcard"}
-                contacts[href] = RecordChange(
+                contacts[href] = _quarantined(
                     href,
-                    payload,
-                    canonical_json_sha256(payload),
+                    {"href": href, "source_digest": canonical_json_sha256(data), "error": "invalid_vcard"},
                     remote_version=etag,
-                    metadata={"href": href},
                 )
                 continue
             contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
@@ -572,10 +605,28 @@ def _render_vcard(
     return card.serialize()
 
 
-def _xml(body: bytes) -> Any:
-    """Parse a DAV multistatus body."""
+def _quarantined(href: str, payload: dict[str, Any], *, remote_version: str = "") -> RecordChange:
+    """Return the per-record change the sync driver quarantines for an unusable remote card."""
 
-    return ElementTree.fromstring(body, forbid_dtd=True, forbid_entities=True, forbid_external=True)
+    return RecordChange(
+        href, payload, canonical_json_sha256(payload), remote_version=remote_version, metadata={"href": href},
+    )
+
+
+class _RefuseDoctype(ElementTree.TreeBuilder):
+    """Refuse document types; Expat surfaces the refusal at the current feed boundary."""
+
+    def doctype(self, name: str, pubid: str | None, system: str | None) -> None:
+        raise ElementTree.ParseError("DAV responses may not declare a document type.")
+
+
+def _xml(body: bytes) -> ElementTree.Element:
+    """Parse DAV in bounded feeds so a document type refusal stops before later chunks."""
+
+    parser = ElementTree.XMLParser(target=_RefuseDoctype())
+    for start in range(0, len(body), _XML_FEED_BYTES):
+        parser.feed(body[start : start + _XML_FEED_BYTES])
+    return parser.close()
 
 
 def _href(response_el: Any) -> str:

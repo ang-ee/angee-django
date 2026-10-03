@@ -106,7 +106,6 @@ addons = [
     "authlib>=1.7.2",
     "channels-redis>=4.2",
     "channels>=4.0",
-    "defusedxml>=0.7,<1",
     "django-anymail>=15.1",
     "django-axes>=8.0",
     "django-countries>=9,<10",
