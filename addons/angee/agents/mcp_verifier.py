@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 
 from django.apps import apps
+from django.contrib.auth.backends import ModelBackend
 from rebac import SubjectRef, system_context
 
 from angee.agents.models import AgentLifecycle, MCPPlacement, RuntimeStatus
@@ -29,7 +30,8 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
     """Return the agent's service-user actor, or ``None`` when the bearer is declined.
 
     The bearer is ``"<agent sqid>.<hmac>"`` (see :meth:`MCPServer.bearer_for`): parse it,
-    look the agent up by its public sqid, and — for a READY/RUNNING non-template agent —
+    look the agent up by its public sqid, and — for a READY/RUNNING non-template agent
+    with an active service user —
     accept it when one of the agent's internal, credentialed MCP servers mints the presented
     digest (:meth:`MCPServer.accepts_bearer_digest`, a constant-time compare). Every decline
     returns ``None`` (no admin/user fallback) and is logged at WARNING with its reason and
@@ -48,7 +50,7 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
         return None
     sqid, digest = parsed
     with system_context(reason="agents.mcp.verify_bearer"):
-        agent = agent_model._base_manager.filter(**agent_model.public_id_lookup(sqid)).first()
+        agent = agent_model._base_manager.select_related("user").filter(**agent_model.public_id_lookup(sqid)).first()
         if agent is None:
             logger.warning("MCP bearer declined: unknown agent %s", sqid)
             return None
@@ -63,6 +65,9 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
                 agent.lifecycle,
                 agent.runtime_status,
             )
+            return None
+        if agent.user is not None and not ModelBackend().user_can_authenticate(agent.user):
+            logger.warning("MCP bearer declined: agent %s has an inactive service user", sqid)
             return None
         servers = (
             agent.mcp_servers.filter(placement=MCPPlacement.INTERNAL)

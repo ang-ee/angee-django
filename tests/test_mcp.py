@@ -91,6 +91,24 @@ def test_mcp_bearer_declines_agent_without_service_user(composed_tables: None) -
     assert resolve_actor(bearer) is None
 
 
+def test_mcp_bearer_declines_inactive_service_user(composed_tables: None) -> None:
+    """Deactivation revokes a valid bearer without changing the agent or credential."""
+
+    owner = User.objects.create_user(username="mcp-inactive-owner")
+    with system_context(reason="test.mcp.actor.inactive_service_user"):
+        credential = _static_credential(owner, name="inactive-user", token="tok-inactive")
+        server = MCPServer.objects.create(
+            name="inactive-user", url="http://x/mcp/", credential=credential, placement=MCPPlacement.INTERNAL
+        )
+        agent = _provisioned_agent(owner, name="Inactive User Agent")
+        agent.mcp_servers.add(server)
+        bearer = server.bearer_for(agent)
+    assert resolve_actor(bearer) == agent.principal_subject()
+    with system_context(reason="test.mcp.actor.deactivate"):
+        User._base_manager.filter(pk=agent.user_id).update(is_active=False)
+    assert resolve_actor(bearer) is None
+
+
 def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
     composed_tables: None,
 ) -> None:

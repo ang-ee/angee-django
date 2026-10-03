@@ -5,17 +5,20 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import tablib
+from asgiref.sync import async_to_sync
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import RequestFactory, TransactionTestCase, override_settings
+from fastmcp.exceptions import ToolError
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 from rebac.roles import grant
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.mcp.server import mcp_server
 from angee.resources.entries import ResourceEntry, ResourceGroup
 
 
@@ -46,6 +49,69 @@ class WorkCampaignTests(TransactionTestCase):
             )
         self.assertIsNone(result.errors, result.errors)
         return result.data
+
+    def test_task_tools_write_replay_complete_and_report_refusals_as_an_ordinary_user(self):
+        with system_context(reason="test.work.mcp.caller"):
+            caller = get_user_model().objects.create_user(username="work-mcp-caller", password=None)
+        self.assertFalse(caller.is_staff)
+        self.assertFalse(caller.is_superuser)
+
+        def run_tool(tool, **arguments):
+            with actor_context(caller):
+                return async_to_sync(tool.run)(arguments).structured_content
+
+        # Build every discovered registrar, including the generated readers.
+        tools = {tool.name: tool for tool in async_to_sync(mcp_server().list_tools)()}
+        with actor_context(caller):
+            queue = self.Queue.objects.create(name="Tool queue", slug="tool-queue", key="TOOL", triage_enabled=True)
+            ready = apps.get_model("work", "Stage").objects.get(queue=queue, category="unstarted")
+        inputs = {
+            "title": "Prepare a checklist",
+            "queue": queue.sqid,
+            "stage": ready.sqid,
+            "client_creation_key": "checklist",
+        }
+        created = run_tool(tools["create_task"], **inputs)
+        self.assertEqual(run_tool(tools["create_task"], **inputs), created)
+        updated = run_tool(
+            tools["update_task"],
+            sqid=created["sqid"],
+            title="Prepare the checklist",
+            expected_revision=created["revision"],
+        )
+        with self.assertRaises(ToolError):
+            run_tool(
+                tools["update_task"], sqid=created["sqid"], title="Stale title", expected_revision=created["revision"]
+            )
+        completed = run_tool(tools["complete_task"], sqid=created["sqid"])
+        self.assertEqual(
+            completed,
+            {
+                "ok": True,
+                "message": "Task completed.",
+                "code": None,
+                "validation_errors": None,
+                "sqid": created["sqid"],
+            },
+        )
+        with actor_context(caller):
+            task = self.Task.objects.get(sqid=created["sqid"])
+            self.assertEqual(task.title, updated["title"])
+            self.assertEqual(task.status, "done")
+        refused = run_tool(tools["accept_task"], sqid=task.sqid, expected_revision=task.revision)
+        self.assertFalse(refused["ok"])
+        self.assertTrue(refused["message"])
+        self.assertTrue(refused["validation_errors"])
+        self.assertEqual(set(refused), {"ok", "message", "code", "validation_errors", "sqid"})
+        triage = run_tool(tools["create_task"], title="Triage item", queue=queue.sqid)
+        accepted = run_tool(
+            tools["accept_tasks"],
+            selection=[
+                {"id": triage["sqid"], "expected_revision": triage["revision"]},
+            ],
+        )
+        self.assertTrue(accepted["result"][0]["ok"])
+        self.assertEqual(accepted["result"][0]["sqid"], triage["sqid"])
 
     def test_every_hand_verb_can_write_existing_zero_after_policy_tightens(self):
         verbs = ("start", "complete", "reopen", "accept", "decline", "drop", "drop_duplicate",

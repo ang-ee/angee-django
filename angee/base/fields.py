@@ -337,6 +337,10 @@ class FractionalRankField(models.FloatField):
     model owns the context columns and their database uniqueness constraint;
     the field cannot infer whether a list is scoped by a lane, parent, project,
     or another domain fact.
+
+    Adding the column backfills pre-existing rows with ``STEP``. Those equal
+    ranks are valid only when the rows share no non-null ordering group under
+    the model's uniqueness constraint; grouped rows need a contextual backfill.
     """
 
     STEP = 1024.0
@@ -347,7 +351,20 @@ class FractionalRankField(models.FloatField):
         """Default ranks to indexed because ordered contexts query by them."""
 
         kwargs.setdefault("db_index", True)
+        kwargs.setdefault("db_default", self.STEP)
         super().__init__(*args, **kwargs)
+
+    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+        """Omit constructor defaults and preserve explicit index/backfill opt-outs."""
+
+        name, path, args, kwargs = super().deconstruct()
+        for key, default in (("db_index", True), ("db_default", self.STEP)):
+            value = getattr(self, key)
+            if value == default:
+                kwargs.pop(key, None)
+            else:
+                kwargs[key] = value
+        return name, path, args, kwargs
 
     def has_default(self) -> bool:
         """Expose model-owned append allocation as a server-side default.

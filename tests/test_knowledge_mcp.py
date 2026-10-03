@@ -18,8 +18,10 @@ from typing import Any
 import pytest
 from django.apps import apps
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT
 from tests.conftest import SchemaAddon
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
@@ -106,11 +108,23 @@ def test_search_pages_passes_named_arguments() -> None:
     assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
     assert tool.parameters["required"] == ["vault", "query"]  # first has a schema default
     assert tool.document == (
-        "query ($vault: ID!, $query: String!, $first: Int!) "
-        "{ search_pages(vault: $vault, query: $query, first: $first) { id title kind } }"
+        "query ($first: Int!, $vault: ID!, $query: String!) "
+        "{ search_pages(first: $first, vault: $vault, query: $query) { id title kind } }"
     )
     # A list operation projects its rows under ``result``.
     assert set(tool.output_schema["properties"]) == {"result"}
+
+
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_curated_search_is_bounded_by_the_compiler() -> None:
+    tool = _registered_tools()["search_pages"]
+    arguments = {"vault": "vault-id", "query": "needle"}
+    assert tool._variables(arguments) == {"first": DEFAULT_QUERY_LIMIT, **arguments}
+    assert tool._variables({**arguments, "first": MAX_QUERY_LIMIT})["first"] == MAX_QUERY_LIMIT
+    with pytest.raises(ToolError, match="must not exceed"):
+        tool._variables({**arguments, "first": MAX_QUERY_LIMIT + 1})
+    with pytest.raises(ToolError, match="at least 1"):
+        tool._variables({**arguments, "first": 0})
 
 
 @pytest.mark.usefixtures("knowledge_discovery")

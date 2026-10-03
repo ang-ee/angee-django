@@ -6,13 +6,10 @@ real-time, agents, deployment — and ships them as framework primitives and
 composable addons. You inherit the answers and spend your code budget on what is
 actually unique to your product.
 
-> **Angee is in early alpha preview.** Everything below is **prototyped and
-> working end to end** — proven in platforms the team has shipped — and is being
-> lifted into this open-source framework one addon at a time. Items marked
-> **Planned** are designed and on the near roadmap.
-> Because every component *and its permissions* are tested end to end, each new
-> addon stands on a proven foundation: technical **investment**, not technical
-> debt.
+> **Angee is in early alpha preview.** The shipped primitives and addons below
+> are available in this repository. Items marked **Planned** describe future
+> capabilities; skeleton plugins demonstrate extension seams without providing
+> the complete capability. See [Checks](checks.md) for current test coverage.
 
 ## What Angee is
 
@@ -80,8 +77,10 @@ actually unique to your product.
   MIME-keyed previewers.
 - **Knowledge** — a server-backed, permissioned, Obsidian-shape knowledge base:
   pages, typed properties, wikilink/embed edges, canvases. "Index, don't grep" —
-  every change becomes queryable rows. **Graph RAG** (vector + graph retrieval)
-  lands as a follow-up addon.
+  every change becomes queryable rows. Knowledge provides a retrieval seam;
+  [`knowledge_graph_pgvector`](../addons/angee/knowledge_graph_pgvector/README.md)
+  is a skeleton plugin using lexical search, with no embeddings. Vector and
+  graph retrieval remain future work.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
   providers and stateful bridges, and signed inbound/outbound webhooks.
   **OAuth2 / OIDC** ships as the credential-source sibling and also powers SSO.
@@ -103,8 +102,10 @@ actually unique to your product.
   rechecks the version's publisher against those grants. Trigger enablement
   discloses prospective grants and run readers; retained run-input evidence is
   projected as record references with per-reader redaction.
-- **MCP** *(Planned)* — an agent tool surface generated from the framework's
-  persisted, REBAC-gated GraphQL operations.
+- **MCP** — [generated, bounded read tools per resource](../addons/angee/mcp/resource_tools.py)
+  plus addon-curated `mcp_tools.py` tools, all scoped to the calling actor.
+  The [compiler](../addons/angee/mcp/graphql.py) builds tool documents from the
+  composed GraphQL schema when the server starts; the documents are not persisted.
 - **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed
   over shared primitives such as `money`, `sequence`, and `uom`.
 

@@ -14,7 +14,7 @@ def test_composed_work_contracts(tmp_path):
     env.pop("DJANGO_SETTINGS_MODULE", None)
     result = subprocess.run(
         [sys.executable, str(root / "tests/composed_host.py"), "--runtime-dir", str(tmp_path / "runtime"),
-         "--app", "angee.work", "--no-examples", "--action", "tests",
+         "--app", "angee.work", "--app", "angee.mcp", "--no-examples", "--action", "tests",
          "--test-label", "tests.native_work_campaign", "--output", str(report)],
         cwd=root, env=env, capture_output=True, text=True, timeout=180, check=False,
     )

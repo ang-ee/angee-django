@@ -8,3 +8,15 @@ rows:
       party: pm.manager_person
       role: moderator
       is_confirmed: true
+  - xref: alice_engineering
+    fields:
+      group: work.eng
+      party: pm.alice_person
+      role: owner
+      is_confirmed: true
+  - xref: bob_engineering
+    fields:
+      group: work.eng
+      party: pm.bob_person
+      role: member
+      is_confirmed: true

@@ -29,8 +29,11 @@ from typing import Any
 import reversion
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
+from django.contrib.auth.backends import ModelBackend
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
 from django.db import close_old_connections
+from django.http import HttpRequest
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import Tool, ToolResult
 from graphql import (
@@ -43,9 +46,11 @@ from graphql import (
 )
 from pydantic import BaseModel
 from rebac import current_actor, system_context
+from strawberry.types import get_object_definition
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
 from angee.base.actors import actor_user_id
+from angee.graphql.actions import ActionResult
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
 
@@ -59,6 +64,18 @@ _SCALAR_JSON = {
 }
 """GraphQL scalar name → JSON Schema ``type``. ``JSON`` maps to an unconstrained schema."""
 
+DEFAULT_QUERY_LIMIT = 25
+"""Rows returned by a collection tool when its caller omits the limit."""
+
+MAX_QUERY_LIMIT = 50
+"""Maximum rows a caller may request from a collection tool."""
+
+ACTION_RESULT = tuple(
+    "sqid" if field.python_name == "id" else field.python_name
+    for field in get_object_definition(ActionResult, strict=True).fields
+)
+"""Whole public ActionResult contract, with the compiler's public-id spelling."""
+
 
 async def execute_under_actor(schema: str, document: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute ``document`` against the named schema bucket under the ambient actor.
@@ -67,7 +84,8 @@ async def execute_under_actor(schema: str, document: str, variables: dict[str, A
     surfaces it as a tool error rather than returning a partial result. The actor is
     whatever ``rebac.current_actor()`` holds — set per call by
     :class:`angee.mcp.middleware.ActorMiddleware`; the schema's ``RebacExtension`` opens
-    its own scopes and pins every queryset to that actor, so no Django request is needed.
+    its own scopes and pins every queryset to that actor. A synthetic Django request
+    carries that same user through the shared GraphQL session and action gates.
 
     Runs ``execute_sync`` in a thread: it matches the sync Django GraphQL view the browser
     uses, and the crud delete resolver does sync ORM that isn't async-safe. ``sync_to_async``
@@ -84,17 +102,17 @@ async def execute_under_actor(schema: str, document: str, variables: dict[str, A
 def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -> Any:
     """Run the GraphQL operation synchronously, recycling stale DB connections.
 
-    The MCP path has no Django request, so the ``request_started``/``request_finished``
+    The MCP path has no HTTP request lifecycle, so the ``request_started``/``request_finished``
     signals that close old connections never fire. Bracket the execution with
     ``close_old_connections()`` so the long-lived ``sync_to_async`` worker thread honours
     ``CONN_MAX_AGE``/``CONN_HEALTH_CHECKS`` like a request does — otherwise a DB restart or
     idle timeout surfaces as a stale-connection error on the next call instead of a
     transparent reconnect.
 
-    The same missing request also means ``reversion.middleware.RevisionMiddleware`` never
-    runs, so a registered model saved here (an agent's body edit) would persist with no
-    ``Version``. Open the revision context the middleware would and bind the ambient actor
-    as its user (mirroring the middleware's ``request.user`` binding). A read records
+    A tool call carries a synthetic request whose only meaningful attribute is ``user``:
+    the ambient actor's user, or anonymous for a non-user or ineligible user. No HTTP
+    middleware runs, including ``reversion.middleware.RevisionMiddleware``, so open its
+    revision context and bind the same eligible user for attribution. A read records
     nothing — no registered model saves, so reversion writes no revision — so wrapping
     every operation is safe.
     """
@@ -102,19 +120,22 @@ def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -
     close_old_connections()
     try:
         with reversion.create_revision():
+            user = _actor_user()
+            request = HttpRequest()
+            request.user = user if user is not None and ModelBackend().user_can_authenticate(user) else AnonymousUser()
             result = built.execute_sync(
                 document,
                 variable_values=dict(variables or {}),
-                context_value=SimpleNamespace(request=None),
+                context_value=SimpleNamespace(request=request),
             )
-            reversion.set_user(_revision_user())
+            reversion.set_user(request.user if request.user.is_authenticated else None)
             return result
     finally:
         close_old_connections()
 
 
-def _revision_user() -> Any | None:
-    """Return the Django user behind the ambient MCP actor for revision attribution.
+def _actor_user() -> Any | None:
+    """Return the ambient MCP user's session identity and revision attribution.
 
     The MCP analog of ``RevisionMiddleware``'s ``request.user`` binding: resolve rebac's
     ambient actor (entered per call by :class:`~angee.mcp.middleware.ActorMiddleware` and
@@ -127,7 +148,7 @@ def _revision_user() -> Any | None:
     user_id = actor_user_id(current_actor())
     if user_id is None:
         return None
-    with system_context(reason="mcp.graphql.revision_user"):
+    with system_context(reason="mcp.graphql.actor_user"):
         return get_user_model()._default_manager.filter(pk=user_id).first()
 
 
@@ -171,16 +192,16 @@ class GraphQLTool:
     :data:`ProjectionSpec`). The compiler derives the input schema and document
     from introspection; the hints below name the input args the tool drives:
     ``flatten`` lifts an input object's fields to top-level args, ``id_arg`` exposes a
-        scalar GraphQL id arg as ``sqid``, ``limit_arg`` maps a top-level int to
+    scalar GraphQL id arg as ``sqid``, ``limit_arg`` maps a top-level int to
     ``pagination.limit`` for an offset-paginated list, ``args`` passes named root
     arguments straight through as top-level tool inputs (scalars, enums, or lists
     thereof — for operations whose inputs are bare arguments rather than one input
     object), ``fixed`` injects constant GraphQL arguments the agent never sees
     (e.g. ``confirm`` on a delete).
     ``search_fields`` adds one optional text query mapped into a Hasura ``where``
-    ``_or`` over the named string fields. ``default_limit`` and ``max_limit`` keep
-    generated collection tools bounded even when the caller omits or overstates
-    ``limit_arg``. ``tags`` carries registration-owned classification such as the
+    ``_or`` over the named string fields. List-returning queries must declare
+    ``limit_arg``; the compiler applies :data:`DEFAULT_QUERY_LIMIT` and
+    :data:`MAX_QUERY_LIMIT`. ``tags`` carries registration-owned classification such as the
     generated-resource-reader bundle marker.
     """
 
@@ -195,8 +216,6 @@ class GraphQLTool:
     args: tuple[str, ...] = ()
     fixed: dict[str, Any] = field(default_factory=dict)
     search_fields: tuple[str, ...] = ()
-    default_limit: int | None = None
-    max_limit: int | None = None
     tags: frozenset[str] = frozenset()
 
 
@@ -288,8 +307,6 @@ class _CompiledTool(Tool):
     limit_wire_arg: str | None = None
     fixed: dict[str, Any] = {}
     search_fields: tuple[str, ...] = ()
-    default_limit: int | None = None
-    max_limit: int | None = None
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         """Execute the operation and return the projected payload as structured content."""
@@ -310,16 +327,12 @@ class _CompiledTool(Tool):
         sqid = args.pop("sqid", None)
         variables: dict[str, Any] = {}
         if self.limit_arg:
-            value = args.pop(self.limit_arg, self.default_limit)
-            if value is not None:
-                value = int(value)
-                if value < 1:
-                    raise ToolError("limit must be at least 1.")
-                if self.max_limit is not None and value > self.max_limit:
-                    raise ToolError(f"limit must not exceed {self.max_limit}.")
-            if value is None:
-                pass
-            elif self.limit_wire_arg == "pagination":
+            value = int(args.pop(self.limit_arg, DEFAULT_QUERY_LIMIT))
+            if value < 1:
+                raise ToolError("limit must be at least 1.")
+            if value > MAX_QUERY_LIMIT:
+                raise ToolError(f"limit must not exceed {MAX_QUERY_LIMIT}.")
+            if self.limit_wire_arg == "pagination":
                 variables["pagination"] = {"limit": value}
             elif self.limit_wire_arg:
                 variables[self.limit_wire_arg] = value
@@ -354,7 +367,7 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
     gc = GraphQLSchemas.from_discovery().graphql_schema(spec.schema)
     op_type, field = _root_field(gc, spec.operation)
     node, is_list, list_result_field = _return_node(field.type)
-    _validate(spec, field, node)
+    _validate(spec, field, node, op_type=op_type, is_list=is_list)
     leaves = _plan(node, spec.fields)
     flatten_fields = _flatten_fields(field, spec)
     id_arg_is_input = _id_arg_is_input(field, spec)
@@ -393,8 +406,6 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         limit_wire_arg=limit_wire_arg,
         fixed=spec.fixed,
         search_fields=spec.search_fields,
-        default_limit=spec.default_limit,
-        max_limit=spec.max_limit,
     )
 
 
@@ -500,7 +511,7 @@ def _limit_wire_arg(field: Any, spec: GraphQLTool) -> str | None:
     return spec.limit_arg if spec.limit_arg in field.args else "pagination"
 
 
-def _validate(spec: GraphQLTool, field: Any, node: Any) -> None:
+def _validate(spec: GraphQLTool, field: Any, node: Any, *, op_type: str, is_list: bool) -> None:
     """Fail fast with a clear message when a spec names a field or arg the schema lacks.
 
     ``_plan``/``_output_schema``/``_document`` index ``node.fields[wire]`` and
@@ -510,6 +521,8 @@ def _validate(spec: GraphQLTool, field: Any, node: Any) -> None:
     ``_root_field``'s fail-fast).
     """
 
+    if op_type == "query" and is_list and not spec.limit_arg:
+        raise ImproperlyConfigured(f"MCP tool {spec.name!r}: list query {spec.operation!r} must declare limit_arg.")
     _validate_fields(spec, node, spec.fields, depth=1)
     driven = [arg for arg in (_limit_wire_arg(field, spec), spec.id_arg, spec.flatten) if arg]
     if spec.search_fields:
@@ -567,8 +580,8 @@ def _input_schema(field: Any, spec: GraphQLTool) -> dict[str, Any]:
         properties[spec.limit_arg] = {
             "type": "integer",
             "minimum": 1,
-            **({"maximum": spec.max_limit} if spec.max_limit is not None else {}),
-            **({"default": spec.default_limit} if spec.default_limit is not None else {}),
+            "maximum": MAX_QUERY_LIMIT,
+            "default": DEFAULT_QUERY_LIMIT,
             "description": "Maximum rows to return.",
         }
     if spec.search_fields:
