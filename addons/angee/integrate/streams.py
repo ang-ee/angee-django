@@ -6,6 +6,7 @@ re-read by identity when supported; there is no durable work queue.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
@@ -16,6 +17,7 @@ from enum import StrEnum
 from itertools import islice
 from time import monotonic
 from typing import Any
+from urllib.parse import urlsplit
 
 from django.apps import apps
 from django.conf import settings
@@ -28,9 +30,12 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.errors import IntegrationError, _safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import UNSET, DiscrepancyKind, LinkStatus, StreamDirection, StreamKind, StreamPhase
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+
+logger = logging.getLogger(__name__)
 
 _CURSOR: TypeAdapter[dict[str, Any]] = TypeAdapter(
     dict[str, JsonValue], config=ConfigDict(strict=True, allow_inf_nan=False)
@@ -58,6 +63,58 @@ class StreamDefinition:
     absence_threshold: int = 2
     tombstone_retention: timedelta | None = None
     config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class PartitionFailure:
+    """The failed partition and operation, independent of shared progress updates."""
+
+    definition: StreamDefinition
+    stage: str
+    error: Exception
+
+    @property
+    def details(self) -> dict[str, str]:
+        """Return operator-safe identity and cause; URLs expose only their path."""
+
+        partition = self.definition.partition
+        parts = urlsplit(partition)
+        return {
+            "stream": self.definition.key,
+            "partition": parts.path if parts.scheme and parts.netloc else partition,
+            "stage": self.stage,
+            "message": _safe_integration_failure(self.error).message,
+        }
+
+    def log(self, bridge: Any) -> None:
+        """Log the original traceback once, using non-secret bridge and partition identity."""
+
+        details = self.details
+        logger.error(
+            "Bridge %s:%s stream %s partition %s failed during %s",
+            bridge._meta.label_lower,
+            bridge.pk,
+            details["stream"],
+            details["partition"],
+            self.stage,
+            exc_info=self.error,
+        )
+
+
+class BridgeSyncError(IntegrationError):
+    """Bounded, deterministic partition refusals retaining their original causes."""
+
+    def __init__(self, failures: Sequence[PartitionFailure]) -> None:
+        self.failures = tuple(sorted(failures, key=lambda item: (item.definition.key, item.definition.partition)))
+        messages = []
+        for failure in self.failures:
+            details = failure.details
+            identity = details["stream"]
+            if details["partition"]:
+                identity += f" ({details['partition']})"
+            messages.append(f"{identity}: {details['message']}")
+        message = "; ".join(messages)
+        super().__init__(message if len(message) <= 4096 else message[:4095] + "…")
 
 
 @dataclass(frozen=True, slots=True)
@@ -927,46 +984,55 @@ def _report(bridge: Any, message: str, **details: Any) -> None:
 
 
 def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float) -> int:
-    stream = begin_stream_cycle(
-        open_stream(bridge, definition.key, definition.partition, adapter, definition=definition, deadline=deadline),
-        adapter,
-    )
-    landed, resets = 0, 0
-    page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
-    exhausted = False
-    previous = None
-    while monotonic() < deadline:
-        result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
-        stream, exhausted = result.stream, result.exhausted
-        landed += result.count
-        previous, resets = result.check_continuation(previous=previous, resets=resets)
-        _report(
-            bridge,
-            "Applied stream page",
-            backend=type(adapter).__name__,
-            stream=definition.key,
-            partition=definition.partition,
-            landed=landed,
-            generation=stream.generation,
+    stage = "open"
+    try:
+        stream = open_stream(
+            bridge, definition.key, definition.partition, adapter, definition=definition, deadline=deadline,
         )
-        if exhausted:
-            if monotonic() < deadline:
-                landed += push_stream(stream, adapter, deadline=deadline).count
-                while monotonic() < deadline:
-                    reconcile_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
-                    if not stream.reconcile_state:
-                        break
-            break
-    if not exhausted:
-        _report(
-            bridge,
-            "Sync time budget reached; resuming next run",
-            stream=definition.key,
-            partition=definition.partition,
-            landed=landed,
-            budget_exhausted=True,
-        )
-    return landed
+        stage = "rescan"
+        stream = begin_stream_cycle(stream, adapter)
+        landed, resets = 0, 0
+        page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
+        exhausted = False
+        previous = None
+        while monotonic() < deadline:
+            stage = "pull"
+            result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
+            stream, exhausted = result.stream, result.exhausted
+            landed += result.count
+            stage = "continuation"
+            previous, resets = result.check_continuation(previous=previous, resets=resets)
+            _report(
+                bridge,
+                "Applied stream page",
+                backend=type(adapter).__name__,
+                stream=definition.key,
+                partition=definition.partition,
+                landed=landed,
+                generation=stream.generation,
+            )
+            if exhausted:
+                if monotonic() < deadline:
+                    stage = "push"
+                    landed += push_stream(stream, adapter, deadline=deadline).count
+                    while monotonic() < deadline:
+                        stage = "reconcile"
+                        reconcile_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
+                        if not stream.reconcile_state:
+                            break
+                break
+        if not exhausted:
+            _report(
+                bridge,
+                "Sync time budget reached; resuming next run",
+                stream=definition.key,
+                partition=definition.partition,
+                landed=landed,
+                budget_exhausted=True,
+            )
+        return landed
+    except Exception as error:  # noqa: BLE001 -- retain the operation that actually failed.
+        raise BridgeSyncError((PartitionFailure(definition, stage, error),)) from error
 
 
 def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float) -> int:
@@ -1002,23 +1068,42 @@ def sync_bridge(bridge: Any) -> int:
                 parallelism = min(parallelism, adapter.sync_parallelism)
             if connection.vendor != "postgresql":
                 parallelism = 1
+            failures: list[PartitionFailure] = []
+            landed = 0
             if parallelism <= 1 or len(definitions) <= 1:
-                return sum(_drain(bridge, adapter, definition, deadline) for definition in definitions)
-            failures, landed = [], 0
-            with ThreadPoolExecutor(
-                max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
-            ) as pool:
-                futures = {
-                    pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
-                    for definition in definitions
-                }
-                for future in as_completed(futures):
+                for definition in definitions:
                     try:
-                        landed += future.result()
-                    except Exception as error:  # noqa: BLE001 -- healthy partitions have already committed.
-                        failures.append((futures[future], error))
+                        landed += _drain(bridge, adapter, definition, deadline)
+                    except BridgeSyncError as error:
+                        failures.extend(error.failures)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
+                ) as pool:
+                    futures = {
+                        pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
+                        for definition in definitions
+                    }
+                    for future in as_completed(futures):
+                        try:
+                            landed += future.result()
+                        except BridgeSyncError as error:
+                            failures.extend(error.failures)
+                        except Exception as error:  # noqa: BLE001 -- partition setup/cleanup can also fail.
+                            failures.append(PartitionFailure(futures[future], "partition", error))
             if failures:
-                raise RuntimeError("Bridge sync failed for one or more partitions.") from failures[0][1]
+                error = BridgeSyncError(failures)
+                for failure in error.failures:
+                    failure.log(bridge)
+                details = [failure.details for failure in error.failures]
+                # All workers have stopped: a later healthy page cannot overwrite
+                # the failed partition with its own progress before settlement.
+                _report(
+                    bridge, error.public_message,
+                    stream=details[0]["stream"], partition=details[0]["partition"],
+                    stage=details[0]["stage"], failures=details,
+                )
+                raise error from error.failures[0].error
             return landed
     finally:
         adapter.close()

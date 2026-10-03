@@ -11,6 +11,7 @@ import vobject
 from django.db import connection
 from rebac import system_context
 
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
 from angee.messaging.testing.models import Directory, Handle, Party, PartyHandle, Person
 from angee.parties_integrate_carddav.backend import (
@@ -91,6 +92,17 @@ def test_native_httpx_multistatus_and_case_insensitive_redirect(monkeypatch: pyt
 
     assert response.status_code == 207
     assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
+
+
+def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        HttpClient, "transport_factory",
+        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(503, content=b"secret=private"))),
+    )
+    with pytest.raises(CardDavError) as refused:
+        _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/books/", "")
+    assert isinstance(refused.value, IntegrationError)
+    assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 503."
 
 
 def test_photo_download_is_capped_and_uses_the_collection_origin() -> None:
