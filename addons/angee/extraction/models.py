@@ -21,12 +21,11 @@ from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
     DocumentRef,
-    DocumentResult,
-    DocumentSource,
     ExtractionPartKind,
     ExtractionRef,
     LineRef,
-    PageRef,
+    Result,
+    Source,
     SourceRef,
     outcome_adapter,
 )
@@ -191,12 +190,12 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
 
     def preserve_authority(
         self,
-        candidate: DocumentResult,
+        candidate: Result,
         *,
         identity_mapping: Mapping[str, str],
         retired_identities: Mapping[str, str] | None = None,
         claim_part_positions: Mapping[int, int] | None = None,
-    ) -> DocumentResult:
+    ) -> Result:
         """Fill only facts without source or correction authority, using validated correspondence.
 
         The caller validates carrier continuity. Unchanged ordered carriers need
@@ -420,10 +419,10 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
             if len(matches := positions.get(part.carrier_identity, [])) == 1
         }
 
-    def document_sources(self) -> tuple[DocumentSource, ...]:
+    def document_sources(self) -> tuple[Source, ...]:
         """Return retained source identities; inference consumes the retained parts."""
         return tuple(
-            DocumentSource(
+            Source(
                 source_position=row.position,
                 content_hash=row.content_hash,
                 mime_type=row.mime_type,
@@ -581,12 +580,6 @@ class ExtractionPage(RetainedEvidence, AngeeDataModel):
             models.UniqueConstraint(fields=("extraction", "position"), name="uniq_extraction_page_position"),
             models.UniqueConstraint(fields=("source", "source_page"), name="uniq_extraction_source_page"),
         )
-
-    @property
-    def reference(self) -> PageRef:
-        """Expose the source/page and its retained raster carrier identities."""
-        carriers = (str(self.carrier_file.sqid),) if self.carrier_file_id else ()
-        return PageRef(self.source.reference, self.source_page, carriers)
 
 
 class ExtractionPart(RetainedEvidence, AngeeDataModel):

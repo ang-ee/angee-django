@@ -9,16 +9,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.impl import resolve_impl_class
 from angee.extraction.acquisition import ExtractionConfig, ExtractionRequestConfig
-from angee.extraction.contracts import (
-    DocumentPart,
-    DocumentPipelineError,
-    DocumentResult,
-    DocumentSource,
-    ExtractionPartKind,
-    PipelineError,
-    Result,
-    Source,
-)
+from angee.extraction.contracts import DocumentPart, ExtractionPartKind, PipelineError
 from angee.extraction.inference import TransientInferenceError, derive_text_claims, map_parts
 from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
@@ -43,8 +34,7 @@ def text_part():
     return DocumentPart(0, None, "text/plain", ExtractionPartKind.NATIVE_TEXT, "Alpha 12,50 7.00", "text", "digest")
 
 
-def test_compatibility_aliases_and_failure_retain_evidence(text_part):
-    assert (DocumentSource, DocumentResult, DocumentPipelineError) == (Source, Result, PipelineError)
+def test_failure_retains_evidence_and_its_own_usage(text_part):
     usage = {"input_tokens": 4}
     error = PipelineError("Unresolved", parts=[text_part], stage="mapping", code="invalid", usage_delta=usage)
     usage["input_tokens"] = 9
