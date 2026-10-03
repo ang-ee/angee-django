@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { searchForWorkspaceRoot } from "vite";
 import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
@@ -44,8 +45,14 @@ export function gqlAliasFor(runtimeGqlDir: string) {
 const srcTestIncludes = ["src/**/*.test.ts", "src/**/*.test.tsx"];
 
 const testDefaults = defineConfig({
-  // Watch mode reuses Vite's dev-server watcher; keep it off jj's store.
-  server: { watch: { ignored: [...ANGEE_WATCH_IGNORED] } },
+  server: {
+    // Watch mode reuses Vite's dev-server watcher; keep it off jj's store.
+    watch: { ignored: [...ANGEE_WATCH_IGNORED] },
+    // DOM suites load the shared setup file through Vite's file server. A
+    // consumer outside this repository (an external addon slot) has its own
+    // workspace root, so allow this config directory beside Vite's default.
+    fs: { allow: [searchForWorkspaceRoot(process.cwd()), fileURLToPath(new URL(".", import.meta.url))] },
+  },
   test: {
     // Pure modules run under node; hook/component suites opt into a DOM
     // environment per-file with a `// @vitest-environment happy-dom` pragma.

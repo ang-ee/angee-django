@@ -14,11 +14,22 @@ const menuItemClass = "relative flex h-full shrink-0 items-center gap-1 rounded-
 
 // Router's Link marks every matching ancestor/reference current. The menu's
 // single matcher owns that fact; native createLink still owns navigation.
-const AppMenuLink = createLink(function MenuAnchor({
+function MenuAnchor({
   "data-current": current, ...props
 }: ComponentPropsWithRef<"a"> & { "data-current"?: boolean }) {
   return <a {...props} data-status={undefined} data-current={current} aria-current={current ? "page" : undefined} />;
-});
+}
+
+const createAppMenuLink = () => createLink(MenuAnchor);
+let appMenuLink: ReturnType<typeof createAppMenuLink> | undefined;
+
+// Created on first render rather than at import, so importing the UI barrel
+// does not call into the router (suites that mock it partially still load).
+function AppMenuLink(props: Parameters<ReturnType<typeof createAppMenuLink>>[0]): ReactElement {
+  appMenuLink ??= createAppMenuLink();
+  const Link = appMenuLink;
+  return <Link {...props} />;
+}
 
 export interface AppMenuProps {
   menuItems?: readonly ChromeMenuItem[] | MenuTree;
