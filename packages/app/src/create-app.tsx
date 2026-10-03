@@ -76,7 +76,7 @@ import {
   ToastProvider,
   useRefineNotificationProvider,
 } from "@angee/ui/feedback/index";
-import { InAppLinkProvider, type InAppNavigator } from "@angee/ui/lib/in-app-link";
+import { InAppLinkProvider, routerNavigator } from "@angee/ui/lib";
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
@@ -461,8 +461,6 @@ export function createApp(input: CreateAppInput): AngeeApp {
     throw new Error(`Home "${home}" must belong to confined menu root "${confineTo}".`);
   }
 
-  const navigateInApp: InAppNavigator = (href, options) => { void router.navigate({ href, ...options }); };
-
   function RootOutlet(): ReactNode {
     const pathname = useRouterState({ select: (state) => state.location.pathname });
     const activeRoute = useActiveRoute(routes);
@@ -595,7 +593,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // this inside its parent layout's <Outlet/>, so the chrome stays mounted.
     defaultPendingComponent: () => <LoadingPanel />,
   });
-
+  // Bound after the router exists; RootOutlet only reads it at render time.
+  const navigateInApp = routerNavigator(router);
   const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
     home,
     confineTo: confineTo ?? null,

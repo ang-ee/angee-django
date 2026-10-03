@@ -1,10 +1,15 @@
 import * as React from "react";
-import { useRouter, type HistoryState } from "@tanstack/react-router";
+import type { AnyRouter, HistoryState } from "@tanstack/react-router";
 
 export type InAppNavigator = (
   href: string,
-  options?: { replace?: boolean; state?: HistoryState },
+  options?: { state?: HistoryState },
 ) => void;
+
+/** Bind the host router once; href navigation preserves its native search codec. */
+export function routerNavigator(router: AnyRouter): InAppNavigator {
+  return (href, options) => { void router.navigate({ href, ...options }); };
+}
 
 const InAppLinkContext = React.createContext<InAppNavigator | undefined>(undefined);
 
@@ -20,7 +25,11 @@ export function useInAppNavigator(): InAppNavigator | undefined {
   return React.useContext(InAppLinkContext);
 }
 
-/** One activation policy for anchors, including callbacks that accompany following a record. */
+/**
+ * One activation policy for anchors, including callbacks that accompany following a record.
+ * Mark server-served root-relative URLs (admin, media, logout) with rel="external"
+ * to retain document navigation.
+ */
 export function useInAppLinkClick(
   href: string | undefined,
   onClick?: React.MouseEventHandler<HTMLElement>,
@@ -32,22 +41,14 @@ export function useInAppLinkClick(
     onClick?.(event);
     const destination = href ?? event.currentTarget.getAttribute("href") ?? undefined;
     const target = event.currentTarget.getAttribute("target");
+    const external = event.currentTarget.getAttribute("rel")?.split(/\s+/).includes("external");
     if (!destination?.startsWith("/") || destination.startsWith("//")
       || event.defaultPrevented || event.button !== 0
       || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
-      || (target && target !== "_self") || event.currentTarget.hasAttribute("download")) return;
+      || (target && target !== "_self") || external || event.currentTarget.hasAttribute("download")) return;
     options?.onFollow?.();
     if (!navigate) return;
     event.preventDefault();
     navigate(destination);
   };
-}
-
-/** Chrome's native Router links use the host's search codec, never a query as a pathname. */
-export function useHrefLinkOptions(href: string | undefined) {
-  const router = useRouter();
-  if (href === undefined) return { to: "." };
-  if (!href.startsWith("/") || href.startsWith("//")) return { to: href };
-  const url = new URL(href, router.origin);
-  return { to: url.pathname, search: () => router.options.parseSearch(url.search), hash: url.hash.slice(1) };
 }

@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, Page, PageBody, PageHeader, RailPanel, Tag, TextLink, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
-import { Link } from "@tanstack/react-router";
 import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
 import { usePartyHandleRowActions } from "./party-handle-row-actions";
@@ -118,30 +117,30 @@ export function ReviewPage(): React.ReactElement {
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {duplicateCandidates.map((candidate) => (
-                  <TextLink key={`${candidate.left.id}:${candidate.right.id}`} asChild variant="block-card">
-                    <Link
-                      to={routeHref("parties.merge", {
-                        left: candidate.left.id,
-                        right: candidate.right.id,
-                      })}
-                    >
-                      <span className="grid gap-3">
-                        <span className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                          <PartySummary name={candidate.left.display_name} />
-                          <Glyph name="chevron-right" className="text-fg-muted" />
-                          <PartySummary name={candidate.right.display_name} align="right" />
-                        </span>
-                        <span className="flex flex-wrap items-center gap-2">
-                          <Tag tone="warning">{t("review.possibleDuplicates.sharedHandle")}</Tag>
-                          <span className="truncate font-mono text-xs text-fg-muted">
-                            {candidate.normalized_value}
-                          </span>
-                        </span>
-                        <span className="text-xs font-medium text-link">
-                          {t("review.possibleDuplicates.compare")}
+                  <TextLink
+                    key={`${candidate.left.id}:${candidate.right.id}`}
+                    variant="block-card"
+                    href={routeHref("parties.merge", {
+                      left: candidate.left.id,
+                      right: candidate.right.id,
+                    })}
+                  >
+                    <span className="grid gap-3">
+                      <span className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                        <PartySummary name={candidate.left.display_name} />
+                        <Glyph name="chevron-right" className="text-fg-muted" />
+                        <PartySummary name={candidate.right.display_name} align="right" />
+                      </span>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Tag tone="warning">{t("review.possibleDuplicates.sharedHandle")}</Tag>
+                        <span className="truncate font-mono text-xs text-fg-muted">
+                          {candidate.normalized_value}
                         </span>
                       </span>
-                    </Link>
+                      <span className="text-xs font-medium text-link">
+                        {t("review.possibleDuplicates.compare")}
+                      </span>
+                    </span>
                   </TextLink>
                 ))}
               </div>

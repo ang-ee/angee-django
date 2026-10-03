@@ -1,5 +1,6 @@
 ---
 "@angee/ui": patch
+"@angee/app": patch
 ---
 
 Keep top-bar app menus within the available width by moving excess entries into
@@ -18,7 +19,11 @@ brand link. Icon-only rail links show their name and interaction hints, followed
 by the developer description when developer mode is enabled.
 
 Route shared in-app links automatically without caller navigation callbacks;
-keep native modified clicks and external/download links. Query-bearing hrefs use
+keep native modified clicks and external/download links, including root-relative
+document links marked `rel="external"`. Query-bearing hrefs use
 the router's href navigation or shared chrome conversion with the host search
-codec. Form links retain breadcrumb history in location state, with Back
-restoration and prefix truncation; chrome destinations start fresh.
+codec. Content links retain breadcrumb history in location state, with Back
+restoration and pathname-based prefix truncation, capped at eight crumbs; tab
+and view search updates preserve history. Content menus, calendars, Gantt,
+action results and drawers use the same navigation owner; chrome destinations
+start fresh. Gallery selection checkboxes sit outside card links.

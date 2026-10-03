@@ -1,7 +1,7 @@
 import { createContext, useContext, useId, useState, type ReactElement } from "react";
 import { Link, useLinkProps, useRouterState } from "@tanstack/react-router";
 
-import { useHrefLinkOptions } from "../lib/in-app-link";
+import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT, type UiTranslate } from "../i18n";
 import { toneGlyph } from "../lib/tones";
 import { tv } from "../lib/variants";

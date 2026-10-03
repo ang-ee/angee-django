@@ -231,11 +231,16 @@ shared UI copy through an addon bundle.
   mounted by `createApp`; plain clicks route automatically and provider-less links
   stay native. Never pass `onNavigate` merely to call the router, or put a
   query-bearing href in TanStack `to`; use `navigate({ href })` or the owner's
-  chrome href conversion.
+  [chrome href conversion](../../packages/ui/src/chrome/href-link-options.ts).
+  Use `rel="external"` for server-served root-relative paths such as admin,
+  media and logout so they load as documents.
 - [Breadcrumb history](../../packages/ui/src/chrome/Breadcrumb.tsx) lives in TanStack
-  location `state.trail`: console content links carry the current nested trail,
-  earlier crumbs truncate it, browser Back restores it, and chrome navigation
-  starts fresh. Menu destinations show no strip.
+  location `state.breadcrumbTrail`, validated at the breadcrumb owner: console
+  content links, including drawers and programmatic record navigation, carry
+  the current nested trail. Revisiting a pathname (even with another query) or
+  activating an earlier crumb truncates it; only the eight most recent entries
+  remain. Same-location search updates pass `state: true`, browser Back restores
+  history, and chrome navigation starts fresh. Menu destinations show no strip.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, containers, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/

@@ -6,7 +6,7 @@ import {
 } from "react";
 import { Link } from "@tanstack/react-router";
 
-import { useHrefLinkOptions } from "../lib/in-app-link";
+import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { toneClass as toneFillClass } from "../lib/tones";
