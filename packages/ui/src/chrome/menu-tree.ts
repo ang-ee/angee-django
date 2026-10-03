@@ -53,8 +53,8 @@ export interface ChromeMenuItem extends ComposedMenuItem, ChromeMenuExtra {
 
 /**
  * Whether `pathname` is `target` or nests under it (`target/…`). The one
- * path-match predicate shared by `ChromeMenuNode.matchesPath` and the app
- * chooser; a missing or `#` target never matches.
+ * path-match predicate used by the menu matcher and explicit chooser links;
+ * a missing or `#` target never matches.
  */
 export function pathMatchesTarget(
   pathname: string,
@@ -200,11 +200,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
 
   /** Most-specific targeted child whose subtree contains `pathname`. */
   activeTargetedChild(pathname: string): ChromeMenuNode | undefined {
-    return new MenuTree(this.targetedChildren, new Map()).match(pathname)?.trail[0];
-  }
-
-  matchesPath(pathname: string): boolean {
-    return pathMatchesTarget(pathname, this.targetPath);
+    return matchWithin(this.targetedChildren, pathname)?.trail[0];
   }
 
   appendChild(child: ChromeMenuNode): void {
@@ -317,16 +313,16 @@ export class MenuTree {
    * and which of them is the active one (`null` when the path belongs to
    * neither, or to the other scope's roots).
    */
-  railPlace(pathname: string): {
+  railPlace(location: string | MenuMatch | undefined): {
     scope: "apps" | "settings";
     roots: readonly ChromeMenuNode[];
     activeRootId: string | null;
   } {
-    const scope = this.isSettingsActive(pathname) ? "settings" : "apps";
+    const active = (typeof location === "string" ? this.match(location) : location)?.trail[0];
+    const scope = active?.group === "platform" ? "settings" : "apps";
     const roots = scope === "settings"
       ? this.settingsMenuItems()
       : this.railMenuItems();
-    const active = this.activeAppRoot(pathname);
     return {
       scope,
       roots,
@@ -374,34 +370,9 @@ export class MenuTree {
     return this.match(pathname)?.item;
   }
 
-  /** Own-path matches rank by path length, equal search params, depth, then pre-order. */
-  match(path: string, search?: string | URLSearchParams): {
-    item: ChromeMenuNode;
-    trail: readonly ChromeMenuNode[];
-    /** Nearest visible app on the navigation trail. Settings has its own place. */
-    app?: ChromeMenuNode;
-  } | undefined {
-    const location = new URL(path, "https://angee.invalid");
-    const params = new URLSearchParams(search ?? location.search);
-    let best: { item: ChromeMenuNode; trail: readonly ChromeMenuNode[] } | undefined;
-    let bestRank = [-1, -1, -1];
-    const visit = (item: ChromeMenuNode, ancestors: readonly ChromeMenuNode[]): void => {
-      const trail = [...ancestors, item];
-      if (item.path && pathMatchesTarget(location.pathname, item.path)) {
-        const equalParams = [...new URLSearchParams(item.search)].filter(
-          ([key, value]) => params.getAll(key).includes(value),
-        ).length;
-        const rank = [item.path.length, equalParams, trail.length];
-        const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
-        if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
-          best = { item, trail };
-          bestRank = rank;
-        }
-      }
-      for (const child of item.children ?? []) visit(child, trail);
-    };
-    for (const root of this.roots) visit(root, []);
-    return best && { ...best, app: best.trail.findLast((item) => item.isApp && !item.hidden) };
+  /** Own-path matches rank by length, equal params, fewer mismatches, depth, then pre-order. */
+  match(path: string, search?: string | URLSearchParams): MenuMatch | undefined {
+    return matchWithin(this.roots, path, search);
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -426,6 +397,41 @@ export class MenuTree {
   itemsForRoute(routeName: string): readonly ChromeMenuNode[] {
     return [...this.byId.values()].filter((item) => item.route === routeName);
   }
+}
+
+export interface MenuMatch {
+  item: ChromeMenuNode;
+  trail: readonly ChromeMenuNode[];
+  /** Nearest visible app on the navigation trail. Settings has its own place. */
+  app?: ChromeMenuNode;
+}
+
+function matchWithin(
+  roots: readonly ChromeMenuNode[],
+  path: string,
+  search?: string | URLSearchParams,
+): MenuMatch | undefined {
+  const location = new URL(path, "https://angee.invalid");
+  const params = new URLSearchParams(search ?? location.search);
+  let best: { item: ChromeMenuNode; trail: readonly ChromeMenuNode[] } | undefined;
+  let bestRank = [-1, -1, -Infinity, -1];
+  const visit = (item: ChromeMenuNode, ancestors: readonly ChromeMenuNode[]): void => {
+    const trail = [...ancestors, item];
+    if (item.path && pathMatchesTarget(location.pathname, item.path)) {
+      const targetParams = [...new URLSearchParams(item.search)];
+      const equalParams = targetParams.filter(([key, value]) => params.getAll(key).includes(value)).length;
+      const mismatches = targetParams.length - equalParams;
+      const rank = [item.path.length, equalParams, -mismatches, trail.length];
+      const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
+      if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
+        best = { item, trail };
+        bestRank = rank;
+      }
+    }
+    for (const child of item.children ?? []) visit(child, trail);
+  };
+  for (const root of roots) visit(root, []);
+  return best && { ...best, app: best.trail.findLast((item) => item.isApp && !item.hidden) };
 }
 
 const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);

@@ -17,9 +17,7 @@ test.describe("iam console — admin", () => {
   test("navigates the Permissions menu across every section", async ({ page }) => {
     await page.goto("/iam");
     await expect(page).toHaveURL(/\/iam/);
-    await expect(
-      page.getByRole("link", { name: "Overview", exact: true }),
-    ).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText("Grant access")).toBeVisible({ timeout: 20000 });
 
     for (const section of SECTIONS) {
       await page.goto(section.path);

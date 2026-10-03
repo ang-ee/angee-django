@@ -286,7 +286,7 @@ describe("ConsoleLayout", () => {
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     const notesLink = within(rail).getByRole("link", { name: "Notes" });
     expect(notesLink.getAttribute("href")).toBe("/notes");
-    expect(notesLink.getAttribute("data-active")).toBe("true");
+    expect(notesLink.getAttribute("data-current")).toBe("true");
     expect(notesLink.getAttribute("aria-current")).toBe("true");
     expect(within(rail).getByRole("link", { name: "Ops" })).toBeTruthy();
     expect(within(rail).queryByRole("button", { name: "Collapse Notes" })).toBeNull();

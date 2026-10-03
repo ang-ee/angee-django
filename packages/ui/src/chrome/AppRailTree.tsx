@@ -9,7 +9,7 @@ import { Accordion } from "../ui/accordion";
 import { Badge, CountBadge } from "../ui/badge";
 import { railLinkToggleProps } from "./app-rail-model";
 import { Glyph } from "./Glyph";
-import { MenuTree, type ChromeMenuNode } from "./menu-tree";
+import type { ChromeMenuNode } from "./menu-tree";
 
 const ActiveMenuItemContext = createContext<{ selected?: string; page?: string }>({});
 
@@ -28,7 +28,7 @@ export const appRailTreeVariants = tv({
     rootItem: "rounded-6",
     row: "group/row flex min-w-0 items-center rounded-6",
     link:
-      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-6 px-2 text-13 text-on-rail-mut no-underline outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring data-[active=true]:bg-rail-hi data-[active=true]:font-medium data-[active=true]:text-on-rail-hi",
+      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-6 px-2 text-13 text-on-rail-mut no-underline outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring data-[current=true]:bg-rail-hi data-[current=true]:font-medium data-[current=true]:text-on-rail-hi",
     trigger:
       "grid size-7 shrink-0 place-content-center rounded-6 p-0 text-on-rail-mut outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring",
     disclosure:
@@ -49,6 +49,10 @@ export interface AppRailTreeProps {
   /** The resolved roots of that place, in display order. */
   roots: readonly ChromeMenuNode[];
   activeRootId: string | null;
+  /** Selected ids from the shell's full-tree match; no matching against pruned roots. */
+  selectedAppId?: string;
+  selectedSubAppId?: string;
+  pageId?: string;
   /** Open a requested app without changing which route is marked active. */
   defaultOpenRootId?: string | null;
   /** The rail collapse toggle, fired by a second activation of the current page's link. */
@@ -62,11 +66,14 @@ export function AppRailTree({
   scope,
   roots,
   activeRootId,
+  selectedAppId,
+  selectedSubAppId,
+  pageId,
   defaultOpenRootId = activeRootId,
   onActiveToggle,
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
-  const { pathname, searchStr } = useRouterState({ select: (state) => state.location });
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [openRootId, setOpenRootId] = useDerivedOverride<string | null>(
     defaultOpenRootId,
     `${scope}\0${activeRootId ?? ""}\0${defaultOpenRootId ?? ""}`,
@@ -74,10 +81,9 @@ export function AppRailTree({
   const idPrefix = `app-rail-${useId().replaceAll(":", "")}`;
   const styles = appRailTreeVariants();
   const [onlyRoot] = roots;
-  const match = MenuTree.from(roots).match(pathname, searchStr);
 
   return (
-    <ActiveMenuItemContext.Provider value={{ selected: (match?.app ?? match?.trail[0])?.id, page: match?.item.id }}>
+    <ActiveMenuItemContext.Provider value={{ selected: selectedSubAppId ?? selectedAppId, page: pageId }}>
       <div className={styles.root({ className })}>
         {scope === "settings" ? (
           <div className={styles.header()}>
@@ -94,7 +100,7 @@ export function AppRailTree({
         <div className={styles.tree()}>
           {flat && roots.length === 1 && onlyRoot ? (
             onlyRoot.appChildren().map((item) => (
-              <NestedMenuItem key={item.id} item={item}
+              <MenuLink key={item.id} item={item}
                 pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
             ))
           ) : <Accordion.Root
@@ -219,7 +225,7 @@ function MenuChildren({
   return (
     <div className={styles.children()}>
       {items.map((item) => (
-        <NestedMenuItem
+        <MenuLink
           key={item.id}
           item={item}
           pathname={pathname}
@@ -229,20 +235,6 @@ function MenuChildren({
       ))}
     </div>
   );
-}
-
-function NestedMenuItem({
-  item,
-  pathname,
-  styles,
-  onActiveToggle,
-}: {
-  item: ChromeMenuNode;
-  pathname: string;
-  styles: AppRailTreeStyles;
-  onActiveToggle?: (() => void) | undefined;
-}): ReactElement | null {
-  return <MenuLink item={item} pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />;
 }
 
 function MenuLink({
@@ -262,15 +254,15 @@ function MenuLink({
   const linkProps = useLinkProps({
     to: item.target,
     href: item.target,
+    ...toggleProps,
   });
   if (!item.target) return null;
   return (
     <a
       {...linkProps}
-      {...toggleProps}
       aria-current={current ? (active.page === item.id ? "page" : "true") : undefined}
-      data-active={current}
-      data-status={current ? "active" : undefined}
+      data-current={current}
+      data-status={undefined}
       className={styles.link()}
     >
       <span className={item.tone ? toneGlyph(item.tone) : undefined}>

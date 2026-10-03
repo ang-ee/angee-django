@@ -36,6 +36,27 @@ const menus: readonly ChromeMenuItem[] = [
 const menuTree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref(routes)) as readonly ChromeMenuItem[]);
 
 describe("app resource projection", () => {
+  test("the refine bridge preserves a route-less Settings group and its single child's own target", () => {
+    const route = { name: "tags.all", path: "/tags" };
+    const menus: readonly ChromeMenuItem[] = [{ id: "tags", label: "Tags", group: "platform", children: [
+      { id: "tags.all", label: "All tags", route: "tags.all" },
+    ] }];
+    const tree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref([route])));
+    const resources = refineRouteResourceProjection([route], tree, tree).resources;
+    const group = resources.find((item) => item.meta?.menuId === "tags")!;
+    const page = resources.find((item) => item.meta?.menuId === "tags.all")!;
+    expect(group.list).toBe("/tags");
+    expect(group.meta?.menuTarget).toBeNull();
+    expect(page.meta?.menuTarget).toBe("/tags");
+    const chrome = MenuTree.from(chromeMenuItemsFromRefine([{
+      key: "menu:tags", name: "menu:tags", route: group.list as string, meta: group.meta,
+      children: [{ key: "menu:tags.all", name: "menu:tags.all", route: page.list as string, meta: page.meta, children: [] }],
+    }]));
+    expect(chrome.roots[0]?.to).toBeUndefined();
+    expect(chrome.roots[0]?.target).toBe("/tags");
+    expect(chrome.match("/tags")?.item.id).toBe("tags.all");
+  });
+
   test("included app identity survives navigation projection and the refine chrome bridge", () => {
     const compiled = compileMenus([
       { id: "desk", menus: { desk: { route: "desk.home" }, "desk.incoming": { parent: "desk", route: "desk.incoming" } } },

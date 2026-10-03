@@ -33,6 +33,20 @@ const MENU: readonly ChromeMenuItem[] = [
 ];
 
 describe("match", () => {
+  test.each([
+    ["", "m.all"],
+    ["?preset=archived", "m.all"],
+    ["?preset=unread", "m.unread"],
+  ])("ranks mismatched preset references below the general page on %s", (search, expected) => {
+    const tree = MenuTree.from([{ id: "m", children: [
+      { id: "m.unread", to: "/m/messages?preset=unread" },
+      { id: "m.all", to: "/m/messages" },
+    ] }]);
+    expect(tree.match("/m/messages", search)?.item.id).toBe(expected);
+    expect(tree.match(`/m/messages${search}`)?.item.id).toBe(expected);
+    expect(tree.roots[0]?.activeTargetedChild(`/m/messages${search}`)?.id).toBe(expected);
+  });
+
   test("eight equal route references highlight the first declaring owner", () => {
     const tree = MenuTree.from(Array.from({ length: 8 }, (_, index) => ({
       id: `owner-${index}`, to: "/shared",

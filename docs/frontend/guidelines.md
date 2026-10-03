@@ -901,16 +901,19 @@ Hard-won traps — the wise learn from others' mistakes
   the rail is viewport-sticky so both remain reachable. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
-  an app with children or Settings opens its menu temporarily in the shell's
-  shared navigation drawer. Mobile uses the same drawer through the top-bar
-  navigation button. Temporary navigation never changes the desktop expansion
+  a root with visible included apps opens those sub-apps temporarily in the
+  shell's shared navigation drawer; leaf apps and sub-apps navigate directly.
+  Settings opens its platform roots in that drawer. Mobile uses it through the
+  top-bar navigation button. Temporary navigation never changes the desktop expansion
   preference (`railLinkToggleProps` in `chrome/app-rail-model.ts` owns link
   activation; modified clicks keep the browser default). Workbench primary
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
-  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
-  app roots: explicit `appRoot` declarations win, otherwise every root is an app,
-  and `appRoot` on a non-root item throws. An included app drops `appRoot` and
+  `ChromeMenuNode.isApp` identifies non-platform roots and included apps.
+  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) selects the
+  rail-root candidates: explicit `appRoot` declarations win, otherwise it returns
+  all roots; the rail filters platform roots, anchors and hidden nodes.
+  `appRoot` on a non-root item throws. An included app drops `appRoot` and
   receives compiler-emitted `app: true`; authors do not declare that field.
   A branded single-root rail shows the brand and included apps instead of the
   app chooser. Addons rearrange
@@ -919,7 +922,10 @@ Hard-won traps — the wise learn from others' mistakes
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
   another addon's items.
   `route.menu` identifies a route's owning item when references are ambiguous.
-  Chrome currently selects the nearest visible app on `MenuTree.match()`'s
+  Ambiguous root ownership still throws under a perspective; confinement does
+  not choose an owner for the route. `useChromePlace()` shares one memoized
+  `MenuTree.match(pathname, searchStr)` across the rail and top bar.
+  Chrome currently selects the nearest visible app on that match's
   trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
   sheet strip below the top bar; pane toggles stay in the top bar.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**

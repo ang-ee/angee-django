@@ -7,6 +7,7 @@ import { BreadcrumbBar } from "../chrome/BreadcrumbBar";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
+import { ChromePlaceProvider } from "../chrome/refine-menu";
 import { useSurfacePresentation } from "../chrome/surface-policy";
 import { Chatter, useChatterPresentation } from "../communication/Chatter";
 import { ChatterProvider, useChatter, type ChatterPaneController } from "../communication/chatter-context";
@@ -40,7 +41,7 @@ export interface ConsoleLayoutProps {
 
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
   const { shell } = useSurfacePresentation();
-  return <ChatterProvider defaultCollapsed={!shell?.asideOpen}><ConsoleLayoutBody {...props} /></ChatterProvider>;
+  return <ChromePlaceProvider><ChatterProvider defaultCollapsed={!shell?.asideOpen}><ConsoleLayoutBody {...props} /></ChatterProvider></ChromePlaceProvider>;
 }
 
 function ConsoleLayoutBody({

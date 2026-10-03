@@ -25,15 +25,19 @@ test.describe("operator console — admin", () => {
     await page.goto("/operator");
     await expect(page).toHaveURL(/\/operator/);
 
-    // The chrome surfaces the active app's sections as a nav; Overview is the
-    // landing section.
+    // Settings sections live in the Operator dropdown in the top bar.
+    const operatorMenu = page.getByRole("navigation", { name: "Settings menu" })
+      .getByRole("button", { name: "Operator", exact: true });
+    await operatorMenu.click();
     await expect(
-      page.getByRole("link", { name: "Overview", exact: true }),
+      page.getByRole("menuitem", { name: "Overview", exact: true }),
     ).toBeVisible({ timeout: 20000 });
+    await page.keyboard.press("Escape");
 
     for (const section of SECTIONS) {
+      await operatorMenu.click();
       await page
-        .getByRole("link", { name: section.label, exact: true })
+        .getByRole("menuitem", { name: section.label, exact: true })
         .click();
       await expect(page).toHaveURL(new RegExp(`${section.path}$`));
     }

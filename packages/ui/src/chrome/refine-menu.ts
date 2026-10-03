@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { Fragment, createContext, createElement, useContext, useMemo, type ReactElement, type ReactNode } from "react";
 import { useMenu, type TreeMenuItem } from "@refinedev/core";
+import { useRouterState } from "@tanstack/react-router";
 
 import { isMenuTone } from "../lib/tones";
 import {
@@ -8,10 +9,13 @@ import {
   type ChromeMenuStatus,
   type ChromeMenuTone,
   MenuTree,
+  type MenuMatch,
 } from "./menu-tree";
 
 interface RefineChromeMenuMeta {
   menuId?: unknown;
+  /** Own resolved href, or null when Refine's list borrows a descendant target. */
+  menuTarget?: unknown;
   parent?: unknown;
   appRoot?: unknown;
   app?: unknown;
@@ -37,6 +41,45 @@ export function useChromeMenuTree(): MenuTree {
   return useMemo(() => MenuTree.from(items), [items]);
 }
 
+interface ChromePlace {
+  tree: MenuTree;
+  pathname: string;
+  searchStr: string;
+  match: MenuMatch | undefined;
+}
+
+const ChromePlaceContext = createContext<ChromePlace | null>(null);
+
+/** Share one full-tree match across the rail, drawer and top-bar app menu. */
+export function ChromePlaceProvider({ menuItems, children }: {
+  menuItems?: readonly ChromeMenuItem[] | MenuTree;
+  children: ReactNode;
+}): ReactElement {
+  const inherited = useContext(ChromePlaceContext);
+  return inherited && (menuItems === undefined || menuItems === inherited.tree)
+    ? createElement(Fragment, null, children)
+    : createElement(ChromePlaceOwner, { menuItems }, children);
+}
+
+function ChromePlaceOwner({ menuItems, children }: {
+  menuItems?: readonly ChromeMenuItem[] | MenuTree;
+  children?: ReactNode;
+}): ReactElement {
+  const runtimeTree = useChromeMenuTree();
+  const tree = useMemo(() => MenuTree.from(menuItems ?? runtimeTree), [menuItems, runtimeTree]);
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const searchStr = useRouterState({ select: (state) => state.location.searchStr });
+  const match = useMemo(() => tree.match(pathname, searchStr), [tree, pathname, searchStr]);
+  const place = useMemo(() => ({ tree, pathname, searchStr, match }), [tree, pathname, searchStr, match]);
+  return createElement(ChromePlaceContext.Provider, { value: place }, children);
+}
+
+export function useChromePlace(): ChromePlace {
+  const place = useContext(ChromePlaceContext);
+  if (!place) throw new Error("useChromePlace requires ChromePlaceProvider.");
+  return place;
+}
+
 export function chromeMenuItemsFromRefine(
   menuItems: readonly TreeMenuItem[],
 ): readonly ChromeMenuItem[] {
@@ -49,12 +92,13 @@ function chromeMenuItemFromRefine(
   const meta = chromeMenuMeta(item);
   const id = stringValue(meta.menuId) ?? item.identifier ?? item.name;
   const label = stringValue(item.label) ?? stringValue(meta.menuId) ?? item.name;
+  const target = meta.menuTarget === undefined ? item.route : stringValue(meta.menuTarget);
   const parentId = menuParentId(meta.parent);
   const children = item.children.flatMap((child) => chromeMenuItemFromRefine(child));
   const menuItem: ChromeMenuItem = {
     id,
     label,
-    ...(item.route ? { to: item.route } : {}),
+    ...(target ? { to: target } : {}),
     ...(parentId ? { parentId } : {}),
     ...(meta.appRoot === true ? { appRoot: true } : {}),
     ...(meta.app === true ? { app: true } : {}),

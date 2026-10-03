@@ -1,12 +1,12 @@
 import type { ComponentPropsWithRef, ReactElement } from "react";
-import { createLink, useRouterState } from "@tanstack/react-router";
+import { createLink } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "./Glyph";
-import { MenuTree, type ChromeMenuItem, type ChromeMenuNode } from "./menu-tree";
-import { useChromeMenuTree } from "./refine-menu";
+import type { MenuTree, ChromeMenuItem, ChromeMenuNode } from "./menu-tree";
+import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
 
 const menuItemClass = "relative flex h-full shrink-0 items-center gap-1 rounded-4 px-2 text-13 text-on-rail-mut no-underline outline-none hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring data-[current=true]:text-on-rail-hi after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 data-[current=true]:after:bg-brand";
 
@@ -15,7 +15,7 @@ const menuItemClass = "relative flex h-full shrink-0 items-center gap-1 rounded-
 const AppMenuLink = createLink(function MenuAnchor({
   "data-current": current, ...props
 }: ComponentPropsWithRef<"a"> & { "data-current"?: boolean }) {
-  return <a {...props} data-current={current} aria-current={current ? "page" : undefined} />;
+  return <a {...props} data-status={undefined} data-current={current} aria-current={current ? "page" : undefined} />;
 });
 
 export interface AppMenuProps {
@@ -24,12 +24,13 @@ export interface AppMenuProps {
 }
 
 /** The selected app's own menus; included apps remain in the rail. */
-export function AppMenu({ menuItems, className }: AppMenuProps): ReactElement | null {
+export function AppMenu({ menuItems, className }: AppMenuProps): ReactElement {
+  return <ChromePlaceProvider menuItems={menuItems}><AppMenuBody className={className} /></ChromePlaceProvider>;
+}
+
+function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactElement | null {
   const t = useUiT();
-  const runtimeTree = useChromeMenuTree();
-  const tree = MenuTree.from(menuItems ?? runtimeTree);
-  const { pathname, searchStr } = useRouterState({ select: (state) => state.location });
-  const match = tree.match(pathname, searchStr);
+  const { tree, match } = useChromePlace();
   const settings = match?.trail[0]?.group === "platform" ? tree.settingsEntry() : undefined;
   const app = match?.app;
   if (!app && !settings) return null;
@@ -46,9 +47,10 @@ export function AppMenu({ menuItems, className }: AppMenuProps): ReactElement | 
     </AppMenuLink>
     {items.map((item) => {
       const children = item.menuItems();
-      if (!children.length) {
-        return <AppMenuLink key={item.id} to={item.target} href={item.target}
-          data-current={item.id === currentId} className={menuItemClass}>
+      if (!children.length || (!item.to && children.length === 1)) {
+        const destination = children[0] ?? item;
+        return <AppMenuLink key={item.id} to={destination.target} href={destination.target}
+          data-current={destination.id === currentId} className={menuItemClass}>
           {item.displayLabel}
         </AppMenuLink>;
       }

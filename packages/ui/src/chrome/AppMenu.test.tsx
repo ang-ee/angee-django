@@ -77,16 +77,27 @@ describe("AppMenu", () => {
       .toEqual(["Overview", "Services"]);
   });
 
-  test("route-less items with children are dropdowns without a duplicate own-page entry", async () => {
-    renderMenu("/tags", [{ id: "suite", label: "Suite", children: [
-      { id: "hidden", app: true, hidden: true, to: "/hidden" },
-      { id: "tags", label: "Tags", children: [{ id: "tags.all", label: "Tags", to: "/tags" }] },
+  test("route-less Settings items with one visible child link to it using the parent label", async () => {
+    renderMenu("/tags", [{ id: "tags", label: "Tags", group: "platform", children: [
+      { id: "tags.hidden", label: "Hidden", hidden: true, to: "/hidden" },
+      { id: "tags.all", label: "All tags", to: "/tags" },
     ] }]);
-    const nav = await screen.findByRole("navigation", { name: "Suite menu" });
-    fireEvent.click(within(nav).getByRole("button", { name: "Tags" }));
-    const popup = await screen.findByRole("menu");
-    expect(within(popup).getAllByRole("menuitem")).toHaveLength(1);
-    expect(within(popup).getByRole("menuitem", { name: "Tags" }).getAttribute("aria-current")).toBe("page");
+    const nav = await screen.findByRole("navigation", { name: "Settings menu" });
+    const tags = within(nav).getByRole("link", { name: "Tags" });
+    expect(tags.getAttribute("href")).toBe("/tags");
+    expect(tags.getAttribute("aria-current")).toBe("page");
+    expect(within(nav).queryByRole("button", { name: "Tags" })).toBeNull();
+    expect(within(nav).queryByText("All tags")).toBeNull();
+  });
+
+  test("route-less items with several children remain dropdowns without an own-page entry", async () => {
+    renderMenu("/tags", [{ id: "tags", label: "Tags", group: "platform", children: [
+      { id: "tags.all", label: "All tags", to: "/tags" },
+      { id: "tags.archived", label: "Archived tags", to: "/tags/archived" },
+    ] }]);
+    fireEvent.click(await screen.findByRole("button", { name: "Tags" }));
+    expect(within(await screen.findByRole("menu")).getAllByRole("menuitem").map((entry) => entry.textContent))
+      .toEqual(["All tags", "Archived tags"]);
   });
 
   test("a hidden included app selects its visible aggregator", async () => {

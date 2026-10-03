@@ -31,7 +31,6 @@ import {
   type ReactNode,
   } from "react";
 import { afterEach,
-  beforeAll,
   describe,
   expect,
   test,
@@ -161,10 +160,6 @@ const formFields = [
 ] satisfies readonly FormField[];
 
 describe("ResourceList", () => {
-  beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
-  });
-
   afterEach(async () => {
     sdkMocks.recordCalls.length = 0;
     sdkMocks.mutate.mockClear();
