@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Column, ResourceList, List, SlotOutlet, useSlot } from "@angee/ui";
+import { ActionMenu, Column, ResourceList, List, SlotOutlet, slotEntriesHaveContent, useSlot } from "@angee/ui";
 import { IntegrationSyncColumns } from "@angee/integrate";
 
 import { channelForm } from "./ChannelForm";
@@ -17,7 +17,11 @@ export function ChannelsPage(): React.ReactElement {
   const toolbarEntries = useSlot(MESSAGING_CHANNEL_TOOLBAR_SLOT);
   return (
     <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={
-      <SlotOutlet entries={toolbarEntries} />
+      slotEntriesHaveContent(toolbarEntries) ? (
+        <ActionMenu label={t("channel.connect.menu")} glyph="plus" variant="primary" size="sm">
+          <SlotOutlet entries={toolbarEntries} />
+        </ActionMenu>
+      ) : null
     }>
       <List resource={CHANNEL_MODEL} defaultGroups={{ list: { field: "backend_class" } }}>
         <Column field="display_name" header={t("channel.name")} />

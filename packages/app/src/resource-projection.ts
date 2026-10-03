@@ -320,7 +320,10 @@ function addMenuRouteResource(
       label: item.displayLabel,
       icon: item.iconName,
       menuId: item.id,
+      // Refine's list may borrow a descendant's target; chrome needs the own target.
+      menuTarget: item.to ?? null,
       ...(appRoot ? { appRoot: true } : {}),
+      ...(item.app === true ? { app: true } : {}),
       ...(item.description ? { description: item.description } : {}),
       ...(item.group ? { group: item.group } : {}),
       ...(item.status ? { status: item.status } : {}),

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   operation: null as Record<string, unknown> | null,
   refetch: vi.fn(),
   run: vi.fn(),
+  isSettingsActive: vi.fn(() => true),
 }));
 
 vi.mock("@angee/refine", () => ({
@@ -47,11 +48,12 @@ vi.mock("@angee/ui", () => ({
 }));
 
 vi.mock("@angee/ui/chrome/refine-menu", () => ({
-  useChromeMenuTree: () => ({ isSettingsActive: () => true }),
+  useChromeMenuTree: () => ({ isSettingsActive: mocks.isSettingsActive }),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
-  useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => string }) => select({ location: { pathname: "/settings/platform" } }),
+  useRouterState: ({ select }: { select: (state: { location: { pathname: string; searchStr: string } }) => string }) =>
+    select({ location: { pathname: "/settings/platform", searchStr: "?preset=operator" } }),
 }));
 
 vi.mock("./i18n", () => ({
@@ -65,9 +67,15 @@ beforeEach(() => {
   mocks.operation = null;
   mocks.refetch.mockClear();
   mocks.run.mockClear();
+  mocks.isSettingsActive.mockClear();
 });
 
 describe("RestartNotice", () => {
+  test("matches Settings with both location pathname and search", () => {
+    render(<RestartNotice />);
+    expect(mocks.isSettingsActive).toHaveBeenCalledWith("/settings/platform?preset=operator");
+  });
+
   test("renders nothing when connection and receipt are both absent", () => {
     const { container } = render(<RestartNotice />);
 

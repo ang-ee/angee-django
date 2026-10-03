@@ -854,7 +854,6 @@ function lastActiveListCall(): ResourceListOptions | undefined {
 
 describe("ResourceList", () => {
   beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
     installTestLocalStorage();
   });
 

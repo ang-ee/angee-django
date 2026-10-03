@@ -5,8 +5,7 @@ import {
   type DocumentData,
 } from "@angee/refine";
 import {
-  Button,
-  Glyph,
+  ActionTrigger,
   MutationDialog,
   optionalTranslation,
   type FormSubmitResult,
@@ -74,8 +73,8 @@ export type ConnectChannelActionProps<
   | PairingConnectChannelActionProps<TDocument, TResultField, TValues>;
 
 /**
- * Canonical economy for messaging connect actions: this factory owns the button,
- * typed mutation dialog, generic name/submit/submitting copy, invalidation, and
+ * Canonical economy for messaging connect actions: this factory owns the adaptive
+ * trigger, typed mutation dialog, generic name/submit/submitting copy, invalidation, and
  * optional vendor error fallback. Vendors declare only their operation, fields,
  * message range, value projection, and (for live bridges) the pairing hand-off.
  *
@@ -181,19 +180,18 @@ function ConnectChannelDialog<
 
   return (
     <MutationDialog
-      trigger={<Button variant="primary" size="sm">
-        <Glyph decorative name="plus" />
+      trigger={<ActionTrigger variant="primary" glyph="plus">
         {t(`${i18nPrefix}.button`)}
-      </Button>}
-        title={t(`${i18nPrefix}.title`)}
-        description={t(`${i18nPrefix}.description`)}
-        fields={dialogFields}
-        initialValues={initialValues}
-        submitLabel={t("channel.connect.submit")}
-        submittingLabel={t("channel.connect.submitting")}
-        errorFallback={errorFallback}
-        parseValues={typedParseValues}
-        onSubmit={onSubmit}
+      </ActionTrigger>}
+      title={t(`${i18nPrefix}.title`)}
+      description={t(`${i18nPrefix}.description`)}
+      fields={dialogFields}
+      initialValues={initialValues}
+      submitLabel={t("channel.connect.submit")}
+      submittingLabel={t("channel.connect.submitting")}
+      errorFallback={errorFallback}
+      parseValues={typedParseValues}
+      onSubmit={onSubmit}
     />
   );
 }

@@ -1,6 +1,6 @@
 import { useMessagingT } from "@angee/messaging";
 import { keysetFeedRows, useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, RecordActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -101,9 +101,9 @@ function ImportImapSampleDialog(): React.ReactElement | null {
     size="lg"
     onSubmit={form.handleSubmit(loadPreview)}
     trigger={
-      <RecordActionTrigger disabled={record.lifecycle !== "PAUSED"}>
+      <ActionTrigger disabled={record.lifecycle !== "PAUSED"}>
         {t("channel.imap.sample.button")}
-      </RecordActionTrigger>
+      </ActionTrigger>
     }
     footer={<Button type="submit" variant="primary" disabled={busy}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
       <FieldRow label={t("channel.imap.sample.mailbox")}><Input disabled={busy} invalid={Boolean(errors.mailbox)} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {

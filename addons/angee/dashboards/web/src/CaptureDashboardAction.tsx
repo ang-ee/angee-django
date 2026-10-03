@@ -1,9 +1,8 @@
 import * as React from "react";
 import {
-  Button,
-  DropdownMenu,
+  ActionMenu,
+  ActionTrigger,
   ErrorBanner,
-  Glyph,
   firstDashboardSlot,
   parseDashboardSnapshot,
   useDashboardRegistry,
@@ -29,20 +28,11 @@ function CaptureDashboardMenu({ store }: { store: DashboardStore }): React.React
   );
   if (targets.length === 0) return null;
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        render={<Button type="button" variant="ghost" size="sm"><Glyph name="plus" />{t("capture.add")}</Button>}
-      />
-      <DropdownMenu.Portal>
-        <DropdownMenu.Positioner sideOffset={6} align="start">
-          <DropdownMenu.Content className="w-60">
-          {targets.map((dashboard) => (
-            <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
-          ))}
-          </DropdownMenu.Content>
-        </DropdownMenu.Positioner>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+    <ActionMenu label={t("capture.add")} glyph="plus" size="sm">
+      {targets.map((dashboard) => (
+        <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
+      ))}
+    </ActionMenu>
   );
 }
 
@@ -99,10 +89,10 @@ function CaptureDestination({ store, dashboard }: {
   };
   return (
     <>
-      <DropdownMenu.Item disabled={pending || binding.state.status !== "ready"} onClick={() => void add()}>
-        <Glyph name="dashboard" />
+      <ActionTrigger glyph="dashboard" loading={pending}
+        disabled={binding.state.status !== "ready"} onClick={() => void add()}>
         {pending ? t("capture.adding") : dashboard.title}
-      </DropdownMenu.Item>
+      </ActionTrigger>
       <ErrorBanner description={error?.message ?? null} className="my-1" />
     </>
   );

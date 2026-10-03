@@ -9,7 +9,7 @@ vi.mock("@angee/projects", () => ({
 
 vi.mock("@angee/ui", () => ({
   ActionFormDialog: () => null,
-  RecordActionTrigger: () => null,
+  ActionTrigger: () => null,
   canonicalOptionValue: (
     options: readonly { value: string }[],
     value: unknown,

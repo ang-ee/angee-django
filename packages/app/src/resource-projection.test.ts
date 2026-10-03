@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 import { MenuTree, resolveMenuRouteTargets, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { createRouteHref } from "@angee/ui/runtime";
 import { resourcePageRoutes, type BaseAddonRoute } from "./define-base-addon";
-import { AppRouteProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
+import { AppRouteProjection, refineRouteResourceProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
+import { chromeMenuItemsFromRefine } from "@angee/ui/chrome/refine-menu";
+import type { TreeMenuItem } from "@refinedev/core";
 import { compileMenus, type MenuLayer } from "./menus";
 import { explainComposition } from "./explain";
 import { resolveShell } from "./shell";
@@ -34,6 +36,50 @@ const menus: readonly ChromeMenuItem[] = [
 const menuTree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref(routes)) as readonly ChromeMenuItem[]);
 
 describe("app resource projection", () => {
+  test("the refine bridge preserves a route-less Settings group and its single child's own target", () => {
+    const route = { name: "tags.all", path: "/tags" };
+    const menus: readonly ChromeMenuItem[] = [{ id: "tags", label: "Tags", group: "platform", children: [
+      { id: "tags.all", label: "All tags", route: "tags.all" },
+    ] }];
+    const tree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref([route])));
+    const resources = refineRouteResourceProjection([route], tree, tree).resources;
+    const group = resources.find((item) => item.meta?.menuId === "tags")!;
+    const page = resources.find((item) => item.meta?.menuId === "tags.all")!;
+    expect(group.list).toBe("/tags");
+    expect(group.meta?.menuTarget).toBeNull();
+    expect(page.meta?.menuTarget).toBe("/tags");
+    const chrome = MenuTree.from(chromeMenuItemsFromRefine([{
+      key: "menu:tags", name: "menu:tags", route: group.list as string, meta: group.meta,
+      children: [{ key: "menu:tags.all", name: "menu:tags.all", route: page.list as string, meta: page.meta, children: [] }],
+    }]));
+    expect(chrome.roots[0]?.to).toBeUndefined();
+    expect(chrome.roots[0]?.target).toBe("/tags");
+    expect(chrome.match("/tags")?.item.id).toBe("tags.all");
+  });
+
+  test("included app identity survives navigation projection and the refine chrome bridge", () => {
+    const compiled = compileMenus([
+      { id: "desk", menus: { desk: { route: "desk.home" }, "desk.incoming": { parent: "desk", route: "desk.incoming" } } },
+      { id: "suite", dependsOn: ["desk"], menus: { suite: { include: ["desk"] } } },
+    ]);
+    const href = createRouteHref(routes);
+    const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href));
+    const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href));
+    const projected = refineRouteResourceProjection(routes, logical, navigation).resources;
+    const desk = projected.find((item) => item.meta?.menuId === "desk")!;
+    const incoming = projected.find((item) => item.meta?.menuId === "desk.incoming")!;
+    expect(desk.meta).toMatchObject({ app: true, parent: "menu:suite" });
+    expect(desk.meta?.appRoot).toBeUndefined();
+    expect(incoming.meta?.app).toBeUndefined();
+    const refineNode = (resource: typeof desk, children: TreeMenuItem[] = []): TreeMenuItem => ({
+      name: resource.name, key: resource.identifier ?? resource.name,
+      label: resource.meta?.label, route: resource.list as string, meta: resource.meta, children,
+    });
+    const suite = projected.find((item) => item.meta?.menuId === "suite")!;
+    const chrome = MenuTree.from(chromeMenuItemsFromRefine([refineNode(suite, [refineNode(desk, [refineNode(incoming)])])]));
+    expect(chrome.byId.get("desk")?.isApp).toBe(true);
+    expect(chrome.match("/desk/incoming")?.app?.id).toBe("desk");
+  });
   test("normalizes relative record paths before href and chatter projection", () => {
     const normalized = resolveRoutePaths([
       { name: "desk", path: "/desk" },

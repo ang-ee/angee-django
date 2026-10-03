@@ -7,12 +7,11 @@ import { tv } from "../lib/variants";
 import { barVariants } from "../layouts/bar";
 import { Accordion } from "../ui/accordion";
 import { Badge, CountBadge } from "../ui/badge";
-import { Collapsible } from "../ui/collapsible";
 import { railLinkToggleProps } from "./app-rail-model";
 import { Glyph } from "./Glyph";
-import { MenuTree, type ChromeMenuNode } from "./menu-tree";
+import type { ChromeMenuNode } from "./menu-tree";
 
-const ActiveMenuItemContext = createContext<string | undefined>(undefined);
+const ActiveMenuItemContext = createContext<{ selected?: string; page?: string }>({});
 
 export const appRailTreeVariants = tv({
   slots: {
@@ -29,7 +28,7 @@ export const appRailTreeVariants = tv({
     rootItem: "rounded-6",
     row: "group/row flex min-w-0 items-center rounded-6",
     link:
-      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-6 px-2 text-13 text-on-rail-mut no-underline outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring data-[active=true]:bg-rail-hi data-[active=true]:font-medium data-[active=true]:text-on-rail-hi",
+      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-6 px-2 text-13 text-on-rail-mut no-underline outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring data-[current=true]:bg-rail-hi data-[current=true]:font-medium data-[current=true]:text-on-rail-hi",
     trigger:
       "grid size-7 shrink-0 place-content-center rounded-6 p-0 text-on-rail-mut outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring",
     disclosure:
@@ -43,13 +42,17 @@ export const appRailTreeVariants = tv({
 
 export interface AppRailTreeProps {
   className?: string;
-  /** Present one app's children without repeating its root heading. */
+  /** Present one app's included apps without repeating its branded root heading. */
   flat?: boolean;
   /** Which place the tree shows — the apps scope or the Settings swap. */
   scope: "apps" | "settings";
   /** The resolved roots of that place, in display order. */
   roots: readonly ChromeMenuNode[];
   activeRootId: string | null;
+  /** Selected ids from the shell's full-tree match; no matching against pruned roots. */
+  selectedAppId?: string;
+  selectedSubAppId?: string;
+  pageId?: string;
   /** Open a requested app without changing which route is marked active. */
   defaultOpenRootId?: string | null;
   /** The rail collapse toggle, fired by a second activation of the current page's link. */
@@ -63,13 +66,14 @@ export function AppRailTree({
   scope,
   roots,
   activeRootId,
+  selectedAppId,
+  selectedSubAppId,
+  pageId,
   defaultOpenRootId = activeRootId,
   onActiveToggle,
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [openRootId, setOpenRootId] = useDerivedOverride<string | null>(
     defaultOpenRootId,
     `${scope}\0${activeRootId ?? ""}\0${defaultOpenRootId ?? ""}`,
@@ -77,10 +81,9 @@ export function AppRailTree({
   const idPrefix = `app-rail-${useId().replaceAll(":", "")}`;
   const styles = appRailTreeVariants();
   const [onlyRoot] = roots;
-  const activeItemId = MenuTree.from(roots).activeItem(pathname)?.id;
 
   return (
-    <ActiveMenuItemContext.Provider value={activeItemId}>
+    <ActiveMenuItemContext.Provider value={{ selected: selectedSubAppId ?? selectedAppId, page: pageId }}>
       <div className={styles.root({ className })}>
         {scope === "settings" ? (
           <div className={styles.header()}>
@@ -96,8 +99,8 @@ export function AppRailTree({
         ) : null}
         <div className={styles.tree()}>
           {flat && roots.length === 1 && onlyRoot ? (
-            (onlyRoot.targetedChildren.length ? onlyRoot.targetedChildren : roots).map((item) => (
-              <NestedMenuItem key={item.id} idPrefix={idPrefix} item={item}
+            onlyRoot.appChildren().map((item) => (
+              <MenuLink key={item.id} item={item}
                 pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
             ))
           ) : <Accordion.Root
@@ -160,7 +163,7 @@ function RootMenuItem({
 }): ReactElement | null {
   const t = useUiT();
   if (!item.target) return null;
-  const children = item.targetedChildren;
+  const children = item.appChildren();
   if (!children.length) {
     return (
       <div className={styles.rootItem()}>
@@ -198,7 +201,6 @@ function RootMenuItem({
       </Accordion.Header>
       <Accordion.Panel id={panelId} className={styles.panel()}>
         <MenuChildren
-          idPrefix={idPrefix}
           items={children}
           pathname={pathname}
           styles={styles}
@@ -210,13 +212,11 @@ function RootMenuItem({
 }
 
 function MenuChildren({
-  idPrefix,
   items,
   pathname,
   styles,
   onActiveToggle,
 }: {
-  idPrefix: string;
   items: readonly ChromeMenuNode[];
   pathname: string;
   styles: AppRailTreeStyles;
@@ -225,9 +225,8 @@ function MenuChildren({
   return (
     <div className={styles.children()}>
       {items.map((item) => (
-        <NestedMenuItem
+        <MenuLink
           key={item.id}
-          idPrefix={idPrefix}
           item={item}
           pathname={pathname}
           styles={styles}
@@ -235,76 +234,6 @@ function MenuChildren({
         />
       ))}
     </div>
-  );
-}
-
-function NestedMenuItem({
-  idPrefix,
-  item,
-  pathname,
-  styles,
-  onActiveToggle,
-}: {
-  idPrefix: string;
-  item: ChromeMenuNode;
-  pathname: string;
-  styles: AppRailTreeStyles;
-  onActiveToggle?: (() => void) | undefined;
-}): ReactElement | null {
-  const t = useUiT();
-  const children = item.targetedChildren;
-  const activeChildId = item.activeTargetedChild(pathname)?.id ?? null;
-  const [open, setOpen] = useDerivedOverride(
-    activeChildId !== null,
-    activeChildId ?? "",
-  );
-  if (!item.target) return null;
-  if (!children.length) {
-    return (
-      <MenuLink
-        item={item}
-        pathname={pathname}
-        styles={styles}
-        onActiveToggle={onActiveToggle}
-      />
-    );
-  }
-  const panelId = menuPanelId(idPrefix, item.id);
-  const accessibleLabel = menuItemAccessibleLabel(t, item);
-  return (
-    <Collapsible.Root
-      variant="flush"
-      open={open}
-      onOpenChange={setOpen}
-    >
-      <div className={styles.row()}>
-        <MenuLink
-          item={item}
-          pathname={pathname}
-          styles={styles}
-          onActiveToggle={onActiveToggle}
-        />
-        <Collapsible.Trigger
-          aria-controls={panelId}
-          aria-label={t(open ? "chrome.collapseItem" : "chrome.expandItem", {
-            label: accessibleLabel,
-          })}
-          className={styles.trigger()}
-        >
-          <span className={styles.disclosure()}>
-            <Glyph name="chevron-right" aria-hidden="true" />
-          </span>
-        </Collapsible.Trigger>
-      </div>
-      <Collapsible.Panel id={panelId} className={styles.panel()}>
-        <MenuChildren
-          idPrefix={idPrefix}
-          items={children}
-          pathname={pathname}
-          styles={styles}
-        />
-      </Collapsible.Panel>
-    </Collapsible.Root>
   );
 }
 
@@ -319,20 +248,21 @@ function MenuLink({
   styles: AppRailTreeStyles;
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
-  const current = useContext(ActiveMenuItemContext) === item.id;
+  const active = useContext(ActiveMenuItemContext);
+  const current = active.selected === item.id;
   const toggleProps = railLinkToggleProps(item.target, pathname, onActiveToggle, true);
   const linkProps = useLinkProps({
     to: item.target,
     href: item.target,
+    ...toggleProps,
   });
   if (!item.target) return null;
   return (
     <a
       {...linkProps}
-      {...toggleProps}
-      aria-current={current ? "page" : undefined}
-      data-active={current}
-      data-status={current ? "active" : undefined}
+      aria-current={current ? (active.page === item.id ? "page" : "true") : undefined}
+      data-current={current}
+      data-status={undefined}
       className={styles.link()}
     >
       <span className={item.tone ? toneGlyph(item.tone) : undefined}>

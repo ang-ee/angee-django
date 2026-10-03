@@ -101,7 +101,7 @@ function BreadcrumbTrail({
     <nav
       aria-label={t("chrome.breadcrumb")}
       className={cn(
-        "flex min-w-0 items-center gap-1 overflow-hidden text-13 text-on-rail-mut",
+        "flex min-w-0 items-center gap-1 overflow-hidden text-13 text-fg-muted",
         className,
       )}
     >
@@ -119,14 +119,14 @@ function BreadcrumbTrail({
               <Link
                 to={item.to}
                 href={item.to}
-                className="min-w-0 truncate rounded-4 outline-none hover:text-on-rail-hi focus-visible:focus-ring"
+                className="min-w-0 truncate rounded-4 outline-none hover:text-fg focus-visible:focus-ring"
               >
                 {item.label}
               </Link>
             ) : (
               <span
                 aria-current={current ? "page" : undefined}
-                className="min-w-0 truncate font-medium text-on-rail-hi"
+                className="min-w-0 truncate font-medium text-fg"
               >
                 {item.label}
               </span>
