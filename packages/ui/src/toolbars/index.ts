@@ -22,3 +22,4 @@ export {
   type FilterClauseOperator,
   type FilterClauseChoice,
 } from "./FilterClauseEditor";
+export { ActionMenu, ActionTrigger, type ActionMenuProps, type ActionTriggerProps } from "./ActionMenu";

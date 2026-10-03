@@ -14,7 +14,12 @@ deterministic product surface. It owns the seams, not the concerns.
 operations, routes, slots, resources) that the composer assembles into a project.
 Everything that gives a product a capability, including its API protocol, is an
 addon. The framework core is not. **Addon** is also the user-facing name;
-**App** is reserved for a domain root in the product rail.
+**App** is reserved for a domain root or an included, non-flattened app in the
+product rail.
+
+**Sub-app** — an app included beneath another app without flattening. The rail
+shows root apps and their sub-apps at most two levels; each app's own menu items
+belong in the top bar.
 
 **Framework core** — Angee's composition language and loom: the data contract,
 composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
@@ -358,6 +363,7 @@ a theme rather than a template.
 state, owned by `@angee/ui`.
 
 **Settings place** — the one synthetic console destination that groups all menu
-roots declared with `group:"platform"`. It is the last entry after a separator in
-the rail's single scrolling list, plus one chooser entry; inside it, the expanded
-rail shows the contributing platform trees and a back header.
+roots declared with `group:"platform"`. Its rail entry sits below the scrolling
+list; the chooser exposes one Settings entry. Inside it, the expanded rail shows
+the contributing platform roots and a back header; their menu items live in the
+top bar.

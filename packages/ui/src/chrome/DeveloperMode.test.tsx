@@ -20,6 +20,7 @@ import {
   type RuntimeComposition,
   type RuntimeUserPreferences,
 } from "../runtime";
+import { AppMenu } from "./AppMenu";
 import { AppRailTree } from "./AppRailTree";
 import { DeveloperMenu, useDeveloperFieldTitle, useDeveloperRail } from "./DeveloperMode";
 import { MenuTree } from "./menu-tree";
@@ -54,6 +55,7 @@ const tree = MenuTree.from([{ id: "desk", label: "Desk", to: "/desk", children: 
 function renderChrome(): void {
   const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={{ composition, activeRouteName: "desk.home", activeApp: "desk" }}>
     <AppRailTree scope="apps" roots={tree.roots} activeRootId="desk" defaultOpenRootId="desk" />
+    <AppMenu menuItems={tree} />
     <DeveloperMenu />
     <Outlet />
   </AppRuntimeProvider> });
@@ -67,24 +69,26 @@ function runtimeWrapper(runtime: Partial<AppRuntime>) {
 }
 
 describe("developer mode", () => {
-  test("is off by default: hidden and removed items stay out of the rail and no debug button shows", async () => {
+  test("is off by default: hidden and removed menus stay out of the top bar and rail, and no debug button shows", async () => {
     renderChrome();
     expect(await screen.findByRole("link", { name: "Notes" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Archive (hidden)" })).toBeNull();
     expect(screen.queryByText(/removed by suite/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand Reports" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Reports" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Composition" })).toBeNull();
   });
 
-  test("?debug=1 shows hidden and removed items where they were and the composition behind the debug button", async () => {
+  test("?debug=1 shows hidden and removed menus where they were, removed apps in the rail, and the composition", async () => {
     applyDeveloperModeSearch("1");
     renderChrome();
+    // The top bar (G-20) carries the app's own menus, hidden ones marked and removed ones struck through.
     expect(await screen.findByRole("link", { name: "Archive (hidden)" })).toBeTruthy();
     expect(screen.getByText("Board — removed by suite")).toBeTruthy();
-    // A removed root shows at the rail's root; a parent whose children were all removed still opens.
-    expect(screen.getByText("Legacy — removed by suite")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Expand Reports" }));
+    // A menu whose children were all removed opens to show them.
+    fireEvent.click(screen.getByRole("button", { name: "Reports" }));
     expect(await screen.findByText("Old reports — removed by suite")).toBeTruthy();
+    // The rail lists apps; a removed app shows at its root.
+    expect(screen.getByText("Legacy — removed by suite")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Composition" }));
     expect(await screen.findByRole("dialog")).toBeTruthy();

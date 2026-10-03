@@ -40,6 +40,26 @@ const strip = (items: Tree): Tree => items.filter((item) => !item.hidden)
   .map((item) => ({ ...item, ...(item.children ? { children: strip(item.children) } : {}) }));
 
 describe("compileMenus", () => {
+  test("Nexus includes emit app identity in both trees; legacy parentId children do not", () => {
+    const result = compileMenus([
+      { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
+      { id: "parties", menus: { parties: { route: "parties.people" } } },
+      { id: "nexus", dependsOn: ["messaging", "parties"], menus: {
+        nexus: { route: "nexus.inbox", include: ["messaging", "parties"] },
+      } },
+      { id: "legacy", menus: [{ id: "legacy.page", parentId: "nexus", route: "legacy.page" }] },
+    ]);
+    for (const items of [result.navigation, result.logical]) {
+      expect(items[0]?.children?.map((item) => [item.id, item.app])).toEqual([
+        ["legacy.page", undefined], ["messaging", true], ["parties", true],
+      ]);
+    }
+    expect(() => compileMenus([{ id: "desk", menus: { desk: { app: true } } } as unknown as MenuLayer]))
+      .toThrow(/unknown key "app"/);
+    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", app: true }] } as unknown as MenuLayer]))
+      .toThrow(/app identity is compiler-emitted/);
+  });
+
   test("legacy arrays compile to the same tree", () => {
     const { logical, navigation, removed } = compileMenus([projects, work]);
     expect(ids(logical)).toEqual([
@@ -58,6 +78,8 @@ describe("compileMenus", () => {
       { work: ["work.triage-hub", "work.cycles-hub"] },
     ] }]);
     expect((logical[0]!.children as CompiledMenuItem[]).find((item) => item.id === "projects")?.flatten).toBe(true);
+    expect((logical[0]!.children as CompiledMenuItem[]).find((item) => item.id === "projects")?.app).toBeUndefined();
+    expect(navigation[0]?.children?.some((item) => item.id === "projects" || item.id === "work")).toBe(false);
     expect(rail(navigation)).toEqual([{ pm: [
       "pm.inbox", "projects.my-work", "work.triage-hub", "projects.tasks", "work.cycles-hub",
     ] }]);

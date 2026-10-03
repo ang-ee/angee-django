@@ -21,6 +21,9 @@ from typing import Any
 
 import pytest
 import yaml
+from django.apps import AppConfig
+
+from angee.addons import addon_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_GITIGNORE = ROOT / ".gitignore"
@@ -838,6 +841,9 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
     full = _render_project_settings(addons_profile="full", framework_workspace=True)
+    nexus = addon_manifest(AppConfig.create("angee.nexus"))
+    assert nexus is not None
+    assert set(nexus.depends_on) <= set(full["INSTALLED_APPS"])
     for app in (
         "angee.nexus",
         "angee.spaces",
@@ -1685,7 +1691,10 @@ def test_python_nodes_share_runtime_environment_and_restart_entry() -> None:
 def test_stack_agent_instructions_name_the_rendered_restart_job() -> None:
     """The root AGENTS.md restart command runs the job the manifest declares as the restart entry."""
 
-    for agents_template, stack in ((DEV_AGENTS_TEMPLATE, _render_dev_stack()), (LOCAL_AGENTS_TEMPLATE, _render_local_stack())):
+    for agents_template, stack in (
+        (DEV_AGENTS_TEMPLATE, _render_dev_stack()),
+        (LOCAL_AGENTS_TEMPLATE, _render_local_stack()),
+    ):
         match = re.search(r'with restart_job="([^"]+)"', agents_template.read_text(encoding="utf-8"))
         assert match is not None, agents_template
         restart_job = match.group(1)

@@ -586,6 +586,14 @@ shared UI copy through an addon bundle.
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
+- Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
+  Contributions use `ActionTrigger` to adapt between a toolbar button and a native
+  menu item and report pending state to the menu trigger. Render menu-opened
+  dialogs inside the menu: the shared owner keeps them mounted after it closes
+  and returns focus to its toolbar trigger. `DialogContent` resets menu context
+  for its body, so nested dialogs return to their own triggers. Pages supply
+  domain labels through i18n and alignment through `align`; selection menus keep
+  their own native controls.
 - Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
   Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
@@ -881,35 +889,45 @@ Hard-won traps — the wise learn from others' mistakes
   an update mutation. Delete affordances are
   schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
   omit record and bulk delete instead of requiring a delete-only `crud(...)`.
-- **An addon contributes one menu root.** The app rail is the one navigation
-  column: compact domain icons collapse into, and expand in place as, their
-  descendant accordion tree. A root with `group:"platform"` contributes to the
+- **An addon contributes one menu root.** The app rail renders apps and their
+  included, non-flattened sub-apps, at most two levels. The selected app's own
+  items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
+  bar; deeper items use the shared dropdown menu and labelled groups.
+  [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
+  `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
   shared **Settings place** instead: the rail and chooser expose one synthetic
   Settings entry, and the expanded rail swaps to the platform tree with a back
   header. Settings and the expansion toggle sit below the scrolling list, and
   the rail is viewport-sticky so both remain reachable. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
-  an app with children or Settings opens its menu temporarily in the shell's
-  shared navigation drawer. Mobile uses the same drawer through the top-bar
-  navigation button. Temporary navigation never changes the desktop expansion
+  a root with visible included apps opens those sub-apps temporarily in the
+  shell's shared navigation drawer; leaf apps and sub-apps navigate directly.
+  Settings opens its platform roots in that drawer. Mobile uses it through the
+  top-bar navigation button. Temporary navigation never changes the desktop expansion
   preference (`railLinkToggleProps` in `chrome/app-rail-model.ts` owns link
   activation; modified clicks keep the browser default). Workbench primary
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
-  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
-  app roots: explicit `appRoot` declarations win, otherwise every root is an app,
-  and `appRoot` on a non-root item throws (an app another addon includes drops
-  the marker: the including root is the app). A branded single-root rail shows the
-  brand and that root's children instead of the app chooser. Addons rearrange
+  `ChromeMenuNode.isApp` identifies non-platform roots and included apps.
+  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) selects the
+  rail-root candidates: explicit `appRoot` declarations win, otherwise it returns
+  all roots; the rail filters platform roots, anchors and hidden nodes.
+  `appRoot` on a non-root item throws. An included app drops `appRoot` and
+  receives compiler-emitted `app: true`; authors do not declare that field.
+  A branded single-root rail shows the brand and included apps instead of the
+  app chooser. Addons rearrange
   other addons' menus only through the `menus` dict's declared verbs (include,
   flatten, remove, hide, only, position), along their dependencies; see
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
   another addon's items.
-  A route referenced by more than one menu item must set `route.menu` (the owning
-  item's id) or the chrome derivation throws "referenced by multiple menu items" —
-  or make the root route-less so it inherits its target through a descendant and the
-  leaf is the route's sole reference.
+  `route.menu` identifies a route's owning item when references are ambiguous.
+  Ambiguous root ownership still throws under a perspective; confinement does
+  not choose an owner for the route. `useChromePlace()` shares one memoized
+  `MenuTree.match(pathname, searchStr)` across the rail and top bar.
+  Chrome currently selects the nearest visible app on that match's
+  trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
+  sheet strip below the top bar; pane toggles stay in the top bar.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and
   temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
@@ -954,7 +972,7 @@ Hard-won traps — the wise learn from others' mistakes
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
-  justify/text live once; `TopBar` (including its inline Breadcrumb)/`ControlBand`/`PageToolbar`/
+  justify/text live once; `TopBar`/`BreadcrumbBar`/`ControlBand`/`PageToolbar`/
   `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
   bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
   recipe so the bars stay in lockstep.

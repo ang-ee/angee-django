@@ -19,23 +19,23 @@ describe("nexus addon manifest", () => {
     ]);
   });
 
-  test("registers the Nexus inbox and retains relationship analytics under Parties", () => {
-    const menus = nexus.menus ?? [];
+  test("registers the Nexus inbox and brings relationship analytics under Nexus", () => {
+    const menus = Object.values(nexus.menus ?? {});
     expect(menus.map((item) => item.route)).toEqual([
       "nexus.inbox", "nexus.inbox",
       "nexus.graph",
       "nexus.ties",
       "nexus.cadences",
     ]);
-    expect(menus.map((item) => item.parentId)).toEqual([undefined, "nexus", "parties", "parties", "parties"]);
-    expect(menus.some((item) => item.children)).toBe(false);
+    expect(menus.map((item) => item.parent)).toEqual([undefined, "nexus", "nexus", "nexus", "nexus"]);
+    expect(nexus.routes?.find((route) => route.name === "nexus.inbox")?.menu).toBe("nexus.inbox");
   });
 
   test("declares a glyph for every menu item it contributes", () => {
     // A menu item without an icon falls back to looking its id up in the glyph
     // registry, which silently renders nothing.
-    for (const item of nexus.menus ?? []) {
-      expect(item.icon, `${item.id} declares no icon`).toBeTruthy();
+    for (const [id, item] of Object.entries(nexus.menus ?? {})) {
+      expect(item.icon, `${id} declares no icon`).toBeTruthy();
       expect(Object.keys(nexus.icons ?? {})).toContain(item.icon);
     }
   });

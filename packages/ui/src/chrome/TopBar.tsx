@@ -7,7 +7,7 @@ import { barVariants } from "../layouts/bar";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
 import { CommandPalette } from "./CommandPalette";
-import { Breadcrumb } from "./Breadcrumb";
+import { AppMenu } from "./AppMenu";
 import { Glyph } from "./Glyph";
 import { Systray } from "./Systray";
 import { UserMenu } from "./UserMenu";
@@ -19,7 +19,6 @@ export interface TopBarProps {
    * the menu (matching the console layout). */
   brand?: ReactNode;
   hideSearch?: boolean;
-  showBreadcrumb?: boolean;
   onHelp?: () => void;
   onNotifications?: () => void;
   navigation?: {
@@ -45,7 +44,6 @@ export interface TopBarProps {
 export function TopBar({
   brand,
   hideSearch = false,
-  showBreadcrumb = true,
   onHelp,
   onNotifications,
   navigation,
@@ -72,7 +70,7 @@ export function TopBar({
       {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
       {brand}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
-      {showBreadcrumb ? <Breadcrumb className="ml-1 max-sm:hidden" /> : null}
+      <AppMenu />
       <div className="min-w-2 flex-1" />
       {children}
       {hideSearch ? null : (

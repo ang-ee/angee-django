@@ -21,6 +21,9 @@ const menus: readonly ChromeMenuItem[] = [{
   children: [
     { id: "all", label: "All notes", to: "/notes", icon: "book" },
     { id: "archive", label: "Archive", to: "/notes/archive", icon: "archive" },
+    { id: "desk", label: "Desk", app: true, to: "/desk", icon: "book", children: [
+      { id: "desk.notes", label: "Desk notes", to: "/desk/notes" },
+    ] },
   ],
 }];
 
@@ -41,21 +44,24 @@ describe("branded single-root rail", () => {
     expect(within(brand).getByTestId("brand-mark")).toBeTruthy();
     expect(within(brand).getByText("Notebook").classList.contains("sr-only")).toBe(!expanded);
     const nav = screen.getByRole("navigation", { name: "Primary navigation" });
-    expect(within(nav).getByRole("link", { name: "All notes" }).getAttribute("href")).toBe("/notes");
-    expect(within(nav).getByRole("link", { name: "Archive" }).getAttribute("href")).toBe("/notes/archive");
+    expect(within(nav).getByRole("link", { name: "Desk" }).getAttribute("href")).toBe("/desk");
+    expect(within(nav).queryByRole("link", { name: "All notes" })).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Archive" })).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Desk notes" })).toBeNull();
     expect(within(nav).queryByRole("link", { name: "Notes root" })).toBeNull();
     expect(screen.queryByRole("button", { name: /choose|switch app|reorder/i })).toBeNull();
     expect(patchPreferences).not.toHaveBeenCalled();
   });
 
-  test("flat AppRailTree keeps a childless root navigable", async () => {
+  test("flat AppRailTree does not repeat a childless root already represented by the brand", async () => {
     const tree = MenuTree.from([{ id: "notes", label: "Notes", to: "/notes" }]);
     const router = createRouter({
       history: createMemoryHistory({ initialEntries: ["/"] }),
-      routeTree: createRootRoute({ component: () => <AppRailTree scope="apps" flat roots={tree.roots} activeRootId="notes" /> }),
+      routeTree: createRootRoute({ component: () => <><AppRailTree scope="apps" flat roots={tree.roots} activeRootId="notes" /><span>Ready</span></> }),
     });
     render(<RouterProvider router={router} />);
-    expect((await screen.findByRole("link", { name: "Notes" })).getAttribute("href")).toBe("/notes");
+    await screen.findByText("Ready");
+    expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
     expect(screen.queryByRole("button", { name: /expand|collapse/i })).toBeNull();
   });
 });

@@ -3,9 +3,11 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
+import { BreadcrumbBar } from "../chrome/BreadcrumbBar";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
+import { ChromePlaceProvider } from "../chrome/refine-menu";
 import { useSurfacePresentation } from "../chrome/surface-policy";
 import { Chatter, useChatterPresentation } from "../communication/Chatter";
 import { ChatterProvider, useChatter, type ChatterPaneController } from "../communication/chatter-context";
@@ -39,7 +41,7 @@ export interface ConsoleLayoutProps {
 
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
   const { shell } = useSurfacePresentation();
-  return <ChatterProvider defaultCollapsed={!shell?.asideOpen}><ConsoleLayoutBody {...props} /></ChatterProvider>;
+  return <ChromePlaceProvider><ChatterProvider defaultCollapsed={!shell?.asideOpen}><ConsoleLayoutBody {...props} /></ChatterProvider></ChromePlaceProvider>;
 }
 
 function ConsoleLayoutBody({
@@ -107,6 +109,7 @@ function ConsoleLayoutBody({
                   "--rail-current-w": mobileViewport
                     ? "0px"
                     : railWidth ?? "var(--spacing-rail-w)",
+                  "--breadcrumbbar-current-h": shell?.breadcrumb === false ? "0px" : "var(--spacing-breadcrumbbar-h)",
                 } as React.CSSProperties}
                 className={cn(
                   "console-grid h-dvh min-h-0 w-full min-w-0 max-w-full overflow-hidden bg-canvas text-fg",
@@ -121,7 +124,6 @@ function ConsoleLayoutBody({
                 )}
                 <TopBar
                   className="area-topbar"
-                  showBreadcrumb={shell?.breadcrumb !== false}
                   hideSearch={shell?.commandSearch === false}
                   navigation={mobileViewport ? {
                     open: navigationOpen,
@@ -151,6 +153,7 @@ function ConsoleLayoutBody({
                   showChatterToggle={showChatter}
                   showUserMenu
                 />
+                {shell?.breadcrumb !== false ? <BreadcrumbBar /> : null}
                 <div className="area-control min-w-0">
                   <div className="contents" data-console-notices>
                     <SlotOutlet entries={notices} />
