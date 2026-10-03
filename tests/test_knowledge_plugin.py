@@ -26,11 +26,13 @@ from typing import Any, cast
 import pytest
 from django.apps import apps
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from graphql import GraphQLObjectType
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.knowledge.retrieval import LexicalRetrievalBackend
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
+from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT
 from tests.conftest import SchemaAddon
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
@@ -166,11 +168,14 @@ def test_semantic_search_tool_compiles() -> None:
     assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
     assert tool.parameters["required"] == ["vault", "query"]  # first has a schema default
     assert tool.document == (
-        "query ($vault: ID!, $query: String!, $first: Int!) "
-        "{ semantic_search(vault: $vault, query: $query, first: $first) { id title kind } }"
+        "query ($first: Int!, $vault: ID!, $query: String!) "
+        "{ semantic_search(first: $first, vault: $vault, query: $query) { id title kind } }"
     )
     # A list operation projects its rows under ``result``.
     assert set(tool.output_schema["properties"]) == {"result"}
+    assert tool._variables({"vault": "vault-id", "query": "needle"})["first"] == DEFAULT_QUERY_LIMIT
+    with pytest.raises(ToolError, match="must not exceed"):
+        tool._variables({"vault": "vault-id", "query": "needle", "first": MAX_QUERY_LIMIT + 1})
 
 
 # --- The composition contract: the manifest wires the three seams ----------------

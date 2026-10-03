@@ -1,6 +1,32 @@
 _meta:
   model: projects.Task
 rows:
+  - xref: eng_prepare_orientation
+    fields:
+      queue: work.eng
+      stage: work.eng_todo
+      cycle: work.eng_active
+      project: projects.neighborhood_garden
+      title: Prepare the volunteer orientation checklist
+      note: Collect the safety and access steps before the next orientation.
+      assignee: iam.user_bob
+      priority: medium
+      estimate: 2.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: eng_confirm_tool_storage
+    fields:
+      queue: work.eng
+      stage: work.eng_done
+      cycle: work.eng_active
+      project: projects.neighborhood_garden
+      title: Confirm shared tool storage
+      note: The volunteers have agreed on a secure, accessible storage location.
+      assignee: iam.user_alice
+      priority: low
+      estimate: 1.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
   - xref: eng_board_drag
     fields:
       queue: work.eng

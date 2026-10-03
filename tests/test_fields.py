@@ -639,6 +639,27 @@ def test_sqid_field_rejects_non_string_prefix() -> None:
                 app_label = "auth"
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"db_index": False},
+        {"db_default": models.NOT_PROVIDED},
+        {"db_index": False, "db_default": models.NOT_PROVIDED},
+    ],
+)
+def test_fractional_rank_deconstruct_round_trips_constructor_defaults_and_opt_outs(options: dict[str, Any]) -> None:
+    """Migration serialization preserves defaults as well as explicit opt-outs."""
+
+    field = FractionalRankField(**options)
+    _, path, args, kwargs = field.deconstruct()
+    assert kwargs == options
+    rebuilt = import_module(path.rsplit(".", 1)[0]).FractionalRankField(*args, **kwargs)
+    assert rebuilt.db_index == field.db_index
+    assert rebuilt.db_default == field.db_default
+    assert rebuilt.deconstruct() == field.deconstruct()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_fractional_rank_appends_within_its_unique_context() -> None:
     """An omitted rank appends per context; an explicit rank is honored."""
@@ -669,6 +690,42 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
         assert explicit.rank == 512.0
         after_explicit = RankedItem.objects.create(lane="a")
         assert after_explicit.rank == second.rank + FractionalRankField.STEP
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_column_backfills_existing_rows_without_changing_allocation() -> None:
+    """Schema backfill uses STEP; later ORM inserts still append in context."""
+
+    class BeforeRank(models.Model):
+        """Existing ungrouped rows before the rank column is introduced."""
+
+        lane = models.CharField(max_length=8, null=True)
+
+        class Meta:
+            app_label = "auth"
+            db_table = "auth_rank_backfill"
+
+    class AfterRank(models.Model):
+        """The migrated model state for the same table."""
+
+        lane = models.CharField(max_length=8, null=True)
+        rank = FractionalRankField()
+
+        class Meta:
+            app_label = "auth"
+            db_table = "auth_rank_backfill"
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="rank_backfill_lane_rank"),)
+
+    with model_tables((BeforeRank,)):
+        BeforeRank.objects.bulk_create([BeforeRank(), BeforeRank()])
+        with connection.schema_editor() as editor:
+            editor.add_field(BeforeRank, AfterRank._meta.get_field("rank"))
+        with connection.schema_editor() as editor:
+            editor.add_constraint(AfterRank, AfterRank._meta.constraints[0])
+
+        assert list(AfterRank.objects.values_list("rank", flat=True)) == [FractionalRankField.STEP] * 2
+        appended = AfterRank.objects.create()
+        assert appended.rank == FractionalRankField.STEP * 2
 
 
 @pytest.mark.django_db(transaction=True)

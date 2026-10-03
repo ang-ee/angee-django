@@ -1701,7 +1701,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
   [GraphQL WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../addons/angee/mcp/graphql.py)
-  has no request and continues under its own actor.
+  carries a synthetic request whose only meaningful attribute is `user`, equal
+  to the ambient actor's eligible user (anonymous for a non-user or inactive
+  user); it has no HTTP headers or view-as preview lifecycle.
 - **Concurrency and replay tokens are GraphQL root arguments.** On models
   composing `OptimisticLockMixin`, `update_<resource>_by_pk` accepts
   `expected_revision: Int`; a stale value fails with `STALE_REVISION`. On models

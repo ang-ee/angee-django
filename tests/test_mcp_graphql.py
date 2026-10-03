@@ -4,7 +4,7 @@ Builds a tiny Strawberry schema shaped like the knowledge ``read_page`` projecti
 (a nullable nested object, a nested list, a list of objects) and drives the compiler
 in :mod:`angee.mcp.graphql` directly, so the assertions cover the document rendering,
 output schema, and row projection without standing up the full discovery schema.
-Native scoped documents also exercise the request-less MCP execution boundary.
+Native scoped documents also exercise the synthetic-request MCP execution boundary.
 """
 
 from __future__ import annotations
@@ -15,17 +15,30 @@ import pytest
 import strawberry
 import strawberry_django
 from asgiref.sync import async_to_sync
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from fastmcp.exceptions import ToolError
+from rebac import (
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    current_actor,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
 
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.permissions import session_user
 from angee.mcp import graphql as mcp_graphql
-from angee.mcp.graphql import GraphQLTool, _compile, execute_under_actor
+from angee.mcp.graphql import ACTION_RESULT, GraphQLTool, _compile, execute_under_actor
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, create_user
 from tests.scopedemo.models import Scope, ScopedDoc
@@ -77,6 +90,121 @@ class PageQuery:
 
         del id
         return None
+
+
+@strawberry.type
+class PageResultsT:
+    results: list[PageT]
+
+
+@strawberry.type
+class CollectionQuery:
+    @strawberry.field
+    def pages(self, first: int = 10) -> list[PageT]:
+        return []
+
+    @strawberry.field
+    def page_results(self, first: int = 10) -> PageResultsT:
+        return PageResultsT(results=[])
+
+
+@strawberry.type
+class CollectionMutation:
+    @strawberry.mutation
+    def bulk_action(self) -> list[ActionResult]:
+        return []
+
+
+@pytest.fixture
+def collection_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    schemas = GraphQLSchemas([
+        SchemaAddon({"public": {"query": (CollectionQuery,), "mutation": (CollectionMutation,)}}),
+    ])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+
+
+@pytest.mark.usefixtures("collection_schema")
+@pytest.mark.parametrize("operation", ["pages", "page_results"])
+@pytest.mark.parametrize("limit_arg", [None, ""])
+def test_list_queries_require_a_bound(operation: str, limit_arg: str | None) -> None:
+    spec = GraphQLTool(
+        operation=operation, name="list_pages", fields=("sqid",), description="List pages.", limit_arg=limit_arg,
+    )
+    with pytest.raises(ImproperlyConfigured, match="must declare limit_arg"):
+        _compile(spec)
+
+
+@pytest.mark.usefixtures("collection_schema")
+def test_bulk_mutation_does_not_require_a_query_bound() -> None:
+    tool = _compile(GraphQLTool(
+        operation="bulk_action", name="bulk_action", fields=ACTION_RESULT, description="Act on selected rows.",
+    ))
+    assert tool.op_type == "mutation"
+    assert tool.is_list
+    assert tool._variables({}) == {}
+    assert set(tool.output_schema["properties"]["result"]["items"]["properties"]) == set(ACTION_RESULT)
+
+
+@pytest.fixture
+def caller_schema(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, Any]]:
+    observed = []
+
+    @strawberry.type
+    class CallerActions:
+        @strawberry.mutation
+        def inspect_caller(self, info: strawberry.Info) -> ActionResult:
+            observed.append((info.context.request.user, current_actor()))
+            return ActionResult(ok=True, message="Caller inspected.")
+
+        @strawberry.mutation
+        @action_guard("Caller refused.")
+        def require_caller(self, info: strawberry.Info) -> ActionResult:
+            observed.append((session_user(info), current_actor()))
+            return ActionResult(ok=True, message="Caller authenticated.")
+
+    schemas = GraphQLSchemas([
+        SchemaAddon({"public": {"query": (PageQuery,), "mutation": (CallerActions,)}}),
+    ])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+    return observed
+
+
+@pytest.mark.parametrize("user_actor", [True, False])
+def test_action_request_user_matches_ambient_caller(
+    transactional_db: None, caller_schema: list[tuple[Any, Any]], user_actor: bool,
+) -> None:
+    user = create_user("mcp-action-caller")
+    actor = to_subject_ref(user) if user_actor else SubjectRef.parse("auth/group:non-user#member")
+    tool = _compile(GraphQLTool(
+        operation="inspect_caller", name="inspect_caller", fields=ACTION_RESULT, description="Inspect the caller.",
+    ))
+    with actor_context(actor):
+        result = async_to_sync(tool.run)({}).structured_content
+    assert result["ok"] is True
+    request_user, ambient = caller_schema.pop()
+    assert ambient == actor
+    if user_actor:
+        assert request_user == user
+        assert to_subject_ref(request_user) == ambient
+    else:
+        assert isinstance(request_user, AnonymousUser)
+        assert not request_user.is_authenticated
+
+
+def test_action_tool_denies_inactive_user(transactional_db: None, caller_schema: list[tuple[Any, Any]]) -> None:
+    user = create_user("mcp-inactive-caller")
+    tool = _compile(GraphQLTool(
+        operation="require_caller", name="require_caller", fields=ACTION_RESULT, description="Require a caller.",
+    ))
+    with actor_context(user):
+        assert async_to_sync(tool.run)({}).structured_content["ok"] is True
+    caller_schema.clear()
+    with system_context(reason="test.mcp.action.deactivate"):
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+    with actor_context(user), pytest.raises(ToolError, match="permission"):
+        async_to_sync(tool.run)({})
+    assert caller_schema == []
 
 
 @pytest.fixture
@@ -270,7 +398,7 @@ class McpDocType(AngeeNode):
 def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
     transactional_db: None, monkeypatch: pytest.MonkeyPatch, settings: Any,
 ) -> None:
-    """G3/G5 hold through the actual request-less MCP execution and actor binding."""
+    """G3/G5 hold through the actual MCP execution and actor binding."""
 
     settings.REBAC_SUPERUSER_BYPASS = False
     settings.REBAC_STRICT_MODE = True
