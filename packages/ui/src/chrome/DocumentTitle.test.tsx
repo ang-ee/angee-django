@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { StrictMode } from "react";
 
 import { AppRuntimeProvider } from "../runtime";
@@ -32,10 +33,11 @@ describe("DocumentTitle and breadcrumb identity", () => {
     const page = (label: string) => <AppRuntimeProvider runtime={{ brand: { name: "Notebook", mark: "book" } }}>
       <BreadcrumbLabelProvider><DocumentTitle /><Breadcrumb /><Leaf label={label} /></BreadcrumbLabelProvider>
     </AppRuntimeProvider>;
-    const mounted = render(page("First note"));
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/notes/1"] }) });
+    const mounted = render(<RouterContextProvider router={router}>{page("First note")}</RouterContextProvider>);
     await waitFor(() => expect(document.title).toBe("First note · Notebook"));
     expect(screen.getByText("First note").getAttribute("aria-current")).toBe("page");
-    mounted.rerender(page("Renamed note"));
+    mounted.rerender(<RouterContextProvider router={router}>{page("Renamed note")}</RouterContextProvider>);
     await waitFor(() => expect(document.title).toBe("Renamed note · Notebook"));
     expect(screen.queryByText("First note")).toBeNull();
     mounted.unmount();
@@ -71,7 +73,7 @@ describe("DocumentTitle and breadcrumb identity", () => {
     render(<BreadcrumbLabelProvider><DocumentTitle /><ItemsProbe /><Leaf label="First note" /></BreadcrumbLabelProvider>);
     await waitFor(() => expect(document.title).toBe("First note · Host title"));
     expect(JSON.parse(screen.getByLabelText("Trail").textContent ?? "[]")).toEqual([
-      { label: "Notes", to: "/notes" }, { label: "First note" },
+      { label: "Notes", href: "/notes" }, { label: "First note" },
     ]);
   });
 

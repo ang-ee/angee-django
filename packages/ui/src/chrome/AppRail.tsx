@@ -26,6 +26,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
+import { useHrefLinkOptions } from "../lib/in-app-link";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useDndKitSensors } from "../lib/dnd";
@@ -339,10 +340,10 @@ function RuntimeShortcutItem({ expanded, icon, label, pathname, to }: {
   to: string;
 }): ReactElement {
   const active = pathname === to;
+  const hrefOptions = useHrefLinkOptions(to);
   const link = (
     <Link
-      to={to}
-      href={to}
+      {...hrefOptions}
       aria-label={label}
       aria-current={active ? "page" : undefined}
       data-current={active}
@@ -416,7 +417,8 @@ function RailSettingsItem({
   onActiveToggle?: (() => void) | undefined;
   onOpenNavigation?: ((target: string) => void) | undefined;
 }): ReactElement {
-  const linkProps = useLinkProps({ to, href: to,
+  const hrefOptions = useHrefLinkOptions(to);
+  const linkProps = useLinkProps({ ...hrefOptions,
     ...railLinkToggleProps(to, pathname, onActiveToggle, expanded, onOpenNavigation),
   });
   const link = (
@@ -735,8 +737,9 @@ function RailItem({
     data: { type: "app-rail-item", itemId: item.id },
   });
   const target = item.target;
+  const hrefOptions = useHrefLinkOptions(target);
   const linkProps = useLinkProps({
-    to: target, href: target, onClick, onKeyDown: onKeyboardMove,
+    ...hrefOptions, onClick, onKeyDown: onKeyboardMove,
     onPointerDown: (event) => {
       sortable.listeners?.onPointerDown?.(event);
       onLongPressStart(item, event);

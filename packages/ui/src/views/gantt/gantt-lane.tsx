@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useInAppLinkClick } from "../../lib/in-app-link";
 import { Avatar, avatarInitials } from "../../ui/avatar";
 import type { GanttEvent } from "./GanttView";
 
@@ -20,23 +21,14 @@ export interface GanttLaneDetails {
 }
 
 /** Shared label for collection Gantt lanes. The record link is a real anchor when declared. */
-export function GanttLane({ details, onOpen, onNavigate }: {
+export function GanttLane({ details, onOpen }: {
   details: GanttLaneDetails;
   onOpen?: () => void;
-  onNavigate?: (href: string) => void;
 }): React.ReactElement {
   const { title, href, secondary, people } = details;
   const titleClass = "block max-w-full truncate text-start font-medium text-brand hover:underline";
   const visiblePeople = people?.filter((person) => person.name.trim());
-  const handleLinkClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
-    event.stopPropagation();
-    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (onOpen || onNavigate) {
-      event.preventDefault();
-      if (onOpen) onOpen();
-      else if (href) onNavigate?.(href);
-    }
-  };
+  const handleLinkClick = useInAppLinkClick(href, (event) => event.stopPropagation(), { navigate: onOpen });
   return (
     <div className="flex min-w-0 flex-col gap-0.5 py-1">
       {href ? <a className={titleClass} href={href} title={title} onClick={handleLinkClick}>{title}</a>

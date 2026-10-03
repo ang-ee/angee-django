@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../runtime";
@@ -64,4 +64,18 @@ describe("branded single-root rail", () => {
     expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
     expect(screen.queryByRole("button", { name: /expand|collapse/i })).toBeNull();
   });
+});
+
+
+test("the brand follows a query-bearing app target through the same chrome conversion", async () => {
+  const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={{ brand: { name: "Notebook", mark: "book" } }}>
+    <AppRail menuItems={[{ id: "notes", label: "Notes", to: "/notes?preset=all", appRoot: true }]} />
+  </AppRuntimeProvider> });
+  const router = createRouter({ routeTree: root.addChildren([
+    createRoute({ getParentRoute: () => root, path: "/" }), createRoute({ getParentRoute: () => root, path: "/notes" }),
+  ]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<RouterProvider router={router} />);
+  fireEvent.click(await screen.findByRole("link", { name: "Notebook" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/notes"));
+  expect(router.state.location.search).toEqual({ preset: "all" });
 });

@@ -26,6 +26,25 @@ const menus: readonly ChromeMenuItem[] = [{ id: "suite", label: "Suite", to: "/s
 ] }];
 
 describe("AppMenu", () => {
+  test.each([1000, 150])("preset links navigate to the path with validated search at width %s", async (width) => {
+    mockOverflow(width);
+    const router = renderMenu("/desk");
+    const nav = await screen.findByRole("navigation", { name: "Desk menu" });
+    if (width === 150) fireEvent.click(within(nav).getByRole("button", { name: "More" }));
+    const link = width === 150
+      ? within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Open notes" })
+      : within(nav).getByRole("link", { name: "Open notes" });
+    expect(link.getAttribute("href")).toBe("/desk/notes?preset=open");
+    fireEvent.click(link);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/desk/notes"));
+    expect(router.state.location.search).toEqual({ preset: "open" });
+    expect(router.state.matches.at(-1)?.routeId).toBe("/desk/notes");
+    await waitFor(() => {
+      if (width === 150) expect(within(nav).getByRole("button", { name: "More" }).getAttribute("data-current")).toBe("true");
+      else expect(within(nav).getByRole("link", { name: "Open notes" }).getAttribute("aria-current")).toBe("page");
+    });
+  });
+
   test("moves narrow-width entries into More in order and restores them on resize", async () => {
     const resize = mockOverflow(1000);
     renderMenu("/desk");

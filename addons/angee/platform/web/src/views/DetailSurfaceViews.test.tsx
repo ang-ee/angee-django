@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { InAppLinkProvider } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 
 const routerMocks = vi.hoisted(() => ({
@@ -52,14 +53,6 @@ vi.mock("../lib/cells", () => ({
         : "—"}
     </span>
   ),
-  RouterLink: ({
-    href,
-    children,
-  }: {
-    href: string;
-    children: React.ReactNode;
-  }) => <a href={href}>{children}</a>,
-  useRouteNavigate: () => platformMocks.navigate,
 }));
 
 vi.mock("../lib/explorer", () => ({
@@ -194,7 +187,7 @@ describe("platform detail surfaces", () => {
       },
     });
 
-    render(<ModelDetail />);
+    render(<InAppLinkProvider navigate={platformMocks.navigate}><ModelDetail /></InAppLinkProvider>);
 
     expect(screen.getByRole("heading", { name: "Note" })).toBeTruthy();
     fireEvent.click(screen.getByRole("link", { name: /col.graph/ }));

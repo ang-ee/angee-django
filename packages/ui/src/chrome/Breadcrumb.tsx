@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { useRouterState } from "@tanstack/react-router";
 import {
   useBreadcrumb as useRefineBreadcrumb,
   type BreadcrumbsType,
@@ -7,12 +7,20 @@ import * as React from "react";
 import type { ReactElement } from "react";
 
 import { useUiT } from "../i18n";
+import { InAppLinkProvider, useInAppNavigator, type InAppNavigator } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
+import { TextLink } from "../ui/text-link";
 import { useOptionalChromePlace } from "./refine-menu";
 
 export interface BreadcrumbItem {
   label: string;
-  to?: string;
+  href?: string;
+}
+
+declare module "@tanstack/react-router" {
+  interface HistoryState {
+    trail?: readonly BreadcrumbItem[];
+  }
 }
 
 export interface BreadcrumbProps {
@@ -99,14 +107,33 @@ export function useBreadcrumbItems(): readonly BreadcrumbItem[] {
 export function useNestedBreadcrumbItems(): readonly BreadcrumbItem[] {
   const items = useBreadcrumbItems();
   const match = useOptionalChromePlace()?.match;
-  if (!match) return items;
-  const menuLabels = new Set(match.trail.map((node) => node.displayLabel));
-  const deeper = items.filter((item) => !menuLabels.has(item.label));
+  const location = useRouterState({ select: (state) => state.location });
+  const menuLabels = new Set(match?.trail.map((node) => node.displayLabel));
+  const deeper = match ? items.filter((item) => !menuLabels.has(item.label)) : items;
+  // A collection/menu destination never shows a strip, even if reached from a record.
   if (!deeper.length) return [];
-  const page = match.item.id === match.app?.id ? undefined : match.item;
-  // Prefer the trail's own crumb for the page: it carries the collection's return link.
-  const pageItem = page && (items.find((item) => item.label === page.displayLabel) ?? { label: page.displayLabel, to: page.target });
-  return pageItem ? [pageItem, ...deeper] : deeper;
+  const current = deeper.map((item, index) => index === deeper.length - 1 ? { ...item, href: location.href } : item);
+  const history = location.state.trail ?? [];
+  if (history.length) {
+    // The previous form supplies the context; the destination's collection is not another step.
+    const tail = match ? current : current.slice(-1);
+    return dedupeBreadcrumbItems([...history, ...tail]);
+  }
+  const page = match?.item.id === match?.app?.id ? undefined : match?.item;
+  const pageItem = page && (items.find((item) => item.label === page.displayLabel) ?? { label: page.displayLabel, href: page.target });
+  return pageItem ? [pageItem, ...current] : current;
+}
+
+/** Only console content carries the current form's breadcrumb context to a followed link. */
+export function BreadcrumbContentLinks({ children, trail }: {
+  children: React.ReactNode;
+  trail: readonly BreadcrumbItem[];
+}): ReactElement {
+  const navigate = useInAppNavigator();
+  const follow: InAppNavigator = (href, options) => navigate?.(href, {
+    ...options, state: { ...options?.state, ...(trail.length ? { trail } : {}) },
+  });
+  return navigate ? <InAppLinkProvider navigate={follow}>{children}</InAppLinkProvider> : <>{children}</>;
 }
 
 function BreadcrumbTrail({
@@ -117,6 +144,7 @@ function BreadcrumbTrail({
   items: readonly BreadcrumbItem[];
 }): ReactElement {
   const t = useUiT();
+  const navigate = useInAppNavigator();
   return (
     <nav
       aria-label={t("chrome.breadcrumb")}
@@ -127,7 +155,7 @@ function BreadcrumbTrail({
     >
       {items.map((item, index) => {
         const current = index === items.length - 1;
-        const key = `${itemKey(item.label)}:${index}`;
+        const key = `${item.label}:${index}`;
         return (
           <span key={key} className="contents">
             {index > 0 ? (
@@ -135,14 +163,15 @@ function BreadcrumbTrail({
                 /
               </span>
             ) : null}
-            {item.to && !current ? (
-              <Link
-                to={item.to}
-                href={item.to}
+            {item.href && !current ? (
+              <BreadcrumbLink
+                href={item.href}
+                navigate={navigate}
+                trailPrefix={items.slice(0, index)}
                 className="min-w-0 truncate rounded-4 outline-none hover:text-fg focus-visible:focus-ring"
               >
                 {item.label}
-              </Link>
+              </BreadcrumbLink>
             ) : (
               <span
                 aria-current={current ? "page" : undefined}
@@ -158,8 +187,14 @@ function BreadcrumbTrail({
   );
 }
 
-function itemKey(label: BreadcrumbItem["label"]): string {
-  return label;
+function BreadcrumbLink({ href, navigate, trailPrefix, ...props }: React.ComponentProps<typeof TextLink> & {
+  href: string;
+  navigate: InAppNavigator | undefined;
+  trailPrefix: readonly BreadcrumbItem[];
+}): ReactElement {
+  const follow: InAppNavigator = (target) => navigate?.(target, { state: { trail: trailPrefix } });
+  const link = <TextLink href={href} variant="muted" {...props} />;
+  return navigate ? <InAppLinkProvider navigate={follow}>{link}</InAppLinkProvider> : link;
 }
 
 function breadcrumbItemsFromRefine(
@@ -170,14 +205,18 @@ function breadcrumbItemsFromRefine(
   const items = breadcrumbs.map((item) => ({
     label:
       leafLabel && item === breadcrumbs.at(-1) ? leafLabel : item.label,
-    ...(item.href ? { to: item.href === collection?.to ? collection.href : item.href } : {}),
+    ...(item.href ? { href: item.href === collection?.to ? collection.href : item.href } : {}),
   }));
 
-  // Menu grouping may repeat the same human label and destination at adjacent
-  // levels (for example Integrations / Integrations / Integrations). Keep the
+  return dedupeBreadcrumbItems(items);
+}
+
+function dedupeBreadcrumbItems(items: readonly BreadcrumbItem[]): readonly BreadcrumbItem[] {
+  // History joints and menu grouping may repeat a label and destination at
+  // adjacent levels (Integrations / Integrations / Integrations). Keep the
   // deepest owner without collapsing equally named, distinct destinations.
   return items.filter((item, index) => {
     const next = items[index + 1];
-    return item.label !== next?.label || item.to !== next.to;
+    return item.label !== next?.label || item.href !== next.href;
   });
 }

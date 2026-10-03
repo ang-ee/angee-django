@@ -135,6 +135,7 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("graphNodeStyle", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
   frameworkCriticalExport("PrimaryPanePublisher", "@angee/ui", "src/layouts/primary-pane-context.tsx"),
+  frameworkCriticalExport("InAppLinkProvider", "@angee/ui", "src/lib/in-app-link.tsx"),
   frameworkCriticalExport("useLatestRef", "@angee/ui", "src/lib/use-latest-ref.ts"),
   frameworkCriticalExport("useRouteParam", "@angee/ui", "src/views/resource/resource-routing.ts"),
   frameworkCriticalExport("useRouteSearch", "@angee/ui", "src/views/resource/resource-routing.ts"),

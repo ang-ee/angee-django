@@ -16,3 +16,9 @@ Add an expansion toggle at the expanded rail header's edge. `AppBrandProps` now
 accepts and forwards anchor props and refs so shared tooltips can compose the
 brand link. Icon-only rail links show their name and interaction hints, followed
 by the developer description when developer mode is enabled.
+
+Route shared in-app links automatically without caller navigation callbacks;
+keep native modified clicks and external/download links. Query-bearing hrefs use
+the router's href navigation or shared chrome conversion with the host search
+codec. Form links retain breadcrumb history in location state, with Back
+restoration and prefix truncation; chrome destinations start fresh.

@@ -2,10 +2,10 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
+  TextLink,
   ListView, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import { TextRouteLink } from "../lib/cells";
 
 // The `platform.Field` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/platform/schema.py`): every composed model's fields flattened
@@ -34,18 +34,18 @@ function columns(
       field: "model",
       header: t("col.model"),
       render: (row) => (
-        <TextRouteLink href={routeHref("platform.models.record", { id: row.model })}>
+        <TextLink href={routeHref("platform.models.record", { id: row.model })}>
           {row.model}
-        </TextRouteLink>
+        </TextLink>
       ),
     },
     {
       field: "addon",
       header: t("col.addon"),
       render: (row) => (
-        <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon })}>
+        <TextLink href={routeHref("platform.addons.record", { id: row.addon })}>
           {row.addon}
-        </TextRouteLink>
+        </TextLink>
       ),
     },
     { field: "kind", header: t("col.type") },
@@ -54,9 +54,9 @@ function columns(
       header: t("col.relationTarget"),
       render: (row) =>
         row.relation_target ? (
-          <TextRouteLink href={routeHref("platform.models.record", { id: row.relation_target })}>
+          <TextLink href={routeHref("platform.models.record", { id: row.relation_target })}>
             {row.relation_target}
-          </TextRouteLink>
+          </TextLink>
         ) : null,
     },
   ];

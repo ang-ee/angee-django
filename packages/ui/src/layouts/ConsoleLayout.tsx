@@ -2,7 +2,7 @@ import * as React from "react";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
-import { BreadcrumbLabelProvider, useNestedBreadcrumbItems } from "../chrome/Breadcrumb";
+import { BreadcrumbContentLinks, BreadcrumbLabelProvider, useNestedBreadcrumbItems } from "../chrome/Breadcrumb";
 import { BreadcrumbBar } from "../chrome/BreadcrumbBar";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
@@ -165,13 +165,15 @@ function ConsoleLayoutBody({
                     data-console-controls
                   />
                 </div>
-                <ConsoleWorkbench
-                  showChatter={showChatter}
-                  onPrimaryController={handlePrimaryController}
-                  onCompactChatterController={setCompactChatterController}
-                >
-                  {children}
-                </ConsoleWorkbench>
+                <BreadcrumbContentLinks trail={nestedTrail}>
+                  <ConsoleWorkbench
+                    showChatter={showChatter}
+                    onPrimaryController={handlePrimaryController}
+                    onCompactChatterController={setCompactChatterController}
+                  >
+                    {children}
+                  </ConsoleWorkbench>
+                </BreadcrumbContentLinks>
                 {/* Optional statusline; the row collapses while this host is empty. */}
                 <div
                   ref={setStatusHost}

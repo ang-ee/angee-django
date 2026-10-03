@@ -54,7 +54,7 @@ async function fixture() {
   }
   const root = createRootRoute({ component: () => <Provider resources={[resource]} routerProvider={tanStackRouterProvider}
     refineResources={refineResourcesFromDataResources([resource]).map((entry) => ({ ...entry, list: "/notes", show: "/notes/:id", meta: { ...entry.meta, label: "Notes" } }))}
-    dataProvider={provider}>
+    dataProvider={provider} navigate={(href, options) => { void router.navigate({ href, ...options }); }}>
     <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
       <ModalsHost><ToastProvider><BreadcrumbLabelProvider><Breadcrumb /><Outlet /></BreadcrumbLabelProvider></ToastProvider></ModalsHost>
     </OperationDocumentsProvider>

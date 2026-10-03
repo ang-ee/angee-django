@@ -7,6 +7,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
+import { InAppLinkProvider } from "../../lib/in-app-link";
 import { RecordReference } from "./RecordReference";
 
 const resource = testDataResource("notes.Note", {
@@ -26,7 +27,7 @@ const runtime = {
 
 /** Render inside a router, as every console surface is. */
 function renderInRouter(ui: ReactNode) {
-  const root = createRootRoute({ component: () => ui });
+  const root = createRootRoute({ component: () => <InAppLinkProvider navigate={(href, options) => { void router.navigate({ href, ...options }); }}>{ui}</InAppLinkProvider> });
   const router = createRouter({
     routeTree: root.addChildren(["/home", "/notes/$id"].map((path) => createRoute({ getParentRoute: () => root, path }))),
     history: createMemoryHistory({ initialEntries: ["/home"] }),

@@ -1,6 +1,7 @@
 import { useMemo, type ComponentPropsWithRef, type ReactElement } from "react";
 import { createLink } from "@tanstack/react-router";
 
+import { useHrefLinkOptions } from "../lib/in-app-link";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useOverflowCount } from "../lib/use-overflow-count";
@@ -26,10 +27,11 @@ let appMenuLink: ReturnType<typeof createAppMenuLink> | undefined;
 
 // Created on first render rather than at import, so importing the UI barrel
 // does not call into the router (suites that mock it partially still load).
-function AppMenuLink(props: Parameters<ReturnType<typeof createAppMenuLink>>[0]): ReactElement {
+function AppMenuLink({ href, ...props }: ComponentPropsWithRef<"a"> & { "data-current"?: boolean }): ReactElement {
+  const hrefOptions = useHrefLinkOptions(href);
   appMenuLink ??= createAppMenuLink();
   const Link = appMenuLink;
-  return <Link {...props} />;
+  return <Link {...props} {...hrefOptions} />;
 }
 
 export interface AppMenuProps {
@@ -62,7 +64,7 @@ function AppMenuBody({ className }: Pick<AppMenuProps, "className">): ReactEleme
   const currentId = match?.item.id;
   const overflowCurrent = visible.length === 0 && currentIndex >= 0;
   // The app's name titles its menus; it is not one of them, so it never carries the current mark.
-  const title = <AppMenuLink to={appTarget} href={appTarget}
+  const title = <AppMenuLink href={appTarget}
     className="flex h-full max-w-48 shrink-0 items-center truncate rounded-4 text-15 font-semibold text-on-rail-hi no-underline outline-none focus-visible:focus-ring">
     {label}
   </AppMenuLink>;
@@ -129,7 +131,7 @@ function AppMenuEntryControl({ entry, currentId, current, rail, measuring = fals
   if (shape.destination) {
     const destination = shape.destination;
     return <Tooltip label={rail.describe(destination)} side="bottom">
-      <AppMenuLink to={destination.target} href={destination.target}
+      <AppMenuLink href={destination.target}
         data-current={destination.id === currentId} className={menuItemClass}>
         {content}
       </AppMenuLink>
@@ -203,7 +205,7 @@ function MenuPage({ target, label, current = false, description }: {
 }): ReactElement | null {
   if (!target) return null;
   return <DropdownMenu.LinkItem href={target} closeOnClick
-    render={<AppMenuLink to={target} href={target} data-current={current} title={description} />}>
+    render={<AppMenuLink href={target} data-current={current} title={description} />}>
     {label}
   </DropdownMenu.LinkItem>;
 }

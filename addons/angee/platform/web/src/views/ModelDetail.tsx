@@ -1,10 +1,10 @@
 import { type ReactElement } from "react";
 
-import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { TextLink, Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
-import { LinkedChips, RouterLink, useRouteNavigate } from "../lib/cells";
+import { LinkedChips } from "../lib/cells";
 import { usePlatformModel } from "../lib/explorer";
 
 export function ModelDetail(): ReactElement {
@@ -12,7 +12,6 @@ export function ModelDetail(): ReactElement {
   const id = useRouteRecordId();
   const routeHref = useRouteHref();
   const { model, dependedBy, isFetching: fetching } = usePlatformModel(id);
-  const go = useRouteNavigate();
 
   return (
     <DetailSurface
@@ -33,9 +32,9 @@ export function ModelDetail(): ReactElement {
         model ? (
           <>
             <Code tone="muted">{model.label}</Code>
-            <RouterLink href={routeHref("platform.addons.record", { id: model.addon_id })}>
+            <TextLink href={routeHref("platform.addons.record", { id: model.addon_id })}>
               <Badge tone="info">{model.addon_label}</Badge>
-            </RouterLink>
+            </TextLink>
           </>
         ) : null
       }
@@ -51,7 +50,6 @@ export function ModelDetail(): ReactElement {
                   undefined,
                   platformScopeSearch({ model: model.label }),
                 ),
-                onNavigate: go,
               },
               {
                 label: t("col.relations"),
@@ -63,7 +61,6 @@ export function ModelDetail(): ReactElement {
                 value: model.addon_label,
                 icon: "grid",
                 href: routeHref("platform.addons.record", { id: model.addon_id }),
-                onNavigate: go,
               },
               {
                 label: t("col.graph"),
@@ -74,7 +71,6 @@ export function ModelDetail(): ReactElement {
                   undefined,
                   platformScopeSearch({ model: model.label }),
                 ),
-                onNavigate: go,
               },
             ]
           : undefined

@@ -65,7 +65,7 @@ export function LoginPage({
         : new URLSearchParams(window.location.search).get("next");
     const target = safeRedirectPath(next) ?? safeRedirectPath(redirectTo) ?? "/";
     if (typeof window === "undefined") {
-      void navigate({ to: target });
+      void navigate({ href: target });
       return;
     }
     window.location.assign(target);

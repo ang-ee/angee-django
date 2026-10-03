@@ -6,6 +6,7 @@ import {
 } from "react";
 import { Link } from "@tanstack/react-router";
 
+import { useHrefLinkOptions } from "../lib/in-app-link";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { toneClass as toneFillClass } from "../lib/tones";
@@ -305,6 +306,7 @@ function AppChooserTile({
     </>
   );
 
+  const hrefOptions = useHrefLinkOptions(item.to);
   const className = cn(
     "flex min-h-32 flex-col items-center gap-2 rounded-8 px-3 py-4 text-fg no-underline outline-none transition-colors hover:bg-inset focus-visible:focus-ring",
     disabled && "cursor-not-allowed opacity-50 hover:bg-transparent",
@@ -320,8 +322,7 @@ function AppChooserTile({
 
   return (
     <Link
-      to={item.to}
-      href={item.to}
+      {...hrefOptions}
       aria-current={active ? "page" : undefined}
       onClick={onSelect}
       className={className}

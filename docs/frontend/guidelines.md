@@ -227,6 +227,15 @@ shared UI copy through an addon bundle.
   fails fast on invalid declarations. Keep query-string codecs addon-local.
   `resourcePageRoutes` names record children `${collectionName}.record` by
   default; use `detailName` only when preserving a deliberate established name.
+- In-app anchors compose the [in-app link owner](../../packages/ui/src/lib/in-app-link.tsx),
+  mounted by `createApp`; plain clicks route automatically and provider-less links
+  stay native. Never pass `onNavigate` merely to call the router, or put a
+  query-bearing href in TanStack `to`; use `navigate({ href })` or the owner's
+  chrome href conversion.
+- [Breadcrumb history](../../packages/ui/src/chrome/Breadcrumb.tsx) lives in TanStack
+  location `state.trail`: console content links carry the current nested trail,
+  earlier crumbs truncate it, browser Back restores it, and chrome navigation
+  starts fresh. Menu destinations show no strip.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, containers, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/

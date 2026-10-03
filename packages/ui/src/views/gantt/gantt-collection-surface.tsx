@@ -199,13 +199,13 @@ export function GanttCollectionSurface<TRow extends Row>({
   const onDateChange = React.useCallback((date: Date) => resourceView.setAnchor(calendarDateToAnchor(date)), [resourceView.setAnchor]);
   const renderResourceContent = React.useCallback((resource: GanttResource) => {
     const details = projection.detailsByLane.get(resource.id);
-    return <GanttLane details={details ?? { title: resource.title }} onNavigate={(href) => void navigate({ to: href })} />;
-  }, [projection.detailsByLane, navigate]);
+    return <GanttLane details={details ?? { title: resource.title }} />;
+  }, [projection.detailsByLane]);
   const handleEventClick = React.useCallback((event: GanttEvent) => {
     const row = rows.find((candidate) => rowPublicId(candidate) === event.id);
     if (!row) return;
     if (onRowClick) onRowClick(row);
-    else if (rowHref) void navigate({ to: rowHref(row) });
+    else if (rowHref) void navigate({ href: rowHref(row) });
   }, [rows, onRowClick, rowHref, navigate]);
   return (
     <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className} error={list.error ?? projection.error} onRetry={refetch} loadingFooter={fetching}

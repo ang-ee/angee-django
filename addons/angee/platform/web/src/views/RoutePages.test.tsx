@@ -98,13 +98,6 @@ vi.mock("../lib/cells", () => ({
     href: (item: string) => string;
     items: readonly string[];
   }) => <>{items.map((item) => <a key={item} href={href(item)}>{item}</a>)}</>,
-  TextRouteLink: ({
-    children,
-    href,
-  }: {
-    children?: React.ReactNode;
-    href: string;
-  }) => <a href={href}>{children}</a>,
 }));
 
 vi.mock("./AddonCard", () => ({

@@ -12,11 +12,6 @@ const mocks = vi.hoisted(() => ({
   overview: { data: undefined as unknown, isFetching: false, error: null },
 }));
 
-vi.mock("@tanstack/react-router", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => mocks.navigate,
-}));
-
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => mocks.overview,
@@ -33,7 +28,7 @@ vi.mock("../SubjectControl", () => ({
   ),
 }));
 
-import { AppRuntimeProvider, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, InAppLinkProvider, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets } from "@angee/ui";
 
 import { OverviewPage } from "./OverviewPage";
 
@@ -112,7 +107,7 @@ describe("IAM overview page", () => {
     );
 
     fireEvent.click(users);
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/iam/users" });
+    expect(mocks.navigate).toHaveBeenCalledWith("/iam/users");
   });
 });
 
@@ -147,7 +142,7 @@ function renderPage(children: ReactNode): ReturnType<typeof render> {
       }}
     >
       <ToastProvider>
-        <ModalsHost>{children}</ModalsHost>
+        <ModalsHost><InAppLinkProvider navigate={mocks.navigate}>{children}</InAppLinkProvider></ModalsHost>
       </ToastProvider>
     </AppRuntimeProvider>,
   );

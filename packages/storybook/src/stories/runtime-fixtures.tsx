@@ -3,6 +3,7 @@ import {
   useMemo, type ComponentProps, type ReactNode } from "react";
 import {
   AppRuntimeProvider,
+  InAppLinkProvider,
   baseIcons,
   ConsoleLayout,
   defaultWidgets,
@@ -188,7 +189,7 @@ export function RoutedRuntimeFixture({
       show: `${collectionPath}/:${recordParam}`,
       meta: { label: resourceLabel },
     }] : undefined;
-    const root = createRootRoute({ component: () => <RuntimeFixture
+    const root = createRootRoute({ component: () => <InAppLinkProvider navigate={(href, options) => { void router.navigate({ href, ...options }); }}><RuntimeFixture
       activeSchema={activeSchema}
       schemas={schemas}
       runtime={runtime}
@@ -196,7 +197,7 @@ export function RoutedRuntimeFixture({
       routed
       syncWithLocation
       operationDocuments={operationDocuments}
-    ><Outlet /></RuntimeFixture> });
+    ><Outlet /></RuntimeFixture></InAppLinkProvider> });
     const collection = createRoute({
       getParentRoute: () => root,
       path: collectionPath,
@@ -206,7 +207,7 @@ export function RoutedRuntimeFixture({
       getParentRoute: () => collection,
       path: `$${recordParam}`,
     });
-    return createRouter({
+    const router = createRouter({
       routeTree: root.addChildren([collection.addChildren([record])]),
       history: createMemoryHistory({ initialEntries: [initialEntry] }),
       parseSearch: (value) => Object.fromEntries(new URLSearchParams(value)),
@@ -217,6 +218,7 @@ export function RoutedRuntimeFixture({
         return query ? `?${query}` : "";
       },
     });
+    return router;
   }, [activeSchema, children, collectionPath, initialEntry, operationDocuments, recordParam, resourceLabel, resourceName, runtime, schemas]);
   return <RouterProvider router={router} />;
 }

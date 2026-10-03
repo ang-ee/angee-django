@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useInAppLinkClick } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
@@ -18,18 +19,13 @@ export interface MetricTileValue {
   tone?: Tone;
   /** When set, the tile is a link to this href (rendered as an `<a>`). */
   href?: string;
-  /**
-   * Client-side navigation handler for `href` — called on a plain left-click so
-   * the consumer routes in-app (the tile keeps the real `href` for middle-click /
-   * open-in-new-tab). Omit for a normal full-navigation anchor.
-   */
-  onNavigate?: (href: string) => void;
 }
 
 export type MetricTileProps = Omit<
   React.HTMLAttributes<HTMLElement>,
   "className"
 > &
+  Pick<React.AnchorHTMLAttributes<HTMLAnchorElement>, "target" | "download" | "rel"> &
   MetricTileValue & {
     className?: string;
     density?: MetricDensity;
@@ -80,9 +76,10 @@ export const metricStripVariants = tv({
 
 export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
-    { className, density = "compact", detail, icon, label, value, tone, href, onNavigate, onClick, valueClassName, ...props },
+    { className, density = "compact", detail, icon, label, value, tone, href, onClick, valueClassName, ...props },
     ref,
   ) {
+    const handleClick = useInAppLinkClick(href, onClick);
     const styles = metricStripVariants({ density });
     const body = (
       <>
@@ -102,28 +99,11 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
     );
 
     if (href != null) {
-      const target = href;
-      function handleClick(event: React.MouseEvent<HTMLAnchorElement>): void {
-        onClick?.(event);
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey ||
-          !onNavigate
-        ) {
-          return;
-        }
-        event.preventDefault();
-        onNavigate(target);
-      }
       return (
         <Card asChild className={styles.tile({ className: cn(className, NAVIGABLE_TILE) })} density="sm">
           <a
             ref={ref as React.Ref<HTMLAnchorElement>}
-            href={target}
+            href={href}
             onClick={handleClick}
             {...props}
           >
