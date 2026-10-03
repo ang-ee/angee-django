@@ -208,7 +208,9 @@ export interface ComposeAddonsOptions {
 }
 
 /** Brand an object as an addon manifest, giving one greppable declaration site. */
-export function defineAddon(manifest: AddonManifest): AddonManifest {
+export function defineAddon<M extends AddonManifest["menus"] = undefined>(
+  manifest: Omit<AddonManifest, "menus"> & { menus?: M },
+): Omit<AddonManifest, "menus"> & { menus?: M } {
   return manifest;
 }
 

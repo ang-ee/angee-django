@@ -146,9 +146,12 @@ export interface BaseLayoutProvider extends Omit<LayoutProviderContribution, "co
  * goes through. The rendered analog of the SDK's headless `defineAddon`: it
  * type-checks the literal against {@link BaseAddon} (routes carrying React
  * components) and returns it unchanged, so addons `defineBaseAddon({...})`
- * instead of annotating `const x: BaseAddon = {...}`.
+ * instead of annotating `const x: BaseAddon = {...}`. The authored `menus` form
+ * (declaration list or dict) keeps its type for readers of the manifest.
  */
-export function defineBaseAddon(addon: BaseAddon): BaseAddon {
+export function defineBaseAddon<M extends BaseAddon["menus"] = undefined>(
+  addon: Omit<BaseAddon, "menus"> & { menus?: M },
+): Omit<BaseAddon, "menus"> & { menus?: M } {
   const routeDashboards = addon.routes
     ?.flatMap((route) => route.dashboard ? [route.dashboard] : []) ?? [];
   return {

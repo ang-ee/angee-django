@@ -131,6 +131,6 @@ describe("expectValidBaseAddon", () => {
     });
 
     expect(() => expectValidBaseAddon(addon)).not.toThrow();
-    expect(Array.isArray(addon.menus) && addon.menus[0]?.params).toEqual({ section: "shared" });
+    expect(addon.menus?.[0]?.params).toEqual({ section: "shared" });
   });
 });
