@@ -27,10 +27,10 @@ from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarr
 from angee.extraction.contracts import (
     CorrectionBinding,
     DocumentPart,
-    DocumentResult,
-    DocumentSource,
     ExtractionPartKind,
     PipelineError,
+    Result,
+    Source,
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
@@ -66,7 +66,7 @@ class ExtractionManager(EvidenceManager):
         if actor is None or not target.with_actor(actor).has_access("write"):
             raise PermissionDenied("Write access to the extraction target is required.")
 
-    def authorized_document_sources(self, extraction: Any, *, actor: Any) -> tuple[DocumentSource, ...]:
+    def authorized_document_sources(self, extraction: Any, *, actor: Any) -> tuple[Source, ...]:
         """Authorize retained inputs before disclosing their carriers to inference."""
         if actor is None or not (extraction).with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to retained evidence and its sources is required.")
@@ -80,8 +80,8 @@ class ExtractionManager(EvidenceManager):
     def retain_result(
         self,
         *,
-        sources: Sequence[DocumentSource],
-        result: DocumentResult,
+        sources: Sequence[Source],
+        result: Result,
         target: Any,
         actor: Any,
         profile: str,
@@ -439,7 +439,7 @@ class ExtractionManager(EvidenceManager):
         }
         outcome = values["outcome"]
         result = authority.preserve_authority(
-            DocumentResult(
+            Result(
                 values["result"], retained_parts, outcome["claims"], provider_metadata=outcome["document"]
             ),
             identity_mapping=mapping,

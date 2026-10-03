@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.extraction.contracts import DocumentResult
+from angee.extraction.contracts import Result
 from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
 from tests.extraction_models import Extraction
 
@@ -46,7 +46,7 @@ def test_inference_preserves_claimed_and_corrected_values_without_mutating_input
             }
         ],
     )
-    candidate = DocumentResult(
+    candidate = Result(
         {"documents": [{"title": "Changed", "extra": "Inferred", "lines": [{"text": "B"}, {"text": "Changed A"}]}]},
         (),
         {"/documents/0/title": [{"part_position": 1}], "/documents/0/note": [{"part_position": 1}]},
@@ -81,7 +81,7 @@ def test_missing_nested_authority_materializes_escaped_path_and_remaps_carrier()
         claims={"/documents/0/details/a~1b": [{"part_position": 3, "start": 0, "end": 1}]},
     )
     result = retained.preserve_authority(
-        DocumentResult({"documents": [{}]}, (), {}),
+        Result({"documents": [{}]}, (), {}),
         identity_mapping={"/documents/0": "document"},
         claim_part_positions={3: 0},
     )
@@ -96,7 +96,7 @@ def test_retired_identity_authority_is_not_copied_to_the_remaining_line():
         lines=("first", "second"),
         claims={"/documents/0/lines/0/text": [{"part_position": 0}]},
     )
-    candidate = DocumentResult({"documents": [{"lines": [{"text": "B"}]}]}, (), {})
+    candidate = Result({"documents": [{"lines": [{"text": "B"}]}]}, (), {})
     result = retained.preserve_authority(
         candidate,
         identity_mapping={"/documents/0": "document", "/documents/0/lines/0": "second"},
@@ -108,7 +108,7 @@ def test_retired_identity_authority_is_not_copied_to_the_remaining_line():
 def test_authority_requires_correspondence_and_cannot_cover_identity_containers():
     retained = authority(result={"documents": [{"title": "A"}]}, claims={"/documents/0/title": [{"part_position": 0}]})
     with pytest.raises(ValidationError, match="explicit identity correspondence"):
-        retained.preserve_authority(DocumentResult({"documents": [{"title": "B"}]}, (), {}), identity_mapping={})
+        retained.preserve_authority(Result({"documents": [{"title": "B"}]}, (), {}), identity_mapping={})
     retained.outcome = {"kind": "succeeded", "claims": {"/documents": [{"part_position": 0}]}}
     with pytest.raises(ValidationError, match="identity container"):
-        retained.preserve_authority(DocumentResult({"documents": []}, (), {}), identity_mapping={})
+        retained.preserve_authority(Result({"documents": []}, (), {}), identity_mapping={})

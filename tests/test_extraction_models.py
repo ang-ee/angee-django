@@ -24,9 +24,9 @@ from angee.base.refs import canonical_record_target
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
-    DocumentResult,
-    DocumentSource,
     ExtractionPartKind,
+    Result,
+    Source,
 )
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
@@ -88,7 +88,7 @@ def evidence(drive, monkeypatch):
     content = b"Note\nFirst line\nSecond line"
     with actor_context(drive.alice):
         source = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
-    document_source = DocumentSource(0, source.content_hash, "text/plain", content, file=source)
+    document_source = Source(0, source.content_hash, "text/plain", content, file=source)
     part = DocumentPart(
         0,
         0,
@@ -98,7 +98,7 @@ def evidence(drive, monkeypatch):
         "native",
         source.content_hash,
     )
-    result = DocumentResult(
+    result = Result(
         value={
             "documents": [
                 {
@@ -222,7 +222,7 @@ def test_file_extraction_rejects_sources_outside_its_target(evidence):
     retain, values = evidence
     other = File.objects.ingest_bytes(b"Another note", filename="other.txt", drive_id=str(values["target"].drive.sqid))
     original = values["sources"][0]
-    additional = DocumentSource(1, other.content_hash, "text/plain", b"Another note", file=other)
+    additional = Source(1, other.content_hash, "text/plain", b"Another note", file=other)
     with pytest.raises(ValidationError, match="belongs to the extraction target"):
         retain(sources=(original, additional))
 

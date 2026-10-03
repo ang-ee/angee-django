@@ -24,15 +24,6 @@ class SourceRef:
 
 
 @dataclass(frozen=True, slots=True)
-class PageRef:
-    """One source page and the carriers acquired from it."""
-
-    source: SourceRef
-    page: int
-    carrier_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class LineRef:
     """Stable line identity and its current result pointer."""
 
@@ -241,9 +232,3 @@ class PipelineError(RuntimeError):
         self.code = code
         self.metadata = dict(metadata or {})
         self.usage_delta = dict(usage_delta or {})
-
-
-# Historical consumer imports name the same contracts, not parallel types.
-DocumentSource = Source
-DocumentResult = Result
-DocumentPipelineError = PipelineError
