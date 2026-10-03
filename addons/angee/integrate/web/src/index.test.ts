@@ -1,8 +1,8 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import {
-  formViewRecordActionsSlot,
-  formViewSectionsSlot,
   MenuTree,
+  resolveContainer,
   type BaseMenuItem,
   type ChromeMenuItem,
 } from "@angee/ui";
@@ -10,6 +10,12 @@ import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
 import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
+import { INTEGRATION_STREAMS_TAB_ID } from "./IntegrationStreams";
+
+const composed = composeAddons([integrate], { canonicalModelLabel: (model) => model }).containers;
+/** The child ids one form container resolves for a subtype record. */
+const childIds = (address: string, models: readonly string[]) =>
+  resolveContainer(composed, address, { models }).map((child) => child.id);
 
 describe("integrate addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -159,41 +165,37 @@ describe("integrate addon manifest", () => {
   });
 
   test("contributes its lifecycle verbs against the MTI parent every subtype inherits", () => {
-    // Contributed against `integrate.Integration` rather than globally, so each
-    // subtype's form inherits them through its canonical label and a subtype can
-    // specialize one by id without this addon naming the subtype.
-    const integrationSlot = formViewRecordActionsSlot(INTEGRATION_MODEL);
-    const recordActions = (integrate.slots ?? []).filter(
-      (entry) =>
-        entry.slot === integrationSlot.slot
-        && entry.model === integrationSlot.model
-        && entry.impl === integrationSlot.impl,
-    );
-
-    expect(recordActions.map((entry) => entry.id)).toEqual([
+    // Declared at `integrate.Integration#…` rather than at the kind, so each
+    // subtype's form inherits them through its canonical label, and a bridge
+    // specializes one with a `variant` without this addon naming the subtype.
+    const subtype = [INTEGRATION_MODEL, "messaging.Channel"];
+    expect(childIds("form#actions", subtype)).toEqual([
       "integrate.lifecycle.pause",
       "integrate.lifecycle.resume",
+    ]);
+    expect(childIds("form#actions-menu", subtype)).toEqual([
       "integrate.lifecycle.disconnect",
       "integrate.connection.test",
     ]);
+    // An unrelated model's form gets none of them.
+    expect(childIds("form#actions", ["notes.Note"])).toEqual([]);
   });
 
   test("ships no Connect verb — a handshake belongs to the addon that owns the vendor", () => {
     // `mark_integration_connected` is a credential-free flag flip, correct only
     // as the inverse of a pause. Contributing it as Connect shadowed the real
     // OAuth/CardDAV/WhatsApp handshakes, so it backs Resume and nothing else.
-    const ids = (integrate.slots ?? []).map((entry) => entry.id);
+    const ids = ["form#actions", "form#actions-menu"].flatMap((address) => childIds(address, [INTEGRATION_MODEL]));
     expect(ids).not.toContain("integrate.lifecycle.connect");
     expect(integrate.i18n?.integrate?.["lifecycle.connect"]).toBeUndefined();
   });
 
   test("contributes one Streams section to the Integration parent without a new route", () => {
-    const target = formViewSectionsSlot(INTEGRATION_MODEL);
-    const sections = (integrate.slots ?? []).filter((entry) => entry.slot === target.slot);
+    const sections = resolveContainer(composed, "form#sections", { models: [INTEGRATION_MODEL, "messaging.Channel"] });
 
-    expect(sections).toHaveLength(1);
-    expect(sections[0]).toMatchObject(target);
-    expect(sections[0]?.impl).toBeUndefined();
+    expect(sections.map(({ id, address, impl }) => ({ id, address, impl }))).toEqual([
+      { id: INTEGRATION_STREAMS_TAB_ID, address: `${INTEGRATION_MODEL}#sections`, impl: undefined },
+    ]);
     expect((integrate.routes ?? []).some((route) => /stream|discrepancy|record-link/.test(route.name)))
       .toBe(false);
     expect(integrate.widgets?.["angee.integrate.integrationSyncCursor"]).toBeDefined();

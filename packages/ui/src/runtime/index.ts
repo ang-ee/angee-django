@@ -1,5 +1,5 @@
 // The rendered binding's runtime contracts. The DAG owner of the app-runtime
-// registry (`AppRuntime` + its `useWidget`/`useSlot`/`usePreviews`/`useT` lookups),
+// registry (`AppRuntime` + its `useWidget`/`useContainer`/`usePreviews`/`useT` lookups),
 // the context factory (`makeContext`), and the contribution contracts the render
 // surfaces consume (menus, slots, previews, widgets, forms). `@angee/app` mounts
 // the provider and builds addon manifests against these contracts.
@@ -13,6 +13,8 @@ export {
 export {
   EMPTY_CONTAINERS,
   containerName,
+  containersFromChildren,
+  useDrawers,
   resolveContainer,
   useContainer,
   type ComposedContainerChild,
@@ -27,6 +29,8 @@ export {
   type ContainersDeclaration,
   type CoreContainer,
   type ResolveContainerOptions,
+  type ResourceViewKindContent,
+  type DockedDrawerContent,
 } from "./containers";
 export {
   applyDeveloperModeSearch,
@@ -53,10 +57,7 @@ export {
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
   readRuntimeRouteShortcuts,
-  useSlot,
-  useModelSlot,
   usePreviews,
-  useDrawers,
   useChatterRoutes,
   useT,
   useNamespaceT,
@@ -90,11 +91,11 @@ export {
   type RouteHrefSearchValue,
   type RuntimeRouteDescriptor,
 } from "./route-href";
-export { isModelScopedSlot, type RuntimeFormRegistration } from "./contracts";
+export { type RuntimeFormRegistration } from "./contracts";
 export type {
   AppVocabulary,
   RuntimeVocabulary,
-  ChatterContribution,
+  ChatterTabContent,
   ChatterRoute,
   ChatterView,
   ChatterViewContext,
@@ -103,12 +104,10 @@ export type {
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
-  ModelSlotTarget,
   PreviewContribution,
   HiddenMenuItem,
   RemovedMenuItem,
   RuntimeBrand,
   RuntimeComposition,
-  SlotContribution,
   WidgetMap,
 } from "./contracts";

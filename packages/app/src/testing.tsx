@@ -142,14 +142,17 @@ export function expectValidBaseAddon(
       throw new Error(`Addon "${addon.id}" icon "${iconName}" must be kebab-case.`);
     }
   }
-  for (const chatter of addon.chatter ?? []) {
-    if (chatter.icon) {
-      assertValidIconName(addon.id, `chatter "${chatter.id}"`, chatter.icon);
+  const asides = Object.entries((addon.containers ?? {}) as Record<string, Record<string, { content?: { icon?: string } }> | undefined>)
+    .filter(([address]) => address.endsWith("#aside"));
+  for (const [, tabs] of asides) {
+    for (const [id, tab] of Object.entries(tabs ?? {})) {
+      if (tab.content?.icon) assertValidIconName(addon.id, `chatter "${id}"`, tab.content.icon);
     }
   }
-  for (const drawer of addon.drawers ?? []) {
-    if (drawer.icon) {
-      assertValidIconName(addon.id, `drawer "${drawer.id}"`, drawer.icon);
+  for (const edge of ["right", "bottom"] as const) {
+    const drawers = (addon.containers as Record<string, Record<string, { content?: { icon?: string } }> | undefined> | undefined)?.[`shell#drawers-${edge}`];
+    for (const [id, drawer] of Object.entries(drawers ?? {})) {
+      if (drawer.content?.icon) assertValidIconName(addon.id, `drawer "${id}"`, drawer.content.icon);
     }
   }
 }

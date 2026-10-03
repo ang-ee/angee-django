@@ -1,5 +1,4 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { CalendarClock, History, Inbox, Radar, Share2 } from "lucide-react";
@@ -55,43 +54,46 @@ const nexus = defineBaseAddon({
   i18n: { nexus: enNexusMessages },
   // The cross-channel timeline rides the record chatter seam; the shell applies
   // each canonical model and record predicate before rendering the contribution.
-  chatter: [
-    {
-      id: "timeline",
-      sequence: 30,
-      model: "parties.Party",
-      when: (context) => context.view.kind === "record",
-      label: "Timeline",
-      icon: "timeline",
-      render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
+  containers: {
+    "parties.overview#items": {
+      "nexus.relationship-health": { sequence: 20, content: <NexusOverviewContribution /> },
     },
-    {
-      id: "network",
-      sequence: 31,
-      model: "parties.Party",
-      when: (context) => context.view.kind === "record",
-      label: "Network",
-      icon: "network",
-      render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
+    "parties.Party#aside": {
+      "nexus.timeline": {
+        sequence: 30,
+        content: {
+          label: "Timeline",
+          icon: "timeline",
+          aliases: ["timeline"],
+          when: (context) => context.view.kind === "record",
+          render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
+        },
+      },
+      "nexus.network": {
+        sequence: 31,
+        content: {
+          label: "Network",
+          icon: "network",
+          aliases: ["network"],
+          when: (context) => context.view.kind === "record",
+          render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
+        },
+      },
     },
-    {
-      id: "feed",
-      sequence: 32,
-      model: "parties.Circle",
-      when: (context) => context.view.kind === "record",
-      label: "Feed",
-      icon: "timeline",
-      render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
+    "parties.Circle#aside": {
+      "nexus.feed": {
+        sequence: 32,
+        content: {
+          label: "Feed",
+          icon: "timeline",
+          aliases: ["feed"],
+          when: (context) => context.view.kind === "record",
+          render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
+        },
+      },
     },
-  ],
-  slots: [
-    {
-      slot: PARTIES_OVERVIEW_SLOT,
-      id: "nexus.relationship-health",
-      sequence: 20,
-      content: <NexusOverviewContribution />,
-    },
-  ],
+  },
+
 });
 
 export default nexus;

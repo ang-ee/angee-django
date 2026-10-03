@@ -1,6 +1,6 @@
 export { barVariants, type BarRecipeProps } from "./bar";
 export { AppBootSkeleton } from "./AppBootSkeleton";
-export { CONSOLE_NOTICE_SLOT, ConsoleLayout, type ConsoleLayoutProps } from "./ConsoleLayout";
+export { ConsoleLayout, type ConsoleLayoutProps } from "./ConsoleLayout";
 export {
   ControlBand,
   ControlBandProvider,

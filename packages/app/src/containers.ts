@@ -17,12 +17,12 @@ export interface ContainerLayer extends Layer {
 }
 
 const FRAMEWORK = "framework";
-const ENTRY_KEYS: ReadonlySet<string> = new Set(["only", "except", "when", "unique"]);
-const CHILD_KEYS: ReadonlySet<string> = new Set(["content", "sequence", "before", "after", "permission", "requiredFields", "variant", "key"]);
+const ENTRY_KEYS: ReadonlySet<string> = new Set(["only", "except", "when", "unique", "models"]);
+const CHILD_KEYS: ReadonlySet<string> = new Set(["content", "sequence", "before", "after", "permission", "requiredFields", "impl", "variant", "key"]);
 const ALTERATION_KEYS: ReadonlySet<string> = new Set(["sequence", "before", "after", "remove", "hide"]);
 const CONDITION_KEYS: ReadonlySet<string> = new Set(["app", "route", "perspective"]);
 
-type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; when?: ContainerCondition; unique?: "key" };
+type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; when?: ContainerCondition; unique?: "key"; models?: true };
 
 interface Child extends ComposedContainerChild {
   setBy: Record<string, string>;
@@ -92,11 +92,25 @@ export function compileContainers(
       if (modelKinds.has(name) || !owns(layer.id, node)) continue;
       const known = declared[address];
       if (known && known.owner !== layer.id) throw new Error(`Container "${address}" is declared by "${known.owner}" and "${layer.id}".`);
-      declared[address] = { owner: layer.id, models: false, ...(entry.unique ? { unique: entry.unique } : known?.unique ? { unique: known.unique } : {}) };
+      const models = entry.models === true || known?.models === true;
+      declared[address] = { owner: layer.id, models, ...(entry.unique ? { unique: entry.unique } : known?.unique ? { unique: known.unique } : {}) };
+      if (models) {
+        const kind = modelKinds.get(name);
+        if (kind && kind !== address) throw new Error(`Container name "#${name}" belongs to two kinds.`);
+        modelKinds.set(name, address);
+      }
     }
   }
 
   const children = new Map<string, Child>();
+  for (const container of core) {
+    for (const [id, child] of Object.entries(container.children ?? {})) {
+      children.set(`${container.address}/${id}`, {
+        ...child, id, owner: FRAMEWORK, address: container.address,
+        setBy: Object.fromEntries(Object.keys(child).map((field) => [field, FRAMEWORK])),
+      });
+    }
+  }
   const rules = new Map<string, ContainerRule[]>();
   const removed: ComposedContainers["removed"][number][] = [];
   const pending: { layer: string; address: string; id: string; alteration: ContainerAlteration; when?: ContainerCondition }[] = [];
@@ -107,8 +121,8 @@ export function compileContainers(
     for (const [rawAddress, entry] of entriesOf(layer)) {
       const address = resolveAddress(layer.id, rawAddress);
       validateEntry(layer.id, rawAddress, entry);
-      if (entry.unique !== undefined && declared[address]?.owner !== layer.id) {
-        throw new Error(`Addon "${layer.id}" sets unique on container "${rawAddress}" it does not own.`);
+      if ((entry.unique !== undefined || entry.models !== undefined) && declared[address]?.owner !== layer.id) {
+        throw new Error(`Addon "${layer.id}" sets unique or models on container "${rawAddress}" it does not own.`);
       }
       if (entry.only || entry.except) pendingRules.push({ layer: layer.id, address, entry });
       for (const [id, value] of Object.entries(entry)) {
@@ -162,11 +176,13 @@ export function compileContainers(
 
   for (const { layer, address, id, alteration, when } of pending) {
     const child = findChild(layer, address, id);
-    assertMayAlter(ancestors, layer, child.owner, `child "${id}" of container "${address}"`);
+    // The framework's own children are every addon's to adjust, as its containers are.
+    if (child.owner !== FRAMEWORK) assertMayAlter(ancestors, layer, child.owner, `child "${id}" of container "${address}"`);
     for (const field of ["sequence", "before", "after"] as const) {
       if (alteration[field] === undefined) continue;
       if (child.address !== address) throw new Error(`Addon "${layer}" positions child "${id}" at "${address}"; position it at "${child.address}".`);
-      if (overridesField(ancestors, child.setBy[field], layer, `child "${id}" of "${address}" ${field}`)) {
+      const previous = child.setBy[field] === FRAMEWORK ? undefined : child.setBy[field];
+      if (overridesField(ancestors, previous, layer, `child "${id}" of "${address}" ${field}`)) {
         (child as unknown as Record<string, unknown>)[field] = alteration[field];
         child.setBy[field] = layer;
       }
@@ -242,6 +258,7 @@ function validateEntry(layer: string, address: string, entry: Entry): void {
     }
   }
   if (entry.unique !== undefined && entry.unique !== "key") throw new Error(`${where}: unique must be "key".`);
+  if (entry.models !== undefined && entry.models !== true) throw new Error(`${where}: models must be true.`);
   if (entry.when !== undefined) {
     if (typeof entry.when !== "object" || entry.when === null) throw new Error(`${where}: when must be a mapping.`);
     for (const key of Object.keys(entry.when)) {

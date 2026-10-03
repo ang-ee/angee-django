@@ -13,10 +13,9 @@ import { useActionMutation, useAuthoredQuery, useStableArray } from "@angee/refi
 import {
   ManageAccessDialog,
   FormView,
-  useSlot,
   useActionResultRun,
   useRecordChromeContext,
-  useModelSlot,
+  useContainer,
   useResourceViewUtilityContext,
   useUiT,
   type ManageAccessDialogProps,
@@ -36,6 +35,15 @@ export interface AccessRoleState {
   people: readonly AccessPerson[];
   add: (subject: string) => Promise<boolean>;
   remove: (person: AccessPerson) => Promise<void>;
+}
+
+declare module "@angee/ui/runtime" {
+  interface ContainerKinds {
+    /** A model's access-role owner, mounted headless to register its role (`<model>#access-roles`). */
+    "access-roles": React.ComponentType<AccessRoleOwnerProps>;
+    /** A model's visibility owner, mounted headless (`<model>#access-visibility`). */
+    "access-visibility": React.ComponentType<AccessRoleOwnerProps>;
+  }
 }
 
 export interface AccessRoleOwnerProps {
@@ -78,8 +86,9 @@ export function ShareRecordChrome(): React.ReactElement | null {
   const listed = useModelMetadata(record.resource);
   const canonical = useModelMetadata(listed?.resource.canonicalLabel ?? record.resource);
   const model = listed?.resource.grantable?.length ? listed : canonical;
-  const roles = useModelSlot({ slot: "access.roles", model: model?.resource.modelLabel ?? record.resource });
-  const visibility = useModelSlot({ slot: "access.visibility", model: model?.resource.modelLabel ?? record.resource });
+  const accessModels = React.useMemo(() => [model?.resource.modelLabel ?? record.resource], [model?.resource.modelLabel, record.resource]);
+  const roles = useContainer("iam#access-roles", { models: accessModels });
+  const visibility = useContainer("iam#access-visibility", { models: accessModels });
   if (!mayShowShare(record.record, model?.resource, [...roles, ...visibility])) return null;
   return <ShareAccess
     resource={record.resource}
@@ -94,8 +103,9 @@ export function ShareAccessCompact(): React.ReactElement | null {
   const listed = useModelMetadata(record.resource);
   const canonical = useModelMetadata(listed?.resource.canonicalLabel ?? record.resource);
   const model = listed?.resource.grantable?.length ? listed : canonical;
-  const roles = useModelSlot({ slot: "access.roles", model: model?.resource.modelLabel ?? record.resource });
-  const visibility = useModelSlot({ slot: "access.visibility", model: model?.resource.modelLabel ?? record.resource });
+  const accessModels = React.useMemo(() => [model?.resource.modelLabel ?? record.resource], [model?.resource.modelLabel, record.resource]);
+  const roles = useContainer("iam#access-roles", { models: accessModels });
+  const visibility = useContainer("iam#access-visibility", { models: accessModels });
   if (!mayShowShare(record.record, model?.resource, [...roles, ...visibility])) return null;
   return <ShareAccess resource={record.resource} targetIds={[record.recordId]}
     record={record.record} compact />;
@@ -138,8 +148,9 @@ export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccess
     ? resource
     : listedModel?.resource.canonicalLabel ?? resource;
   const model = useModelMetadata(accessResource);
-  const roleEntries = useModelSlot({ slot: "access.roles", model: accessResource });
-  const visibilityEntries = useModelSlot({ slot: "access.visibility", model: accessResource });
+  const accessModels = React.useMemo(() => [accessResource], [accessResource]);
+  const roleEntries = useContainer("iam#access-roles", { models: accessModels });
+  const visibilityEntries = useContainer("iam#access-visibility", { models: accessModels });
   if (!model?.resource.resourceType ||
     (!model.resource.grantable?.length && !roleEntries.length && !visibilityEntries.length)) return null;
   return <BoundShareAccess
@@ -154,8 +165,8 @@ export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccess
 
 function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, open, onOpenChange, trigger, compact, roleEntries, visibilityEntries }: Omit<ShareAccessDialogProps, "resource"> & {
   resource: DataResourceMetadata;
-  roleEntries: ReturnType<typeof useModelSlot>;
-  visibilityEntries: ReturnType<typeof useModelSlot>;
+  roleEntries: ReturnType<typeof useContainer>;
+  visibilityEntries: ReturnType<typeof useContainer>;
 }): React.ReactElement {
   const t = useUiT();
   const [roleStates, setRoleStates] = React.useState<Record<string, AccessRoleState>>({});
@@ -189,7 +200,6 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
     roleStates[id]?.add(subject) ?? Promise.resolve(false), [roleStates]);
   const onRemovePerson = React.useCallback((person: AccessPerson) =>
     person.roleId ? roleStates[person.roleId]?.remove(person) ?? Promise.resolve() : Promise.resolve(), [roleStates]);
-  const directShare = useSlot("access.direct").some((entry) => entry.id === "iam.direct");
   const stableTargetIds = useStableArray(targetIds);
   const invalidates = useResourceInvalidates([resource.modelLabel]);
   const query = useAuthoredQuery(RecordAccessDocument, {
@@ -294,13 +304,13 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
     {...(trigger === undefined ? {} : { trigger })}
     {...(label === undefined ? {} : { label })}
     targetIds={stableTargetIds}
-    grantable={directShare ? availableRelations : []}
+    grantable={availableRelations}
     entries={entries}
     people={people}
     peopleLoaded={readers.data?.record_readers !== undefined}
     roles={roles}
     visibility={visibility}
-    directShare={directShare}
+    directShare
     onAddRole={onAddRole}
     onRemovePerson={onRemovePerson}
     fetching={query.isFetching || readers.isFetching}

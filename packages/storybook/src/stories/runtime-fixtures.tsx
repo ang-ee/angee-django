@@ -143,7 +143,7 @@ export function RuntimeFixture({
       >
         <OperationDocumentsProvider documents={operationDocuments}><ActiveGraphQLSchemaProvider schema={activeSchema}>
           <ModelMetadataProvider metadata={fieldMetadata}>
-            <RuntimeRegistryFixture runtime={{ slots: [], ...runtime }}>
+            <RuntimeRegistryFixture runtime={runtime}>
               {children}
             </RuntimeRegistryFixture>
           </ModelMetadataProvider>

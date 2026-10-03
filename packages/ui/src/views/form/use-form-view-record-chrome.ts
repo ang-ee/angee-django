@@ -1,21 +1,13 @@
 import * as React from "react";
 import {
-  holdsPermission,
   rowPublicId,
   type DataResourceMetadata,
   type Row,
 } from "@angee/metadata";
 
-import {
-  useModelSlot,
-  type ModelSlotTarget,
-  type SlotContribution,
-} from "../../runtime";
+import { useContainer, type ComposedContainerChild } from "../../runtime";
 import { optionToken } from "../../widgets/types";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
-import {
-  formViewRecordActionsSlot,
-} from "./form-view-slots";
 
 export interface UseFormViewRecordChromeProps {
   dataResource: DataResourceMetadata | null;
@@ -30,10 +22,14 @@ export interface UseFormViewRecordChromeProps {
 
 export interface FormViewRecordChromeSurface {
   recordChromeContext: RecordChromeContext | null;
-  recordActions: readonly SlotContribution[];
+  /** The record verbs for the toolbar (`#actions`) and the overflow menu (`#actions-menu`). */
+  recordActions: {
+    primary: readonly ComposedContainerChild[];
+    menu: readonly ComposedContainerChild[];
+  };
 }
 
-/** Resolve passive chrome and increasingly-specific record-action slots. */
+/** Resolve passive chrome and the record verbs, with this row's variants and permissions applied. */
 export function useFormViewRecordChrome({
   dataResource,
   modelLabel,
@@ -59,27 +55,20 @@ export function useFormViewRecordChrome({
           },
     [actionsBlocked, canonicalResource, dataResource, formReadOnly, id, isCreate, modelLabel, record],
   );
-  const recordActionTargets = React.useMemo<readonly ModelSlotTarget[]>(() => {
-    const targets = [formViewRecordActionsSlot(canonicalResource)];
-    if (canonicalResource !== modelLabel) {
-      targets.push(formViewRecordActionsSlot(modelLabel));
-    }
-    for (const field of dataResource?.implFields ?? []) {
+  const models = React.useMemo(
+    () => [...new Set([canonicalResource, modelLabel])].filter(Boolean),
+    [canonicalResource, modelLabel],
+  );
+  // The row's ImplClassField values select the bridges' variants of a verb.
+  const impls = React.useMemo(
+    () => (dataResource?.implFields ?? []).flatMap((field) => {
       const impl = optionToken(record?.[field]);
-      if (impl) targets.push(formViewRecordActionsSlot(modelLabel, impl));
-    }
-    return targets;
-  }, [canonicalResource, dataResource, modelLabel, record]);
-  const recordActionEntries = useModelSlot(recordActionTargets);
-  const recordActions = React.useMemo(() => {
-    const byId = new Map<string, SlotContribution>();
-    for (const entry of recordActionEntries) {
-      if (!entry.permission || holdsPermission(record, entry.permission)) byId.set(entry.id, entry);
-    }
-    return [...byId.values()].sort(
-      (left, right) => (left.sequence ?? 0) - (right.sequence ?? 0),
-    );
-  }, [record, recordActionEntries]);
-
+      return impl ? [impl] : [];
+    }),
+    [dataResource, record],
+  );
+  const primary = useContainer("form#actions", { models, row: record, impls });
+  const menu = useContainer("form#actions-menu", { models, row: record, impls });
+  const recordActions = React.useMemo(() => ({ primary, menu }), [menu, primary]);
   return { recordChromeContext, recordActions };
 }

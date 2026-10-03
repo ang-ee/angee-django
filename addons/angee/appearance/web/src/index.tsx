@@ -1,11 +1,10 @@
 import { defineBaseAddon } from "@angee/app";
-import { USER_MENU_ITEMS_SLOT, DropdownMenu, Glyph } from "@angee/ui";
+import { DropdownMenu, Glyph } from "@angee/ui";
 import { lazyRouteComponent, useNavigate } from "@tanstack/react-router";
 import { createElement } from "react";
 import { Palette } from "lucide-react";
 import { enAppearanceMessages } from "./i18n";
 
-export const APPEARANCE_TOOLS_SLOT = "appearance.settings.tools";
 
 function AppearanceMenuItem() {
   const navigate = useNavigate();
@@ -20,5 +19,8 @@ export default defineBaseAddon({
   menus: [{ id: "appearance", label: "Appearance", icon: "appearance", group: "platform", route: "appearance.settings" }],
   i18n: { appearance: enAppearanceMessages },
   icons: { appearance: Palette },
-  slots: [{ slot: USER_MENU_ITEMS_SLOT, id: "appearance.settings", content: createElement(AppearanceMenuItem) }],
+  containers: {
+    "shell#user-menu": { "appearance.settings": { content: createElement(AppearanceMenuItem) } },
+    "appearance.settings#tools": {},
+  },
 });

@@ -35,7 +35,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Form: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
   Group: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   List: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
-  SlotOutlet: ({ entries }: { entries: readonly { id: string; content: unknown }[] }) => {
+  ContainerOutlet: ({ entries }: { entries: readonly { id: string; content: unknown }[] }) => {
     return <div>{entries.map((entry) => <span key={entry.id}>{String(entry.content)}</span>)}</div>;
   },
   ResourceList: (props: Record<string, unknown>) => {

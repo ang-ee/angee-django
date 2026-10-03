@@ -1,7 +1,6 @@
 import { isMenuDeclarationList, type BaseAddon } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 /** Assert the navigation/connect contract shared by every channel bridge addon. */
 export function expectValidChannelBridgeAddon(addon: BaseAddon): void {
@@ -20,13 +19,10 @@ export function expectValidChannelBridgeAddon(addon: BaseAddon): void {
       `Channel bridge "${addon.id}" must target the shared messaging channels menu.`,
     );
   }
-  const connect = addon.slots?.[0];
-  if (
-    connect?.slot !== MESSAGING_CHANNEL_TOOLBAR_SLOT
-    || connect.id !== `${addon.id}.connect`
-  ) {
+  const toolbar = (addon.containers as Record<string, Record<string, unknown> | undefined> | undefined)?.["messaging.channels#toolbar"];
+  if (!toolbar || !(`${addon.id}.connect` in toolbar)) {
     throw new Error(
-      `Channel bridge "${addon.id}" must lead with its shared channel-toolbar connect action.`,
+      `Channel bridge "${addon.id}" must contribute its connect action to the channels toolbar.`,
     );
   }
 }

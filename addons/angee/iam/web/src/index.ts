@@ -1,6 +1,5 @@
-import { AUTH_LOGIN_METHOD_SLOT } from "@angee/app/auth";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { FORM_VIEW_RECORD_CHROME_SLOT, RESOURCE_VIEW_UTILITIES_SLOT, formViewSectionsSlot, formViewRecordActionsSlot, type BaseMenuItem } from "@angee/ui";
+import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { createElement } from "react";
 
@@ -90,25 +89,34 @@ const iam = defineBaseAddon({
   ],
   menus: identityMenu,
   i18n: { iam: enIamMessages },
-  slots: [
-    { slot: "access.direct", id: "iam.direct", content: null },
-    { ...formViewRecordActionsSlot("iam.User"), id: "iam.issue-password", recordActionPlacement: "menu", requiredFields: ["can_issue_password"], content: createElement(IssuePasswordRecordAction) },
-    { slot: FORM_VIEW_RECORD_CHROME_SLOT, id: "iam.share-record", sequence: 20, content: createElement(ShareRecordChrome) },
-    { slot: RESOURCE_VIEW_UTILITIES_SLOT, id: "iam.share-list", sequence: 20, content: createElement(ShareListChrome) },
-    {
-      slot: AUTH_LOGIN_METHOD_SLOT,
-      id: "iam.oauth-login",
-      content: createElement(OAuthLoginMethods),
+  containers: {
+    // A model's access owners register their roles and visibility for the Share panel.
+    "iam#access-roles": { models: true },
+    "iam#access-visibility": { models: true },
+    "auth.login#method": {
+      "iam.oauth-login": { content: createElement(OAuthLoginMethods) },
     },
-    {
-      // OIDC login lives on the OAuth client itself; this contributes the OIDC tab
-      // into integrate's OAuth-client form, gated to the OIDC provider types this
-      // addon owns. No separate OIDC page/model — it's the same OAuthClient row.
-      ...formViewSectionsSlot("integrate.OAuthClient"),
-      id: "iam.oidc-login",
-      content: oidcLoginSection,
+    "iam.User#actions-menu": {
+      "iam.issue-password": {
+        requiredFields: ["can_issue_password"],
+        content: createElement(IssuePasswordRecordAction),
+      },
     },
-  ],
+    "resource#utilities": {
+      "iam.share-list": { sequence: 20, content: createElement(ShareListChrome) },
+    },
+    "form#chrome": {
+      "iam.share-record": { sequence: 20, content: createElement(ShareRecordChrome) },
+    },
+    "integrate.OAuthClient#sections": {
+      "iam.oidc-login": {
+        // OIDC login lives on the OAuth client itself; this contributes the OIDC tab
+        // into integrate's OAuth-client form, gated to the OIDC provider types this
+        // addon owns. No separate OIDC page/model — it's the same OAuthClient row.
+        content: oidcLoginSection,
+      },
+    },
+  },
 });
 
 export default iam;

@@ -10,21 +10,6 @@ import type { ResourceVocabulary } from "@angee/metadata";
 
 import type { RouteHrefParams } from "./route-href";
 
-export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
-export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
-export const FORM_VIEW_RAIL_SLOT = "form-view.rail";
-
-const MODEL_SCOPED_SLOTS: ReadonlySet<string> = new Set([
-  FORM_VIEW_RECORD_ACTIONS_SLOT,
-  FORM_VIEW_SECTIONS_SLOT,
-  FORM_VIEW_RAIL_SLOT,
-]);
-
-/** Whether every contribution to this slot must carry a canonical model. */
-export function isModelScopedSlot(slot: string): boolean {
-  return MODEL_SCOPED_SLOTS.has(slot);
-}
-
 /** Product identity declared once by an addon; mark names a registered glyph. */
 export interface RuntimeBrand {
   name: string;
@@ -168,12 +153,11 @@ export interface ChatterViewContext {
   view: ChatterView;
 }
 
-/** A chatter aside tab; unique by `(model?, id)` and ordered by `sequence`. */
-export interface ChatterContribution {
-  id: string;
-  sequence?: number;
-  /** Canonical model scope; the app normalizes authored spellings at composition. */
-  model?: string;
+/**
+ * A chatter aside tab: a child of `record#aside` (every record view) or
+ * `<model>#aside` (that model's pages), ordered by its `sequence`.
+ */
+export interface ChatterTabContent {
   /** Additional declarative scope evaluated by the shell before counts or rendering. */
   when?: (context: ChatterViewContext) => boolean;
   label?: ReactNode;
@@ -182,34 +166,8 @@ export interface ChatterContribution {
   useCount?: (context: ChatterViewContext) => number | undefined;
   panelClassName?: string;
   render?: (context: ChatterViewContext) => ReactNode;
-}
-
-/** A model-scoped slot address. The app canonicalizes `model` at composition. */
-export interface ModelSlotTarget {
-  slot: string;
-  model: string;
-  /** Optional `ImplClassField` key for a model+implementation specialization. */
-  impl?: string;
-}
-
-/**
- * A contribution into a UI slot another addon owns. Model-scoped slots carry
- * their model and optional impl as typed fields; no composer parses a rendered
- * surface's private string key. Merges by `(slot, model?, impl?, id)`.
- */
-export interface SlotContribution {
-  slot: string;
-  model?: string;
-  impl?: string;
-  id: string;
-  /** Projected record permission required to render this contribution. */
-  permission?: string;
-  sequence?: number;
-  /** Toolbar placement for content in the form-view record-actions slot. */
-  recordActionPlacement?: "primary" | "menu";
-  /** Readable fields a saved-record contribution consumes from RecordChromeContext.record. */
-  requiredFields?: readonly string[];
-  content?: unknown;
+  /** Earlier ids a `?aside=` link may still carry, kept for one release. */
+  aliases?: readonly string[];
 }
 
 /**

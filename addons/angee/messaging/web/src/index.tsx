@@ -1,9 +1,8 @@
 export { messageFeedRows, messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";
 import { type BaseMenuItem } from "@angee/ui";
-import type { ChatterContribution, ChatterViewContext } from "@angee/ui/runtime";
+import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
@@ -21,7 +20,6 @@ import {
   RecordThreadUnreadCountDocument,
 } from "./documents";
 
-export { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export { CHANNEL_MODEL, LogRecordActivityDocument } from "./documents";
 export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
 export {
@@ -90,12 +88,16 @@ export interface MessagingAddonOptions {
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
 }
 
-/** The shared Comments tab, configurable without constructing another addon. */
-export function recordCommentsContribution({ id = "comments", submitKey = "enter" }: MessagingAddonOptions & { id?: string } = {}): ChatterContribution {
+/** The shared Comments tab, for an addon's `record#aside` or `<model>#aside`, configurable without another addon. */
+export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAddonOptions & { aliases?: readonly string[] } = {}): ContainerChild<ChatterTabContent> {
   return {
-    id, sequence: 10, label: "Comments", icon: "comments",
-    useCount: useRecordCommentsUnread,
-    render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+    sequence: 10,
+    content: {
+      label: "Comments", icon: "comments",
+      ...(aliases ? { aliases } : {}),
+      useCount: useRecordCommentsUnread,
+      render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+    },
   };
 }
 
@@ -123,31 +125,28 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   icons: { inbox: Inbox, threads: MessagesSquare, send: Send, channel: Mail },
   i18n: { messaging: enMessagingMessages },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
-  chatter: [
-    recordCommentsContribution({ submitKey }),
-    {
-      id: "activity",
-      sequence: 20,
-      label: "Activity",
-      icon: "activity",
-      render: (context) => <RecordActivityPane context={context} />,
+  containers: {
+    // Connect verbs for each channel vendor, on the Channels list's toolbar.
+    "messaging.channels#toolbar": {},
+    "parties.overview#items": {
+      "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    {
-      id: "sources",
-      sequence: 30,
-      label: "Sources",
-      icon: "inbox",
-      render: (context) => <RecordSourceThreadsPane context={context} />,
+    // Messaging supplies the real comments and activity in place of the framework's placeholders.
+    "record#aside": {
+      "chatter.comments": { remove: true },
+      "chatter.activity": { remove: true },
+      "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
+      "messaging.activity": {
+        sequence: 20,
+        content: { label: "Activity", icon: "activity", aliases: ["activity"], render: (context) => <RecordActivityPane context={context} /> },
+      },
+      "messaging.sources": {
+        sequence: 30,
+        content: { label: "Sources", icon: "inbox", aliases: ["sources"], render: (context) => <RecordSourceThreadsPane context={context} /> },
+      },
     },
-  ],
-  slots: [
-    {
-      slot: PARTIES_OVERVIEW_SLOT,
-      id: "messaging.channel-health",
-      sequence: 30,
-      content: <MessagingOverviewContribution />,
-    },
-  ],
+  },
+
 });
 
 const messaging = defineMessagingAddon();

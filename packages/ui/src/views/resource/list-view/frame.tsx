@@ -9,9 +9,11 @@ import {
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
-import { useResourceRecordMatchFields } from "../../../runtime";
+import { useContainer, useResourceRecordMatchFields, type ResourceViewKindContent } from "../../../runtime";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
-import { Filter, availableResourceViewKinds } from "../resource-view-model";
+import { Filter, isBuiltInResourceViewKind } from "../resource-view-model";
+import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
+import { ContributedViewSurface } from "./contributed-view-surface";
 import { GanttCollectionSurface } from "../../gantt/gantt-collection-surface";
 import { LinkedGanttCollectionSurface } from "../../gantt/linked-gantt-collection-surface";
 import { CalendarCollectionSurface } from "../../calendar/calendar-collection-surface";
@@ -142,14 +144,31 @@ function ValidatedListViewBody<TRow extends Row>(
         cause instanceof Error ? cause : new Error("Invalid resource query.");
     }
   }
-  return error ? (
-    <ResourceQueryError error={error} onReset={() => {
-      if (props.renderItem) props.resourceView.setView("list");
-      props.resourceView.resetQuery();
-    }} />
-  ) : (
-    <ListViewBody {...props} />
+  return (
+    <ResourceViewKinds resource={props.source ? "" : props.resource}>
+      {error ? (
+        <ResourceQueryError error={error} onReset={() => {
+          if (props.renderItem) props.resourceView.setView("list");
+          props.resourceView.resetQuery();
+        }} />
+      ) : (
+        <ListViewBody {...props} />
+      )}
+    </ResourceViewKinds>
   );
+}
+
+/** The collection's `#views` children (its model and MTI parent), for the switcher, toolbar and body. */
+function ResourceViewKinds({ resource, children }: { resource: string; children: React.ReactNode }): React.ReactElement {
+  const metadata = useModelMetadata(resource);
+  const models = useResourceModels(resource, metadata?.resource?.canonicalLabel);
+  const kinds = useContainer<ResourceViewKindContent>("resource#views", { models });
+  const contents = React.useMemo(() => new Map(kinds.map((kind) => [kind.id, kind.content])), [kinds]);
+  return <ResourceViewKindsProvider value={contents}>{children}</ResourceViewKindsProvider>;
+}
+
+function useResourceModels(resource: string, canonical: string | null | undefined): readonly string[] {
+  return React.useMemo(() => [...new Set([canonical ?? resource, resource])].filter(Boolean), [canonical, resource]);
 }
 
 function ListViewBody<TRow extends Row = Row>({
@@ -230,12 +249,20 @@ function ListViewBody<TRow extends Row = Row>({
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
   const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
-  const availableViews = React.useMemo(
-    () =>
-      declaredViews ??
-      availableResourceViewKinds({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable }),
-    [declaredViews, calendarAvailable, ganttAvailable, dashboardAvailable],
+  const declaredSources = React.useMemo(
+    () => ({ calendar: calendarAvailable, gantt: ganttAvailable, dashboard: dashboardAvailable }),
+    [calendarAvailable, ganttAvailable, dashboardAvailable],
   );
+  const offered = useOfferedResourceViewKinds(
+    useResourceModels(source ? "" : resource, modelMetadata?.resource?.canonicalLabel),
+    declaredSources,
+  );
+  // A page's own list of views is narrowed by what the layers offer; otherwise the container decides.
+  const availableViews = React.useMemo(
+    () => declaredViews ? declaredViews.filter((kind) => offered.kinds.includes(kind)) : offered.kinds,
+    [declaredViews, offered.kinds],
+  );
+  const contributedKind = useResourceViewKindContent(resourceView.state.view);
   const schemaMetadata = useSchemaFieldMetadata();
   const resolvedLaneSource =
     React.useMemo<ResolvedBoardLaneSource | null>(() => {
@@ -447,6 +474,22 @@ function ListViewBody<TRow extends Row = Row>({
           filterOptions: explicitFilterOptions,
           customFilterFields: explicitCustomFilterFields,
         }}
+      />
+    );
+  }
+  if (!isBuiltInResourceViewKind(resourceView.state.view)) {
+    const Body = availableViews.includes(resourceView.state.view) ? contributedKind?.render : undefined;
+    if (!Body) return <ErrorBanner description={t("list.unknownView", { view: resourceView.state.view })} />;
+    return (
+      <ContributedViewSurface
+        resource={resource}
+        resourceView={resourceView}
+        body={Body}
+        availableViews={availableViews}
+        createLabel={createLabel}
+        onCreate={onCreate}
+        toolbarActions={toolbarActions}
+        className={className}
       />
     );
   }

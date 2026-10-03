@@ -273,6 +273,7 @@ export const enUiMessages: Record<string, string> = {
   "explorer.emptyDescription": "Create a record to start browsing.",
   "list.loading": "Loading…",
   "list.empty": "No records.",
+  "list.unknownView": "This collection does not offer the view \"{view}\".",
   "list.noMatchingRecords": "No matching records",
   "list.noMatchingRecordsHint": "Clear the current query to see all records.",
   "list.allRecords": "All records",

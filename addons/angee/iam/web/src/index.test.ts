@@ -1,9 +1,5 @@
-import { AUTH_LOGIN_METHOD_SLOT } from "@angee/app/auth";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import {
-  FORM_VIEW_RECORD_CHROME_SLOT,
-  RESOURCE_VIEW_UTILITIES_SLOT,
-  formViewSectionsSlot,
   MenuTree,
   type BaseMenuItem,
   type ChromeMenuItem,
@@ -99,25 +95,18 @@ describe("iam addon manifest", () => {
   });
 
   test("contributes one shared access action to record and collection toolbars", () => {
-    const record = iam.slots?.find((slot) => slot.id === "iam.share-record");
-    expect(record?.slot).toBe(FORM_VIEW_RECORD_CHROME_SLOT);
-    expect(record?.sequence).toBe(20);
-    expect(record?.content).toBeDefined();
-    const list = iam.slots?.find((slot) => slot.id === "iam.share-list");
-    expect(list?.slot).toBe(RESOURCE_VIEW_UTILITIES_SLOT);
-    expect(list?.sequence).toBe(20);
-    expect(list?.content).toBeDefined();
+    expect(iam.containers?.["form#chrome"]).toMatchObject({ "iam.share-record": { sequence: 20, content: expect.anything() } });
+    expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20, content: expect.anything() } });
   });
 
-  test("contributes the login methods and the OIDC tab on the OAuth client form", () => {
-    expect(iam.slots).toHaveLength(6);
-    const login = iam.slots?.find((slot) => slot.id === "iam.oauth-login");
-    expect(login?.slot).toBe(AUTH_LOGIN_METHOD_SLOT);
-    expect(login?.content).toBeDefined();
+  test("contributes the login methods, the OIDC tab on the OAuth client form and the user's password verb", () => {
+    expect(iam.slots?.map((slot) => slot.id)).toEqual(["iam.direct"]);
+    expect(iam.containers?.["auth.login#method"]).toMatchObject({ "iam.oauth-login": { content: expect.anything() } });
     // The OIDC login tab the iam addon adds to integrate's OAuth client form.
-    const oidc = iam.slots?.find((slot) => slot.id === "iam.oidc-login");
-    expect(oidc).toMatchObject(formViewSectionsSlot("integrate.OAuthClient"));
-    expect(oidc?.content).toBeDefined();
+    expect(iam.containers?.["integrate.OAuthClient#sections"]).toMatchObject({ "iam.oidc-login": { content: expect.anything() } });
+    // Issuing a password is an overflow-menu verb on the user form only.
+    expect(iam.containers?.["iam.User#actions-menu"])
+      .toMatchObject({ "iam.issue-password": { requiredFields: ["can_issue_password"], content: expect.anything() } });
   });
 
   test("publishes login backgrounds as frontend build assets", () => {

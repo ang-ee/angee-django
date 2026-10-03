@@ -6,12 +6,10 @@ import { ShareAccessRailGroup } from "@angee/iam";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   ErrorBanner,
-  FormView,
   Glyph,
   Group,
   SkeletonStatus,
   Tab,
-  formViewSectionsSlot,
   useRecordChromeContext,
   type ChatterViewContext,
 } from "@angee/ui";
@@ -31,51 +29,62 @@ const intake = defineBaseAddon({
   id: "intake",
   i18n: { intake: enIntakeMessages },
   icons: { "intake-needs": MessageSquareQuote },
-  chatter: [{
-    id: "intake.access-decisions", label: "Decisions", sequence: 50,
-    when: (context) => context.view.kind === "record" && context.route?.modelLabel === TASK_MODEL,
-    render: (context) => <TaskAccessChatter context={context} />,
-  }],
-  slots: [
-    { slot: "access.roles", model: TASK_MODEL, id: "intake.requester", content: TaskRequesterAccessRole },
-    { ...FormView.railSlot(TASK_MODEL), id: "intake.people-rail", sequence: 40,
-      content: ShareAccessRailGroup },
-    decisionRecordTab(NEED_MODEL),
-    {
-      ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
-      // Access decisions are the request's writers' business; a requester reading their own request never sees them.
-      permission: "write", requiredFields: ["permissions"],
-      content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly collapsible defaultOpen content={<TaskAccessGroup />} />,
+  containers: {
+    [`${TASK_MODEL}#access-roles`]: {
+      "intake.requester": { content: TaskRequesterAccessRole },
     },
-    {
-      ...formViewSectionsSlot(PROJECT_MODEL),
-      id: "intake.project-needs",
-      sequence: 30,
-      content: (
-        <Tab
-          id="needs"
-          label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
-          icon={<Glyph decorative name="intake-needs" />}
-        >
-          <RecordNeedsSection targetField="project" />
-        </Tab>
-      ),
+    [`${TASK_MODEL}#aside`]: {
+      "intake.access-decisions": {
+        sequence: 50,
+        content: {
+          label: "Decisions",
+          when: (context) => context.view.kind === "record",
+          render: (context) => <TaskAccessChatter context={context} />,
+        },
+      },
     },
-    {
-      ...formViewSectionsSlot(TASK_MODEL),
-      id: "intake.task-needs",
-      sequence: 30,
-      content: (
-        <Tab
-          id="needs"
-          label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
-          icon={<Glyph decorative name="intake-needs" />}
-        >
-          <RecordNeedsSection targetField="task" />
-        </Tab>
-      ),
+    [`${NEED_MODEL}#sections`]: {
+      "intake.decisions": decisionRecordTab(),
     },
-  ],
+    [`${TASK_MODEL}#rail`]: {
+      "intake.people-rail": { sequence: 40, content: ShareAccessRailGroup },
+    },
+    [`${TASK_MODEL}#sections`]: {
+      "intake.task-access-decisions": {
+        sequence: 50,
+        // Access decisions are the request's writers' business; a requester reading their own request never sees them.
+        permission: "write",
+        requiredFields: ["permissions"],
+        content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly collapsible defaultOpen content={<TaskAccessGroup />} />,
+      },
+      "intake.task-needs": {
+        sequence: 30,
+        content: (
+          <Tab
+            id="needs"
+            label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
+            icon={<Glyph decorative name="intake-needs" />}
+          >
+            <RecordNeedsSection targetField="task" />
+          </Tab>
+        ),
+      },
+    },
+    [`${PROJECT_MODEL}#sections`]: {
+      "intake.project-needs": {
+        sequence: 30,
+        content: (
+          <Tab
+            id="needs"
+            label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
+            icon={<Glyph decorative name="intake-needs" />}
+          >
+            <RecordNeedsSection targetField="project" />
+          </Tab>
+        ),
+      },
+    },
+  },
 });
 
 function RecordNeedsSection({

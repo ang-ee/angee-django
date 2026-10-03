@@ -1,7 +1,6 @@
 import { type ReactElement } from "react";
 
-import {
-  Badge, Chip, ListView, SlotOutlet, useStatusTone, textRoleVariants, useRouteHref, useSlot, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { Badge, Chip, ListView, ContainerOutlet, useStatusTone, textRoleVariants, useRouteHref, useContainer, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import {
@@ -12,7 +11,6 @@ import {
   STATE_TONES,
   type AddonResourceRow,
 } from "./AddonCard";
-import { PLATFORM_ADDON_TOOLBAR_SLOT } from "../slots";
 
 // The name column owns sort/search; label and card-only values are selected
 // alongside column fields through the shared resource query.
@@ -84,7 +82,7 @@ export function AddonsPage(): ReactElement {
   const statusTone = useStatusTone();
   const t = usePlatformT();
   const routeHref = useRouteHref();
-  const toolbarEntries = useSlot(PLATFORM_ADDON_TOOLBAR_SLOT);
+  const toolbarEntries = useContainer("platform.addons#toolbar");
   return (
     <ListView<AddonResourceRow>
       resource={ADDON_MODEL}
@@ -97,7 +95,7 @@ export function AddonsPage(): ReactElement {
       defaultGroup={{ field: "category" }}
       pageSize={100}
       rowHref={(row) => routeHref("platform.addons.record", { id: row.id })}
-      toolbarActions={<SlotOutlet entries={toolbarEntries} />}
+      toolbarActions={<ContainerOutlet entries={toolbarEntries} />}
       renderCard={(row) => <AddonCard row={row} />}
       cardActions={(row: AddonResourceRow, context: CardActionContext) => (
         <AddonCardActions row={row} context={context} />

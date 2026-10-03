@@ -1,6 +1,7 @@
 import { FILTER_OPERATORS, type FilterOperator } from "@angee/metadata";
 import { DEFAULT_PAGE_SIZE, normalisePageSize } from "../page-size";
 import type { ResourceViewInitialState } from "./filter";
+/** The framework's own view kinds; addons contribute more through `<model>#views`. */
 export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "gantt", "dashboard"] as const;
 
 /** The calendar kind's window modes; `month` is the default period. */
@@ -11,7 +12,18 @@ export const DEFAULT_CALENDAR_VIEW_MODE: CalendarViewMode = "month";
 export const CALENDAR_ANCHOR_FORMAT = "yyyy-MM-dd";
 export const DEFAULT_RESOURCE_VIEW_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
-export type ResourceViewKind = (typeof RESOURCE_VIEW_KINDS)[number];
+export type BuiltInResourceViewKind = (typeof RESOURCE_VIEW_KINDS)[number];
+/** A view kind: a built-in one, or a contributed kind's namespaced id (`nexus.graph`). */
+export type ResourceViewKind = BuiltInResourceViewKind | `${string}.${string}`;
+
+export function isBuiltInResourceViewKind(kind: string): kind is BuiltInResourceViewKind {
+  return RESOURCE_VIEW_KINDS.includes(kind as BuiltInResourceViewKind);
+}
+
+/** A built-in kind, or a contributed kind's id (namespaced, so it never collides with one). */
+export function isResourceViewKind(value: string): value is ResourceViewKind {
+  return isBuiltInResourceViewKind(value) || /^[a-z0-9_-]+\.[a-z0-9_.-]+$/i.test(value);
+}
 export type ResourceListOrder = Record<string, unknown>;
 
 /**
@@ -36,7 +48,7 @@ export interface ResourceViewKindCapabilities {
 
 /** The applicable data-controls per resource-view kind (the owner map on the kind). */
 export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
-  ResourceViewKind,
+  BuiltInResourceViewKind,
   ResourceViewKindCapabilities
 > = {
   list: { grouping: true, pagination: true, columns: true, filter: true },
@@ -71,13 +83,17 @@ export const FULL_RESOURCE_VIEW_KIND_CAPABILITIES: ResourceViewKindCapabilities 
   filter: true,
 };
 
-/** The active kind's applicability, or all-applicable when no kind is named. */
+/**
+ * The active kind's applicability: a built-in kind's own, a contributed kind's
+ * declared capabilities, or all-applicable when no kind is named.
+ */
 export function resourceViewKindCapabilities(
   view: ResourceViewKind | undefined,
+  contributed?: ResourceViewKindCapabilities,
 ): ResourceViewKindCapabilities {
-  return view
-    ? RESOURCE_VIEW_KIND_CAPABILITIES[view]
-    : FULL_RESOURCE_VIEW_KIND_CAPABILITIES;
+  if (!view) return FULL_RESOURCE_VIEW_KIND_CAPABILITIES;
+  if (isBuiltInResourceViewKind(view)) return RESOURCE_VIEW_KIND_CAPABILITIES[view];
+  return contributed ?? FULL_RESOURCE_VIEW_KIND_CAPABILITIES;
 }
 
 /**
@@ -87,7 +103,7 @@ export function resourceViewKindCapabilities(
  */
 export function availableResourceViewKinds(
   declared: { calendar?: boolean; gantt?: boolean; dashboard?: boolean } = {},
-): readonly ResourceViewKind[] {
+): readonly BuiltInResourceViewKind[] {
   return RESOURCE_VIEW_KINDS.filter((kind) => {
     if (!RESOURCE_VIEW_KIND_CAPABILITIES[kind].requiresSources) return true;
     if (kind === "calendar") return declared.calendar ?? false;

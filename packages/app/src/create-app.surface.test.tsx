@@ -2,11 +2,11 @@
 import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { SlotOutlet } from "@angee/ui/lib/slot-outlet";
+import { ContainerOutlet } from "@angee/ui/lib/container-outlet";
 import { useSlot } from "@angee/ui/runtime";
 import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
 import { isSurfaceSlotAdmitted, useSurfaceAdmission } from "@angee/ui/chrome/surface-policy";
-import { FORM_VIEW_RECORD_CHROME_SLOT, RecordChrome } from "@angee/ui/views/index";
+import { RecordChrome } from "@angee/ui/views/index";
 
 import { createApp } from "./create-app";
 import { TEST_SCHEMAS } from "./testing";
@@ -22,18 +22,23 @@ const record = {
   formReadOnly: false,
 };
 
+// A named slot of the page's own: the record form no longer reads slots, so
+// surface admission is exercised on a plain one until surface itself goes.
+const DESK_TOOLS_SLOT = "desk.tools";
+
 function SlotPage() {
+  const tools = useSlot(DESK_TOOLS_SLOT);
   const notices = useSlot("console.notice");
   const admission = useSurfaceAdmission();
   return <>
-    <RecordChrome value={record} />
-    <SlotOutlet entries={notices} />
-    <span data-testid="direct-share-admitted">{String(isSurfaceSlotAdmitted(admission, FORM_VIEW_RECORD_CHROME_SLOT, "share"))}</span>
-    <span data-testid="workflow-admitted">{String(isSurfaceSlotAdmitted(admission, FORM_VIEW_RECORD_CHROME_SLOT, "workflow"))}</span>
+    <ContainerOutlet entries={tools} />
+    <ContainerOutlet entries={notices} />
+    <span data-testid="direct-share-admitted">{String(isSurfaceSlotAdmitted(admission, DESK_TOOLS_SLOT, "share"))}</span>
+    <span data-testid="workflow-admitted">{String(isSurfaceSlotAdmitted(admission, DESK_TOOLS_SLOT, "workflow"))}</span>
   </>;
 }
 
-test("a confined app restricts a named record slot, keeps an unnamed slot, and leaves public and sign-in routes unfiltered", async () => {
+test("a confined app restricts a named slot, keeps an unnamed slot, and leaves public and sign-in routes unfiltered", async () => {
   history.replaceState(null, "", "/desk/one");
   const app = createApp({
     addons: [{
@@ -45,10 +50,10 @@ test("a confined app restricts a named record slot, keeps an unnamed slot, and l
         { name: "desk.signin", path: "/signin", component: SlotPage },
       ],
       menus: [{ id: "desk", route: "desk.home" }],
-      surface: [{ app: "desk", admit: { slots: { [FORM_VIEW_RECORD_CHROME_SLOT]: ["share"] } } }],
+      surface: [{ app: "desk", admit: { slots: { [DESK_TOOLS_SLOT]: ["share"] } } }],
       slots: [
-        { slot: FORM_VIEW_RECORD_CHROME_SLOT, id: "share", content: <span>Share action</span> },
-        { slot: FORM_VIEW_RECORD_CHROME_SLOT, id: "workflow", content: <span>Workflow action</span> },
+        { slot: DESK_TOOLS_SLOT, id: "share", content: <span>Share action</span> },
+        { slot: DESK_TOOLS_SLOT, id: "workflow", content: <span>Workflow action</span> },
         { slot: "console.notice", id: "notice", content: <span>Notice content</span> },
       ],
     }],
@@ -72,6 +77,44 @@ test("a confined app restricts a named record slot, keeps an unnamed slot, and l
     expect(screen.getByTestId("workflow-admitted").textContent).toBe("true");
     await act(async () => { await app.router.navigate({ to: "/signin" }); });
     expect(screen.getByText("Workflow action")).toBeTruthy();
+  } finally { act(() => root.unmount()); host.remove(); }
+});
+
+test("an app narrows the record chrome with a conditional only on its own form#chrome children", async () => {
+  history.replaceState(null, "", "/desk/one");
+  const RecordPage = () => <RecordChrome value={record} />;
+  const app = createApp({
+    addons: [{
+      id: "desk",
+      routes: [
+        { name: "desk.home", path: "/desk", component: RecordPage },
+        { name: "desk.record", path: "/desk/$id", component: RecordPage },
+      ],
+      menus: [{ id: "desk", route: "desk.home" }],
+      containers: {
+        "form#chrome": [
+          {
+            "desk.share": { content: <span>Share action</span> },
+            "desk.workflow": { content: <span>Workflow action</span> },
+          },
+          { only: ["desk.share"], when: { route: "desk.record" } },
+        ],
+      },
+    }],
+    layouts: { console: { requireAuth: false } },
+    schemas: TEST_SCHEMAS,
+    defaultSchema: "console",
+    confineTo: "desk",
+    home: "desk.home",
+  });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await screen.findByText("Share action");
+    expect(screen.queryByText("Workflow action")).toBeNull();
+    await act(async () => { await app.router.navigate({ to: "/desk" }); });
+    await screen.findByText("Workflow action");
+    expect(screen.getByText("Share action")).toBeTruthy();
   } finally { act(() => root.unmount()); host.remove(); }
 });
 

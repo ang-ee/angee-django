@@ -6,17 +6,17 @@ import {
 } from "@tanstack/react-router";
 
 import { Glyph } from "../chrome/Glyph";
-import { admittedAsideTabs, useSurfacePresentation } from "../chrome/surface-policy";
-import { EmptyState } from "../fragments/EmptyState";
-import { useUiT, type UiMessageVars } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import {
   useAppRuntime,
   useActiveRoute,
-  type ChatterContribution,
+  useContainer,
   type ChatterRoute,
+  type ChatterTabContent,
   type ChatterView,
   type ChatterViewContext,
+  type ComposedContainerChild,
 } from "../runtime";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
@@ -44,12 +44,6 @@ export function Chatter({
   const requestIdentity = useRouterState({
     select: (state) => state.location.href,
   });
-  const runtime = useAppRuntime();
-  const surface = useSurfacePresentation();
-  const [validatedRequest, setValidatedRequest] = React.useState<string | null>(null);
-  // Page publishers register in an effect. Validate after that first commit so
-  // their ids can satisfy route tab lists and aside admission.
-  React.useEffect(() => setValidatedRequest(requestIdentity), [requestIdentity]);
   const [counts, setCounts] = React.useState<Record<string, number>>({});
   const publishCount = React.useCallback(
     (id: string, count: number | undefined) => {
@@ -67,55 +61,37 @@ export function Chatter({
     },
     [],
   );
-  // Tabs merge by id (last wins): the default comments/activity tabs are the
-  // base, runtime chatter contributions render for the active view on top, and a
-  // page's published tabs (explicit prop or context) win last. A same-id tab
-  // replaces its predecessor in place; a new id appends. So a page contributing a
-  // `details`/`backlinks` tab keeps the defaults it does not override.
-  const { context: viewContext, visible } = useChatterPresentation();
-  const admit = admittedAsideTabs(surface);
-  const baseTabs = defaultTabs(t);
-  const publishedTabs = tabs ?? content?.tabs ?? [];
-  if (validatedRequest === requestIdentity) {
-    const known = new Set([...baseTabs, ...(runtime.chatter ?? []), ...publishedTabs].map((tab) => tab.id));
-    for (const id of admit ?? []) {
-      if (!known.has(id)) throw new Error(`Chatter admits unknown contribution id "${id}".`);
-    }
-  }
+  // The aside's tabs are `record#aside` / `<model>#aside` children for this view,
+  // narrowed by the layers, in their composed order; a page's published tabs
+  // follow, a same-id tab replacing its predecessor in place.
+  const { context: viewContext, visible, tabs: candidates } = useChatterPresentation(tabs);
   const activeContributions = React.useMemo(
-    () =>
-      (runtime.chatter ?? []).filter((contribution) =>
-        visible && (admit === undefined || admit.includes(contribution.id))
-          && contributionMatches(contribution, viewContext, admit?.includes(contribution.id) ?? false),
-      ),
-    [runtime.chatter, viewContext, admit, visible],
+    () => candidates.filter((child): child is ComposedContainerChild<ChatterTabContent> => child.owner !== PAGE_OWNER),
+    [candidates],
   );
   const contributedTabs = React.useMemo(
     () => tabsFromContributions(activeContributions, viewContext, counts),
     [activeContributions, viewContext, counts],
   );
-  // A route that lists its tabs admits them and orders them: the first listed
-  // tab is the one the aside opens on.
-  const merged = mergeChatterTabs(
-    (viewContext.view.kind === "record" || admit !== undefined) ? baseTabs : [],
-    contributedTabs,
-    publishedTabs,
+  const publishedTabs = React.useMemo(
+    () => candidates.flatMap((child) => child.owner === PAGE_OWNER ? [child.content as ChatterTab] : []),
+    [candidates],
   );
-  const resolvedTabs = admit === undefined
-    ? merged
-    : merged
-      .filter((tab) => admit.includes(tab.id))
-      .sort((left, right) => admit.indexOf(left.id) - admit.indexOf(right.id));
+  const resolvedTabs = mergeChatterTabs(contributedTabs, publishedTabs);
+  // A `?aside=` link may name a tab by an id it carried before (one release).
+  const requestedId = requestedTab
+    ? activeContributions.find((child) => child.id === requestedTab || child.content.aliases?.includes(requestedTab))?.id ?? requestedTab
+    : null;
   const resolvedComposer = composer ?? content?.composer;
   const requestedTabAvailable = Boolean(
-    requestedTab && resolvedTabs.some((tab) => tab.id === requestedTab),
+    requestedId && resolvedTabs.some((tab) => tab.id === requestedId),
   );
   React.useEffect(() => {
-    if (!requestedTab) return;
+    if (!requestedId) return;
     if (!requestedTabAvailable) return;
-    setActiveTab(requestedTab);
+    setActiveTab(requestedId);
     setCollapsed(false);
-  }, [requestIdentity, requestedTab, requestedTabAvailable, setActiveTab, setCollapsed]);
+  }, [requestIdentity, requestedId, requestedTabAvailable, setActiveTab, setCollapsed]);
   const active = resolvedTabs.some((tab) => tab.id === activeTab)
     ? activeTab
     : resolvedTabs[0]?.id;
@@ -135,11 +111,11 @@ export function Chatter({
       )}
     >
       {activeContributions.map((contribution) =>
-        contribution.useCount ? (
+        contribution.content.useCount ? (
           <ChatterCountProbe
             key={contribution.id}
             id={contribution.id}
-            useCount={contribution.useCount}
+            useCount={contribution.content.useCount}
             context={viewContext}
             onCount={publishCount}
           />
@@ -184,30 +160,39 @@ export function Chatter({
   );
 }
 
-/** The route owns aside visibility and tab selection for shell and pane alike. */
-export function useChatterPresentation(): { context: ChatterViewContext; visible: boolean } {
+const PAGE_OWNER = "page";
+
+/**
+ * The aside's candidate tabs for the active view, which decide whether it shows:
+ * kind-level children on record views, a model's own children on its pages, and
+ * the page's published tabs, each narrowed by the layers and its `when`.
+ */
+export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
+  context: ChatterViewContext;
+  visible: boolean;
+  tabs: readonly ComposedContainerChild<ChatterTabContent | ChatterTab>[];
+} {
   const runtime = useAppRuntime();
-  const surface = useSurfacePresentation();
   const context = useActiveChatterView(runtime.chatterRoutes ?? []);
   const { content } = useChatter();
-  const admit = admittedAsideTabs(surface);
-  const known = new Set([
-    "comments", "activity",
-    ...(runtime.chatter ?? []).map((entry) => entry.id),
-    ...(content?.tabs ?? []).map((tab) => tab.id),
-  ]);
-  const defaultTabVisible = ["comments", "activity"].some((id) =>
-    (admit === undefined || admit.includes(id))
-    && (context.view.kind === "record"
-      || (surface.chatter !== "hidden" && surface.chatter?.tabs?.includes(id))));
-  const visible = surface.chatter !== "hidden" && (
-    defaultTabVisible
-    || Boolean(content?.tabs?.some((tab) => admit === undefined || admit.includes(tab.id)))
-    || (runtime.chatter ?? []).some((entry) =>
-      Boolean(entry.render) && (admit === undefined || admit.includes(entry.id)) && contributionMatches(entry, context, admit?.includes(entry.id) ?? false))
-    || (admit ?? []).some((id) => !known.has(id))
+  const published = explicitTabs ?? content?.tabs;
+  const models = React.useMemo(
+    () => [...new Set([context.route?.canonicalLabel, context.route?.modelLabel].filter((label): label is string => Boolean(label)))],
+    [context.route?.canonicalLabel, context.route?.modelLabel],
   );
-  return { context, visible };
+  const extra = React.useMemo(
+    () => (published ?? []).map((tab) => ({ id: tab.id, owner: PAGE_OWNER, address: "record#aside", content: tab })),
+    [published],
+  );
+  const children = useContainer<ChatterTabContent | ChatterTab>("record#aside", { models, extra });
+  const tabs = React.useMemo(() => children.filter((child) => {
+    if (child.owner === PAGE_OWNER) return true;
+    const tab = child.content as ChatterTabContent;
+    if (!tab.render) return false;
+    if (child.address === "record#aside" && context.view.kind !== "record") return false;
+    return tab.when?.(context) ?? true;
+  }), [children, context]);
+  return { context, visible: tabs.length > 0, tabs };
 }
 
 /** Visit lazily, then retain this record's draft input while peeking at sources. */
@@ -232,24 +217,6 @@ function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: 
       </ScrollArea>
     </Tabs.Panel>
   ))}</>;
-}
-
-// A contribution with no model scope shows on record pages by default; a route
-// that lists it by id admits it on any page.
-function contributionMatches(
-  contribution: ChatterContribution,
-  context: ChatterViewContext,
-  listed = false,
-): boolean {
-  if (contribution.model === undefined && context.view.kind !== "record" && !listed) return false;
-  if (
-    contribution.model !== undefined &&
-    (context.route?.canonicalLabel ?? context.route?.modelLabel) !==
-      contribution.model
-  ) {
-    return false;
-  }
-  return contribution.when?.(context) ?? true;
 }
 
 function useActiveChatterView(
@@ -309,21 +276,21 @@ function viewTypeFromPath(pathname: string): string {
 }
 
 function tabsFromContributions(
-  contributions: readonly ChatterContribution[],
+  contributions: readonly ComposedContainerChild<ChatterTabContent>[],
   context: ChatterViewContext,
   counts: Readonly<Record<string, number>>,
 ): readonly ChatterTab[] {
-  return contributions.flatMap((contribution) => {
-    if (!contribution.render) return [];
-    const children = contribution.render(context);
+  return contributions.flatMap(({ id, content: tab }) => {
+    if (!tab.render) return [];
+    const children = tab.render(context);
     if (children == null || children === false) return [];
-    const count = counts[contribution.id] ?? contribution.count;
+    const count = counts[id] ?? tab.count;
     return [{
-      id: contribution.id,
-      label: contribution.label ?? contribution.id,
-      ...(contribution.icon ? { icon: contribution.icon } : {}),
+      id,
+      label: tab.label ?? id,
+      ...(tab.icon ? { icon: tab.icon } : {}),
       ...(typeof count === "number" ? { count } : {}),
-      ...(contribution.panelClassName ? { panelClassName: contribution.panelClassName } : {}),
+      ...(tab.panelClassName ? { panelClassName: tab.panelClassName } : {}),
       children,
     }];
   });
@@ -360,37 +327,4 @@ function mergeChatterTabs(
     for (const tab of group) byId.set(tab.id, tab);
   }
   return [...byId.values()];
-}
-
-function defaultTabs(
-  t: (key: string, vars?: UiMessageVars) => string,
-): readonly ChatterTab[] {
-  return [
-    {
-      id: "comments",
-      label: t("chatter.tabComments"),
-      icon: "comments",
-      children: (
-        <EmptyState
-          icon="comments"
-          title={t("chatter.noComments")}
-          description={t("chatter.commentsHint")}
-          className="min-h-48 p-4"
-        />
-      ),
-    },
-    {
-      id: "activity",
-      label: t("chatter.tabActivity"),
-      icon: "activity",
-      children: (
-        <EmptyState
-          icon="activity"
-          title={t("chatter.noActivity")}
-          description={t("chatter.activityHint")}
-          className="min-h-48 p-4"
-        />
-      ),
-    },
-  ];
 }

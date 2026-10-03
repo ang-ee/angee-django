@@ -28,8 +28,7 @@ describe("decisions fragment", () => {
     expect(DECISION_ORIGIN_SLOT).toBe("decisions.origin");
     expect(decisionContent("review", () => null)).toMatchObject({ slot: DECISION_CONTENT_SLOT, id: "review" });
     expect(decisions.slots).toBeUndefined();
-    expect(decisionRecordTab("intake.Need")).toMatchObject({
-      id: "decisions.subject.intake.Need", model: "intake.Need", slot: "form-view.sections",
-    });
+    // A subject model's addon declares it at `<model>#sections` under its own id.
+    expect(decisionRecordTab()).toMatchObject({ sequence: 50, content: expect.anything() });
   });
 });

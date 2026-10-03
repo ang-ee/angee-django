@@ -13,7 +13,7 @@ import {
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
-import { useFormOverride, useModelSlot } from "../../runtime";
+import { useContainer, useFormOverride } from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
@@ -35,7 +35,6 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
-import { formViewRailSlot, formViewRecordActionsSlot, formViewSectionsSlot } from "./form-view-slots";
 import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import {
   addFieldSelection,
@@ -242,21 +241,15 @@ export function useFormViewSurface({
   const canonicalResource = dataResource?.canonicalLabel ?? modelLabel;
   const canonicalMetadata = useModelMetadata(canonicalResource);
   const formOverride = useFormOverride(modelLabel);
-  const sectionTargets = React.useMemo(
-    () => [...new Set([canonicalResource, modelLabel])].map(formViewSectionsSlot),
+  // Children of `form#…` show on every form; a model's own, and its MTI parent's, on its records.
+  const models = React.useMemo(
+    () => [...new Set([canonicalResource, modelLabel])].filter(Boolean),
     [canonicalResource, modelLabel],
   );
-  const sectionEntries = useModelSlot(sectionTargets);
-  const recordActionTargets = React.useMemo(
-    () => [...new Set([canonicalResource, modelLabel])].map((label) => formViewRecordActionsSlot(label)),
-    [canonicalResource, modelLabel],
-  );
-  const recordActionFieldEntries = useModelSlot(recordActionTargets);
-  const railTargets = React.useMemo(
-    () => [...new Set([canonicalResource, modelLabel])].map(formViewRailSlot),
-    [canonicalResource, modelLabel],
-  );
-  const railEntries = useModelSlot(railTargets);
+  const sectionEntries = useContainer<React.ReactNode>("form#sections", { models });
+  const primaryActionFieldEntries = useContainer("form#actions", { models });
+  const menuActionFieldEntries = useContainer("form#actions-menu", { models });
+  const railEntries = useContainer<React.ReactNode>("form#rail", { models });
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -268,7 +261,7 @@ export function useFormViewSurface({
           continue;
         }
         console.warn(
-          `FormView slot "${entry.slot}" contribution "${entry.id}" `
+          `FormView container "${entry.address}" child "${entry.id}" `
             + `has unsupported direct marker "${marker ?? "unmarked"}"; `
             + "only Group, Action, and Tab declarations are discovered.",
         );
@@ -329,9 +322,10 @@ export function useFormViewSurface({
   const contributionFields = React.useMemo(() => [
     ...slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
       ? declaration.tab.requiredFields ?? [] : []),
-    ...recordActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
+    ...primaryActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
+    ...menuActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
     ...railEntries.flatMap((entry) => entry.requiredFields ?? []),
-  ], [railEntries, recordActionFieldEntries, slotDeclarations]);
+  ], [menuActionFieldEntries, primaryActionFieldEntries, railEntries, slotDeclarations]);
   const canonicalTabFields = React.useMemo(() => [...new Set(
     contributionFields.filter((path) => {
           const head = path.split(".")[0]!;

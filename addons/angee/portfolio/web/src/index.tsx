@@ -5,7 +5,6 @@ import {
 } from "@angee/app";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
 import {
-  formViewSectionsSlot,
   Glyph,
   Tab,
   type BaseMenuItem,
@@ -94,48 +93,40 @@ const portfolio = defineBaseAddon({
   routes: portfolioRoutes,
   menus: portfolioMenu,
   i18n: { portfolio: enPortfolioMessages },
-  slots: [
-    {
-      ...formViewSectionsSlot(PROJECT_MODEL),
-      id: "portfolio.project-fields",
-      sequence: 40,
-      content: projectPortfolioFormSection,
+  containers: {
+    [`${PROJECT_MODEL}#sections`]: {
+      "portfolio.project-fields": { sequence: 40, content: projectPortfolioFormSection },
+      "portfolio.project-updates": {
+        sequence: 45,
+        content: (
+          <Tab
+            id="portfolio-updates"
+            label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
+            icon={<Glyph decorative name="portfolio-update" />}
+          >
+            <ProjectUpdatesSection />
+          </Tab>
+        ),
+      },
     },
-    {
-      ...formViewSectionsSlot(PROJECT_MODEL),
-      id: "portfolio.project-updates",
-      sequence: 45,
-      content: (
-        <Tab
-          id="portfolio-updates"
-          label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
-          icon={<Glyph decorative name="portfolio-update" />}
-        >
-          <ProjectUpdatesSection />
-        </Tab>
-      ),
+    [`${INITIATIVE_MODEL}#sections`]: {
+      "portfolio.initiative-updates": {
+        sequence: 45,
+        content: (
+          <Tab
+            id="portfolio-updates"
+            label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
+            icon={<Glyph decorative name="portfolio-update" />}
+          >
+            <InitiativeUpdatesSection />
+          </Tab>
+        ),
+      },
     },
-    {
-      ...formViewSectionsSlot(INITIATIVE_MODEL),
-      id: "portfolio.initiative-updates",
-      sequence: 45,
-      content: (
-        <Tab
-          id="portfolio-updates"
-          label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
-          icon={<Glyph decorative name="portfolio-update" />}
-        >
-          <InitiativeUpdatesSection />
-        </Tab>
-      ),
+    [`${TASK_MODEL}#sections`]: {
+      "portfolio.task-release": { sequence: 45, content: taskReleaseFormSection },
     },
-    {
-      ...formViewSectionsSlot(TASK_MODEL),
-      id: "portfolio.task-release",
-      sequence: 45,
-      content: taskReleaseFormSection,
-    },
-  ],
+  },
   icons: {
     portfolio: Layers3,
     "portfolio-roadmap": Map,

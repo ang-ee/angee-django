@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
@@ -11,7 +12,7 @@ import {
   ToastProvider,
   baseIcons,
   defaultWidgets,
-  formViewSectionsSlot,
+  resolveContainer,
 } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
@@ -47,6 +48,7 @@ const resources = [
 ];
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://proposals-work" });
+const { containers } = composeAddons([proposalsWork], { canonicalModelLabel: (model) => model });
 afterEach(() => { cleanup(); clearClients(); });
 
 function renderRound(permissions: string[]) {
@@ -65,7 +67,7 @@ function renderRound(permissions: string[]) {
       queryClientConfig={{ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }}>
       <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{
-          widgets: defaultWidgets, icons: baseIcons, slots: proposalsWork.slots,
+          widgets: defaultWidgets, icons: baseIcons, containers,
         }}>
           <FormView resource="proposals.Round" id="round-1">
             <Field name="name" label="Name" title />
@@ -79,10 +81,10 @@ function renderRound(permissions: string[]) {
 
 test("contributes one queue section to the round form", () => {
   expectValidBaseAddon(proposalsWork);
-  expect(proposalsWork.slots).toHaveLength(1);
-  expect(proposalsWork.slots?.[0]).toMatchObject({
-    ...formViewSectionsSlot("proposals.Round"), id: "proposals-work.questions",
-  });
+  expect(proposalsWork.slots).toBeUndefined();
+  expect(resolveContainer(containers, "form#sections", { models: ["proposals.Round"] }).map(({ id, address }) => ({ id, address })))
+    .toEqual([{ id: "proposals-work.questions", address: "proposals.Round#sections" }]);
+  expect(resolveContainer(containers, "form#sections", { models: ["work.Queue"] })).toEqual([]);
 });
 
 test("renders the standard relation picker and saves through the round form", async () => {

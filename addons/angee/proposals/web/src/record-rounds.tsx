@@ -1,17 +1,15 @@
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
 import { ShareAccessRailGroup } from "@angee/iam";
 import {
-  FormView,
   Glyph,
   ListView,
   Tab,
-  formViewSectionsSlot,
-  formViewRecordActionsSlot,
   useRecordChromeContext,
   useRouteHref,
   type ListColumn,
   type StringIdRow,
 } from "@angee/ui";
+import type { ContainersDeclaration } from "@angee/ui/runtime";
 import * as React from "react";
 
 import { enProposalsMessages, useProposalsT } from "./i18n";
@@ -89,85 +87,96 @@ function RoundTabLabel({ name }: { name: "roster" | "comparison" }): React.React
   return <>{t(name === "roster" ? "round.tabs.roster" : "round.tabs.comparison")}</>;
 }
 
-export const roundRecordSlots = [
-  {
-    slot: "access.roles", model: ROUND_MODEL, id: "proposals.responder",
-    content: RoundResponderAccessRole,
+/** The round's and its project's children: access owners, the rail, record verbs and tabs. */
+export const roundRecordContainers = {
+  [`${ROUND_MODEL}#access-roles`]: {
+    "proposals.responder": { content: RoundResponderAccessRole },
   },
-  {
-    slot: "access.visibility", model: ROUND_MODEL, id: "proposals.opening",
-    content: RoundOpeningAccessVisibility,
+  [`${ROUND_MODEL}#access-visibility`]: {
+    "proposals.opening": { content: RoundOpeningAccessVisibility },
   },
-  {
-    ...FormView.railSlot(ROUND_MODEL), id: "proposals.people-rail", sequence: 40,
-    requiredFields: ROUND_RECORD_FIELDS,
-    content: ShareAccessRailGroup,
+  [`${ROUND_MODEL}#rail`]: {
+    "proposals.people-rail": {
+      sequence: 40,
+      requiredFields: ROUND_RECORD_FIELDS,
+      content: ShareAccessRailGroup,
+    },
   },
-  {
-    ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-open", sequence: 30,
-    requiredFields: ROUND_RECORD_FIELDS,
-    content: <RoundRecordSection surface="primary" />,
+  [`${ROUND_MODEL}#actions`]: {
+    "proposals.round-open": {
+      sequence: 30,
+      requiredFields: ROUND_RECORD_FIELDS,
+      content: <RoundRecordSection surface="primary" />,
+    },
   },
-  {
-    ...formViewRecordActionsSlot(PROJECT_MODEL), id: "proposals.project-round-open", sequence: 30,
-    requiredFields: PROJECT_ROUND_FIELDS,
-    content: <ProjectRoundRecord surface="primary" />,
+  [`${PROJECT_MODEL}#actions`]: {
+    "proposals.project-round-open": {
+      sequence: 30,
+      requiredFields: PROJECT_ROUND_FIELDS,
+      content: <ProjectRoundRecord surface="primary" />,
+    },
   },
-  {
-    ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-verbs", sequence: 35,
-    requiredFields: ROUND_RECORD_FIELDS,
-    recordActionPlacement: "menu", content: <RoundRecordSection surface="actions" />,
+  [`${ROUND_MODEL}#actions-menu`]: {
+    "proposals.round-verbs": {
+      sequence: 35,
+      requiredFields: ROUND_RECORD_FIELDS,
+      content: <RoundRecordSection surface="actions" />,
+    },
   },
-  {
-    ...formViewRecordActionsSlot(PROJECT_MODEL), id: "proposals.project-round-verbs", sequence: 35,
-    requiredFields: PROJECT_ROUND_FIELDS,
-    recordActionPlacement: "menu", content: <ProjectRoundRecord surface="actions" />,
+  [`${PROJECT_MODEL}#actions-menu`]: {
+    "proposals.project-round-verbs": {
+      sequence: 35,
+      requiredFields: PROJECT_ROUND_FIELDS,
+      content: <ProjectRoundRecord surface="actions" />,
+    },
   },
-  {
-    ...formViewSectionsSlot(ROUND_MODEL), id: "proposals.round-people", sequence: 40,
-    content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={ROUND_RECORD_FIELDS}><RoundRecordSection surface="people" /></Tab>,
+  [`${ROUND_MODEL}#sections`]: {
+    "proposals.round-people": {
+      sequence: 40,
+      content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={ROUND_RECORD_FIELDS}><RoundRecordSection surface="people" /></Tab>,
+    },
   },
-  {
-    ...formViewSectionsSlot(PROJECT_MODEL), id: "proposals.project-people", sequence: 40,
-    content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="people" /></Tab>,
+  [`${PROJECT_MODEL}#sections`]: {
+    "proposals.project-people": {
+      sequence: 40,
+      content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="people" /></Tab>,
+    },
+    "proposals.project-approach": {
+      sequence: 35,
+      content: <Tab id="comparison" label={<RoundTabLabel name="comparison" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="approach" /></Tab>,
+    },
+    "proposals.project-rounds": {
+      sequence: 35,
+      content: (
+        <Tab
+          id="proposal-rounds"
+          label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
+          icon={<Glyph decorative name="proposals-round" />}
+        >
+          <RecordRoundsSection targetField="project" />
+        </Tab>
+      ),
+    },
   },
-  {
-    ...formViewSectionsSlot(PROJECT_MODEL), id: "proposals.project-approach", sequence: 35,
-    content: <Tab id="comparison" label={<RoundTabLabel name="comparison" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="approach" /></Tab>,
+  [`${TASK_MODEL}#actions`]: {
+    "proposals.task-responder-share": {
+      sequence: 45,
+      requiredFields: ["revision", "permissions", "shared_with_responders", "project.source_proposal.id"],
+      content: <TaskResponderShareAction />,
+    },
   },
-  {
-    ...formViewRecordActionsSlot(TASK_MODEL),
-    id: "proposals.task-responder-share",
-    sequence: 45,
-    requiredFields: ["revision", "permissions", "shared_with_responders", "project.source_proposal.id"],
-    content: <TaskResponderShareAction />,
+  [`${TASK_MODEL}#sections`]: {
+    "proposals.task-rounds": {
+      sequence: 35,
+      content: (
+        <Tab
+          id="proposal-rounds"
+          label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
+          icon={<Glyph decorative name="proposals-round" />}
+        >
+          <RecordRoundsSection targetField="task" />
+        </Tab>
+      ),
+    },
   },
-  {
-    ...formViewSectionsSlot(PROJECT_MODEL),
-    id: "proposals.project-rounds",
-    sequence: 35,
-    content: (
-      <Tab
-        id="proposal-rounds"
-        label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
-        icon={<Glyph decorative name="proposals-round" />}
-      >
-        <RecordRoundsSection targetField="project" />
-      </Tab>
-    ),
-  },
-  {
-    ...formViewSectionsSlot(TASK_MODEL),
-    id: "proposals.task-rounds",
-    sequence: 35,
-    content: (
-      <Tab
-        id="proposal-rounds"
-        label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
-        icon={<Glyph decorative name="proposals-round" />}
-      >
-        <RecordRoundsSection targetField="task" />
-      </Tab>
-    ),
-  },
-] as const;
+} satisfies ContainersDeclaration;

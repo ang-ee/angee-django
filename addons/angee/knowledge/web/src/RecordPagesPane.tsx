@@ -1,5 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { Button, EmptyState, ErrorBanner, Select, Skeleton, SkeletonStatus, errorMessage, useRuntimeViewAs, type ChatterContribution, type ChatterViewContext } from "@angee/ui";
+import { Button, EmptyState, ErrorBanner, Select, Skeleton, SkeletonStatus, errorMessage, useRuntimeViewAs, type ChatterTabContent, type ChatterViewContext, type ContainerChild } from "@angee/ui";
 import { useMemo, useState, type ReactElement } from "react";
 
 import { KNOWLEDGE_LIST_LIMIT, KnowledgeBindRecord, KnowledgePages, KnowledgeRecordPages, KnowledgeUnbindRecord, RECORD_BINDING_MODEL } from "./data/documents";
@@ -25,24 +25,29 @@ function useRecordPagesCount(context: ChatterViewContext, role?: string): number
   return query.data?.record_knowledge_bindings.filter((binding) => binding.page !== null).length;
 }
 
-export interface RecordPagesContributionOptions {
-  id?: string;
+export interface RecordPagesTabOptions {
   label?: string;
   role?: string;
   sequence?: number;
-  when?: ChatterContribution["when"];
+  when?: ChatterTabContent["when"];
+  /** Earlier ids a `?aside=` link may still carry. */
+  aliases?: readonly string[];
 }
 
-/** Configure a role-scoped Pages tab through the existing chatter contract. */
-export function recordPagesContribution(options: RecordPagesContributionOptions = {}): ChatterContribution {
-  const { id = "pages", label = "Pages", role, sequence = 40, when } = options;
+/** A role-scoped Pages tab, for an addon's `<model>#aside` or `record#aside`. */
+export function recordPagesTab(options: RecordPagesTabOptions = {}): ContainerChild<ChatterTabContent> {
+  const { label = "Pages", role, sequence = 40, when, aliases } = options;
   return {
-    id, label, sequence, icon: "knowledge",
-    when: (context) => context.view.kind === "record"
-      && Boolean(context.route?.modelLabel && context.view.sqid)
-      && (when?.(context) ?? true),
-    useCount: (context) => useRecordPagesCount(context, role),
-    render: (context) => <RecordPagesPane target={recordPagesTarget(context)} role={role} />,
+    sequence,
+    content: {
+      label, icon: "knowledge",
+      ...(aliases ? { aliases } : {}),
+      when: (context) => context.view.kind === "record"
+        && Boolean(context.route?.modelLabel && context.view.sqid)
+        && (when?.(context) ?? true),
+      useCount: (context) => useRecordPagesCount(context, role),
+      render: (context) => <RecordPagesPane target={recordPagesTarget(context)} role={role} />,
+    },
   };
 }
 

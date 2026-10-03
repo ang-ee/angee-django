@@ -17,7 +17,7 @@ function isOidcProvider(values: Row): boolean {
 
 /**
  * The OIDC/login section contributed into integrate's OAuth-client form via
- * `FORM_VIEW_SECTIONS_SLOT`. It renders as a "Sign-in (OIDC)" tab whose fields all
+ * `integrate.OAuthClient#sections`. It renders as a "Sign-in (OIDC)" tab whose fields all
  * gate on the OIDC provider types, so the tab appears only for a login provider.
  * The fields are native on `OAuthClient` (folded in by the OIDC `extends` model).
  */
