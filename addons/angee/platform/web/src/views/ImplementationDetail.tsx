@@ -2,6 +2,7 @@ import { useMemo, type ReactElement } from "react";
 
 import { useAuthoredQuery } from "@angee/refine";
 import {
+  TextLink,
   Badge, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs,
   deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId,
@@ -9,7 +10,6 @@ import {
 
 import { PlatformImplementation, type PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
-import { TextRouteLink } from "../lib/cells";
 
 const ignoreChange = () => {};
 
@@ -90,12 +90,12 @@ export function ImplementationDetail(): ReactElement {
               <DetailSection title={t("detail.definition")} rows={[
                 [t("implementation.key"), <Code>{implementation.key}</Code>],
                 [t("col.category"), implementation.category],
-                [t("col.model"), <TextRouteLink href={routeHref("platform.models.record", { id: implementation.model.toLowerCase() })}>{implementation.model}</TextRouteLink>],
+                [t("col.model"), <TextLink href={routeHref("platform.models.record", { id: implementation.model.toLowerCase() })}>{implementation.model}</TextLink>],
                 [t("col.field"), implementation.field],
                 [t("implementation.registry"), <Code>{implementation.registry_setting}</Code>],
                 [t("implementation.baseClass"), <Code>{implementation.base_class_path}</Code>],
                 [t("col.addon"), implementation.addon_id
-                  ? <TextRouteLink href={routeHref("platform.addons.record", { id: implementation.addon_id })}>{implementation.addon_label}</TextRouteLink>
+                  ? <TextLink href={routeHref("platform.addons.record", { id: implementation.addon_id })}>{implementation.addon_label}</TextLink>
                   : t("implementation.external")],
               ]} />
             </Tabs.Panel>

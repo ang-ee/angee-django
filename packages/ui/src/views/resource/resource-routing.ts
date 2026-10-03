@@ -103,6 +103,7 @@ export function RoutedRecordController<TRow extends Row = Row>({
     void navigate({
       to: ".",
       replace: true,
+      state: true,
       search: (prev: Record<string, unknown>) => recordTargetSearch(prev, { tab }),
     });
   }, [navigate]);

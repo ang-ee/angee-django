@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import * as React from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { RouterContextProvider, createRootRoute, createRouter, createMemoryHistory } from "@tanstack/react-router";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
   PrimaryPaneTestHost,
@@ -17,6 +17,7 @@ const routerMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   params: {} as Record<string, string>,
   routeHref: vi.fn(),
+  search: {} as Record<string, unknown>,
 }));
 
 const sdkMocks = vi.hoisted(() => ({
@@ -24,15 +25,11 @@ const sdkMocks = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
-  const React = await import("react");
   return {
     ...actual,
-    useNavigate: () => routerMocks.navigate, useParams: () => routerMocks.params, // A capturing anchor: keeps the `to` href and spreads the merged props (className, // aria-current, data-active) that `SessionRailItem`'s `useRender` injects.
-    Link: React.forwardRef<HTMLAnchorElement, { to?: unknown; children?: React.ReactNode }>(
-      function Link({ to, children, ...rest }, ref) {
-        return React.createElement(
-          "a", { ref, href: typeof to === "string" ? to : String(to ?? ""), ...rest }, children, );
-      }, ), };
+    useNavigate: () => routerMocks.navigate,
+    useParams: () => routerMocks.params,
+  };
 });
 
 vi.mock("@angee/refine", async (importOriginal) => ({
@@ -49,7 +46,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
     ...actual,
     useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
-    useRouteSearch: () => ({}),
+    useRouteSearch: () => routerMocks.search,
     // Mirror the real `useNamespaceT` contract: a STABLE translator identity (memoized
     // on its inputs). AgentSessionsPage publishes a `t`-derived node into the shell
     // primary pane via `usePrimaryPane`, so an unstable `t` would churn that node and
@@ -72,12 +69,14 @@ import { AgentSessionsPage } from "./AgentSessionsPage";
 
 // A fresh element each call: React bails out of re-rendering a referentially-identical
 // element, so `rerender` must get a NEW tree to pick up the changed router params.
+const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+
 function harness() {
   return (
-    <ShellPageTestProviders>
+    <RouterContextProvider router={router}><ShellPageTestProviders>
       <AgentSessionsPage />
       <PrimaryPaneTestHost />
-    </ShellPageTestProviders>
+    </ShellPageTestProviders></RouterContextProvider>
   );
 }
 
@@ -108,6 +107,7 @@ function queryResult(data: unknown, fetching = false) {
 
 beforeEach(() => {
   routerMocks.params = {};
+  routerMocks.search = {};
   routerMocks.navigate.mockReset();
   routerMocks.routeHref.mockReset();
   const routeHref = createRouteHref(agents.routes ?? []);
@@ -122,6 +122,13 @@ afterEach(() => {
 });
 
 describe("AgentSessionsPage", () => {
+  test("agent links clear the selected session and preserve unrelated search", () => {
+    routerMocks.search = { keep: "scope", session: "s1" };
+    sdkMocks.useAuthoredQuery.mockReturnValue(queryResult({ agents: [agent("a1", "Scout")] }));
+    routerMocks.params = { id: "a1" };
+    renderPage();
+    expect(screen.getByRole("link", { current: "page" }).getAttribute("href")).toBe("/agents/sessions/a1?keep=scope");
+  });
   test("retains agent navigation for a transport without ACP session navigation", () => {
     sdkMocks.navigation = false;
     sdkMocks.useAuthoredQuery.mockReturnValue(queryResult({ agents: [agent("a1", "Scout")] }));

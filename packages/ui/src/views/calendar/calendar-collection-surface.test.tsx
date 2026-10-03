@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { CalendarViewProps, Occurrence } from "./CalendarView";
 import type { CalendarViewSpec } from "../resource/resource-view-types";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
+import { InAppLinkProvider, type InAppNavigator } from "../../lib/in-app-link";
 
 // Capture the CalendarView props (so the interaction callbacks can be driven
 // without FullCalendar) and stand in for the windowed-fetch owner so settled
@@ -63,15 +64,14 @@ function Harness({ spec }: { spec: CalendarViewSpec }): React.ReactElement {
   );
 }
 
-function renderSurface(spec: CalendarViewSpec): void {
-  render(
-    <ResourceViewProvider
-      scope="local"
-      resource="calendar.Event"
-      initialState={{ view: "calendar", anchor: "2026-06-15" }}
-    >
+function renderSurface(spec: CalendarViewSpec, navigateInApp?: InAppNavigator): void {
+  const content = (
+    <ResourceViewProvider scope="local" resource="calendar.Event" initialState={{ view: "calendar", anchor: "2026-06-15" }}>
       <Harness spec={spec} />
-    </ResourceViewProvider>,
+    </ResourceViewProvider>
+  );
+  render(
+    navigateInApp ? <InAppLinkProvider navigate={navigateInApp}>{content}</InAppLinkProvider> : content,
   );
 }
 
@@ -101,6 +101,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("CalendarCollectionSurface", () => {
+  test("content occurrences use the inherited navigation owner", () => {
+    const navigateInApp = vi.fn();
+    renderSurface(surfaceProps(), navigateInApp);
+    mocks.calendarProps?.onEventClick?.(OCC_WITH_ROUTE);
+    expect(navigateInApp).toHaveBeenCalledExactlyOnceWith("/calendar/cev_a");
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
   test("gates the fetch until the grid reports its window (settled)", () => {
     renderSurface(surfaceProps());
     // First render: the seed window is degenerate, so the source is not enabled.
@@ -120,7 +127,7 @@ describe("CalendarCollectionSurface", () => {
   test("navigates only for an occurrence carrying a source-declared route", () => {
     renderSurface(surfaceProps());
     mocks.calendarProps?.onEventClick?.(OCC_WITH_ROUTE);
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/calendar/cev_a" });
+    expect(mocks.navigate).toHaveBeenCalledWith({ href: "/calendar/cev_a" });
 
     mocks.navigate.mockClear();
     mocks.calendarProps?.onEventClick?.(OCC_NO_ROUTE);

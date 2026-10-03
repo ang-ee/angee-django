@@ -1911,6 +1911,169 @@ describe("FormView", () => {
     expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
   });
 
+  test.each([
+    ["WHATSAPP", ["WhatsApp pairing", "WhatsApp health", "Shared notes"], ["Generic connection", "IMAP folders"]],
+    ["IMAP", ["Generic connection", "IMAP folders", "Shared notes"], ["WhatsApp pairing", "WhatsApp health"]],
+  ] as const)("sections and the rail resolve per row: impl children and variants (%s)", async (kind, shown, absent) => {
+    // Every candidate's fields are read; the row then admits its impl's children,
+    // and a variant stands in for its original, as on the record verbs.
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      formChildren({
+        "notes.Note#sections": {
+          "notes.connection": { content: <Group content={<p>Generic connection</p>} /> },
+          "notes.shared": { content: <Group content={<p>Shared notes</p>} /> },
+          "whatsapp.connection": {
+            variant: { of: "notes.connection", impl: "whatsapp" },
+            content: <Group content={<p>WhatsApp pairing</p>} />,
+          },
+          "imap.folders": { impl: "imap", content: <Group content={<p>IMAP folders</p>} /> },
+          // A tab and an action from a row-decided child follow the row too.
+          "notes.sync": { content: <Tab id="sync" label="Sync"><p>Generic sync</p></Tab> },
+          "whatsapp.sync": {
+            variant: { of: "notes.sync", impl: "whatsapp" },
+            content: <Tab id="sync" label="WhatsApp sync"><p>WhatsApp sync</p></Tab>,
+          },
+          "imap.reindex": { impl: "imap", content: <Action id="reindex" label="Reindex IMAP" run={() => undefined} /> },
+        },
+        "notes.Note#rail": {
+          "whatsapp.health": { impl: "whatsapp", content: <FormView.RailGroup id="health" label="Health" content={<p>WhatsApp health</p>} /> },
+        },
+      }),
+    );
+
+    for (const text of shown) expect(await screen.findByText(text)).toBeTruthy();
+    for (const text of absent) expect(screen.queryByText(text)).toBeNull();
+    // The original and its variant may reuse a tab id: only one reaches the row.
+    expect(screen.getByRole("tab", { name: kind === "WHATSAPP" ? "WhatsApp sync" : "Sync" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: kind === "WHATSAPP" ? "Sync" : "WhatsApp sync" })).toBeNull();
+    const actions = screen.queryByRole("button", { name: "Actions" });
+    if (kind === "IMAP") {
+      fireEvent.click(actions!);
+      expect(await screen.findByRole("menuitem", { name: "Reindex IMAP" })).toBeTruthy();
+    } else if (actions) {
+      fireEvent.click(actions);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeTruthy());
+      expect(screen.queryByRole("menuitem", { name: "Reindex IMAP" })).toBeNull();
+    }
+  });
+
+  test("a create form knows no implementation: originals stand, row-decided children stay out, fields and all", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView resource="notes.Note">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata({ secret: { name: "secret", kind: "scalar", scalar: "String" } }),
+      undefined,
+      formChildren({
+        "notes.Note#sections": {
+          "notes.connection": { content: <Group content={<p>Generic connection</p>} /> },
+          "whatsapp.connection": {
+            variant: { of: "notes.connection", impl: "whatsapp" },
+            content: <Group content={<p>WhatsApp pairing</p>} />,
+          },
+          // A required field of an impl child would otherwise block every create.
+          "imap.secret": { impl: "imap", content: <Group label="IMAP"><Field name="secret" label="Secret" required /></Group> },
+        },
+      }),
+    );
+
+    expect(await screen.findByText("Generic connection")).toBeTruthy();
+    expect(screen.queryByText("WhatsApp pairing")).toBeNull();
+    expect(screen.queryByLabelText("Secret")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { title: "New" } });
+  });
+
+  test("a group the record does not show lends the form no body", async () => {
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP", notes: "IMAP folder notes" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata({ notes: { name: "notes", kind: "scalar", scalar: "String" } }),
+      undefined,
+      formChildren({
+        "notes.Note#sections": {
+          "imap.notes": { impl: "imap", content: <Group label="IMAP"><Field name="notes" label="Notes" body /></Group> },
+        },
+      }),
+    );
+
+    await screen.findByLabelText("Title");
+    expect(screen.queryByDisplayValue("IMAP folder notes")).toBeNull();
+    expect(screen.queryByText("IMAP folder notes")).toBeNull();
+  });
+
+  test("a field an original and its variant both declare saves as the record's own declares it", async () => {
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP", label: "Old" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata({ label: { name: "label", kind: "scalar", scalar: "String" } }),
+      undefined,
+      formChildren({
+        "notes.Note#sections": {
+          "notes.label": { content: <Group label="Label"><Field name="label" label="Label" readOnly /></Group> },
+          "whatsapp.label": {
+            variant: { of: "notes.label", impl: "whatsapp" },
+            content: <Group label="Label"><Field name="label" label="Label" /></Group>,
+          },
+        },
+      }),
+    );
+
+    const label = await screen.findByLabelText("Label");
+    await waitFor(() => expect((label as HTMLInputElement).value).toBe("Old"));
+    fireEvent.change(label, { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { label: "New", id: "note-1" } });
+  });
+
+  test("a variant section or rail group the row may not see leaves its original (G-13)", async () => {
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP", permissions: ["read"] };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      implMetadata(),
+      undefined,
+      formChildren({
+        "notes.Note#sections": {
+          "notes.connection": { content: <Group content={<p>Generic connection</p>} /> },
+          "whatsapp.connection": {
+            variant: { of: "notes.connection", impl: "whatsapp" },
+            permission: "manage",
+            content: <Group content={<p>WhatsApp pairing</p>} />,
+          },
+        },
+        "notes.Note#rail": {
+          "notes.health": { content: <FormView.RailGroup id="health" label="Health" content={<p>Generic health</p>} /> },
+          "whatsapp.health": {
+            variant: { of: "notes.health", impl: "whatsapp" },
+            permission: "manage",
+            content: <FormView.RailGroup id="health" label="Health" content={<p>WhatsApp health</p>} />,
+          },
+        },
+      }),
+    );
+
+    expect(await screen.findByText("Generic connection")).toBeTruthy();
+    expect(screen.queryByText("WhatsApp pairing")).toBeNull();
+    expect(screen.getByText("Generic health")).toBeTruthy();
+    expect(screen.queryByText("WhatsApp health")).toBeNull();
+  });
+
   test("an impl child shows only on rows of its impl, beside another impl's child", async () => {
     // Two backends contribute a connect verb on one model as siblings; each row
     // resolves only its own, and neither displaces a model-level verb.
@@ -3516,13 +3679,13 @@ function mtiModel(
  * columns, never with any form's selection, so a form reaches its impl value only
  * because `FormView` selects it.
  */
-function implMetadata(): SchemaFieldMetadata {
+function implMetadata(extra: ModelMetadata["fields"] = {}): SchemaFieldMetadata {
   const note = mtiModel("NoteType", "notes.Note", "parties.Party", ["kind"]);
   return withTestResourceInventory({
     types: {
       NoteType: {
         ...note,
-        fields: { ...note.fields, kind: { name: "kind", kind: "scalar", scalar: "String" } },
+        fields: { ...note.fields, kind: { name: "kind", kind: "scalar", scalar: "String" }, ...extra },
       },
       PartyType: mtiModel("PartyType", "parties.Party", "parties.Party"),
     },

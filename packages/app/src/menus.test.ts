@@ -24,7 +24,7 @@ const pm: MenuLayer = {
   dependsOn: ["projects", "work"],
   menus: {
     pm: { label: "Work", sequence: 1, include: [{ id: "projects", flatten: true }, { id: "work", flatten: true }] },
-    "pm.inbox": { parent: "pm", route: "messaging.inbox", sequence: 10 },
+    "pm.inbox": { parent: "pm", route: "messaging.messages", sequence: 10 },
     "projects.my-work": { sequence: 20 },
     "work.triage-hub": { sequence: 30 },
     "projects.board": { remove: true },
@@ -127,6 +127,19 @@ describe("compileMenus", () => {
     expect(rail(compileMenus([projects, work, pm, narrow, top, unhide]).navigation)).toEqual([
       { pm: ["pm.inbox", "projects.my-work", "projects.tasks", "top.page"] },
     ]);
+    // A deployment `only` narrows like any layer's; with `force` it stands in for every
+    // layer's (G-14), bringing back work's items narrow and top left out and leaving top's page.
+    const deployment = (entry: Record<string, unknown>): MenuLayer =>
+      ({ id: DEPLOYMENT_LAYER_ID, dependsOn: ["projects", "work", "pm", "narrow", "top"], menus: { pm: entry } as MenuLayer["menus"] });
+    expect(rail(compileMenus([projects, work, pm, narrow, top, deployment({ only: ["pm.inbox", "work", "narrow.page"] })]).navigation))
+      .toEqual([{ pm: ["pm.inbox"] }]);
+    const forced = compileMenus([projects, work, pm, narrow, top, deployment({ only: ["pm.inbox", "work", "narrow.page"], force: true })]);
+    expect(rail(forced.navigation)).toEqual([{ pm: ["pm.inbox", "work.triage-hub", "work.cycles-hub", "narrow.page"] }]);
+    expect(forced.hidden.find((entry) => entry.id === "top.page")).toEqual({ id: "top.page", by: DEPLOYMENT_LAYER_ID, reason: "only" });
+    // Only the deployment forces, and only an `only`.
+    expect(() => compileMenus([projects, work, pm, { ...narrow, menus: { pm: { only: ["pm.inbox"], force: true } } }]))
+      .toThrow(/only the deployment forces/);
+    expect(() => compileMenus([projects, work, pm, narrow, top, deployment({ force: true })])).toThrow(/only the deployment forces/);
   });
 
   test("the gate: only nodes of addons a layer depends on can be altered", () => {

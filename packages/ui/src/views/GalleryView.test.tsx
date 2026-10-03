@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GalleryView } from "./GalleryView";
+import { InAppLinkProvider } from "../lib/in-app-link";
 
 afterEach(() => cleanup());
 
@@ -19,6 +20,23 @@ const ROWS: Cover[] = [
 ];
 
 describe("GalleryView", () => {
+  test("selection is outside the card link and never opens the record", () => {
+    const navigate = vi.fn();
+    const onCardClick = vi.fn();
+    const onToggleSelected = vi.fn();
+    render(<InAppLinkProvider navigate={navigate}><GalleryView rows={[ROWS[0]!]}
+      cardHref={() => "/records/a"} onCardClick={onCardClick} onToggleSelected={onToggleSelected}
+    /></InAppLinkProvider>);
+    const checkbox = screen.getByRole("checkbox", { name: "Select Onboarding map" });
+    expect(checkbox.closest("a")).toBeNull();
+    fireEvent.click(checkbox);
+    expect(onToggleSelected).toHaveBeenCalledExactlyOnceWith("a", true);
+    expect(onCardClick).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("link"));
+    expect(onCardClick).toHaveBeenCalledExactlyOnceWith(ROWS[0]);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("/records/a");
+  });
   test("renders one card per row with title + subtitle and fires click", () => {
     const onCardClick = vi.fn();
     render(

@@ -9,6 +9,7 @@ import { refineResourcesFromDataResources } from "@angee/metadata";
 import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, tanStackRouterProvider } from "@angee/refine";
 import { Breadcrumb, BreadcrumbLabelProvider } from "@angee/ui/chrome/index";
+import { routerNavigator } from "@angee/ui/lib";
 import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
 import { ResourceList } from "@angee/ui/views/ResourceList";
 import { afterEach, expect, test, vi } from "vitest";
@@ -54,7 +55,7 @@ async function fixture() {
   }
   const root = createRootRoute({ component: () => <Provider resources={[resource]} routerProvider={tanStackRouterProvider}
     refineResources={refineResourcesFromDataResources([resource]).map((entry) => ({ ...entry, list: "/notes", show: "/notes/:id", meta: { ...entry.meta, label: "Notes" } }))}
-    dataProvider={provider}>
+    dataProvider={provider} navigate={navigate}>
     <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
       <ModalsHost><ToastProvider><BreadcrumbLabelProvider><Breadcrumb /><Outlet /></BreadcrumbLabelProvider></ToastProvider></ModalsHost>
     </OperationDocumentsProvider>
@@ -63,6 +64,7 @@ async function fixture() {
   createAddonRouteNodes({ routes, routesByName: new Map(routes.map((route) => [route.name, route])), layoutRoutes: new Map([["console", root]]) });
   const history = createMemoryHistory({ initialEntries: [`/notes?pageSize=20&sort=updated_at%3Adesc&keep=external&filter=${encodeURIComponent(JSON.stringify({ title: { iContains: "Note" } }))}`] });
   const router = createRouter({ routeTree: root, history, parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
+  const navigate = routerNavigator(router);
   render(<RouterProvider router={router} />);
   await screen.findByText("January 2021");
   await waitFor(() => expect(

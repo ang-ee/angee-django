@@ -227,6 +227,20 @@ shared UI copy through an addon bundle.
   fails fast on invalid declarations. Keep query-string codecs addon-local.
   `resourcePageRoutes` names record children `${collectionName}.record` by
   default; use `detailName` only when preserving a deliberate established name.
+- In-app anchors compose the [in-app link owner](../../packages/ui/src/lib/in-app-link.tsx),
+  mounted by `createApp`; plain clicks route automatically and provider-less links
+  stay native. Never pass `onNavigate` merely to call the router, or put a
+  query-bearing href in TanStack `to`; use `navigate({ href })` or the owner's
+  [chrome href conversion](../../packages/ui/src/chrome/href-link-options.ts).
+  Use `rel="external"` for server-served root-relative paths such as admin,
+  media and logout so they load as documents.
+- [Breadcrumb history](../../packages/ui/src/chrome/Breadcrumb.tsx) lives in TanStack
+  location `state.breadcrumbTrail`, validated at the breadcrumb owner: console
+  content links, including drawers and programmatic record navigation, carry
+  the current nested trail. Revisiting a pathname (even with another query) or
+  activating an earlier crumb truncates it; only the eight most recent entries
+  remain. Same-location search updates pass `state: true`, browser Back restores
+  history, and chrome navigation starts fresh. Menu destinations show no strip.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, containers, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
@@ -774,9 +788,13 @@ on that addon; the framework's containers are open to every addon.
 
 `when: { app, route, perspective }` limits an entry's render verbs (`only`,
 `except` and `hide`) to some pages. `route` matches the route or any route
-below it, `app` the active app, and `perspective` the selected perspective
-while the console is confined; each takes one id or a list. An array of
-entries holds conditional alternatives:
+below it, `app` any app on the page's menu trail (its root and every included
+app on the way, flattened ones too, so `when: { app: "work" }` holds on work's
+pages inside the PM suite; under a perspective only the root's own apps count,
+and a page another root owns sits in the root alone), and `perspective` the selected perspective
+while the console is confined; each takes one id or a list, and an id that
+names no route, app or perspective fails at boot. An array of entries holds
+conditional alternatives:
 
 ```ts
 // A product layered on its dependencies.
@@ -794,7 +812,14 @@ Children are declared unconditionally; declaring, moving or removing under
 `when` fails. A container has no hide of its own: hide its children, or narrow
 it with `only: []`. `hide: false` undoes a `hide`, never an `only`. The
 deployment's `ANGEE_UI.containers` is a last layer that depends on every addon:
-it alters and narrows, and declares nothing.
+it alters and narrows, and declares nothing. A deployment `only` narrows like
+any other unless it says `force: true` (G-14): then, where it holds, it stands
+in for every addon's `only` and `except` across the addresses the page merges
+(a forced `only` at `notes.Note#sections` also sets aside the addons' narrowing
+at `form#sections` on notes forms), so a deployment can admit a child an addon
+narrowed away; a `hide` stays until the deployment shows it again. Only the
+deployment may force, and only beside an `only`. Developer mode labels such a
+rule "force only". `ANGEE_UI.menus` forces the same way, per menu node.
 
 ### Variants and `impl`
 
@@ -816,8 +841,15 @@ verbs are variants of Integration's resume and disconnect:
 },
 ```
 
-Owners pass the row's implementations where they render for one record; the
-form's `#actions` and `#actions-menu` do.
+Owners pass the row's implementations where they render for one record. The
+form does so for all of `#sections`, `#rail`, `#actions` and `#actions-menu`:
+it resolves each with `projection: true` so the record projection reads every
+candidate's fields, then shows the groups, tabs, actions and rail groups of
+the children the loaded record admits; its layout (title, status, body) and its
+save read only those children's fields. An original and its variants may reuse
+a tab or rail group id, never a fixed group's. A create form knows no
+implementation: originals stand, and the children that need one stay out of
+the form with their required fields and defaults.
 
 Record verbs are `#actions` children. The one exception is an inline action
 form rendered inside the record, such as a decision answered on its own page:
@@ -1133,13 +1165,28 @@ Hard-won traps — the wise learn from others' mistakes
 - **An addon contributes one menu root.** The app rail renders apps and their
   included, non-flattened sub-apps, at most two levels. The selected app's own
   items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
-  bar; deeper items use the shared dropdown menu and labelled groups.
+  bar; deeper items use the shared dropdown menu and labelled groups. The bar
+  leads with the app's name (or Settings) as a title, set apart from its menus
+  and never marked current. The breadcrumb strip under the bar appears only for
+  nested navigation, a record and deeper
+  ([`useNestedBreadcrumbItems`](../../packages/ui/src/chrome/Breadcrumb.tsx)):
+  a menu destination is already named by the bar, so the trail starts at the
+  current menu page, with the list's return link.
+  The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
+  measures the ordered menus followed by developer removed markers, and excess
+  entries go into More. The current trail's menu keeps the last visible slot;
+  when no entries fit, More holds them all and is marked current when it holds
+  the current page. A route-less menu with one child is the same link in the row
+  and in More. Icon-only rail links show supplementary name tooltips; developer
+  descriptions follow the name.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
-  `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
-  shared **Settings place** instead: the rail and chooser expose one synthetic
-  Settings entry, and the expanded rail swaps to the platform tree with a back
-  header. Settings and the expansion toggle sit below the scrolling list, and
-  the rail is viewport-sticky so both remain reachable. At desktop widths, a
+  `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
+  contributes to the shared **Settings place** in every console: the rail and
+  chooser expose one synthetic Settings entry, and the expanded rail swaps to
+  the platform tree with a back header. Settings and the expansion toggle sit
+  below the scrolling list, and the rail is viewport-sticky so both remain
+  reachable. The expanded desktop
+  header also composes the same expansion toggle. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
   a root with visible included apps opens those sub-apps temporarily in the
@@ -1163,8 +1210,10 @@ Hard-won traps — the wise learn from others' mistakes
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
   another addon's items.
   `route.menu` identifies a route's owning item when references are ambiguous.
-  Ambiguous root ownership still throws under a perspective; confinement does
-  not choose an owner for the route. `useChromePlace()` shares one memoized
+  Multiple references within one root do not throw; without an anchor they
+  provide no menu-derived trail or metadata. References from different roots
+  still throw under a perspective; confinement does not choose an owner for
+  the route. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
   trail. Match path length and search params first, then the route's menu anchor

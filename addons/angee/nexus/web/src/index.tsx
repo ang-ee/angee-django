@@ -10,7 +10,7 @@ import { TimelinePane } from "./TimelinePane";
 const nexus = defineBaseAddon({
   id: "nexus",
   routes: [
-    { name: "nexus.inbox", path: "/nexus/inbox", layout: "console", menu: "nexus.inbox", component: lazyRouteComponent(() => import("./InboxPage"), "InboxPage") },
+    { name: "nexus.inbox", path: "/nexus/inbox", layout: "console", component: lazyRouteComponent(() => import("./InboxPage"), "InboxPage") },
     {
       name: "nexus.graph",
       path: "/nexus/graph",
@@ -23,16 +23,16 @@ const nexus = defineBaseAddon({
   menus: {
     nexus: {
       label: "Nexus",
-      route: "nexus.inbox",
       icon: "nexus-inbox",
       // Each included app keeps its own group, so its pages stay a level down.
       include: ["messaging", "parties", "spaces", "posts"],
     },
     "nexus.inbox": { parent: "nexus", label: "Inbox", route: "nexus.inbox", icon: "nexus-inbox", sequence: 10 },
     "nexus.graph": { parent: "nexus", label: "Graph", route: "nexus.graph", icon: "network", sequence: 20 },
-    "nexus.ties": { parent: "nexus", label: "Ties", route: "nexus.ties", icon: "radar", sequence: 30 },
+    "nexus.ties": { parent: "nexus", label: "Ties", route: "nexus.ties", icon: "radar", sequence: 30, hide: true },
     "nexus.cadences": { parent: "nexus", label: "Cadences", route: "nexus.cadences", icon: "cadence", sequence: 40 },
   },
+  perspectives: { nexus: { root: "nexus", home: "nexus.inbox" } },
   icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History, "nexus-inbox": Inbox },
   i18n: { nexus: enNexusMessages },
   // The cross-channel timeline rides the record chatter seam; the shell applies

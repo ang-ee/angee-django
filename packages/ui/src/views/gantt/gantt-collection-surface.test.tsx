@@ -16,6 +16,7 @@ import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } 
 import type { GanttViewProps } from "./GanttView";
 import { mergeGanttI18n } from "./gantt-i18n";
 import { calendarDateToAnchor } from "../calendar/calendar-view-controls";
+import type { InAppNavigator } from "../../lib/in-app-link";
 
 // ReUI's drawing is tested at its own boundary; all query/state/toolbar owners run here.
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
@@ -38,6 +39,8 @@ function renderCollection(options: {
   resources?: readonly DataResourceMetadata[];
   getList?: (params: Partial<GetListParams>) => Promise<{ data: Row[]; total: number }>;
   onRowClick?: (row: Row) => void;
+  rowHref?: (row: Row) => string;
+  navigate?: InAppNavigator;
   gantt?: Partial<GanttViewSpec>;
 } = {}) {
   const getList = vi.fn(options.getList ?? (async ({ resource }: Partial<GetListParams>) => resource === "lanes"
@@ -53,9 +56,9 @@ function renderCollection(options: {
       gantt={{ start: "start", end: "end", tone: "status",
         lane: { fields: ["code"], content: (row) => ({ title: String(row.name), href: `/lanes/${String(row.id)}`, secondary: `Code ${String(row.code)}` }) },
         ...options.gantt }}
-      laneSource={{ field: "lane" }} onRowClick={options.onRowClick} />;
+      laneSource={{ field: "lane" }} onRowClick={options.onRowClick} rowHref={options.rowHref} />;
   }
-  const view = render(<RouterContextProvider router={router}><Provider resources={options.resources ?? ganttResources} dataProvider={{ getList }}>
+  const view = render(<RouterContextProvider router={router}><Provider navigate={options.navigate} resources={options.resources ?? ganttResources} dataProvider={{ getList }}>
     <ResourceViewProvider resource={ganttRecord.modelLabel} scope="local" initialState={{
       view: "gantt", anchor: options.anchor ?? "2026-09-01", page: options.page ?? 1, pageSize: options.pageSize ?? 10,
     }}><Collection /></ResourceViewProvider>
@@ -64,6 +67,27 @@ function renderCollection(options: {
 }
 
 describe("Gantt collection over native list data", () => {
+  test("bar destinations use the inherited content navigator", async () => {
+    const navigate = vi.fn();
+    renderCollection({ navigate, rowHref: (row) => `/schedules/${String(row.id)}` });
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    act(() => drawing.props?.onEventClick?.(drawing.props!.events[0]!));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(`/schedules/${String(scheduledRecord.id)}`);
+  });
+  test("linked bar destinations use the inherited content navigator", async () => {
+    const navigate = vi.fn();
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterContextProvider router={router}><Provider navigate={navigate} resources={ganttResources} dataProvider={{
+      getList: async ({ resource }) => resource === "lanes" ? { data: ganttLanes, total: 2 } : { data: [scheduledRecord], total: 1 },
+    }}><ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
+      <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]}
+        gantt={{ linked: { resource: ganttRecord.modelLabel, lane: "lane" }, start: "start", end: "end" }}
+        rowHref={(row) => `/lanes/${String(row.id)}`} />
+    </ResourceViewProvider></Provider></RouterContextProvider>);
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    act(() => drawing.props?.onEventClick?.(drawing.props!.events[0]!));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("/lanes/lane-a");
+  });
   test("linked bars use the visible lane page while the lane resource owns view scope and selection", async () => {
     const getList = vi.fn(async ({ resource }: Partial<GetListParams>) => resource === "lanes"
       ? { data: ganttLanes, total: 2 }

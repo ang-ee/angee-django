@@ -37,7 +37,6 @@ export function DashboardView({
         tone: metric.tone,
         detail: metric.detail,
         href: metric.href,
-        onNavigate: metric.onNavigate,
       });
     } else {
       content.push(child);

@@ -35,7 +35,7 @@ export function explainComposition(
 
 function ruleSummary(rule: ComposedContainers["rules"][string][number]): string {
   const parts = [
-    rule.only ? `only [${rule.only.join(", ")}]` : undefined,
+    rule.only ? `${rule.force ? "force only" : "only"} [${rule.only.join(", ")}]` : undefined,
     rule.except ? `except [${rule.except.join(", ")}]` : undefined,
     rule.hide ? `hide [${rule.hide.join(", ")}]` : undefined,
     rule.show ? `show [${rule.show.join(", ")}]` : undefined,

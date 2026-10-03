@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -10,18 +10,14 @@ import { CommandPalette } from "./CommandPalette";
 import { AppMenu } from "./AppMenu";
 import { useShellRegion } from "./shell-containers";
 import { Glyph } from "./Glyph";
-import { Systray } from "./Systray";
 import { UserMenu } from "./UserMenu";
 import { DeveloperMenu } from "./DeveloperMode";
 
+/**
+ * The console's top bar. Its contents are the shell's own: addons reach it
+ * through the shell containers (`shell#regions`, `shell#user-menu`), not props.
+ */
 export interface TopBarProps {
-  /** Optional leading brand/lockup. Omit inside ConsoleLayout — the rail's
-   * app-switcher already carries the brand mark, so the top bar starts with
-   * the menu (matching the console layout). */
-  brand?: ReactNode;
-  hideSearch?: boolean;
-  onHelp?: () => void;
-  onNotifications?: () => void;
   navigation?: {
     open: boolean;
     toggle: () => void;
@@ -34,28 +30,18 @@ export interface TopBarProps {
     collapsed: boolean;
     toggle: () => void;
   };
-  searchPlaceholder?: string;
   showChatterToggle?: boolean;
   showUserMenu?: boolean;
-  trailing?: ReactNode;
   className?: string;
-  children?: ReactNode;
 }
 
 export function TopBar({
-  brand,
-  hideSearch = false,
-  onHelp,
-  onNotifications,
   navigation,
   primaryPane,
   chatterPane,
-  searchPlaceholder,
   showChatterToggle = false,
   showUserMenu = false,
-  trailing,
   className,
-  children,
 }: TopBarProps): ReactElement {
   const t = useUiT();
   const showAppMenu = useShellRegion("chrome.app-menu");
@@ -70,15 +56,10 @@ export function TopBar({
       )}
     >
       {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
-      {brand}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
       {showAppMenu ? <AppMenu /> : null}
-      <div className="min-w-2 flex-1" />
-      {children}
-      {hideSearch ? null : (
-        <CommandPalette triggerPlaceholder={searchPlaceholder} />
-      )}
-      <Systray onHelp={onHelp} onNotifications={onNotifications} />
+      <div className="ml-auto min-w-2" />
+      <CommandPalette />
       <DeveloperMenu />
       {showUserMenu ? (
         <UserMenu
@@ -88,7 +69,6 @@ export function TopBar({
           sideOffset={6}
         />
       ) : null}
-      {trailing}
       {showChatterToggle ? <ChatterToggleButton pane={chatterPane} /> : null}
     </header>
   );

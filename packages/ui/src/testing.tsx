@@ -12,6 +12,8 @@ import {
   type SchemaFieldMetadata,
 } from "@angee/metadata";
 
+import { InAppLinkProvider, type InAppNavigator } from "./lib/in-app-link";
+
 import type {
   MutationDialogProps,
   MutationDialogValues,
@@ -22,6 +24,7 @@ export type UiTestDoubles = Partial<Record<keyof UiModule, unknown>>;
 
 export interface UiTestProviderOptions<T extends RefineTestDataProvider = RefineTestDataProvider>
   extends Omit<RefineTestProviderOptions<T>, "resources"> {
+  navigate?: InAppNavigator;
   metadata?: SchemaFieldMetadata;
   resources?: readonly DataResourceMetadata[];
   /** Override the projected registry when a case exercises explicit routes or no registration. */
@@ -33,6 +36,7 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
   defaults: UiTestProviderOptions<T> = {},
 ) {
   const {
+    navigate: initialNavigate,
     metadata: initialMetadata,
     resources: initialResources,
     refineResources: initialRefineResources,
@@ -42,6 +46,7 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
 
   function Provider({
     children,
+    navigate = initialNavigate,
     metadata = initialMetadata,
     resources = initialResources ?? metadata?.resources,
     refineResources = initialRefineResources,
@@ -52,12 +57,13 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
       () => metadata ?? (resources && schemaFieldMetadataFromDataResources(resources)),
       [metadata, resources],
     );
+    const content = schema ? <ModelMetadataProvider metadata={schema}>{children}</ModelMetadataProvider> : children;
     return <refine.Provider
       {...refineOptions}
       resources={refineResources ?? [...refineResourcesFromDataResources(resources ?? [])]}
       providerNames={providerNames ?? ["console", ...(resources ?? []).map((resource) => resource.schemaName)]}
     >
-      {schema ? <ModelMetadataProvider metadata={schema}>{children}</ModelMetadataProvider> : children}
+      {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
     </refine.Provider>;
   }
 

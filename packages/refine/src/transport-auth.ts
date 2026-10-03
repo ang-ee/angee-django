@@ -20,39 +20,65 @@ export interface CsrfTokenOptions {
   fetch?: FetchFn;
 }
 
+interface CsrfBootstrap {
+  token: string | null;
+  cookieName: string | null;
+}
+
+// The CSRF cookie belongs to the document, not to one GraphQL client. Separate
+// concurrent bootstraps would each mint a secret, the last Set-Cookie would win,
+// and the other clients' tokens would no longer match it. Every provider shares
+// one in-flight bootstrap per endpoint.
+const bootstraps = new Map<string, Promise<CsrfBootstrap>>();
+
+/** Django accepts the unmasked CSRF cookie; read it when the cookie is readable. */
+function readCsrfCookie(cookieName: string | null): string | null {
+  if (!cookieName || typeof document === "undefined") return null;
+  const prefix = `${encodeURIComponent(cookieName)}=`;
+  const cookie = document.cookie.split(";").map(value => value.trim()).find(value => value.startsWith(prefix));
+  return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : null;
+}
+
 export function createCsrfTokenProvider(
   options: CsrfTokenOptions = {},
 ): CsrfTokenProvider {
   const endpoint = options.endpoint ?? "/auth/csrf/";
   const fetchImpl = options.fetch ?? globalThis.fetch;
   let cookieName: string | null = null;
-  let inFlight: Promise<string | null> | null = null;
 
-  async function load(): Promise<string | null> {
+  async function load(): Promise<CsrfBootstrap> {
     const response = await fetchImpl(endpoint, { credentials: "include" });
-    if (!response.ok) return null;
+    if (!response.ok) return { token: null, cookieName: null };
     const body = (await response.json()) as { token?: unknown; cookieName?: unknown };
-    cookieName = typeof body.cookieName === "string" ? body.cookieName : null;
-    return typeof body.token === "string" ? body.token : null;
+    return {
+      token: typeof body.token === "string" ? body.token : null,
+      cookieName: typeof body.cookieName === "string" ? body.cookieName : null,
+    };
   }
 
   return {
     async token() {
-      // Django accepts the unmasked CSRF cookie. Read it for every request:
-      // login can rotate it in another GraphQL client or another browser tab.
-      if (cookieName && typeof document !== "undefined") {
-        const prefix = `${encodeURIComponent(cookieName)}=`;
-        const cookie = document.cookie.split(";").map(value => value.trim()).find(value => value.startsWith(prefix));
-        if (cookie) return decodeURIComponent(cookie.slice(prefix.length));
-      }
+      // Read the cookie for every request: login can rotate it in another
+      // GraphQL client or another browser tab.
+      const current = readCsrfCookie(cookieName);
+      if (current) return current;
       // HttpOnly/session-backed CSRF has no readable cookie; fetch a fresh
       // token, sharing only concurrent reads rather than caching across logins.
-      inFlight ??= load().finally(() => { inFlight = null; });
-      return inFlight;
+      let bootstrap = bootstraps.get(endpoint);
+      if (!bootstrap) {
+        const pending = load().finally(() => {
+          if (bootstraps.get(endpoint) === pending) bootstraps.delete(endpoint);
+        });
+        bootstraps.set(endpoint, pending);
+        bootstrap = pending;
+      }
+      const loaded = await bootstrap;
+      cookieName = loaded.cookieName;
+      // The cookie holds the secret that survived; prefer it to the body's token.
+      return readCsrfCookie(cookieName) ?? loaded.token;
     },
     clear() {
       cookieName = null;
-      inFlight = null;
     },
   };
 }

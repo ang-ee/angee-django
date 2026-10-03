@@ -2,9 +2,8 @@ import * as React from "react";
 
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { NavLink } from "../ui/nav-link";
 import { tabsVariants } from "../ui/tabs";
-
-type NavigateHandler = (to: string) => void;
 
 export const sectionNavVariants = tv({
   slots: {
@@ -51,7 +50,6 @@ export type SectionNavProps = Omit<
     className?: string;
     items?: readonly SectionNavItem[];
     label?: string;
-    onNavigate?: NavigateHandler;
   };
 
 export const SectionNav = React.forwardRef<HTMLElement, SectionNavProps>(
@@ -61,7 +59,6 @@ export const SectionNav = React.forwardRef<HTMLElement, SectionNavProps>(
       className,
       items,
       label = "Sections",
-      onNavigate,
       orientation = "horizontal",
       ...props
     },
@@ -90,20 +87,19 @@ export const SectionNav = React.forwardRef<HTMLElement, SectionNavProps>(
 
               if (item.href) {
                 return (
-                  <a
+                  <NavLink
                     key={item.id}
                     aria-current={ariaCurrent}
                     aria-disabled={item.disabled ? true : undefined}
                     className={linkClassName}
                     data-active={active ? true : undefined}
-                    href={item.disabled ? undefined : item.href}
+                    href={item.href}
+                    disabled={item.disabled}
                     tabIndex={item.disabled ? -1 : undefined}
-                    onClick={(event) =>
-                      handleSectionLinkClick(event, item, onNavigate)
-                    }
+                    onClick={() => item.onSelect?.()}
                   >
                     {item.label}
-                  </a>
+                  </NavLink>
                 );
               }
 
@@ -136,27 +132,4 @@ function getAriaCurrent(
   if (!active) return undefined;
   if (!item.href) return true;
   return item.href.startsWith("#") ? true : "page";
-}
-
-function handleSectionLinkClick(
-  event: React.MouseEvent<HTMLAnchorElement>,
-  item: SectionNavItem,
-  onNavigate: NavigateHandler | undefined,
-): void {
-  if (item.disabled) {
-    event.preventDefault();
-    return;
-  }
-
-  item.onSelect?.();
-
-  if (!item.href || !onNavigate || item.href.startsWith("#")) return;
-  if (event.defaultPrevented || event.button !== 0) return;
-  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-
-  const target = event.currentTarget.getAttribute("target");
-  if (target && target !== "_self") return;
-
-  event.preventDefault();
-  onNavigate(item.href);
 }

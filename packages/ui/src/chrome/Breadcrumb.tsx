@@ -1,17 +1,36 @@
-import { Link } from "@tanstack/react-router";
+import { useRouterState } from "@tanstack/react-router";
 import {
   useBreadcrumb as useRefineBreadcrumb,
   type BreadcrumbsType,
 } from "@refinedev/core";
 import * as React from "react";
 import type { ReactElement } from "react";
+import * as v from "valibot";
 
 import { useUiT } from "../i18n";
+import { InAppLinkProvider, useInAppNavigator } from "../lib/in-app-link";
+import { useLatestRef } from "../lib/use-latest-ref";
 import { cn } from "../lib/cn";
+import { TextLink } from "../ui/text-link";
+import { useOptionalChromePlace } from "./refine-menu";
 
-export interface BreadcrumbItem {
-  label: string;
-  to?: string;
+const breadcrumbTrailSchema = v.array(v.object({ label: v.string(), href: v.optional(v.string()) }));
+export type BreadcrumbItem = v.InferOutput<typeof breadcrumbTrailSchema>[number];
+
+declare module "@tanstack/react-router" {
+  interface HistoryState {
+    breadcrumbTrail?: unknown;
+  }
+}
+
+const MAX_BREADCRUMB_ITEMS = 8;
+
+/** Revisiting a pathname has the same prefix as activating its earlier crumb. */
+function breadcrumbPrefix(items: readonly BreadcrumbItem[], href: string): readonly BreadcrumbItem[] {
+  const pathname = href.split(/[?#]/, 1)[0];
+  const index = items.findIndex((item) => item.href?.split(/[?#]/, 1)[0] === pathname);
+  // Reserve one slot for the destination's current crumb.
+  return (index < 0 ? items : items.slice(0, index)).slice(1 - MAX_BREADCRUMB_ITEMS);
 }
 
 export interface BreadcrumbProps {
@@ -79,14 +98,54 @@ export function useBreadcrumbCollectionLink(to: string, href: string | null): vo
 export function Breadcrumb({
   className,
 }: BreadcrumbProps): ReactElement {
-  return <BreadcrumbTrail className={className} items={useBreadcrumbItems()} />;
+  return <BreadcrumbTrail className={className} items={useNestedBreadcrumbItems()} />;
 }
 
-/** The displayed trail, including the record's published label and return link. */
+/** The full trail, including the record's published label and return link. */
 export function useBreadcrumbItems(): readonly BreadcrumbItem[] {
   const leafLabel = React.useContext(BreadcrumbLeafLabelContext);
   const collection = React.useContext(BreadcrumbCollectionContext)?.link;
   return breadcrumbItemsFromRefine(useRefineBreadcrumb().breadcrumbs, leafLabel, collection);
+}
+
+/**
+ * The trail worth showing below the top bar. It is empty on a menu destination,
+ * because the top bar already names the app and its menus. Deeper (a record, or
+ * anything else the menus do not name), it is the current menu page followed by
+ * the deeper crumbs.
+ */
+export function useNestedBreadcrumbItems(): readonly BreadcrumbItem[] {
+  const items = useBreadcrumbItems();
+  const match = useOptionalChromePlace()?.match;
+  const location = useRouterState({ select: (state) => state.location });
+  const menuLabels = new Set(match?.trail.map((node) => node.displayLabel));
+  const deeper = match ? items.filter((item) => !menuLabels.has(item.label)) : items;
+  // A collection/menu destination never shows a strip, even if reached from a record.
+  if (!deeper.length) return [];
+  const current = deeper.map((item, index) => index === deeper.length - 1 ? { ...item, href: location.href } : item);
+  const parsed = v.safeParse(breadcrumbTrailSchema, location.state.breadcrumbTrail);
+  const history = breadcrumbPrefix(parsed.success ? parsed.output : [], location.href);
+  if (history.length) {
+    // The previous form supplies the context; the destination's collection is not another step.
+    const tail = match ? current : current.slice(-1);
+    return dedupeBreadcrumbItems([...history, ...tail]).slice(-MAX_BREADCRUMB_ITEMS);
+  }
+  const page = match?.item.id === match?.app?.id ? undefined : match?.item;
+  const pageItem = page && (items.find((item) => item.label === page.displayLabel) ?? { label: page.displayLabel, href: page.target });
+  return (pageItem ? [pageItem, ...current] : current).slice(-MAX_BREADCRUMB_ITEMS);
+}
+
+/** Only console content carries the current form's breadcrumb context to a followed link. */
+export function BreadcrumbContentLinks({ children, trail }: {
+  children: React.ReactNode;
+  trail: readonly BreadcrumbItem[];
+}): ReactElement {
+  const navigate = useInAppNavigator();
+  const trailRef = useLatestRef(trail);
+  const follow = React.useCallback<NonNullable<typeof navigate>>((href, options) => navigate?.(href, {
+    ...options, state: { ...options?.state, breadcrumbTrail: breadcrumbPrefix(trailRef.current, href) },
+  }), [navigate, trailRef]);
+  return navigate ? <InAppLinkProvider navigate={follow}>{children}</InAppLinkProvider> : <>{children}</>;
 }
 
 function BreadcrumbTrail({
@@ -107,7 +166,7 @@ function BreadcrumbTrail({
     >
       {items.map((item, index) => {
         const current = index === items.length - 1;
-        const key = `${itemKey(item.label)}:${index}`;
+        const key = `${item.label}:${index}`;
         return (
           <span key={key} className="contents">
             {index > 0 ? (
@@ -115,14 +174,14 @@ function BreadcrumbTrail({
                 /
               </span>
             ) : null}
-            {item.to && !current ? (
-              <Link
-                to={item.to}
-                href={item.to}
+            {item.href && !current ? (
+              <BreadcrumbLink
+                href={item.href}
+                trailPrefix={items.slice(0, index)}
                 className="min-w-0 truncate rounded-4 outline-none hover:text-fg focus-visible:focus-ring"
               >
                 {item.label}
-              </Link>
+              </BreadcrumbLink>
             ) : (
               <span
                 aria-current={current ? "page" : undefined}
@@ -138,8 +197,13 @@ function BreadcrumbTrail({
   );
 }
 
-function itemKey(label: BreadcrumbItem["label"]): string {
-  return label;
+function BreadcrumbLink({ href, trailPrefix, ...props }: React.ComponentProps<typeof TextLink> & {
+  href: string;
+  trailPrefix: readonly BreadcrumbItem[];
+}): ReactElement {
+  return <BreadcrumbContentLinks trail={trailPrefix}>
+    <TextLink href={href} variant="muted" {...props} />
+  </BreadcrumbContentLinks>;
 }
 
 function breadcrumbItemsFromRefine(
@@ -150,14 +214,18 @@ function breadcrumbItemsFromRefine(
   const items = breadcrumbs.map((item) => ({
     label:
       leafLabel && item === breadcrumbs.at(-1) ? leafLabel : item.label,
-    ...(item.href ? { to: item.href === collection?.to ? collection.href : item.href } : {}),
+    ...(item.href ? { href: item.href === collection?.to ? collection.href : item.href } : {}),
   }));
 
-  // Menu grouping may repeat the same human label and destination at adjacent
-  // levels (for example Integrations / Integrations / Integrations). Keep the
+  return dedupeBreadcrumbItems(items);
+}
+
+function dedupeBreadcrumbItems(items: readonly BreadcrumbItem[]): readonly BreadcrumbItem[] {
+  // History joints and menu grouping may repeat a label and destination at
+  // adjacent levels (Integrations / Integrations / Integrations). Keep the
   // deepest owner without collapsing equally named, distinct destinations.
   return items.filter((item, index) => {
     const next = items[index + 1];
-    return item.label !== next?.label || item.to !== next.to;
+    return item.label !== next?.label || item.href !== next.href;
   });
 }

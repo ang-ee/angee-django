@@ -38,7 +38,7 @@ export function AddIntegrationPage(): React.ReactElement {
   if (query.error) return <ErrorBanner title={t("integrations.add.loadError")} description={errorMessage(query.error, t("integrations.add.loadError"))} />;
   const selectCapability = (resource?: string): void => {
     const base = routeHref("integrate.add");
-    void navigate({ to: resource ? `${base}?capability=${encodeURIComponent(resource)}` : base });
+    void navigate({ href: resource ? `${base}?capability=${encodeURIComponent(resource)}` : base });
   };
 
   if (!selected) {
@@ -89,7 +89,7 @@ export function AddIntegrationPage(): React.ReactElement {
       onSaved={(row) => {
         const id = rowPublicId(row);
         const href = id == null ? undefined : recordHref(selected.resource, id);
-        if (href) void navigate({ to: href });
+        if (href) void navigate({ href });
       }}
     />
   );

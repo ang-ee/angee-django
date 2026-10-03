@@ -142,6 +142,7 @@ const ResourceViewContext = createContext<ResourceViewContextValue | null>(null)
 type ResourceViewNavigate = (options: {
   search: (current: Record<string, unknown>) => Record<string, unknown>;
   replace?: boolean;
+  state: true;
 }) => Promise<void> | void;
 
 export function ResourceViewProvider({
@@ -296,6 +297,7 @@ function RouteResourceViewProvider({
       }
       setFailedTransition(null);
       void navigate({
+        state: true,
         search: (current) => {
           const updated = functionalUpdate(
             updater,

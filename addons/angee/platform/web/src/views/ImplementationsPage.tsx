@@ -1,11 +1,10 @@
 import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
-import { Code, ListView, textRoleVariants, useRouteHref, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { TextLink, Code, ListView, textRoleVariants, useRouteHref, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import type { PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
-import { TextRouteLink } from "../lib/cells";
 
 type ImplementationRow = Pick<PlatformImplementationData,
   "id" | "label" | "key" | "model" | "field" | "category" | "class_path" | "addon_label" | "addon_id"
@@ -22,9 +21,9 @@ export function ImplementationsPage(): ReactElement {
       field: "label", header: t("implementation.name"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <TextRouteLink href={routeHref("platform.implementations.record", { id: row.id })}>
+          <TextLink href={routeHref("platform.implementations.record", { id: row.id })}>
             {row.label}
-          </TextRouteLink>
+          </TextLink>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.key}</span>
         </span>
       ),
@@ -35,7 +34,7 @@ export function ImplementationsPage(): ReactElement {
     {
       field: "addon_label", header: t("col.addon"),
       render: (row) => row.addon_id
-        ? <TextRouteLink href={routeHref("platform.addons.record", { id: row.addon_id })}>{row.addon_label}</TextRouteLink>
+        ? <TextLink href={routeHref("platform.addons.record", { id: row.addon_id })}>{row.addon_label}</TextLink>
         : t("implementation.external"),
     },
     { field: "class_path", header: t("implementation.class"), render: (row) => <Code truncate>{row.class_path}</Code> },

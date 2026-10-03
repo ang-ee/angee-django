@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useInAppLinkClick } from "../../../lib/in-app-link";
 import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -121,38 +121,17 @@ function LinkedRecordRow<TRow extends Row>({
   const firstCell = row.getVisibleCells()[0];
   const ownsControls =
     firstCell && columnHasInteractiveContent(firstCell.column.columnDef);
-  const navigate = useNavigate();
-  const openRow = React.useCallback(
-    (event: React.MouseEvent<HTMLTableRowElement>) => {
-      if (isInteractiveTarget(event.target)) return;
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-        window.open(href, "_blank", "noopener");
-        return;
-      }
-      event.preventDefault();
-      onRecordOpen?.(row.original);
-      void navigate({ to: href });
-    },
-    [href, navigate, onRecordOpen, row.original],
-  );
-  const openLink = React.useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
-        return;
-      }
-      event.preventDefault();
-      onRecordOpen?.(row.original);
-      void navigate({ to: href });
-    },
-    [href, navigate, onRecordOpen, row.original],
-  );
+  const link = React.useRef<HTMLAnchorElement>(null);
+  const openLink = useInAppLinkClick(href, undefined, { onFollow: () => onRecordOpen?.(row.original) });
+  const openRow = (event: React.MouseEvent<HTMLTableRowElement>) => {
+    if (event.defaultPrevented || isInteractiveTarget(event.target)) return;
+    // A table row has no native new-tab behavior; its actual anchor does.
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      window.open(href, "_blank", "noopener");
+      return;
+    }
+    link.current?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: event.button }));
+  };
   return (
     <TableRow
       {...dragProps}
@@ -168,8 +147,7 @@ function LinkedRecordRow<TRow extends Row>({
               if (event.target !== event.currentTarget || event.key !== "Enter")
                 return;
               event.preventDefault();
-              onRecordOpen?.(row.original);
-              void navigate({ to: href });
+              link.current?.click();
             }
           : undefined
       }
@@ -195,6 +173,7 @@ function LinkedRecordRow<TRow extends Row>({
           {index === 0 &&
           !columnHasInteractiveContent(cell.column.columnDef) ? (
             <a
+              ref={link}
               href={href}
               className="block min-w-0 rounded-4 text-inherit outline-none focus-visible:focus-ring"
               aria-label={t("list.openRecord", {
@@ -209,7 +188,10 @@ function LinkedRecordRow<TRow extends Row>({
               {renderCell(cell)}
             </a>
           ) : (
-            renderCell(cell)
+            <>
+              {index === 0 ? <a ref={link} href={href} hidden tabIndex={-1} onClick={openLink} /> : null}
+              {renderCell(cell)}
+            </>
           )}
         </TableCell>
       ))}

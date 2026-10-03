@@ -23,8 +23,6 @@ export interface MetricProps {
   detail?: ReactNode;
   /** Destination for a metric that opens its related detail view. */
   href?: string;
-  /** Optional client-side navigation handler for `href`. */
-  onNavigate?: (href: string) => void;
 }
 
 /** Render-less marker; `DashboardView` collects these into one prominent metric strip. */

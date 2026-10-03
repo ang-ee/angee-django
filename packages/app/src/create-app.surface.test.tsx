@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
-import { act, cleanup, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
+import { TextLink } from "@angee/ui/ui/text-link";
 import { ContainerOutlet } from "@angee/ui/lib/container-outlet";
 import { useContainer } from "@angee/ui/runtime";
 import { RecordChrome } from "@angee/ui/views/index";
@@ -143,5 +144,28 @@ test("an app narrows the record chrome with a conditional only on its own form#c
     await act(async () => { await app.router.navigate({ to: "/desk" }); });
     await screen.findByText("Workflow action");
     expect(screen.getByText("Share action")).toBeTruthy();
+  } finally { act(() => root.unmount()); host.remove(); }
+});
+
+
+test("the app supplies in-app link navigation and keeps a query-bearing home destination out of the pathname", async () => {
+  history.replaceState(null, "", "/");
+  const app = createApp({
+    addons: [{ id: "desk", routes: [
+      { name: "desk.home", path: "/desk", component: () => <TextLink href="/records/7?preset=open">Follow record</TextLink> },
+      { name: "desk.record", path: "/records/$id", component: () => <div>Record page</div> },
+    ], menus: [{ id: "desk", route: "desk.home" }] }],
+    layouts: { console: { requireAuth: false } }, schemas: TEST_SCHEMAS, defaultSchema: "console", home: "/desk?preset=all",
+  });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = app.mount(host);
+  try {
+    const link = await screen.findByRole("link", { name: "Follow record" });
+    expect(app.router.state.location.pathname).toBe("/desk");
+    expect(app.router.state.location.search).toEqual({ preset: "all" });
+    expect(fireEvent.click(link)).toBe(false);
+    await screen.findByText("Record page");
+    await waitFor(() => expect(app.router.state.location.pathname).toBe("/records/7"));
+    expect(app.router.state.location.search).toEqual({ preset: "open" });
   } finally { act(() => root.unmount()); host.remove(); }
 });
