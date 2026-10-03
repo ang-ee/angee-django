@@ -6,6 +6,9 @@ import addon from "./index";
 import { runResourceFixture, workflowResourceFixture } from "./testing";
 import { triggerEventResourceFixture, triggerResourceFixture } from "./trigger-testing";
 
+// Workflows includes decisions' menu; the composed runtime supplies the dependency.
+const decisionsMenu = { id: "decisions", menus: [{ id: "decisions", label: "Decisions" }] };
+
 test("registers read-only workflow and run pages with additive record and decision context", () => {
   expectValidBaseAddon(addon);
   expect(addon.routes?.map((route) => route.name)).toContain("workflows.runs.record");
@@ -14,7 +17,7 @@ test("registers read-only workflow and run pages with additive record and decisi
 });
 
 test("trigger record breadcrumbs inherit the declared Triggers collection label", async () => {
-  const chrome = await chromeSnapshotForRoute({ addons: [addon], path: "/workflows/triggers/wft_review", schemas: {
+  const chrome = await chromeSnapshotForRoute({ addons: [decisionsMenu, { ...addon, dependsOn: ["decisions"] }], path: "/workflows/triggers/wft_review", schemas: {
     ...TEST_SCHEMAS,
     console: { ...TEST_SCHEMAS.console, metadata: { angee: { resources: [
       workflowResourceFixture, runResourceFixture, triggerResourceFixture, triggerEventResourceFixture,

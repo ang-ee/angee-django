@@ -37,6 +37,8 @@ export interface ChromeMenuExtra {
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
+  /** Left out of the rail and Settings; it still owns its routes and stays in the palette. */
+  hidden?: boolean;
 }
 
 export interface BaseMenuItem extends MenuItem, ChromeMenuExtra {
@@ -141,6 +143,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
+  hidden?: boolean;
 
   constructor(item: ChromeMenuItem) {
     const { children: _children, ...clone } = item;
@@ -173,8 +176,9 @@ export class ChromeMenuNode implements ChromeMenuItem {
     return this.parentId;
   }
 
+  /** Children the rail renders: those with a target that are not hidden. */
   get targetedChildren(): readonly ChromeMenuNode[] {
-    return (this.children ?? []).filter((child) => child.target);
+    return (this.children ?? []).filter((child) => child.target && !child.hidden);
   }
 
   /** Most-specific targeted child whose subtree contains `pathname`. */
@@ -198,7 +202,8 @@ export class ChromeMenuNode implements ChromeMenuItem {
     visited.add(this.id);
     try {
       if (this.to) return this.to;
-      for (const child of this.children ?? []) {
+      const children = this.children ?? [];
+      for (const child of [...children.filter((item) => !item.hidden), ...children.filter((item) => item.hidden)]) {
         const target = child.resolveTarget(visited);
         if (target) return target;
       }
@@ -253,7 +258,7 @@ export class MenuTree {
 
   railMenuItems(): readonly ChromeMenuNode[] {
     return this.appRoots().filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id)) return false;
+      if (CHROME_MENU_PARENT_IDS.has(item.id) || item.hidden) return false;
       if (item.group === "platform") return false;
       return Boolean(item.target);
     });
@@ -262,7 +267,7 @@ export class MenuTree {
   /** Navigable root categories that live in the Settings place. */
   settingsMenuItems(): readonly ChromeMenuNode[] {
     return this.roots.filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id)) return false;
+      if (CHROME_MENU_PARENT_IDS.has(item.id) || item.hidden) return false;
       return item.group === "platform" && Boolean(item.target);
     });
   }

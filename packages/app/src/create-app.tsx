@@ -127,6 +127,8 @@ import {
   resourceMutationsForSchema,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
+import { explainComposition, type CompositionExplanation } from "./explain";
+import { developmentMode } from "@angee/ui/lib/development-mode";
 import { admittedContributions, routePolicyIndex } from "./route-policy";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
@@ -199,6 +201,8 @@ type NormalizedAngeeAppSchemaConfig =
 export interface AngeeApp {
   router: AnyRouter;
   mount(target: string | Element): Root;
+  /** Which layer set the shell and each menu node, and why pages are hidden or unavailable. */
+  explain: CompositionExplanation;
 }
 
 /**
@@ -297,8 +301,21 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   const menuTree = MenuTree.from(menus);
   const confineTo = input.confineTo ?? composed.shell.perspective?.root;
+  if (confineTo !== undefined && !menuTree.roots.some((root) => root.id === confineTo)) {
+    throw new Error(
+      `Unknown menu root "${confineTo}": a perspective root must be a top-level menu item, not removed or included under another item.`,
+    );
+  }
   const homeInput = input.home ?? composed.shell.home;
-  const projection = new AppRouteProjection(routes, menuTree, confineTo);
+  const projection = new AppRouteProjection(routes, menuTree, confineTo, {
+    navigation: MenuTree.from(resolveMenuRouteTargets(composed.menuComposition.navigation, routeHref)),
+    removed: composed.menuComposition.removed,
+  });
+  const unavailable = projection.unavailable;
+  // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
+  const runtimeRouteHref = unavailable.size
+    ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
+    : routeHref;
   const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
   const unrestrictedSurface: SurfacePresentation = {};
   const navigationTree = projection.navigationTree;
@@ -371,7 +388,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     drawers: composed.drawers,
     dashboards: composed.dashboards,
     routesByResource,
-    routeHref,
+    routeHref: runtimeRouteHref,
     loginPath,
     themes: composed.themes as readonly ThemeContribution[],
   };
@@ -422,11 +439,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const home =
     (homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined) ??
     (confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
-    routes.find((route) => route.layout !== "public")?.path ??
+    routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path ??
     "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
     ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
+  if (homeRoute && unavailable.has(homeRoute.name)) {
+    throw new Error(`Home "${home}" is unavailable: ${unavailable.get(homeRoute.name)}.`);
+  }
   if (confineTo !== undefined && (homePath === "/"
     || !(homeRoute ? projection.rootFor(homeRoute) === confineTo : menuTree.activeAppRoot(homePath)?.id === confineTo))) {
     throw new Error(`Home "${home}" must belong to confined menu root "${confineTo}".`);
@@ -458,7 +478,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         drawers: admittedContributions(runtime.drawers, surface.admit, "drawers"),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref,
+        routeHref: runtimeRouteHref,
       };
     }, [app, activeRoute, words, surface]);
     return (
@@ -533,7 +553,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
-    ...(confineTo !== undefined ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } } : {}),
+    ...(confineTo !== undefined || unavailable.size
+      ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } }
+      : {}),
   });
 
   const router = createRouter({
@@ -553,8 +575,18 @@ export function createApp(input: CreateAppInput): AngeeApp {
     defaultPendingComponent: () => <LoadingPanel />,
   });
 
+  const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
+    home,
+    confineTo: confineTo ?? null,
+  });
+  if (developmentMode()) {
+    for (const diagnostic of composed.shell.diagnostics) console.warn(`[angee] ${diagnostic}`);
+    const menuFindings = composed.menuComposition.diagnostics.length;
+    if (menuFindings) console.warn(`[angee] ${menuFindings} menu finding(s); see createApp(...).explain.menus.diagnostics.`);
+  }
   return {
     router,
+    explain,
     mount(target: string | Element): Root {
       const element =
         typeof target === "string" ? document.querySelector(target) : target;

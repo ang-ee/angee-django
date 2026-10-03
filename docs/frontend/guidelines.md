@@ -899,8 +899,13 @@ Hard-won traps — the wise learn from others' mistakes
   for explicit collection-view state, not derived menu children.
   [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
   app roots: explicit `appRoot` declarations win, otherwise every root is an app,
-  and `appRoot` on a non-root item throws. A branded single-root rail shows the
-  brand and that root's children instead of the app chooser.
+  and `appRoot` on a non-root item throws (an app another addon includes drops
+  the marker: the including root is the app). A branded single-root rail shows the
+  brand and that root's children instead of the app chooser. Addons rearrange
+  other addons' menus only through the `menus` dict's declared verbs (include,
+  flatten, remove, hide, only, position), along their dependencies; see
+  [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
+  another addon's items.
   A route referenced by more than one menu item must set `route.menu` (the owning
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the

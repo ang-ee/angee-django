@@ -1,5 +1,9 @@
 import type { RuntimeBrand } from "@angee/ui/runtime";
 
+import { DEPLOYMENT_LAYER_ID, layerAncestry, mostSpecific, type Layer } from "./layers";
+
+export { DEPLOYMENT_LAYER_ID };
+
 /** Shell facts a product addon declares; a dependent overrides its dependencies field by field. */
 export interface ShellDeclaration {
   /** Where `/` lands: a route name or an absolute path. */
@@ -13,15 +17,15 @@ export interface ShellDeclaration {
 export interface PerspectiveDeclaration {
   /** The menu root the rail, palette and route guard are confined to. */
   root: string;
-  /** Where `/` lands under this perspective; defaults to the shell's home. */
+  /**
+   * Where `/` lands when the deployment pins this perspective. A product that
+   * selects it keeps its own `shell.home`; this is the fallback.
+   */
   home?: string;
 }
 
 /** The layer facts `resolveShell` reads from each composed manifest. */
-export interface ShellLayer {
-  id: string;
-  /** Ids of the manifests this one depends on, as the composed runtime supplies them. */
-  dependsOn?: readonly string[];
+export interface ShellLayer extends Layer {
   shell?: ShellDeclaration;
   /** @deprecated Declare `shell.brand`. */
   brand?: RuntimeBrand;
@@ -38,9 +42,6 @@ export interface ResolvedShell {
   diagnostics: readonly string[];
 }
 
-/** The deployment's `ANGEE_UI` layer, appended by the composed runtime after every addon. */
-export const DEPLOYMENT_LAYER_ID = "deployment";
-
 const SHELL_FIELDS = ["home", "brand", "perspective"] as const;
 
 /**
@@ -52,9 +53,10 @@ const SHELL_FIELDS = ["home", "brand", "perspective"] as const;
  * unrelated ancestors of the selected product setting one field, fall back to
  * the framework default instead of failing; the deployment layer applies last.
  */
-export function resolveShell(layers: readonly ShellLayer[]): ResolvedShell {
-  const ids = new Set(layers.map((layer) => layer.id));
-  const ancestors = ancestry(layers, ids);
+export function resolveShell(
+  layers: readonly ShellLayer[],
+  ancestors: ReadonlyMap<string, ReadonlySet<string>> = layerAncestry(layers),
+): ResolvedShell {
   const perspectives = new Map<string, PerspectiveDeclaration>();
   for (const layer of layers) {
     for (const [id, perspective] of Object.entries(layer.perspectives ?? {})) {
@@ -108,8 +110,12 @@ export function resolveShell(layers: readonly ShellLayer[]): ResolvedShell {
     if (!declared) throw new Error(`Shell selects unknown perspective "${resolved.perspective}".`);
     perspective = { id: resolved.perspective, ...declared };
   }
-  const home = deployment?.home ?? perspective?.home ?? resolved.home;
-  if (home !== undefined && deployment?.home === undefined && perspective?.home !== undefined) {
+  // A pinned perspective brings its home; one a product selects defers to the
+  // product chain's shell.home, so a product layered on a bundle can move home.
+  const pinned = provenance.perspective === DEPLOYMENT_LAYER_ID ? perspective?.home : undefined;
+  const home = deployment?.home ?? pinned ?? resolved.home ?? perspective?.home;
+  if (deployment?.home === undefined && perspective?.home !== undefined && home === perspective.home
+    && (pinned !== undefined || resolved.home === undefined)) {
     provenance.home = provenance.perspective!;
   }
   return {
@@ -127,34 +133,4 @@ function assign<K extends keyof ShellDeclaration>(
   value: ShellDeclaration[K],
 ): void {
   target[field] = value;
-}
-
-/** Each layer's transitive dependencies; an undeclared dependency id fails composition. */
-function ancestry(layers: readonly ShellLayer[], ids: ReadonlySet<string>): Map<string, Set<string>> {
-  const direct = new Map(layers.map((layer) => [layer.id, layer.dependsOn ?? []] as const));
-  for (const [id, dependencies] of direct) {
-    for (const dependency of dependencies) {
-      if (!ids.has(dependency)) throw new Error(`Addon "${id}" depends on unknown addon "${dependency}".`);
-    }
-  }
-  const closures = new Map<string, Set<string>>();
-  const visit = (id: string, path: readonly string[]): Set<string> => {
-    const known = closures.get(id);
-    if (known) return known;
-    if (path.includes(id)) throw new Error(`Addon dependencies form a cycle: ${[...path, id].join(" -> ")}.`);
-    const reached = new Set<string>();
-    for (const dependency of direct.get(id) ?? []) {
-      reached.add(dependency);
-      for (const ancestor of visit(dependency, [...path, id])) reached.add(ancestor);
-    }
-    closures.set(id, reached);
-    return reached;
-  };
-  for (const id of direct.keys()) visit(id, []);
-  return closures;
-}
-
-/** The candidates no other candidate depends on, in input order. */
-function mostSpecific(candidates: readonly string[], ancestors: ReadonlyMap<string, ReadonlySet<string>>): string[] {
-  return candidates.filter((id) => !candidates.some((other) => other !== id && ancestors.get(other)?.has(id)));
 }

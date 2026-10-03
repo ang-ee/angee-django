@@ -165,12 +165,23 @@ export class AppRouteProjection {
   private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
 
+  /** Console routes removed menu nodes made unavailable, with the reason; they redirect home. */
+  readonly unavailable: ReadonlyMap<string, string>;
+
+  /**
+   * `menuTree` is the logical tree (route ownership, trails); `navigation` is what
+   * the chrome shows (defaults to the logical tree); `removed` lists the menu
+   * nodes composition removed, which decides route availability.
+   */
   constructor(
     readonly routes: readonly BaseAddonRoute[],
     readonly menuTree: MenuTree,
     readonly confineTo?: string,
+    options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
   ) {
-    this.navigationTree = confineTo === undefined ? menuTree : menuTree.confineTo(confineTo);
+    const navigation = options.navigation ?? menuTree;
+    this.navigationTree = confineTo === undefined ? navigation : navigation.confineTo(confineTo);
+    this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
     const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
     const canonical: BaseAddonRoute[] = [];
@@ -183,6 +194,7 @@ export class AppRouteProjection {
         || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     });
     for (const route of ordered) {
+      if (this.unavailable.has(route.name)) continue;
       const root = this.rootFor(route);
       const resource = route.resource ?? route.recordModel;
       if (!resource || !root || !appIds.has(root)) {
@@ -267,6 +279,7 @@ export class AppRouteProjection {
   }
 
   allows(route: BaseAddonRoute, pathname: string): boolean {
+    if (this.unavailable.has(route.name)) return false;
     if (this.confineTo === undefined) return true;
     const root = this.rootFor(route);
     if (root === undefined || root === this.confineTo) return true;
@@ -313,22 +326,71 @@ function addMenuRouteResource(
       ...(item.status ? { status: item.status } : {}),
       ...(item.tone ? { tone: item.tone } : {}),
       ...(item.badge !== undefined ? { badge: item.badge } : {}),
+      ...(item.hidden ? { hidden: true } : {}),
       ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
     },
   });
+}
+
+/**
+ * Console routes made unavailable by removed menu nodes, each with its reason. A
+ * route is unavailable when every menu reference to it was removed: its targets
+ * and its `route.menu` anchor. A surviving reference keeps it available; route
+ * descendants (`route.parent`) follow; routes no menu ever referenced, and
+ * routes outside the console layout, stay available. An anchor naming no menu
+ * item at all is a wiring error.
+ */
+export function unavailableRoutes(
+  routes: readonly BaseAddonRoute[],
+  menuTree: MenuTree,
+  removed: readonly { id: string; route?: string }[],
+): Map<string, string> {
+  const removedIds = new Set(removed.map((node) => node.id));
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const layoutOf = (route: BaseAddonRoute): string => {
+    for (let current: BaseAddonRoute | undefined = route; current; current = current.parent ? routesByName.get(current.parent) : undefined) {
+      if (current.layout) return current.layout;
+    }
+    return "console";
+  };
+  const unavailable = new Map<string, string>();
+  const consider = (route: BaseAddonRoute, reason: string): void => {
+    if (unavailable.has(route.name) || layoutOf(route) !== "console") return;
+    if (menuTree.itemsForRoute(route.name).length === 0) unavailable.set(route.name, reason);
+  };
+  for (const route of routes) {
+    if (route.menu && !menuTree.byId.has(route.menu) && !removedIds.has(route.menu)) {
+      throw new Error(`Route "${route.name}" references unknown menu item "${route.menu}".`);
+    }
+  }
+  for (const node of removed) {
+    const route = node.route ? routesByName.get(node.route) : undefined;
+    if (route) consider(route, `menu item "${node.id}" was removed`);
+  }
+  for (const route of routes) {
+    if (route.menu && removedIds.has(route.menu)) consider(route, `its menu anchor "${route.menu}" was removed`);
+  }
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const route of routes) {
+      if (route.parent && unavailable.has(route.parent) && !unavailable.has(route.name) && layoutOf(route) === "console") {
+        unavailable.set(route.name, `its parent route "${route.parent}" is unavailable`);
+        grew = true;
+      }
+    }
+  }
+  return unavailable;
 }
 
 export function menuNodeForRoute(
   route: BaseAddonRoute,
   menuTree: MenuTree,
 ): ChromeMenuNode | undefined {
-  if (route.menu) {
-    const selected = menuTree.byId.get(route.menu);
-    if (!selected) {
-      throw new Error(
-        `Route "${route.name}" references unknown menu item "${route.menu}".`,
-      );
-    }
+  // An anchor composition removed falls back to the route's surviving references;
+  // `unavailableRoutes` already refused anchors that name no menu item.
+  const anchor = route.menu ? menuTree.byId.get(route.menu) : undefined;
+  if (route.menu && anchor) {
+    const selected = anchor;
     const refs = menuTree.itemsForRoute(route.name);
     if (refs.length > 0 && !refs.some((item) => item.id === selected.id)) {
       throw new Error(

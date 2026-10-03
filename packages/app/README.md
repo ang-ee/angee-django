@@ -29,6 +29,34 @@ keeps the full console. `createApp`'s `home` and `confineTo` inputs and the
 top-level `brand` field remain as deprecated overrides. Addons cannot claim the
 `ui` translation namespace, which belongs to the rendered package.
 
+Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
+the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
+alters a node of an addon it depends on, and the deployment's `ANGEE_UI.menus`
+may alter any node last. `include: [id | { id, flatten }]` places other apps
+under a node (an aggregator); a flattened app keeps its routes and trail but
+shows its items as the aggregator's own. `remove: true` takes a node and its
+subtree out and makes the pages only it reached unavailable: they stay
+registered, redirect home, and drop out of record links and claims (a
+`route.menu` anchor counts as a reference; a surviving reference keeps a page
+available, and `routeHref.maybe` returns nothing for unavailable pages).
+`hide: true` only leaves the rail: the page stays reachable by URL, link and the
+command palette; `hide: false` shows it again. `only: [ids]` narrows the visible
+children per layer, ignoring items the narrowing addon's dependents add.
+`sequence`, `before` and `after` order siblings; included apps follow the
+including node's own children in include order. Two unrelated addons setting
+one field of a node fail composition. The legacy array form remains a list of
+declarations; ids outside the addon's namespace are reported, not refused.
+
+Menu entries are checked: unknown keys and malformed values fail composition,
+and the deployment layer must be a mapping.
+
+`createApp(...).explain` reports how the composition came out: the resolved
+shell with the layer behind each field, the effective home and confinement, the
+layer that set each menu node field, removed nodes and who removed them, hidden
+nodes (by `hide` or a layer's `only`), unavailable routes with the reason, and
+diagnostics such as shell fallbacks and out-of-namespace menu ids (warned in
+development).
+
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
 remain unique. A same-model route may declare `recordMatch` for its records;

@@ -1,4 +1,5 @@
 import type { DataProvider as RefineDataProvider } from "@refinedev/core";
+import type { MenuDeclarations } from "./menus";
 import type {
   RouteComponent,
 } from "@tanstack/react-router";
@@ -116,7 +117,8 @@ export function dashboardPageRoute(options: DashboardPageRouteOptions): BaseAddo
 export interface BaseAddon
   extends Omit<AddonManifest, "routes" | "menus" | "previews" | "themes" | "layoutProviders"> {
   routes?: readonly BaseAddonRoute[];
-  menus?: readonly BaseMenuItem[];
+  /** Menu nodes keyed by id (declare own, alter dependencies'), or the legacy declaration list. */
+  menus?: readonly BaseMenuItem[] | MenuDeclarations;
   /**
    * Full preview renderers. The SDK manifest tracks only the contribution id
    * (for collision detection); the rendered binding owns `PreviewProvider`, so
@@ -144,8 +146,14 @@ export interface BaseLayoutProvider extends Omit<LayoutProviderContribution, "co
  * goes through. The rendered analog of the SDK's headless `defineAddon`: it
  * type-checks the literal against {@link BaseAddon} (routes carrying React
  * components) and returns it unchanged, so addons `defineBaseAddon({...})`
- * instead of annotating `const x: BaseAddon = {...}`.
+ * instead of annotating `const x: BaseAddon = {...}`. The authored `menus` form
+ * (declaration list or dict) keeps its type for readers of the manifest.
  */
+export function defineBaseAddon(addon: Omit<BaseAddon, "menus"> & { menus?: readonly BaseMenuItem[] }):
+  Omit<BaseAddon, "menus"> & { menus?: readonly BaseMenuItem[] };
+export function defineBaseAddon(addon: Omit<BaseAddon, "menus"> & { menus: MenuDeclarations }):
+  Omit<BaseAddon, "menus"> & { menus: MenuDeclarations };
+export function defineBaseAddon(addon: BaseAddon): BaseAddon;
 export function defineBaseAddon(addon: BaseAddon): BaseAddon {
   const routeDashboards = addon.routes
     ?.flatMap((route) => route.dashboard ? [route.dashboard] : []) ?? [];

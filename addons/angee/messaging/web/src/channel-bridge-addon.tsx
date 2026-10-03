@@ -1,4 +1,4 @@
-import { defineBaseAddon, type BaseAddon } from "@angee/app";
+import { defineBaseAddon } from "@angee/app";
 import {
   ConditionalMutationButton,
   INTEGRATION_DISCONNECT_ACTION_ID,
@@ -68,7 +68,7 @@ export function defineChannelBridgeAddon({
   instructionKey,
   disconnectAction = <ChannelDisconnectAction />,
   recordActions = [],
-}: ChannelBridgeAddonOptions): BaseAddon {
+}: ChannelBridgeAddonOptions) {
   const connectActionId = `${id}.connect`;
   const pairingActionId = `${id}.pairing`;
   const channelActions = formViewRecordActionsSlot(CHANNEL_MODEL, key);
@@ -128,7 +128,7 @@ export function defineChannelPollBridgeAddon({
   connectAction,
   i18n,
   recordActions = [],
-}: ChannelPollBridgeAddonOptions): BaseAddon {
+}: ChannelPollBridgeAddonOptions) {
   return defineBaseAddon({
     id,
     i18n,
