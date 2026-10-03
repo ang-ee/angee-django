@@ -9,7 +9,7 @@ from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relati
 
 from angee.extraction import schema as evidence_schema
 from angee.extraction.acquisition import PageCarrier
-from angee.extraction.contracts import DocumentPart, DocumentSource, ExtractionPartKind
+from angee.extraction.contracts import DocumentPart, ExtractionPartKind, Source
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data
 from tests.test_extraction_models import evidence as evidence
 from tests.test_messaging_part_tree import part_tree as part_tree
@@ -85,7 +85,7 @@ def test_message_part_identity_requires_current_part_read(schema, evidence, part
     retain, values = evidence
     message, parts = part_tree
     part = parts["plain"]
-    source = DocumentSource(0, part.fragment.hash, "text/plain", part.fragment.text, message_part=part)
+    source = Source(0, part.fragment.hash, "text/plain", part.fragment.text, message_part=part)
     result = replace(values["result"], parts=(DocumentPart(
         0, 0, "text/plain", ExtractionPartKind.NATIVE_TEXT, part.fragment.text, "native", part.fragment.hash,
     ),))

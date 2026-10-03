@@ -7,7 +7,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
-from angee.extraction.contracts import DocumentPart, DocumentSource, ExtractionPartKind
+from angee.extraction.contracts import DocumentPart, ExtractionPartKind, Source
 from angee.graphql.publishing import mute_changes
 from angee.messaging.testing.models import Part
 from tests.conftest import create_platform_admin
@@ -38,7 +38,7 @@ def message_source_and_part(part, position):
     text = part.fragment.text
     digest = part.fragment.hash
     return (
-        DocumentSource(position, digest, part.type, text, message_part=part),
+        Source(position, digest, part.type, text, message_part=part),
         DocumentPart(position, 0, part.type, ExtractionPartKind.NATIVE_TEXT, text, "native", digest),
     )
 
@@ -77,7 +77,7 @@ def test_message_target_accepts_its_attachment_file_source(message_evidence, evi
     _, file_values = evidence
     file = file_values["target"]
     content = file_values["sources"][0].content
-    source = DocumentSource(0, file.content_hash, "text/plain", content, file=file)
+    source = Source(0, file.content_hash, "text/plain", content, file=file)
     result = replace(
         values["result"],
         parts=(DocumentPart(0, 0, "text/plain", ExtractionPartKind.NATIVE_TEXT,
