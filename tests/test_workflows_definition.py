@@ -108,6 +108,16 @@ def test_linear_entry_and_next_node():
     assert planned(definition, [row("start"), row("finish", "ready")]) == []
 
 
+def test_topology_retains_removed_steps_and_unfrozen_outcome_keys():
+    """An operator can inspect old publications after an implementation disappears."""
+    definition = graph({"old_step": {"step": "removed", "next": {"no_longer_available": "finish"}},
+                        "finish": {}})
+    node = definition.topology().nodes[0]
+    assert node.label == "Old step"
+    assert node.step_label == "removed"
+    assert node.outcomes == {"no_longer_available": "no_longer_available"}
+
+
 def test_topology_projects_frozen_labels_all_routed_ports_and_map_identity():
     """Old publications without outcome labels still have a port for every edge."""
     definition = graph({

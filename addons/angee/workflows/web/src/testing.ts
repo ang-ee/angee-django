@@ -108,6 +108,7 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
       "deadline_at", "wake_at", "created_at", "updated_at"].map((name) => retainedField(name)),
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
+    { ...retainedField("decision_group"), kind: "relation", relationObject: true, relationModelLabel: "decisions.DecisionGroup" },
     ...["rank", "map_index", "map_settled", "map_total", "attempt", "page_index", "retries"].map((name) => retainedField(name, "Int")),
     ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
     ...["input", "output", "state"].map((name) => retainedField(name, "JSON")),
@@ -117,7 +118,16 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   roots: { list: "steprun", detail: "steprun_by_pk", aggregate: "steprun_aggregate" },
   typeNames: { filter: "steprun_bool_exp", order: "steprun_order_by" },
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "run", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["id", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["run", "awaited_run"].map((name) => [name, testQueryField(name, {
+      kind: "relation", scalar: "ID",
+      relation: { model: "workflows.WorkflowRun", identityPath: `${name}.id`, labelPath: `${name}.id` },
+      row: { path: `${name}.id`, paths: [`${name}.id`] },
+    })])),
+    decision_group: testQueryField("decision_group", { kind: "relation", scalar: "ID",
+      relation: { model: "decisions.DecisionGroup", identityPath: "decision_group.id", labelPath: "decision_group.id" },
+      row: { path: "decision_group.id", paths: ["decision_group.id"] },
+    }),
     ...Object.fromEntries(["state", "page_index", "failure_reason", "retries", "deadline_at", "wake_at", "created_at", "updated_at"]
       .map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: stepStates,
@@ -227,7 +237,7 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     attempts: [{ id: "wsa_inspect", number: 1, page_index: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
     artifacts: [{ id: "wfa_note", label: "Retained note", record_model: "notes.Note", record_id: "nte_7" }],
-    watches: [],
+    watches: [], decision_group: null,
     ...overrides,
   };
 }
@@ -238,7 +248,7 @@ export function runGraphFixture(step: StepRun = stepRunFixture()): RunGraphData 
     page_index, map_total, map_settled, created_at, updated_at, deadline_at, wake_at } = step;
   return { nodes: [
     { key: "inspect", label: "Inspect source", step_label: "Inspect", rank: 0, body_key: null,
-      outcomes: [{ id: "done", label: "Done" }, { id: "error", label: "Needs attention" }],
+      outcomes: [{ outcome: "done", label: "Done" }, { outcome: "error", label: "Needs attention" }],
       item_counts: [], item_attempts: 0,
       step_run: { id, status, waiting_kind, wait_reason, outcome, outcome_label, failure_reason, attempt,
         page_index, map_total, map_settled, created_at, updated_at, deadline_at, wake_at } },

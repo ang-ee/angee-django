@@ -736,13 +736,15 @@ class StepRunQuerySet(AngeeQuerySet):
 
     def nodes(self) -> Any:
         """Read declared nodes with bounded map progress, excluding item rows."""
-        return self.exclude(node_key__endswith=MAP_BODY_SUFFIX).annotate(
+        return self.exclude(node_key__endswith=MAP_BODY_SUFFIX).defer("input", "output", "state").annotate(
+            _failure_reason=self.model.failure_reason_expression(),
+            _map_total=self.model.map_total_expression(),
             _map_settled=self.model.map_settled_expression(),
         )
 
     def item_counts(self) -> Any:
         """Aggregate every admitted map item without fetching its payload."""
-        return (self.filter(node_key__endswith=MAP_BODY_SUFFIX).order_by()
+        return (self.filter(node_key__endswith=MAP_BODY_SUFFIX)
                 .values("node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
                 .order_by("node_key", "status"))
 
@@ -761,7 +763,7 @@ class StepRunQuerySet(AngeeQuerySet):
         return [{
             "index": row.map_index, "outcome": row.outcome,
             **(
-                {"error": row.output.get("error", "")}
+                {"error": row.failure_reason or ""}
                 if row.status == StepRunStatus.FAILED else {"output": row.output}
             ),
         } for row in rows]

@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
-import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { ChatterTabsTestHost } from "@angee/app/testing";
-import { authoredQueryReadsChange, useQueryClient } from "@angee/refine";
-import { RunGraph, RUN_GRAPH_INSPECTOR_TAB } from "./RunGraph";
+import { createAngeeChangeLiveProvider } from "@angee/refine";
+import { createRefineTestProviders } from "@angee/refine/testing";
+import { RUN_GRAPH_INSPECTOR_TAB } from "./RunGraph";
 import { RunGraphStory } from "./RunGraph.stories";
-import { RunStory, type RunRequest } from "./RunsPage.stories";
-import { RUN_MODEL, STEP_RUN_MODEL } from "./documents.console";
+import type { RunRequest } from "./RunsPage.stories";
+import { RUN_MODEL } from "./documents.console";
 import { mappedRunGraphFixture } from "./testing";
 
 beforeAll(() => {
@@ -15,7 +14,8 @@ beforeAll(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   Element.prototype.getAnimations ??= () => [];
 });
-afterEach(cleanup);
+const { createClient, clearClients } = createRefineTestProviders();
+afterEach(() => { cleanup(); clearClients(); });
 
 test.each(["click", "Enter"])("%s selects the URL node and expands the native inspector", async (activation) => {
   render(<RunGraphStory retained />);
@@ -25,14 +25,22 @@ test.each(["click", "Enter"])("%s selects the URL node and expands the native in
   else fireEvent.keyDown(node, { key: "Enter" });
   await waitFor(() => expect(screen.getByTestId("graph-node-selection").textContent).toBe("inspect"));
   expect(screen.getByTestId("graph-pane-state").textContent).toBe(`false:${RUN_GRAPH_INSPECTOR_TAB}`);
+  expect(await screen.findByRole("button", { name: "Open Inspect source" })).toBeTruthy();
+  expect(screen.queryByRole("dialog", { name: "Step Run" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open Inspect source" }));
   expect(await screen.findByRole("dialog", { name: "Step Run" })).toBeTruthy();
 });
 
 test("an inactive graph sends no request and publishes no inspector", async () => {
   const requests = vi.fn();
-  render(<RunGraphStory active={false} retained onRequest={requests} />);
+  const client = createClient();
+  render(<RunGraphStory active={false} retained onRequest={requests} queryClient={client} />);
   await act(async () => {});
   expect(requests).not.toHaveBeenCalled();
+  await waitFor(() => {
+    const query = client.getQueryCache().findAll().find((query) => query.queryKey[1] === "authored");
+    expect(query?.state).toMatchObject({ fetchStatus: "idle", dataUpdateCount: 0 });
+  });
   expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Show graph" }));
   await screen.findByTestId("rf__node-inspect");
@@ -52,7 +60,7 @@ test("retained tabs preserve the canvas and selection while withdrawing their in
   expect(screen.getByTestId("graph-node-selection").textContent).toBe("finish");
 });
 
-test("a map inspector shows complete progress and filters both parent and body rows", async () => {
+test("a map inspector shows complete progress and filters the node and its items", async () => {
   const requests: RunRequest[] = [];
   render(<RunGraphStory graph={mappedRunGraphFixture()} onRequest={(request) => requests.push(request)} />);
   expect(await screen.findByText("119/122")).toBeTruthy();
@@ -66,20 +74,49 @@ test("a map inspector shows complete progress and filters both parent and body r
   expect(query).not.toMatch(/\b(input|output|state|stacktrace)\b/);
 });
 
-test("native authored reads register the exact run and related-only step interests", async () => {
-  let client: ReturnType<typeof useQueryClient> | undefined;
-  function Capture() {
-    const value = useQueryClient();
-    useEffect(() => { client = value; }, [value]);
-    return null;
-  }
-  render(<RunStory content={<><RunGraph runId="wfr_review" /><ChatterTabsTestHost /><Capture /></>} />);
-  await screen.findByTestId("rf__node-inspect");
-  const query = client!.getQueryCache().findAll().find((query) => authoredQueryReadsChange(query.meta, RUN_MODEL, "wfr_review"));
-  expect(query).toBeTruthy();
-  expect(authoredQueryReadsChange(query!.meta, RUN_MODEL, "wfr_review")).toBe(true);
-  expect(authoredQueryReadsChange(query!.meta, RUN_MODEL, "wfr_unrelated")).toBe(false);
-  expect(authoredQueryReadsChange(query!.meta, STEP_RUN_MODEL, "wsr_unrelated")).toBe(false);
-  expect(query!.meta).toMatchObject({ angeeModels: [STEP_RUN_MODEL, RUN_MODEL],
-    angeeRecords: [{ model: RUN_MODEL, id: "wfr_review" }], angeeRelatedModels: [STEP_RUN_MODEL] });
+test("committed run changes refetch once while preserving the canvas and node URL", async () => {
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let change: ((id: string) => void) | undefined;
+  const socket: Parameters<typeof createAngeeChangeLiveProvider>[0] = {
+    subscribe: (_request, sink) => {
+      change = (id) => sink.next({ data: { workflowRunChanged: { model: RUN_MODEL, id, action: "update" } } }
+        as Parameters<typeof sink.next>[0]);
+      return () => { change = undefined; };
+    },
+    on: () => () => undefined,
+  };
+  const liveProvider = createAngeeChangeLiveProvider(socket, [{ schemaName: "console", modelLabel: RUN_MODEL,
+    roots: { list: "workflowrun", changes: "workflowRunChanged" } }], { queryClient: client });
+  const requests: RunRequest[] = [];
+  render(<RunGraphStory retained initialEntry="/workflows/runs/wfr_review?node=inspect"
+    liveProvider={liveProvider} queryClient={client} onRequest={(request) => requests.push(request)} />);
+  const canvas = await screen.findByTestId("run-graph-canvas");
+  await waitFor(() => expect(change).toBeTypeOf("function"));
+  const reads = () => requests.filter(({ query }) => query.includes("WorkflowRunGraph")).length;
+  expect(reads()).toBe(1);
+  await act(async () => { change!("wfr_review"); });
+  await waitFor(() => expect(reads()).toBe(2));
+  await waitFor(() => expect(client.getQueryCache().findAll().every((query) => query.state.fetchStatus === "idle")).toBe(true));
+  expect(reads()).toBe(2);
+  expect(screen.getByTestId("run-graph-canvas")).toBe(canvas);
+  expect(screen.getByTestId("graph-node-selection").textContent).toBe("inspect");
+  expect(screen.getByTestId("rf__node-inspect").className).toContain("selected");
+});
+
+test("a node deep link selects the node and opens its inspector without a modal", async () => {
+  render(<RunGraphStory retained initialEntry="/workflows/runs/wfr_review?node=inspect" />);
+  const node = await screen.findByTestId("rf__node-inspect");
+  await waitFor(() => expect(node.className).toContain("selected"));
+  expect(screen.getByTestId("graph-pane-state").textContent).toBe(`false:${RUN_GRAPH_INSPECTOR_TAB}`);
+  expect(await screen.findByRole("button", { name: "Open Inspect source" })).toBeTruthy();
+  expect(screen.queryByRole("dialog", { name: "Step Run" })).toBeNull();
+});
+
+test("an unknown node deep link opens the empty inspector", async () => {
+  render(<RunGraphStory retained initialEntry="/workflows/runs/wfr_review?node=removed" />);
+  await screen.findByTestId("run-graph-canvas");
+  await waitFor(() => expect(screen.getByTestId("graph-pane-state").textContent).toBe(`false:${RUN_GRAPH_INSPECTOR_TAB}`));
+  expect(screen.getByText("Select a node to inspect its progress and retained evidence.")).toBeTruthy();
+  expect(screen.getByTestId("rf__node-inspect").className).not.toContain("selected");
+  expect(screen.getByTestId("graph-node-selection").textContent).toBe("removed");
 });

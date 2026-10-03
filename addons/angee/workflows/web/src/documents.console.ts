@@ -8,10 +8,10 @@ export const RUN_MODELS = [RUN_MODEL, STEP_RUN_MODEL, "workflows.StepWatch", ...
 export const WorkflowRunGraphDocument = graphql(`
   query WorkflowRunGraph($id: String!) {
     workflowrun_by_pk(id: $id) {
-      id status
+      id
       graph {
         nodes {
-          key label step_label rank body_key outcomes { id label }
+          key label step_label rank body_key outcomes { outcome label }
           item_counts { status count } item_attempts
           step_run {
             id status waiting_kind wait_reason outcome outcome_label failure_reason

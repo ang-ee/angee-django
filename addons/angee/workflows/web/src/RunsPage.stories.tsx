@@ -1,6 +1,7 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, type ComponentProps, type ReactNode } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
+import { decisionGroupFixture } from "@angee/decisions/testing";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
@@ -11,6 +12,7 @@ import { runFixture, runGraphFixture, runResourceFixture, runEvidenceResourceFix
 import type { RunGraphData } from "./run-graph";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
+import { WORKFLOW_STATUS_TONES } from "./status-tones";
 
 export default { title: "Workflows/Run page", parameters: { layout: "fullscreen" }, excludeStories: ["RunStory"] };
 export const Recovery = { render: () => <RunStory /> };
@@ -36,6 +38,7 @@ const mappedSteps = Array.from({ length: 11 }, (_, index) => stepRunFixture({
 }));
 const documents = { console: operationDocuments };
 const runtime = {
+  statusTones: WORKFLOW_STATUS_TONES,
   routeHref: createRouteHref([
     { name: "workflows.runs", path: "/workflows/runs" },
     { name: "workflows.runs.record", path: "/workflows/runs/$id" },
@@ -56,13 +59,16 @@ const runtime = {
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
 export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
-  run, steps, children, evidence = [], onRequest, content, graph }: {
+  run, steps, children, evidence = [], onRequest, content, graph, initialEntry, liveProvider, queryClient }: {
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
   onRequest?: (request: RunRequest) => void;
   content?: ReactNode;
   graph?: RunGraphData;
+  initialEntry?: string;
+  liveProvider?: ComponentProps<typeof RoutedRuntimeFixture>["liveProvider"];
+  queryClient?: ComponentProps<typeof RoutedRuntimeFixture>["queryClient"];
 }) {
   const schemas = useMemo(() => {
     let current = run ?? runFixture();
@@ -135,11 +141,12 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, runEvidenceResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
-      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture,
+      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture, decisionGroupFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
-    initialEntry={list ? "/workflows/runs" : "/workflows/runs/wfr_review"} runtime={runtime}
+    initialEntry={initialEntry ?? (list ? "/workflows/runs" : "/workflows/runs/wfr_review")} runtime={runtime}
+    liveProvider={liveProvider} queryClient={queryClient}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>
     <ShellPageTestProviders runtime={{ ...runtime, widgets: defaultWidgets }}>
       {content ?? <div className="grid min-h-0 flex-1 grid-cols-[1fr_24rem] gap-4"><RunsPage /><ChatterTabsTestHost /></div>}

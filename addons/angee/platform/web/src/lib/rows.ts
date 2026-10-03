@@ -7,7 +7,7 @@ import type {
 
 export function modelGraphNodes(
   models: readonly PlatformModelData[],
-  highlightId?: string | null,
+  selectedId?: string | null,
 ): GraphViewNode<"model">[] {
   return models.map((model) => ({
     id: model.label,
@@ -15,7 +15,7 @@ export function modelGraphNodes(
     title: model.model_name,
     code: model.label,
     detail: model.addon_label,
-    highlighted: highlightId ? model.label === highlightId : undefined,
+    selected: selectedId ? model.label === selectedId : undefined,
   }));
 }
 

@@ -9,10 +9,11 @@ import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
 
 import { RUN_MODELS, STEP_RUN_MODEL } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
+import { formatStepPage, stepPageCodec } from "./step-page";
 
 /** Child collections fetch one selected detail; rows never mount their own queries. */
-export function StepRuns({ runId, nodeKeys, selectFirstRecord = false }: {
-  runId: string; nodeKeys?: readonly string[]; selectFirstRecord?: boolean;
+export function StepRuns({ runId, nodeKeys }: {
+  runId: string; nodeKeys?: readonly string[];
 }) {
   const t = useWorkflowsT();
   const { widgets } = useAppRuntime();
@@ -29,7 +30,6 @@ export function StepRuns({ runId, nodeKeys, selectFirstRecord = false }: {
     required: ["acknowledge"],
   }, widgets, { translate: uiT }), [t, uiT, widgets]);
   return <DrawerResourceList resource={STEP_RUN_MODEL} hideCreate presentation="embedded"
-    selectFirstRecord={selectFirstRecord}
     baseFilter={{ run: { exact: runId }, ...(nodeKeys ? { node_key: { inList: nodeKeys } } : {}) }} recordTabs={[
       { id: "attempts", label: t("step.attempts"), render: ({ recordId }) => <StepAttempts stepId={recordId} /> },
       { id: "artifacts", label: t("step.artifacts"), render: ({ recordId }) =>
@@ -46,7 +46,7 @@ export function StepRuns({ runId, nodeKeys, selectFirstRecord = false }: {
             typeof row.record_model === "string" && typeof row.record_id === "string"
               ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
         </List> },
-      { id: "decisions", label: t("step.decisions"), render: ({ recordId }) =>
+      { id: "decisions", label: t("step.decisions"), visibleWhen: (row) => row.decision_group != null, render: ({ recordId }) =>
         <DecisionsList baseFilter={{ "group.step_run": { exact: recordId } }} /> },
     ]}>
     <List fields={["is_mapped", "is_map"]} order={{ rank: "ASC", map_index: "ASC" }} pageSize={10} emptyContent={t("run.noSteps")}>
@@ -59,7 +59,7 @@ export function StepRuns({ runId, nodeKeys, selectFirstRecord = false }: {
       <Column field="outcome_label" header={t("run.outcome")} />
       <Column field="attempt" header={t("step.attempts")} />
     </List>
-    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement"]}>
+    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement", "decision_group"]}>
       <Field name="is_mapped" hidden />
       <Field name="is_map" hidden />
       <Field name="node_label" title />
@@ -73,11 +73,11 @@ export function StepRuns({ runId, nodeKeys, selectFirstRecord = false }: {
         <Field name="waiting_kind" label={t("step.waitKind")} showWhen={(row) => optionToken(row.status) === "waiting"} />
         <Field name="awaited_run" label={t("step.awaitedRun")} showWhen={(row) => optionToken(row.waiting_kind) === "run"} />
         <Field name="wait_reason" label={t("step.waitReason")} showWhen={(row) => optionToken(row.status) === "waiting"} />
-        <Field name="page_index" label={t("step.pageIndex")} />
+        <Field name="page_index" label={t("step.page")} widget="text" valueCodec={stepPageCodec(t)} />
         <Field name="retries" label={t("step.retries")} />
         <Field name="deadline_at" label={t("step.deadline")} showWhen={(row) => Boolean(row.deadline_at)} />
         <Field name="wake_at" label={t("step.wake")} showWhen={(row) => Boolean(row.wake_at)} />
-        <Field name="created_at" label={t("run.started")} />
+        <Field name="created_at" label={t("step.created")} />
         <Field name="updated_at" label={t("step.updated")} />
       </Group>
       <Field name="failure_reason" label={t("run.failureReason")} widget="textarea"
@@ -102,7 +102,7 @@ function StepAttempts({ stepId }: { stepId: string }) {
     baseFilter={{ step_run: { exact: stepId } }}>
     <List order={{ number: "ASC" }}>
       <Column field="number" />
-      <Column field="page_index" header={t("step.pageIndex")} />
+      <Column field="page_index" header={t("step.page")} render={(row) => formatStepPage(row.page_index, t)} />
       <Column field="result" header={t("step.result")} widget="statusBadge" />
       <Column field="started_at" header={t("run.started")} />
       <Column field="finished_at" header={t("run.finished")} />
@@ -110,7 +110,7 @@ function StepAttempts({ stepId }: { stepId: string }) {
     </List>
     <Form readOnly>
       <Field name="number" title />
-      <Field name="page_index" label={t("step.pageIndex")} />
+      <Field name="page_index" label={t("step.page")} widget="text" valueCodec={stepPageCodec(t)} />
       <Field name="result" label={t("step.result")} widget="statusBadge" />
       <Field name="started_at" label={t("run.started")} />
       <Field name="finished_at" label={t("run.finished")} />

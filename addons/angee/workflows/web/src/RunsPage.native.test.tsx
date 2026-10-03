@@ -34,7 +34,8 @@ test("node-scoped step evidence keeps the run filter and selects parent plus ite
 
 test("step checkpoint and linked decisions compose the existing form and list", async () => {
   const requests: RunRequest[] = [];
-  render(<RunStory onRequest={(request) => requests.push(request)} />);
+  render(<RunStory steps={[stepRunFixture({ decision_group: { id: "dcg_review" } })]}
+    onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   expect(await within(step).findByText("Checkpoint")).toBeTruthy();
   await waitFor(() => expect(step.textContent).toContain("page-2"));
@@ -43,6 +44,14 @@ test("step checkpoint and linked decisions compose the existing form and list", 
   expect(requests.find(({ query }) => /\bdecisions\s*\(/.test(query))?.variables.where).toEqual({ _and: [
     { group__step_run: { _eq: "wsr_inspect" } },
   ] });
+});
+
+test("steps without a decision group hide the Decisions tab", async () => {
+  render(<RunStory />);
+  const step = await openStep();
+  expect(within(step).queryByRole("tab", { name: "Decisions" })).toBeNull();
+  expect(await within(step).findByText("Created")).toBeTruthy();
+  expect((await within(step).findAllByText("Page 2")).length).toBeGreaterThan(0);
 });
 
 async function action(label: string, scope: HTMLElement = document.body) {

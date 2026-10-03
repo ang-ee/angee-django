@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, cast
 
 import strawberry
@@ -38,12 +39,14 @@ from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 from angee.workflows.definition import Body, Definition, Issue
-from angee.workflows.states import RunOrigin, StepRunStatus
+from angee.workflows.models import RunGraphNode
+from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
 from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
 strawberry.enum(cast(Any, StepRunStatus))
+strawberry.enum(cast(Any, WaitingKind))
 
 Workflow = apps.get_model("workflows", "Workflow")
 WorkflowVersion = apps.get_model("workflows", "WorkflowVersion")
@@ -140,7 +143,7 @@ class WorkflowRunType(RecordReferenceNode):
 
     @strawberry_django.field(only=["version_id"], prefetch_related=[_RUN_POLICY_VERSION])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
-        """Dispatch the bounded projection through the run's read policy."""
+        """Read one run's bounded graph; list selections cost about five queries per row."""
         return cast(WorkflowRunGraph, cast(Any, self).graph(request_from_info(info).user))
 
     @strawberry_django.field(only=["status"])
@@ -268,12 +271,12 @@ class StepAttemptType(AngeeNode):
 class WorkflowRunGraphOutcome:
     """A frozen outcome label attached to a graph port."""
 
-    id: str
+    outcome: str
     label: str
 
 
 @strawberry.type
-class StepRunStatusCount:
+class WorkflowRunGraphStatusCount:
     """Exact item cardinality in one execution state."""
 
     status: StepRunStatus
@@ -281,23 +284,64 @@ class StepRunStatusCount:
 
 
 @strawberry.type
-class WorkflowRunGraphNode:
-    """A published node with one parent row and unbounded-item aggregates."""
+class WorkflowRunGraphStepRun:
+    """Payload-free execution summary with no relation traversal."""
 
-    key: str
-    label: str
-    step: str
-    step_label: str
-    rank: int
-    body_key: str | None
-    step_run: StepRunType | None
-    item_counts: list[StepRunStatusCount]
+    id: PublicID = strawberry.field(resolver=AngeeNode.id)
+    status: StepRunStatus
+    waiting_kind: WaitingKind | None
+    wait_reason: str
+    outcome: str
+    outcome_label: str
+    failure_reason: str | None
+    attempt: int
+    page_index: int
+    map_total: int
+    map_settled: int
+    created_at: datetime
+    updated_at: datetime
+    deadline_at: datetime | None
+    wake_at: datetime | None
+
+
+@strawberry.type
+class WorkflowRunGraphNode:
+    """Published topology composed with one summary row and complete item counts."""
+
+    step_run: WorkflowRunGraphStepRun | None
+    item_counts: list[WorkflowRunGraphStatusCount]
     item_attempts: int
+
+    @strawberry.field
+    def key(self) -> str:
+        """Expose the definition owner's node identity."""
+        return cast(RunGraphNode, self).node.key
+
+    @strawberry.field
+    def label(self) -> str:
+        """Expose the published node label."""
+        return cast(RunGraphNode, self).node.label
+
+    @strawberry.field
+    def step_label(self) -> str:
+        """Expose the definition owner's implementation label."""
+        return cast(RunGraphNode, self).node.step_label
+
+    @strawberry.field
+    def rank(self) -> int:
+        """Expose deterministic execution order."""
+        return cast(RunGraphNode, self).node.rank
+
+    @strawberry.field
+    def body_key(self) -> str | None:
+        """Identify the optional item execution node."""
+        return cast(RunGraphNode, self).node.body_key
 
     @strawberry.field
     def outcomes(self) -> list[WorkflowRunGraphOutcome]:
         """Expose the definition owner's named ports as a typed collection."""
-        return [WorkflowRunGraphOutcome(id=key, label=label) for key, label in cast(Any, self).outcomes.items()]
+        return [WorkflowRunGraphOutcome(outcome=key, label=label)
+                for key, label in cast(RunGraphNode, self).node.outcomes.items()]
 
 
 @strawberry.type

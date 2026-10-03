@@ -17,7 +17,7 @@ from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode, Superseded
-from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
+from angee.workflows.testing.drivers import load_workflow, observe, register_steps, run_until
 from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
@@ -41,8 +41,12 @@ def test_io_claim_publishes_running_before_body_and_database_only_publishes_adva
     original = runner_module.publish_change
 
     def publish(run, **kwargs):
+        assert connection.in_atomic_block
+        committed = len(publications)
         transaction.on_commit(lambda: publications.append(step_row(run).status))
-        return original(run, **kwargs)
+        result = original(run, **kwargs)
+        assert len(publications) == committed
+        return result
 
     class Observed(Echo):
         def run(self, ctx):
@@ -56,6 +60,34 @@ def test_io_claim_publishes_running_before_body_and_database_only_publishes_adva
     monkeypatch.setattr(runner_module, "publish_change", publish)
     assert runner.execute(step_row(run).pk)
     assert publications == expected
+
+
+def test_io_claim_publication_failure_does_not_become_a_step_failure(execution, register_step, monkeypatch, caplog):
+    """Publication diagnostics are isolated from the committed claim and IO body."""
+    actor, _ = execution
+    entered = []
+    original = runner_module.publish_change
+
+    class Observed(Echo):
+        mode = StepMode.IO
+
+        def run(self, ctx):
+            entered.append(ctx.attempt.number)
+            return ctx.done(ctx.input)
+
+    def publish(run, **kwargs):
+        if step_row(run).status == StepRunStatus.RUNNING:
+            raise RuntimeError("Claim publication unavailable")
+        return original(run, **kwargs)
+
+    register_step(Observed)
+    workflow = load_workflow(document("entry"), actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    monkeypatch.setattr(runner_module, "publish_change", publish)
+    assert runner.execute(step_row(run).pk)
+    assert entered == [1]
+    assert step_row(run).status == StepRunStatus.SUCCEEDED
+    assert "Workflow run change publication failed." in caplog.text
 
 
 def test_io_body_is_outside_transactions_and_scoped_to_its_actor(execution, register_step):
@@ -186,7 +218,9 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
     step_run = step_row(run)
     assert step_run.idempotency_token is None and step_run.page_index == 0
     for number in range(1, 5):
-        assert runner.execute(step_run.pk)
+        with observe(WorkflowRun) as publications:
+            assert runner.execute(step_run.pk)
+        assert len(publications) == (2 if mode == StepMode.IO else 1)
         retained = step_row(run)
         if number in {1, 3}:
             assert retained.waiting_kind == "time" and retained.retries == 1

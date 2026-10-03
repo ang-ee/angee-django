@@ -15,6 +15,7 @@ import {
   createAngeeHasuraDataProviders,
   OperationDocumentsProvider,
   Refine,
+  type useQueryClient,
   tanStackRouterProvider,
   type AngeeHasuraSchemaConfig,
 } from "@angee/refine";
@@ -102,6 +103,8 @@ export function RuntimeFixture({
   resources,
   routed = false,
   operationDocuments = {},
+  liveProvider,
+  queryClient,
 }: {
   activeSchema?: string;
   schemas: Record<string, StorySchemaConfig>;
@@ -111,6 +114,8 @@ export function RuntimeFixture({
   resources?: IResourceItem[];
   routed?: boolean;
   operationDocuments?: ComponentProps<typeof OperationDocumentsProvider>["documents"];
+  liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
+  queryClient?: ReturnType<typeof useQueryClient>;
 }): ReactNode {
   const normalized = useMemo(
     () =>
@@ -143,9 +148,10 @@ export function RuntimeFixture({
     <ToastProvider><ModalsHost>
       <Refine
         dataProvider={dataProvider}
+        liveProvider={liveProvider}
         resources={resources}
         routerProvider={routed ? tanStackRouterProvider : undefined}
-        options={{ syncWithLocation }}
+        options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
       >
         <OperationDocumentsProvider documents={operationDocuments}><ActiveGraphQLSchemaProvider schema={activeSchema}>
           <ModelMetadataProvider metadata={fieldMetadata}>
@@ -171,6 +177,8 @@ export function RoutedRuntimeFixture({
   resourceLabel = "Records",
   resourceName,
   operationDocuments,
+  liveProvider,
+  queryClient,
 }: {
   activeSchema?: string;
   schemas: Record<string, StorySchemaConfig>;
@@ -182,6 +190,8 @@ export function RoutedRuntimeFixture({
   resourceLabel?: string;
   resourceName?: string;
   operationDocuments?: ComponentProps<typeof OperationDocumentsProvider>["documents"];
+  liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
+  queryClient?: ReturnType<typeof useQueryClient>;
 }): ReactNode {
   const router = useMemo(() => {
     const resources = resourceName ? [{
@@ -198,6 +208,8 @@ export function RoutedRuntimeFixture({
       routed
       syncWithLocation
       operationDocuments={operationDocuments}
+      liveProvider={liveProvider}
+      queryClient={queryClient}
     ><Outlet /></RuntimeFixture></InAppLinkProvider> });
     const collection = createRoute({
       getParentRoute: () => root,
@@ -221,6 +233,6 @@ export function RoutedRuntimeFixture({
     });
     const navigate = routerNavigator(router);
     return router;
-  }, [activeSchema, children, collectionPath, initialEntry, operationDocuments, recordParam, resourceLabel, resourceName, runtime, schemas]);
+  }, [activeSchema, children, collectionPath, initialEntry, liveProvider, operationDocuments, queryClient, recordParam, resourceLabel, resourceName, runtime, schemas]);
   return <RouterProvider router={router} />;
 }

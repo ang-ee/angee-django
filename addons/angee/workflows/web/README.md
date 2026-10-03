@@ -8,7 +8,9 @@ The default Graph run tab draws the pinned version and complete map progress thr
 the shared read-only canvas. Selecting a node stores `node` in the URL and opens the
 shell inspector with node-scoped step evidence, checkpoint, attempts and decisions.
 Run changes refresh the graph and inspector summary, including IO claims. StepRun
-lists still lack live refresh: the missing StepRun `changes()` root is deferred debt.
+lists still lack live refresh. The required fix is `changes(StepRun, field="stepRunChanged")`,
+whose events also count as changes to the parent run. The architect deferred it in Q3
+over event volume; that decision currently blocks this subscription seam.
 
 Runs retain the backend's origin, outcomes, attempt evidence, wait reasons, and
 record references. The backend supplies execution rank and mapped-step identity;

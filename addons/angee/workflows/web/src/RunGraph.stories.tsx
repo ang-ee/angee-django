@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { ChatterTabsTestHost } from "@angee/app/testing";
 import { Button, routeSearchParam, useChatter, useRouteSearch } from "@angee/ui";
 import { RunGraph } from "./RunGraph";
@@ -14,23 +14,25 @@ export const Paging = { render: () => <RunGraphStory graph={runGraphFixture(step
 }))} /> };
 export const Retained = { render: () => <RunGraphStory retained /> };
 
-export function RunGraphStory({ graph, active = true, retained = false, onRequest }: {
+export function RunGraphStory({ graph, active = true, retained = false, onRequest, initialEntry, liveProvider, queryClient }: {
   graph?: RunGraphData; active?: boolean; retained?: boolean; onRequest?: (request: RunRequest) => void;
+  initialEntry?: string; liveProvider?: ComponentProps<typeof RunStory>["liveProvider"];
+  queryClient?: ComponentProps<typeof RunStory>["queryClient"];
 }) {
-  return <RunStory graph={graph} onRequest={onRequest}
+  return <RunStory graph={graph} onRequest={onRequest} initialEntry={initialEntry} liveProvider={liveProvider} queryClient={queryClient}
     content={<GraphDemo initialActive={active} retained={retained} />} />;
 }
 
 function GraphDemo({ initialActive, retained }: { initialActive: boolean; retained: boolean }) {
   const [active, setActive] = useState(initialActive);
   const pane = useChatter();
-  const route = useRouteSearch();
+  const search = useRouteSearch();
   return <>
     {retained ? <div>
       <Button onClick={() => setActive((value) => !value)}>{active ? "Hide graph" : "Show graph"}</Button>
       <Button onClick={() => pane.setCollapsed(true)}>Collapse inspector</Button>
       <output data-testid="graph-pane-state">{String(pane.collapsed)}:{pane.activeTab}</output>
-      <output data-testid="graph-node-selection">{routeSearchParam(route.search, "node")}</output>
+      <output data-testid="graph-node-selection">{routeSearchParam(search, "node")}</output>
     </div> : null}
     <div className="grid min-h-0 flex-1 grid-cols-[1fr_24rem] gap-4">
       <div hidden={!active} className="flex min-h-0 flex-col"><RunGraph runId="wfr_review" active={active} /></div>

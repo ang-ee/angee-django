@@ -1,22 +1,27 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Badge, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, PageAside, RailPanel,
-  errorMessage, optionLabel, routeSearchParam, updateRouteSearch, useChatter, useChatterContent,
+  errorMessage, formatDateTime, optionLabel, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent,
   useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode,
 } from "@angee/ui";
 import { RUN_MODEL, STEP_RUN_MODEL, WorkflowRunGraphDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
 import { StepRuns } from "./StepRuns";
+import { formatStepPage } from "./step-page";
 
 export const RUN_GRAPH_INSPECTOR_TAB = "run-graph-inspector";
 
 /** A retained read-only canvas; only the active run tab publishes its inspector and reads. */
 export function RunGraph({ runId, active = true }: { runId: string; active?: boolean }) {
   const t = useWorkflowsT();
-  const route = useRouteSearch();
-  const selectedKey = routeSearchParam(route.search, "node");
+  const search = useRouteSearch();
+  const navigate = useNavigate();
+  const selectedKey = routeSearchParam(search, "node");
+  const { i18n } = useAppRuntime();
+  const locale = i18n?.language;
   const chatter = useChatter();
   const resolveTone = useStatusTone();
   const statusOptions = useEnumOptions(STEP_RUN_MODEL, "status");
@@ -24,12 +29,12 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
   const read = useAuthoredQuery(WorkflowRunGraphDocument, { id: runId }, {
     dataProviderName: "console", models: [RUN_MODEL, STEP_RUN_MODEL],
     records: [{ model: RUN_MODEL, id: runId }], relatedModels: [STEP_RUN_MODEL],
-    keepPreviousData: true, enabled: active,
+    enabled: active,
   });
   const run = read.data?.workflowrun_by_pk;
   const graph = run?.id === runId ? run.graph : undefined;
-  const projected = useMemo(() => graph ? projectRunGraph(graph, selectedKey, { t, statusOptions, waitOptions, resolveTone }) : null,
-    [graph, selectedKey, t, statusOptions, waitOptions, resolveTone]);
+  const projected = useMemo(() => graph ? projectRunGraph(graph, selectedKey, { t, statusOptions, waitOptions, resolveTone, locale }) : null,
+    [graph, selectedKey, t, statusOptions, waitOptions, resolveTone, locale]);
   const selected = graph?.nodes.find((node) => node.key === selectedKey);
   const inspector = useMemo(() => active && graph ? { tabs: [{ id: RUN_GRAPH_INSPECTOR_TAB,
     label: t("run.graphInspector"), icon: "info", children:
@@ -41,11 +46,18 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
       </PageAside>,
   }] } : null, [active, graph, selected, projected, runId, t]);
   useChatterContent(inspector);
+  const graphReady = graph != null;
+  useEffect(() => {
+    if (active && graphReady && selectedKey) {
+      chatter.setCollapsed(false);
+      chatter.setActiveTab(RUN_GRAPH_INSPECTOR_TAB);
+    }
+  }, [active, graphReady, selectedKey, chatter.setCollapsed, chatter.setActiveTab]);
   const selectNode = useCallback((node: GraphViewNode) => {
-    route.navigate({ search: updateRouteSearch({ node: node.id }) });
+    void navigate({ to: ".", search: updateRouteSearch({ node: node.id }) });
     chatter.setCollapsed(false);
     chatter.setActiveTab(RUN_GRAPH_INSPECTOR_TAB);
-  }, [route.navigate, chatter.setCollapsed, chatter.setActiveTab]);
+  }, [navigate, chatter.setCollapsed, chatter.setActiveTab]);
   const errorPanel = read.error ? <ErrorBanner description={errorMessage(read.error, t("run.graphLoadFailed"))}
     actions={<Button onClick={() => void read.refetch()}>{t("run.graphReload")}</Button>} /> : null;
   if (!graph || !projected) return errorPanel ?? (read.data && !run
@@ -54,7 +66,7 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
     {errorPanel}
     <GraphView nodes={projected.nodes} edges={projected.edges} nodeStyles={projected.nodeStyles}
       edgeStyles={RUN_GRAPH_EDGE_STYLES} status={projected.status} layout={{ rankdir: "LR" }} miniMap
-      initialView={{ ready: true, anchorNodeId: projected.anchorNodeId, minZoom: 0.65 }}
+      initialView={{ anchorNodeId: projected.anchorNodeId }}
       ariaLabel={t("run.graph")} className="min-h-0 flex-1" onNodeClick={selectNode} />
   </div>;
 }
@@ -70,17 +82,16 @@ function RunNodeInspector({ runId, node, detail }: {
     <MetaSection title={node.label}>
       <MetaGrid rows={[
         [t("run.graphKey"), node.key], [t("run.graphStep"), node.step_label],
-        [t("run.status"), <Badge tone={resolveTone(row?.status ?? "pending")}>
+        [t("run.status"), <Badge tone={resolveTone(row?.status ?? "unreached")}>
           {row ? optionLabel(statuses, row.status) : t("run.graphPending")}</Badge>],
         ...(detail ? [[t("run.graphProgress"), detail] as const] : []),
-        ...(row ? [[t("step.attempts"), row.attempt], [t("step.pageIndex"), row.page_index],
-          [t("run.started"), row.created_at], [t("step.updated"), row.updated_at],
-          ...(row.deadline_at ? [[t("step.deadline"), row.deadline_at] as const] : []),
-          ...(row.wake_at ? [[t("step.wake"), row.wake_at] as const] : [])] as const : []),
+        ...(row ? [[t("step.attempts"), row.attempt], [t("step.page"), formatStepPage(row.page_index, t)],
+          [t("step.created"), formatDateTime(row.created_at)], [t("step.updated"), formatDateTime(row.updated_at)],
+          ...(row.deadline_at ? [[t("step.deadline"), formatDateTime(row.deadline_at)] as const] : []),
+          ...(row.wake_at ? [[t("step.wake"), formatDateTime(row.wake_at)] as const] : [])] as const : []),
         ...(node.body_key ? [[t("step.mapSettled"), row?.map_settled ?? 0], [t("step.mapTotal"), row?.map_total ?? 0]] as const : []),
       ]} />
     </MetaSection>
-    <StepRuns runId={runId} nodeKeys={node.body_key ? [node.key, node.body_key] : [node.key]}
-      selectFirstRecord={!node.body_key && row != null} />
+    <StepRuns runId={runId} nodeKeys={node.body_key ? [node.key, node.body_key] : [node.key]} />
   </>;
 }

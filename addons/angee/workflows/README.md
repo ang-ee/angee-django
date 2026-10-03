@@ -39,7 +39,9 @@ uses this same contract for configured seats. Under `all`, differing actions
 take an explicitly routed `disputed` branch.
 
 The [`permission schema`](permissions.zed) lets starters discover and read the
-workflows they may start, without editing them. Run actors can cancel and
+workflows they may start, without editing them. Run readers see the pinned topology
+and actor-readable execution summaries without requiring workflow or version read access.
+Run actors can cancel and
 reprocess their own runs. Monitoring other runs and reading unpublished drafts
 requires workflow monitoring access, including read-only Studio inspection. Draft edits and
 publication require workflow write access. Execution rows and artifacts are engine-owned;

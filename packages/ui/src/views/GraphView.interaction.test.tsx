@@ -68,19 +68,19 @@ describe("GraphView interactions", () => {
     expect(node.style.borderColor).toBe("var(--border-subtle)");
     expect(node.style.background).toBe("var(--surface-sheet)");
     expect(node.style.borderWidth).toBe("1px");
-    expect(node.style.outline).toBe("2px solid var(--brand)");
-    expect(node.style.outlineOffset).toBe("3px");
+    expect(node.style.boxShadow).toBe("0 0 0 3px var(--surface-sheet), 0 0 0 5px var(--brand)");
+    expect(node.style.outline).toBe("");
 
     view.rerender(graph(true, true));
     await waitFor(() => expect(node.style.borderWidth).toBe("2px"));
     expect(node.style.borderColor).toBe("var(--brand)");
     expect(node.style.background).toBe("var(--brand-soft)");
-    expect(node.style.outline).toBe("2px solid var(--brand)");
+    expect(node.style.boxShadow).toBe("0 0 0 3px var(--surface-sheet), 0 0 0 5px var(--brand)");
 
     view.rerender(graph(false, true));
     await waitFor(() => expect(node.className).not.toContain("selected"));
     expect(node.style.borderWidth).toBe("2px");
-    expect(node.style.outline).toBe("");
+    expect(node.style.boxShadow).toBe("");
 
     view.rerender(graph(false));
     await waitFor(() => expect(node.className).not.toContain("selected"));

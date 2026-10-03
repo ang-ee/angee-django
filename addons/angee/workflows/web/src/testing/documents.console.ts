@@ -16,6 +16,7 @@ const StepRunFields = graphql(`
     can_retry requires_duplicate_acknowledgement
     state page_index failure_reason retries deadline_at wake_at created_at updated_at
     awaited_run { id }
+    decision_group { id }
     attempts { id number page_index result started_at finished_at error stacktrace }
     artifacts { id label record_model record_id }
     watches { id record_model record_id }

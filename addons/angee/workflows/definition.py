@@ -165,7 +165,6 @@ class GraphNode:
 
     key: str
     label: str
-    step: str
     step_label: str
     rank: int
     outcomes: dict[str, str]
@@ -306,14 +305,27 @@ class Definition(BaseModel):
     def node_label(self, key: str) -> str:
         """Use the frozen label, an explicit step label, or the authored node key."""
         node = self.node(key)
-        return node.label or node.implementation.__dict__.get("label") or key.replace("_", " ").capitalize()
+        if node.label:
+            return node.label
+        try:
+            label = node.implementation.__dict__.get("label")
+        except ImproperlyConfigured:
+            label = None
+        return label or key.replace("_", " ").capitalize()
+
+    def node_step_label(self, key: str) -> str:
+        """Name the implementation, retaining its declared key if it was removed."""
+        node = self.node(key)
+        try:
+            return node.implementation.display_label()
+        except ImproperlyConfigured:
+            return node.step
 
     def topology(self) -> GraphTopology:
         """Project frozen labels and every routed port in stable execution order."""
         return GraphTopology(
             nodes=tuple(GraphNode(
-                key=key, label=self.node_label(key), step=node.step,
-                step_label=node.implementation.display_label() or node.step, rank=rank,
+                key=key, label=self.node_label(key), step_label=self.node_step_label(key), rank=rank,
                 outcomes={outcome: self.node_outcome_label(key, outcome)
                           for outcome in sorted(node.outcome_labels.keys() | node.next.keys())},
                 body_key=map_body_key(key) if node.body is not None else None,
@@ -326,9 +338,13 @@ class Definition(BaseModel):
     def node_outcome_label(self, key: str, outcome: str) -> str:
         """Name a node result from its frozen declaration, including old documents."""
         node = self.node(key)
-        return (node.outcome_labels.get(outcome)
-                or node.implementation.available_outcomes(node.parsed_config).get(outcome)
-                or outcome.replace("_", " ").capitalize())
+        if label := node.outcome_labels.get(outcome):
+            return label
+        try:
+            label = node.implementation.available_outcomes(node.parsed_config).get(outcome)
+        except ImproperlyConfigured:
+            return outcome
+        return label or outcome.replace("_", " ").capitalize()
 
     def run_outcome_label(self, outcome: str) -> str:
         """Name a terminal result using its published result vocabulary."""

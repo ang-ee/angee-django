@@ -42,8 +42,9 @@ export interface GraphViewNode<
   title: React.ReactNode;
   code?: React.ReactNode;
   detail?: React.ReactNode;
-  /** Controlled native React Flow selection state. */
+  /** Controlled native React Flow selection, drawn as a ring around the node. */
   selected?: boolean;
+  /** Emphasize this node's border and background independently of selection. */
   highlighted?: boolean;
   position?: GraphViewPosition;
   /** Named output handles; omitted preserves the default unnamed output. */
@@ -270,6 +271,22 @@ function GraphCanvas<
   TNodeMeta,
   TEdgeMeta
 >): React.ReactElement {
+  const t = useUiT();
+  const nodeDescription = t(nodesDraggable ? "graph.nodeMoveDescription" : "graph.nodeDescription");
+  const ariaLabelConfig = React.useMemo(() => ({
+    "node.a11yDescription.default": nodeDescription,
+    "node.a11yDescription.keyboardDisabled": nodeDescription,
+    "node.a11yDescription.ariaLiveMessage": ({ direction, x, y }: { direction: string; x: number; y: number }) =>
+      t("graph.nodeMoved", { direction, x, y }),
+    "edge.a11yDescription.default": t("graph.edgeDescription"),
+    "controls.ariaLabel": t("graph.controls"),
+    "controls.zoomIn.ariaLabel": t("graph.zoomIn"),
+    "controls.zoomOut.ariaLabel": t("graph.zoomOut"),
+    "controls.fitView.ariaLabel": t("graph.fitView"),
+    "controls.interactive.ariaLabel": t("graph.toggleInteraction"),
+    "minimap.ariaLabel": t("graph.minimap"),
+    "handle.ariaLabel": t("graph.port"),
+  }), [nodeDescription, t]);
   // Consumers pass `layout` as an inline literal; resolve it by value so a
   // parent re-render with unchanged settings cannot re-run the dagre layout.
   const {
@@ -345,7 +362,7 @@ function GraphCanvas<
       const style = resolvedNodeStyles[node.kind];
       const overlay = status?.[node.id];
       if (previous && sameNodeContent(previous.data.node, node)
-        && previous.data.style === style && previous.data.status === overlay
+        && previous.data.style === style && sameStatus(previous.data.status, overlay)
         && previous.sourcePosition === HANDLE_POSITIONS[rankdir].source
         && previous.targetPosition === HANDLE_POSITIONS[rankdir].target
         && previous.selected === selected && previous.measured === measured[node.id]
@@ -473,6 +490,7 @@ function GraphCanvas<
       <div className="absolute inset-0">
         <ReactFlow<RenderNode<TNodeKind, TNodeMeta>, RenderEdge<TEdgeKind, TEdgeMeta>>
           nodeTypes={NODE_TYPES}
+          ariaLabelConfig={ariaLabelConfig}
           deleteKeyCode={null}
           nodes={renderNodes}
           edges={readyRenderEdges}
@@ -586,11 +604,6 @@ function GraphCanvas<
           {miniMap ? <MiniMap pannable zoomable /> : null}
         </ReactFlow>
       </div>
-      <div role="status" className="sr-only">
-        {nodes.filter((node) => status?.[node.id]).map((node) => (
-          <span key={node.id}>{node.ariaLabel ?? (typeof node.title === "string" ? node.title : node.id)}: {status?.[node.id]?.label}. </span>
-        ))}
-      </div>
     </div>
   );
 }
@@ -641,8 +654,7 @@ function toReactFlowNode<
         ? style.highlightedBackground ?? "var(--brand-soft)"
         : style.background ?? "var(--surface-sheet)",
       color: style.color ?? "var(--text-primary)",
-      outline: selected ? "2px solid var(--brand)" : undefined,
-      outlineOffset: selected ? 3 : undefined,
+      boxShadow: selected ? "0 0 0 3px var(--surface-sheet), 0 0 0 5px var(--brand)" : undefined,
       padding: 0,
       borderStyle: "solid",
       borderRadius: 6,
@@ -756,6 +768,11 @@ function sameNodeContent(left: GraphViewNode, right: GraphViewNode): boolean {
   return left.kind === right.kind && left.kindLabel === right.kindLabel
     && left.title === right.title && left.code === right.code && left.detail === right.detail
     && left.ariaLabel === right.ariaLabel && left.highlighted === right.highlighted
-    && left.meta === right.meta && left.ports === right.ports
+    && left.meta === right.meta && (left.ports === right.ports || (left.ports?.length === right.ports?.length
+      && Boolean(left.ports?.every((port, index) => port.id === right.ports?.[index]?.id && port.label === right.ports?.[index]?.label))))
     && left.selected === right.selected && left.position?.x === right.position?.x && left.position?.y === right.position?.y;
+}
+
+function sameStatus(left: GraphViewStatus | undefined, right: GraphViewStatus | undefined): boolean {
+  return left?.label === right?.label && left?.tone === right?.tone;
 }
