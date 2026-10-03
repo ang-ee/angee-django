@@ -35,9 +35,7 @@ describe("parties addon manifest", () => {
   });
 
   test("registers review under the parties menu", () => {
-    const menu = (parties.menus ?? []).find((item) => item.id === "parties");
-    expect(menu?.children?.[0]?.route).toBe("parties.overview");
-    expect(menu?.children?.map((item) => item.route)).toContain("parties.review");
+    expect(parties.menus["parties.review"]).toMatchObject({ parent: "parties", route: "parties.review" });
     expect(
       (parties.routes ?? []).find((route) => route.name === "parties.merge")
         ?.parent,
@@ -47,6 +45,13 @@ describe("parties addon manifest", () => {
       enPartiesMessages["review.party"],
       enPartiesMessages["relationship.party"],
     ]).toEqual(["Party", "Party", "Party"]);
+  });
+
+  test("hides supporting tables and declares directories as platform configuration", () => {
+    for (const id of ["parties.overview", "parties.relationships", "parties.handles"]) {
+      expect(parties.menus[id]?.hide).toBe(true);
+    }
+    expect(parties.menus["parties.directories"]).toMatchObject({ label: "Contact directories", group: "platform", parent: "parties" });
   });
 
   test("builds list, record, and merge hrefs from its declared route templates", () => {

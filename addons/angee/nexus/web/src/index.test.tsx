@@ -23,13 +23,22 @@ describe("nexus addon manifest", () => {
   test("registers the Nexus inbox and brings relationship analytics under Nexus", () => {
     const menus = Object.values(nexus.menus ?? {});
     expect(menus.map((item) => item.route)).toEqual([
-      "nexus.inbox", "nexus.inbox",
+      undefined, "nexus.inbox",
       "nexus.graph",
       "nexus.ties",
       "nexus.cadences",
     ]);
     expect(menus.map((item) => item.parent)).toEqual([undefined, "nexus", "nexus", "nexus", "nexus"]);
-    expect(nexus.routes?.find((route) => route.name === "nexus.inbox")?.menu).toBe("nexus.inbox");
+    expect(nexus.routes?.find((route) => route.name === "nexus.inbox")?.menu).toBeUndefined();
+    expect(menus.slice(1).map((item) => item.sequence)).toEqual([10, 20, 30, 40]);
+    expect(nexus.menus["nexus.ties"]?.hide).toBe(true);
+    expect(nexus.menus.messaging?.hide).toBeUndefined();
+  });
+
+  test("offers a Nexus perspective for the deployment to select without setting a shell or brand", () => {
+    expect(nexus.perspectives).toEqual({ nexus: { root: "nexus", home: "nexus.inbox" } });
+    expect(nexus.shell).toBeUndefined();
+    expect(nexus.brand).toBeUndefined();
   });
 
   test("declares a glyph for every menu item it contributes", () => {

@@ -78,11 +78,14 @@ describe("organization form extensions", () => {
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
-  test.each(forms)("retains the native read-only gate for $resource records", async ({ resource, Component }) => {
+  test.each(forms)("read-only $resource records lock fields and keep declared contact actions", async ({ resource, Component }) => {
     renderPartyForm(<Component resource={resource} id="party-1" readOnly />);
     expect(await screen.findByRole("heading", { name: "Saved party" })).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    // FormView's read-only contract locks fields and generated CRUD; declared actions remain.
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Add email" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
   });
 
   test("offers identity and address tabs on saved organizations", async () => {

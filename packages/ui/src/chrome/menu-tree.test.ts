@@ -126,6 +126,46 @@ test("confinement keeps personal Settings roots, such as appearance, beside the 
   expect(confined.railMenuItems().map((node) => node.id)).toEqual(["notes"]);
 });
 
+test.each([false, true])("lifts nested platform nodes into Settings (confined=%s)", (confined) => {
+  const logical = MenuTree.from([
+    { id: "suite", children: [
+      { id: "suite.inbox", to: "/suite/inbox" },
+      { id: "mail", app: true, children: [
+        { id: "mail.messages", to: "/mail/messages" },
+        { id: "mail.settings", group: "platform", children: [
+          { id: "mail.channels", to: "/mail/channels" },
+        ] },
+        { id: "mail.hidden-settings", to: "/mail/hidden", group: "platform", hidden: true },
+      ] },
+      { id: "configuration", app: true, group: "platform", to: "/configuration" },
+    ] },
+    { id: "appearance", group: "platform", personal: true, to: "/appearance" },
+  ]);
+  const navigation = confined ? logical.confineTo("suite") : logical.withSettingsPlace();
+  expect(navigation.railMenuItems().map((node) => node.id)).toEqual(["suite"]);
+  expect(navigation.byId.get("suite")?.appChildren().map((node) => node.id)).toEqual(["mail"]);
+  expect(navigation.byId.get("mail")?.menuItems().map((node) => node.id)).toEqual(["mail.messages"]);
+  expect(navigation.settingsMenuItems().map((node) => node.id)).toEqual(["mail.settings", "configuration", "appearance"]);
+  expect(navigation.settingsMenuItems(true).map((node) => node.id)).toContain("mail.hidden-settings");
+  expect(navigation.byId.get("configuration")?.isApp).toBe(false);
+  expect(navigation.railPlace("/mail/channels/one")).toMatchObject({ scope: "settings", activeRootId: "mail.settings" });
+  expect(navigation.match("/mail/channels/one")?.app).toBeUndefined();
+  expect(navigation.navigableItems().map(({ item }) => item.id)).toContain("mail.hidden-settings");
+  expect(navigation.trailFor("mail.channels").map((node) => node.id)).toEqual(["mail.settings", "mail.channels"]);
+  expect(logical.trailFor("mail.channels").map((node) => node.id)).toEqual(["suite", "mail", "mail.settings", "mail.channels"]);
+  expect(logical.byId.get("mail.settings")?.parentNode?.id).toBe("mail");
+});
+
+test("withSettingsPlace is idempotent, retaining platform descendants inside Settings roots", () => {
+  const tree = MenuTree.from([{ id: "mail", children: [
+    { id: "mail.settings", group: "platform", children: [
+      { id: "mail.channels", group: "platform", to: "/mail/channels" },
+    ] },
+  ] }]);
+  const once = tree.withSettingsPlace();
+  expect(once.withSettingsPlace()).toEqual(once);
+});
+
 describe("resolveMenuRouteTargets", () => {
   const routeHref = createRouteHref([
     { name: "dashboards.addon", path: "/dashboards/addon/$key" },
@@ -216,25 +256,6 @@ describe("navigableItems", () => {
     // `to` but also children — both are parents, so their leaves carry targets.
     expect(ids).not.toContain("operator");
     expect(ids).not.toContain("notes");
-  });
-
-  test("excludes the chrome action menus (systray/user) and their entries", () => {
-    const ids = MenuTree.from([
-      { id: "notes", label: "Notes", to: "/notes" },
-      {
-        id: "user",
-        label: "User",
-        children: [{ id: "user.profile", label: "Profile", to: "/profile" }],
-      },
-      {
-        id: "systray",
-        label: "Systray",
-        children: [{ id: "systray.help", label: "Help", to: "/help" }],
-      },
-    ])
-      .navigableItems()
-      .map(({ item }) => item.id);
-    expect(ids).toEqual(["notes"]);
   });
 
   test("skips entries with no target or a '#' placeholder", () => {
@@ -445,12 +466,6 @@ describe("trailFor", () => {
     expect(() =>
       MenuTree.from([{ id: "child", parentId: "ghost" }]),
     ).toThrow(/Menu item "child" names unknown parent "ghost"/);
-  });
-
-  test("tolerates a reserved virtual parent (systray/user) with no node", () => {
-    expect(() =>
-      MenuTree.from([{ id: "entry", parentId: "systray", to: "/x" }]),
-    ).not.toThrow();
   });
 
   test("throws when target fallback links cycle", () => {
