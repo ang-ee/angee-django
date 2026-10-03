@@ -153,6 +153,8 @@ export class ChromeMenuNode implements ChromeMenuItem {
   badge?: number;
   hidden?: boolean;
   personal?: boolean;
+  /** An included app shown without an entry of its own (logical tree only); still an app for words and rules (G-8). */
+  flatten?: boolean;
 
   constructor(item: ChromeMenuItem) {
     const { children: _children, ...clone } = item;
@@ -378,6 +380,20 @@ export class MenuTree {
     return this.match(pathname)?.trail[0];
   }
 
+  /**
+   * The apps the current path sits in, outermost first: its root and every
+   * included app on the way, flattened ones too, which stay apps for words and
+   * rules (G-8). Read it from the logical tree, which keeps flattened apps.
+   */
+  appTrail(pathname: string): readonly ChromeMenuNode[] {
+    return this.match(pathname)?.trail.filter(scopesApp) ?? [];
+  }
+
+  /** Every id an app trail can hold: what `when: { app }` may name. */
+  appIds(): ReadonlySet<string> {
+    return new Set([...this.byId.values()].filter(scopesApp).map((item) => item.id));
+  }
+
   /** One highlighted destination; ancestors remain expanded, not selected. */
   activeItem(pathname: string): ChromeMenuNode | undefined {
     return this.match(pathname)?.item;
@@ -450,6 +466,11 @@ function matchWithin(
 }
 
 const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);
+
+/** An app for words and rules: a root or an included app, flattened ones too (G-8), never the chrome's own parents. */
+function scopesApp(item: ChromeMenuNode): boolean {
+  return (item.isApp || item.flatten === true) && !CHROME_MENU_PARENT_IDS.has(item.id);
+}
 
 export function buildMenuTree(
   items: readonly ChromeMenuItem[],

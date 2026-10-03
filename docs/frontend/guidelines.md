@@ -771,9 +771,13 @@ on that addon; the framework's containers are open to every addon.
 
 `when: { app, route, perspective }` limits an entry's render verbs (`only`,
 `except` and `hide`) to some pages. `route` matches the route or any route
-below it, `app` the active app, and `perspective` the selected perspective
-while the console is confined; each takes one id or a list. An array of
-entries holds conditional alternatives:
+below it, `app` any app on the page's menu trail (its root and every included
+app on the way, flattened ones too, so `when: { app: "work" }` holds on work's
+pages inside the PM suite; under a perspective only the root's own apps count,
+and a page another root owns sits in the root alone), and `perspective` the selected perspective
+while the console is confined; each takes one id or a list, and an id that
+names no route, app or perspective fails at boot. An array of entries holds
+conditional alternatives:
 
 ```ts
 // A product layered on its dependencies.
@@ -791,7 +795,14 @@ Children are declared unconditionally; declaring, moving or removing under
 `when` fails. A container has no hide of its own: hide its children, or narrow
 it with `only: []`. `hide: false` undoes a `hide`, never an `only`. The
 deployment's `ANGEE_UI.containers` is a last layer that depends on every addon:
-it alters and narrows, and declares nothing.
+it alters and narrows, and declares nothing. A deployment `only` narrows like
+any other unless it says `force: true` (G-14): then, where it holds, it stands
+in for every addon's `only` and `except` across the addresses the page merges
+(a forced `only` at `notes.Note#sections` also sets aside the addons' narrowing
+at `form#sections` on notes forms), so a deployment can admit a child an addon
+narrowed away; a `hide` stays until the deployment shows it again. Only the
+deployment may force, and only beside an `only`. Developer mode labels such a
+rule "force only". `ANGEE_UI.menus` forces the same way, per menu node.
 
 ### Variants and `impl`
 
@@ -813,8 +824,15 @@ verbs are variants of Integration's resume and disconnect:
 },
 ```
 
-Owners pass the row's implementations where they render for one record; the
-form's `#actions` and `#actions-menu` do.
+Owners pass the row's implementations where they render for one record. The
+form does so for all of `#sections`, `#rail`, `#actions` and `#actions-menu`:
+it resolves each with `projection: true` so the record projection reads every
+candidate's fields, then shows the groups, tabs, actions and rail groups of
+the children the loaded record admits; its layout (title, status, body) and its
+save read only those children's fields. An original and its variants may reuse
+a tab or rail group id, never a fixed group's. A create form knows no
+implementation: originals stand, and the children that need one stay out of
+the form with their required fields and defaults.
 
 ### Framework containers
 

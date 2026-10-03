@@ -94,9 +94,12 @@ export type DialogContentProps = BaseDialogPopupProps &
     className?: string;
   };
 
+/** Where a dialog returns focus when it closes; Base UI's `finalFocus`. */
+export type DialogReturnFocus = BaseDialogPopupProps["finalFocus"];
+
 /** A surface may supply return focus for its immediate dialog, across portals. */
-export const DialogReturnFocusContext =
-  React.createContext<BaseDialogPopupProps["finalFocus"]>(undefined);
+export const DialogReturnFocusContext: React.Context<DialogReturnFocus> =
+  React.createContext<DialogReturnFocus>(undefined);
 
 export const DialogContent = React.forwardRef<
   HTMLDivElement,

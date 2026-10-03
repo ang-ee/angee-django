@@ -121,6 +121,11 @@ export type ContainerEntry<TContent> = {
   only?: readonly string[];
   /** Drop these children. */
   except?: readonly string[];
+  /**
+   * The deployment only (`ANGEE_UI.containers`), with `only`: force it (G-14), so it
+   * stands in for every addon's `only` and `except` instead of narrowing them.
+   */
+  force?: true;
   /** Where the entry's render verbs (`only`, `except`, `hide`) apply. */
   when?: ContainerCondition;
   /** On an addon's own container: at most one child per `key`. */
@@ -166,6 +171,13 @@ export interface ContainerRule {
   show?: readonly string[];
   /** Layers whose children this rule's `only` never filters: the layer's dependents (G2.2). */
   exempt: readonly string[];
+  /**
+   * A deployment `only` declared with `force: true` (G-14 "the deployment may
+   * force"): where it holds, the deployment's `only` and `except` stand in for
+   * every layer's at the addresses a page merges, so it may admit a child an
+   * addon's `only` left out. `hide` still applies; un-hide it.
+   */
+  force?: true;
 }
 
 /** The composed containers the runtime renders from. */
@@ -182,9 +194,11 @@ export interface ComposedContainers {
   diagnostics: readonly string[];
 }
 
-/** Where the page is: the apps and routes on its trail (nearest first) and the perspective. */
+/** Where the page is, for `when`: its apps, its routes and the perspective. */
 export interface ContainerScope {
+  /** Every app on the page's menu trail, outermost first, flattened ones too (G-8). */
   apps: readonly string[];
+  /** The page's route and its parent routes, nearest first. */
   routes: readonly string[];
   perspective: string | null;
 }
@@ -268,6 +282,9 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
  * variants standing in for their originals on matching rows and the row's
  * permission last. Narrowing by a variant's own id drops that variant (its
  * original returns); narrowing by an original's id carries its variants along.
+ * A deployment `only` that holds forces: its narrowing replaces the addons'.
+ * `projection` keeps every candidate (impl children and all variants) for the
+ * fields to fetch, each unplaced variant right after its original.
  */
 export function resolveContainer<TContent = unknown>(
   composed: ComposedContainers,
@@ -296,7 +313,10 @@ export function resolveContainer<TContent = unknown>(
     for (const id of rule.hide ?? []) hidden.add(id);
     for (const id of rule.show ?? []) hidden.delete(id);
   }
-  const excepted = new Set(rules.flatMap((rule) => rule.except ?? []));
+  // Where the deployment forces (G-14), its `only` and `except` stand in for every layer's.
+  const forcing = rules.find((rule) => rule.force)?.layer;
+  const narrowing = forcing === undefined ? rules : rules.filter((rule) => rule.layer === forcing);
+  const excepted = new Set(narrowing.flatMap((rule) => rule.except ?? []));
   const blocked = (id: string): boolean => hidden.has(id) || excepted.has(id);
 
   // A variant carries its original's admission: its id and its owner for `only`'s exemption.
@@ -305,9 +325,22 @@ export function resolveContainer<TContent = unknown>(
   const ownerOf = (child: ComposedContainerChild): string => originals.get(lineage(child))?.owner ?? child.owner;
   const permitted = (child: ComposedContainerChild): boolean =>
     projection || row === undefined || !child.permission || holdsPermission(row, child.permission);
+  // A variant positioned in its own right keeps its place; one without stands where
+  // its original stood, or keeps its own when the original is not on this page.
+  const placed = (child: ComposedContainerChild): boolean =>
+    child.sequence !== undefined || child.before !== undefined || child.after !== undefined
+    || (child.variant !== undefined && !originals.has(child.variant.of));
 
   let visible = merged.filter((child) => !blocked(child.id) && !blocked(lineage(child)));
-  if (!projection) {
+  if (projection) {
+    // Every candidate stays; an unplaced variant follows its original, whose place it takes on its rows.
+    const following = new Map<string, ComposedContainerChild[]>();
+    const trails = (child: ComposedContainerChild): boolean => child.variant !== undefined && !placed(child);
+    for (const child of visible) {
+      if (trails(child)) following.set(child.variant!.of, [...(following.get(child.variant!.of) ?? []), child]);
+    }
+    visible = visible.filter((child) => !trails(child)).flatMap((child) => [child, ...(following.get(child.id) ?? [])]);
+  } else {
     // Variants for the row's implementation stand in for their originals; one the
     // row lacks the permission for leaves the original in place (G-13).
     const variants = new Map<string, ComposedContainerChild>();
@@ -317,11 +350,6 @@ export function resolveContainer<TContent = unknown>(
       if (taken) throw new Error(`Children "${taken.id}" and "${child.id}" of "${address}" are both variants of "${child.variant.of}" for this row.`);
       variants.set(child.variant.of, child);
     }
-    // A variant positioned in its own right keeps its place; one without stands where
-    // its original stood, or keeps its own when the original is not on this page.
-    const placed = (child: ComposedContainerChild): boolean =>
-      child.sequence !== undefined || child.before !== undefined || child.after !== undefined
-      || (child.variant !== undefined && !originals.has(child.variant.of));
     visible = visible
       .filter((child) => !child.variant || (variants.get(child.variant.of) === child && placed(child)))
       .flatMap((child) => {
@@ -331,7 +359,7 @@ export function resolveContainer<TContent = unknown>(
       })
       .filter((child) => child.impl === undefined || impls.includes(child.impl));
   }
-  for (const rule of rules) {
+  for (const rule of narrowing) {
     if (!rule.only) continue;
     const kept = new Set(rule.only);
     visible = visible.filter((child) => kept.has(child.id) || kept.has(lineage(child)) || rule.exempt.includes(ownerOf(child)));

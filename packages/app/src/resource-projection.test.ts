@@ -127,6 +127,32 @@ describe("app resource projection", () => {
     expect(projection.allows(routes.find((route) => route.name === "platform")!, "/settings/platform")).toBe(false);
   });
 
+  test("the app trail lists every app a page sits in, flattened ones too (G-8)", () => {
+    const compiled = compileMenus([
+      { id: "projects", menus: [{ id: "projects", children: [{ id: "projects.tasks", route: "projects.tasks" }] }] },
+      { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
+      { id: "pm", dependsOn: ["projects", "messaging"], menus: { pm: { include: [{ id: "projects", flatten: true }, "messaging"] } } },
+      { id: "look", menus: { look: { route: "look.page", group: "platform" } } },
+    ]);
+    const appRoutes: readonly BaseAddonRoute[] = [
+      { name: "projects.tasks", path: "/projects/tasks" },
+      { name: "messaging.messages", path: "/messaging" },
+      { name: "look.page", path: "/settings/look" },
+    ];
+    const tree = MenuTree.from(resolveMenuRouteTargets(compiled.logical, createRouteHref(appRoutes)) as readonly ChromeMenuItem[]);
+    const projection = new AppRouteProjection(appRoutes, tree);
+    expect(projection.appTrail("/projects/tasks/t1")).toEqual(["pm", "projects"]);
+    expect(projection.appTrail("/messaging")).toEqual(["pm", "messaging"]);
+    expect(projection.appTrail("/elsewhere")).toEqual([]);
+    // A Settings root is no app.
+    expect(projection.appTrail("/settings/look")).toEqual([]);
+    // Under a confinement the root's own apps count; a page another root owns sits in the root alone.
+    const confined = new AppRouteProjection(appRoutes, tree, "pm");
+    expect(confined.appTrail("/projects/tasks")).toEqual(["pm", "projects"]);
+    expect(confined.appTrail("/settings/look")).toEqual(["pm"]);
+    expect(tree.appIds()).toEqual(new Set(["projects", "messaging", "pm"]));
+  });
+
   test("confineTo supplies the app scope even without an explicit appRoot marker", () => {
     const tree = MenuTree.from(resolveMenuRouteTargets(menus.map((item) => ({ ...item, appRoot: undefined })), createRouteHref(routes)) as readonly ChromeMenuItem[]);
     const projection = new AppRouteProjection(routes, tree, "desk");

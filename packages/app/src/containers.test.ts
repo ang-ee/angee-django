@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 import { resolveContainer, type ContainersDeclaration, type CoreContainer } from "@angee/ui/runtime";
 
 import { compileContainers, type ContainerLayer } from "./containers";
+import { explainComposition } from "./explain";
 import { DEPLOYMENT_LAYER_ID } from "./layers";
+import { compileMenus } from "./menus";
+import { resolveShell } from "./shell";
 
 const core: CoreContainer[] = [{ address: "form#sections", models: true }, { address: "form#actions", models: true }];
 const layer = (id: string, containers: Record<string, unknown>, dependsOn: string[] = []): ContainerLayer =>
@@ -188,6 +191,46 @@ describe("compileContainers", () => {
     expect(ids(resolveContainer(composed, "form#sections", { models }))).toEqual(["work.edit", "work.view"]);
     const deployment = layer(DEPLOYMENT_LAYER_ID, { "form#sections": { except: ["work.view"] } }, ["work"]);
     expect(ids(resolveContainer(compileContainers([work, deployment], core), "form#sections", { models }))).toEqual(["work.edit"]);
+  });
+
+  test("addons narrow only; a deployment only narrows too unless it forces, standing in for every layer's (G-14)", () => {
+    const work = layer("work", { "form#sections": { "work.a": { content: 1 }, "work.b": { content: 2 }, "work.c": { content: 3 } } });
+    const product = layer("product", { "form#sections": [{ only: ["work.a", "work.b"] }, { except: ["work.c"] }, { "work.b": { hide: true } }] }, ["work"]);
+    const deployment = (containers: Record<string, unknown>) => layer(DEPLOYMENT_LAYER_ID, containers, ["work", "product"]);
+    expect(ids(resolveContainer(compileContainers([work, product], core), "form#sections"))).toEqual(["work.a"]);
+    // A plain deployment `only` or `except` narrows with the addons.
+    expect(ids(resolveContainer(compileContainers([work, product, deployment({ "form#sections": { only: ["work.b", "work.c"] } })], core), "form#sections"))).toEqual([]);
+    expect(ids(resolveContainer(compileContainers([work, product, deployment({ "form#sections": { except: ["work.a"] } })], core), "form#sections"))).toEqual([]);
+    // `force: true` makes its `only` the set: the product's only and except give way; its hide holds until shown.
+    const forced = compileContainers([work, product, deployment({ "form#sections": [
+      { only: ["work.b", "work.c"], force: true }, { "work.b": { hide: false } },
+    ] })], core);
+    expect(forced.rules["form#sections"]?.find((rule) => rule.layer === DEPLOYMENT_LAYER_ID && rule.only)?.force).toBe(true);
+    expect(ids(resolveContainer(forced, "form#sections"))).toEqual(["work.b", "work.c"]);
+    expect(explainComposition(resolveShell([]), compileMenus([]), new Map(), { home: "/", confineTo: null }, forced).containers?.rules)
+      .toContainEqual({ address: "form#sections", layer: DEPLOYMENT_LAYER_ID, summary: "force only [work.b, work.c]" });
+    // A condition scopes the force like any narrowing.
+    const conditional = compileContainers([work, product, deployment({ "form#sections": [
+      { only: ["work.c"], force: true, when: { app: "desk" } },
+    ] })], core);
+    expect(ids(resolveContainer(conditional, "form#sections", { scope: scope([], ["desk"]) }))).toEqual(["work.c"]);
+    expect(ids(resolveContainer(conditional, "form#sections"))).toEqual(["work.a"]);
+    // Only the deployment forces, and only an `only`.
+    expect(() => compileContainers([work, layer("product", { "form#sections": { only: ["work.a"], force: true } }, ["work"])], core))
+      .toThrow(/only the deployment forces/);
+    expect(() => compileContainers([work, product, deployment({ "form#sections": { except: ["work.a"], force: true } })], core))
+      .toThrow(/only the deployment forces/);
+  });
+
+  test("the projection keeps every candidate, each unplaced variant right after its original", () => {
+    const composed = compileContainers([layer("work", { "form#actions": {
+      "work.archive": { content: 1, sequence: 10 },
+      "work.resume": { content: 2, sequence: 20 },
+      "work.zz-fast": { content: 3, variant: { of: "work.resume", impl: "fast" } },
+      "work.slow": { content: 4, impl: "slow" },
+    } })], core);
+    expect(ids(resolveContainer(composed, "form#actions", { projection: true }))).toEqual(["work.archive", "work.resume", "work.zz-fast", "work.slow"]);
+    expect(ids(resolveContainer(composed, "form#actions", { impls: ["fast"] }))).toEqual(["work.archive", "work.zz-fast"]);
   });
 
   test("entries are validated: unknown keys, unnamespaced children, conditional declarations, foreign declarations", () => {
