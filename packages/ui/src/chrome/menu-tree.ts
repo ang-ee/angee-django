@@ -39,6 +39,11 @@ export interface ChromeMenuExtra {
   badge?: number;
   /** Left out of the rail and Settings; it still owns its routes and stays in the palette. */
   hidden?: boolean;
+  /**
+   * A Settings root every user has, such as their appearance: a perspective
+   * keeps it in Settings and admits its routes. Only on a root in `platform`.
+   */
+  personal?: boolean;
 }
 
 export interface BaseMenuItem extends MenuItem, ChromeMenuExtra {
@@ -147,6 +152,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   tone?: ChromeMenuTone;
   badge?: number;
   hidden?: boolean;
+  personal?: boolean;
 
   constructor(item: ChromeMenuItem) {
     const { children: _children, ...clone } = item;
@@ -245,7 +251,7 @@ export class MenuTree {
       : buildMenuTree(itemsOrTree);
   }
 
-  /** Project one host-selected root, retaining contributed descendants. */
+  /** Project one host-selected root, retaining contributed descendants and the personal Settings roots. */
   confineTo(rootId: string): MenuTree {
     const root = this.roots.find((item) => item.id === rootId);
     if (!root) throw new Error(`Unknown menu root "${rootId}" in confineTo.`);
@@ -259,7 +265,8 @@ export class MenuTree {
       }),
     });
     const app = { ...project(root), appRoot: true, group: "domain" as const };
-    return MenuTree.from([app, ...settings]);
+    const personal = this.roots.filter((item) => item.personal && item.group === "platform" && item.id !== rootId);
+    return MenuTree.from([app, ...settings, ...personal.map(project)]);
   }
 
   /** Explicit app roots win; without an opt-in every root remains an app. */

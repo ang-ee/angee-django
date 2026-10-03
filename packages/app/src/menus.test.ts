@@ -56,6 +56,11 @@ describe("compileMenus", () => {
     }
     expect(() => compileMenus([{ id: "desk", menus: { desk: { app: true } } } as unknown as MenuLayer]))
       .toThrow(/unknown key "app"/);
+    // Only a Settings root may be personal: one every perspective keeps.
+    expect(compileMenus([{ id: "look", menus: { look: { group: "platform", personal: true } } }]).navigation[0]?.personal).toBe(true);
+    expect(() => compileMenus([{ id: "look", menus: { look: { personal: true } } }])).toThrow(/is personal, which only a Settings root/);
+    expect(() => compileMenus([{ id: "look", menus: { look: {}, "look.theme": { parent: "look", group: "platform", personal: true } } }]))
+      .toThrow(/is personal, which only a Settings root/);
     expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", app: true }] } as unknown as MenuLayer]))
       .toThrow(/app identity is compiler-emitted/);
   });
