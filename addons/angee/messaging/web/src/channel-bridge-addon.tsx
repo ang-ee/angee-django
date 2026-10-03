@@ -1,4 +1,4 @@
-import { defineBaseAddon, type BaseAddon } from "@angee/app";
+import { defineBaseAddon } from "@angee/app";
 import {
   ConditionalMutationButton,
   INTEGRATION_DISCONNECT_ACTION_ID,
