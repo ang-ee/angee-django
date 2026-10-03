@@ -19,7 +19,7 @@ afterEach(() => { cleanup(); clearClients(); });
 
 test.each(["click", "Enter"])("%s selects the URL node and expands the native inspector", async (activation) => {
   render(<RunGraphStory retained />);
-  fireEvent.click(screen.getByRole("button", { name: "Collapse inspector" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Collapse inspector" }));
   const node = await screen.findByTestId("rf__node-inspect");
   if (activation === "click") fireEvent.click(node);
   else fireEvent.keyDown(node, { key: "Enter" });
@@ -66,9 +66,12 @@ test("a map inspector shows complete progress and filters the node and its items
   expect(await screen.findByText("119/122")).toBeTruthy();
   fireEvent.click(await screen.findByTestId("rf__node-reviews"));
   await waitFor(() => expect(requests.some(({ query }) => /\bsteprun\s*\(/.test(query))).toBe(true));
-  expect(requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where).toEqual({ _and: [
+  // `_and` is commutative; the shared filter owner decides clause order.
+  const where = requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where as { _and: unknown[] };
+  expect(where._and).toHaveLength(2);
+  expect(where._and).toEqual(expect.arrayContaining([
     { run: { _eq: "wfr_review" } }, { node_key: { _in: ["reviews", "reviews.body"] } },
-  ] });
+  ]));
   expect(screen.queryByRole("dialog", { name: "Step Run" })).toBeNull();
   const query = requests.find(({ query }) => query.includes("WorkflowRunGraph"))!.query;
   expect(query).not.toMatch(/\b(input|output|state|stacktrace)\b/);

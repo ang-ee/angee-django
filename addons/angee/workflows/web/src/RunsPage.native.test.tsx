@@ -27,9 +27,12 @@ test("node-scoped step evidence keeps the run filter and selects parent plus ite
   render(<RunStory content={<StepRuns runId="wfr_review" nodeKeys={["inspect", "inspect.body"]} />}
     onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("button", { name: "Open Inspect source" });
-  expect(requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where).toEqual({ _and: [
+  // `_and` is commutative; the shared filter owner decides clause order.
+  const where = requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where as { _and: unknown[] };
+  expect(where._and).toHaveLength(2);
+  expect(where._and).toEqual(expect.arrayContaining([
     { run: { _eq: "wfr_review" } }, { node_key: { _in: ["inspect", "inspect.body"] } },
-  ] });
+  ]));
 });
 
 test("step checkpoint and linked decisions compose the existing form and list", async () => {
