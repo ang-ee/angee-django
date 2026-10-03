@@ -178,12 +178,17 @@ export class ChromeMenuNode implements ChromeMenuItem {
 
   /** Children the rail renders: those with a target that are not hidden. */
   get targetedChildren(): readonly ChromeMenuNode[] {
-    return (this.children ?? []).filter((child) => child.target && !child.hidden);
+    return this.railChildren();
   }
 
-  /** Most-specific targeted child whose subtree contains `pathname`. */
-  activeTargetedChild(pathname: string): ChromeMenuNode | undefined {
-    return deepestTargetMatch(this.targetedChildren, pathname);
+  /** Children with a target; developer mode's rail includes the hidden ones. */
+  railChildren(includeHidden = false): readonly ChromeMenuNode[] {
+    return (this.children ?? []).filter((child) => child.target && (includeHidden || !child.hidden));
+  }
+
+  /** Most-specific rail child whose subtree contains `pathname`. */
+  activeTargetedChild(pathname: string, includeHidden = false): ChromeMenuNode | undefined {
+    return deepestTargetMatch(this.railChildren(includeHidden), pathname);
   }
 
   matchesPath(pathname: string): boolean {
@@ -256,18 +261,19 @@ export class MenuTree {
       : this.roots;
   }
 
-  railMenuItems(): readonly ChromeMenuNode[] {
+  /** The app roots the rail lists; developer mode's rail includes the hidden ones. */
+  railMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
     return this.appRoots().filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id) || item.hidden) return false;
+      if (CHROME_MENU_PARENT_IDS.has(item.id) || (item.hidden && !includeHidden)) return false;
       if (item.group === "platform") return false;
       return Boolean(item.target);
     });
   }
 
   /** Navigable root categories that live in the Settings place. */
-  settingsMenuItems(): readonly ChromeMenuNode[] {
+  settingsMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
     return this.roots.filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id) || item.hidden) return false;
+      if (CHROME_MENU_PARENT_IDS.has(item.id) || (item.hidden && !includeHidden)) return false;
       return item.group === "platform" && Boolean(item.target);
     });
   }
@@ -300,15 +306,15 @@ export class MenuTree {
    * and which of them is the active one (`null` when the path belongs to
    * neither, or to the other scope's roots).
    */
-  railPlace(pathname: string): {
+  railPlace(pathname: string, includeHidden = false): {
     scope: "apps" | "settings";
     roots: readonly ChromeMenuNode[];
     activeRootId: string | null;
   } {
     const scope = this.isSettingsActive(pathname) ? "settings" : "apps";
     const roots = scope === "settings"
-      ? this.settingsMenuItems()
-      : this.railMenuItems();
+      ? this.settingsMenuItems(includeHidden)
+      : this.railMenuItems(includeHidden);
     const active = this.activeAppRoot(pathname);
     return {
       scope,

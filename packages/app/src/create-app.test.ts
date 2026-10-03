@@ -161,6 +161,37 @@ describe("createApp confinement", () => {
   });
 });
 
+describe("createApp developer mode", () => {
+  test("?debug=1 on / turns it on through the home redirect; pages read the composition and route name", async () => {
+    window.sessionStorage.clear();
+    history.replaceState(null, "", "/?debug=1");
+    const seen: { route?: string | null; home?: string } = {};
+    function Probe(): ReactNode {
+      const runtime = useAppRuntime();
+      seen.route = runtime.activeRouteName;
+      seen.home = runtime.composition?.effective.home;
+      return null;
+    }
+    const app = createApp({
+      ...testAppInput([{ id: "desk", routes: [{ name: "desk.home", path: "/desk", component: Probe }], menus: [{ id: "desk", route: "desk.home" }] }]),
+      home: "desk.home",
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(window.location.pathname).toBe("/desk"));
+      expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");
+      await waitFor(() => expect(seen).toEqual({ route: "desk.home", home: "/desk" }));
+      expect(app.explain.effective.home).toBe("/desk");
+    } finally {
+      root.unmount();
+      host.remove();
+      window.sessionStorage.clear();
+    }
+  });
+});
+
 type AuthoredQueryDocument = Parameters<typeof useAuthoredQuery>[0];
 
 function typedDocument(source: string): AuthoredQueryDocument {

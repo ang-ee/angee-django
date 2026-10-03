@@ -11,10 +11,10 @@ export {
   type PreferenceSliceState,
 } from "./user-preferences";
 export {
-  DEVELOPER_MODE_PREFERENCE_KEY,
+  applyDeveloperModeSearch,
   useDeveloperMode,
+  useDeveloperModeSwitch,
   useRuntimeComposition,
-  type RuntimeComposition,
 } from "./developer-mode";
 export {
   AppRuntimeProvider,
@@ -87,7 +87,10 @@ export type {
   MenuItem,
   ModelSlotTarget,
   PreviewContribution,
+  HiddenMenuItem,
+  RemovedMenuItem,
   RuntimeBrand,
+  RuntimeComposition,
   SlotContribution,
   WidgetMap,
 } from "./contracts";

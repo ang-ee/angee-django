@@ -3,8 +3,10 @@ import type { RuntimeComposition } from "@angee/ui/runtime";
 import type { CompiledMenus } from "./menus";
 import type { ResolvedShell } from "./shell";
 
-/** Why the composed shell and menus look as they do, layer by layer; the runtime's developer-mode facts. */
-export type CompositionExplanation = RuntimeComposition;
+/** Why the composed shell and menus look as they do, layer by layer: the facts developer mode shows. */
+export interface CompositionExplanation extends RuntimeComposition {
+  shell: ResolvedShell;
+}
 
 /** Assemble the composition's explanation from its owners' facts; nothing is re-derived here. */
 export function explainComposition(

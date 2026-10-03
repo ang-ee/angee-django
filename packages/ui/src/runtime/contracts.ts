@@ -31,6 +31,48 @@ export interface RuntimeBrand {
   mark: string;
 }
 
+/** A menu item a layer removed: the route it referenced, the removing layer, the rail item it showed under, its label. */
+export interface RemovedMenuItem {
+  id: string;
+  route?: string;
+  by: string;
+  parent?: string;
+  label?: string;
+}
+
+/** A surviving menu item left out of the rail, by a `hide` or by a layer's `only`. */
+export interface HiddenMenuItem {
+  id: string;
+  by: string;
+  reason: "hide" | "only";
+}
+
+/**
+ * How the composition came out, layer by layer: what developer mode shows. It
+ * holds composition facts only (ids, addon names, route names), never records.
+ */
+export interface RuntimeComposition {
+  shell: {
+    home?: string;
+    brand: RuntimeBrand | null;
+    perspective: { id: string; root: string; home?: string } | null;
+    /** The layer that supplied each resolved shell field. */
+    provenance: Readonly<Partial<Record<string, string>>>;
+    diagnostics: readonly string[];
+  };
+  /** What the app runs with once deprecated `createApp` inputs override the shell. */
+  effective: { home: string; confineTo: string | null };
+  menus: {
+    /** The layer that set each menu item field, declarations included. */
+    provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
+    removed: readonly RemovedMenuItem[];
+    hidden: readonly HiddenMenuItem[];
+    /** Console routes a removal made unavailable, with the reason. */
+    unavailable: Readonly<Record<string, string>>;
+    diagnostics: readonly string[];
+  };
+}
+
 /** Scoped presentation only; unknown message, resource, field and menu keys fail at boot. */
 export interface AppVocabulary {
   /** Menu root owning this vocabulary. */

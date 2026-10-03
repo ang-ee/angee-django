@@ -120,14 +120,19 @@ export function AppRail({
     railPreferences.expanded,
     largeViewport,
   );
-  const activePlace = tree.railPlace(pathname);
+  const activePlace = tree.railPlace(pathname, rail.enabled);
   const place = drawerMode && navigationTarget
-    ? tree.railPlace(navigationTarget)
+    ? tree.railPlace(navigationTarget, rail.enabled)
     : activePlace;
   const settingsActive = place.scope === "settings";
   const items = useMemo(
     () => orderedRailItems(tree.railMenuItems(), railPreferences.order),
     [railPreferences.order, tree],
+  );
+  // Developer mode lists hidden apps in the expanded tree; the icon rail keeps its order and default.
+  const treeItems = useMemo(
+    () => rail.enabled ? orderedRailItems(tree.railMenuItems(true), railPreferences.order) : items,
+    [items, rail.enabled, railPreferences.order, tree],
   );
   const [onlyRoot] = items;
   const railBrand = brand ?? (confineTo && onlyRoot
@@ -236,7 +241,7 @@ export function AppRail({
             <AppRailTree
               scope={place.scope}
               flat={Boolean(singleApp) && !settingsActive}
-              roots={settingsActive ? place.roots : items}
+              roots={settingsActive ? place.roots : treeItems}
               activeRootId={activeRootId}
               defaultOpenRootId={place.activeRootId}
               onActiveToggle={onActiveToggle}
@@ -245,8 +250,7 @@ export function AppRail({
             <div className="flex flex-col gap-1">
               {(rail.children(singleApp.root).length ? rail.children(singleApp.root) : [singleApp.root]).map((item) => item.target ? (
                 <RailSettingsItem key={item.id} active={item.matchesPath(pathname)} expanded={false}
-                  icon={item.iconName} label={rail.enabled && item.hidden ? `${item.displayLabel} (${t("developer.hiddenMark")})` : item.displayLabel}
-                  to={item.target} pathname={pathname}
+                  icon={item.iconName} label={rail.label(item)} to={item.target} pathname={pathname}
                   onActiveToggle={onActiveToggle} onOpenNavigation={item.targetedChildren.length ? openNavigation : undefined} />
               ) : null)}
             </div>

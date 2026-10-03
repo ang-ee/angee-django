@@ -19,6 +19,7 @@ import type {
   ModelSlotTarget,
   PreviewContribution,
   RuntimeBrand,
+  RuntimeComposition,
   SlotContribution,
   WidgetMap,
 } from "./contracts";
@@ -30,7 +31,6 @@ import {
   type RuntimeResourceRoutes,
 } from "./route-href";
 import type { ResourceViewPreset } from "../views/resource/model/favorites";
-import type { RuntimeComposition } from "./developer-mode";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
@@ -127,7 +127,7 @@ export interface AppRuntime {
   /** How the composition came out; developer mode shows it. */
   composition?: RuntimeComposition | null;
   /** The active route's name and its app (menu root), per page. */
-  activeRoute?: string | null;
+  activeRouteName?: string | null;
   activeApp?: string | null;
 }
 
