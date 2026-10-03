@@ -24,7 +24,7 @@ const pm: MenuLayer = {
   dependsOn: ["projects", "work"],
   menus: {
     pm: { label: "Work", sequence: 1, include: [{ id: "projects", flatten: true }, { id: "work", flatten: true }] },
-    "pm.inbox": { parent: "pm", route: "messaging.inbox", sequence: 10 },
+    "pm.inbox": { parent: "pm", route: "messaging.messages", sequence: 10 },
     "projects.my-work": { sequence: 20 },
     "work.triage-hub": { sequence: 30 },
     "projects.board": { remove: true },

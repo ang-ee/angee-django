@@ -155,7 +155,7 @@ export function messageRecordTabs(
   ];
 }
 
-/** The canonical Message detail, reused by the inbox and passive record peeks. */
+/** The canonical Message detail, reused by Messages and passive record peeks. */
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);

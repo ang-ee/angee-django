@@ -256,22 +256,31 @@ export class MenuTree {
       : buildMenuTree(itemsOrTree);
   }
 
+  /** Lift nested platform nodes into Settings without changing logical ownership. */
+  withSettingsPlace(): MenuTree {
+    return MenuTree.from(this.roots.flatMap((root) => {
+      if (root.group === "platform") return [root];
+      const settings: ChromeMenuItem[] = [];
+      const project = (item: ChromeMenuNode): ChromeMenuItem => ({
+        ...item,
+        children: item.children?.flatMap((child) => {
+          if (child.group !== "platform") return [project(child)];
+          settings.push({ ...child, parentId: undefined, appRoot: false, app: false });
+          return [];
+        }),
+      });
+      const app = project(root);
+      return [app, ...settings];
+    }));
+  }
+
   /** Project one host-selected root, retaining contributed descendants and the personal Settings roots. */
   confineTo(rootId: string): MenuTree {
     const root = this.roots.find((item) => item.id === rootId);
     if (!root) throw new Error(`Unknown menu root "${rootId}" in confineTo.`);
-    const settings: ChromeMenuItem[] = [];
-    const project = (item: ChromeMenuNode): ChromeMenuItem => ({
-      ...item,
-      children: item.children?.flatMap((child) => {
-        if (child.group !== "platform") return [project(child)];
-        settings.push({ ...child, parentId: undefined, appRoot: false });
-        return [];
-      }),
-    });
-    const app = { ...project(root), appRoot: true, group: "domain" as const };
+    const app = { ...root, appRoot: true, group: "domain" as const };
     const personal = this.roots.filter((item) => item.personal && item.group === "platform" && item.id !== rootId);
-    return MenuTree.from([app, ...settings, ...personal.map(project)]);
+    return MenuTree.from([app, ...personal]).withSettingsPlace();
   }
 
   /** Explicit app roots win; without an opt-in every root remains an app. */
@@ -284,7 +293,7 @@ export class MenuTree {
   /** The app roots the rail lists; developer mode's rail includes the hidden ones. */
   railMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
     return this.appRoots().filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id) || (item.hidden && !includeHidden)) return false;
+      if (item.hidden && !includeHidden) return false;
       if (item.group === "platform") return false;
       return Boolean(item.target);
     });
@@ -293,7 +302,7 @@ export class MenuTree {
   /** Navigable root categories that live in the Settings place. */
   settingsMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
     return this.roots.filter((item) => {
-      if (CHROME_MENU_PARENT_IDS.has(item.id) || (item.hidden && !includeHidden)) return false;
+      if (item.hidden && !includeHidden) return false;
       return item.group === "platform" && Boolean(item.target);
     });
   }
@@ -349,8 +358,7 @@ export class MenuTree {
    * Every navigable destination for the command palette: each leaf carrying its
    * own resolved `target`, paired with its root ancestor (so the palette groups
    * by app). Parents that only borrow a child's target are skipped — their
-   * leaves carry the real destinations — as are the chrome action menus
-   * (systray/user) and their entries. Build-order deterministic (`byId`).
+   * leaves carry the real destinations. Build-order deterministic (`byId`).
    */
   navigableItems(): readonly {
     item: ChromeMenuNode;
@@ -359,12 +367,10 @@ export class MenuTree {
   }[] {
     const result: { item: ChromeMenuNode; root: ChromeMenuNode; target: string }[] = [];
     for (const node of this.byId.values()) {
-      if (CHROME_MENU_PARENT_IDS.has(node.id)) continue;
       const target = node.target;
       if (!target || target === "#") continue;
       if (node.targetedChildren.length) continue;
       const root = this.trailFor(node.id)[0];
-      if (root && CHROME_MENU_PARENT_IDS.has(root.id)) continue;
       result.push({ item: node, root: root ?? node, target });
     }
     return result;
@@ -449,8 +455,6 @@ function matchWithin(
   return best && { ...best, app: best.trail.findLast((item) => item.isApp && (includeHidden || !item.hidden)) };
 }
 
-const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);
-
 export function buildMenuTree(
   items: readonly ChromeMenuItem[],
 ): MenuTree {
@@ -488,8 +492,7 @@ export function buildMenuTree(
     if (!parent) {
       // A `parentId` is an explicit contribution into another addon's menu, so a
       // missing target is a wiring bug — fail fast (matching the duplicate-id and
-      // cycle throws), except for the reserved virtual chrome anchors.
-      if (CHROME_MENU_PARENT_IDS.has(parentId)) continue;
+      // cycle throws).
       throw new Error(`Menu item "${item.id}" names unknown parent "${parentId}".`);
     }
     parent.appendChild(item);

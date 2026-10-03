@@ -1134,11 +1134,12 @@ Hard-won traps — the wise learn from others' mistakes
   and in More. Icon-only rail links show supplementary name tooltips; developer
   descriptions follow the name.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
-  `appChildren()` and `menuItems()`. A root with `group:"platform"` contributes to the
-  shared **Settings place** instead: the rail and chooser expose one synthetic
-  Settings entry, and the expanded rail swaps to the platform tree with a back
-  header. Settings and the expansion toggle sit below the scrolling list, and
-  the rail is viewport-sticky so both remain reachable. The expanded desktop
+  `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
+  contributes to the shared **Settings place** in every console: the rail and
+  chooser expose one synthetic Settings entry, and the expanded rail swaps to
+  the platform tree with a back header. Settings and the expansion toggle sit
+  below the scrolling list, and the rail is viewport-sticky so both remain
+  reachable. The expanded desktop
   header also composes the same expansion toggle. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
@@ -1163,8 +1164,10 @@ Hard-won traps — the wise learn from others' mistakes
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
   another addon's items.
   `route.menu` identifies a route's owning item when references are ambiguous.
-  Ambiguous root ownership still throws under a perspective; confinement does
-  not choose an owner for the route. `useChromePlace()` shares one memoized
+  Multiple references within one root do not throw; without an anchor they
+  provide no menu-derived trail or metadata. References from different roots
+  still throw under a perspective; confinement does not choose an owner for
+  the route. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
   trail; route-owned active ids remain a follow-up. Breadcrumbs occupy the
