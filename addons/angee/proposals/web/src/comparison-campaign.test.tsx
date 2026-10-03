@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
+import { markdownPreviewWidget } from "@angee/ui/widgets/markdown";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -8,6 +9,10 @@ import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./co
 import { RoundComparisonGrid, type RoundComparisonGridProps } from "./comparison-grid";
 
 afterEach(cleanup);
+
+// The registry loads the markdown widget lazily; statements and answers render
+// it eagerly here, so the assertions never race the chunk on a loaded runner.
+const widgets = { ...defaultWidgets, "markdown.preview": markdownPreviewWidget };
 
 test("custom headers, cells and selected facts compose the shared comparison grid", () => {
   const topics: ComparisonTopic[] = [{ id: "topic-scope", key: "scope", name: "Scope", sort_order: 1 }];
@@ -22,7 +27,7 @@ test("custom headers, cells and selected facts compose the shared comparison gri
     (_row, proposal, answer) => <span>{String(answer?.body ?? `Cell ${proposal.id}`)}</span>;
   const cell = vi.fn(renderCell);
   render(
-    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <AppRuntimeProvider runtime={{ widgets }}>
       <RoundComparisonGrid topics={topics} proposals={proposals} answers={answers}
         facts={["statement"]} renderColumnHeader={(proposal) => <span>Header {proposal.id}</span>}
         renderCell={cell} />
@@ -43,7 +48,7 @@ test("redacted statements stay empty and removing a disclosed column removes its
   const visible: ComparisonProposal = { id: "visible", state: "DRAFT", statement: "Visible commitment" };
   const redacted: ComparisonProposal = { id: "redacted", state: "DRAFT", statement: null };
   const view = (proposals: ComparisonProposal[]) => (
-    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <AppRuntimeProvider runtime={{ widgets }}>
       <RoundComparisonGrid topics={[]} proposals={proposals} answers={[]} facts={["statement"]} />
     </AppRuntimeProvider>
   );
@@ -58,7 +63,7 @@ test("redacted statements stay empty and removing a disclosed column removes its
 
 
 test("each answer carries an audience chip and the column summarizes it", () => {
-  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  render(<AppRuntimeProvider runtime={{ widgets }}>
     <RoundComparisonGrid facts={[]} topics={[{ id: "topic", key: "scope", name: "Scope" }]}
       proposals={[{ id: "proposal", state: "DRAFT" }]}
       answers={[{ id: "answer", topic: { id: "topic" }, proposal: { id: "proposal" },
