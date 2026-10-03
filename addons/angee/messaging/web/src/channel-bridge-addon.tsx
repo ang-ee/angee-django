@@ -128,7 +128,7 @@ export function defineChannelPollBridgeAddon({
   connectAction,
   i18n,
   recordActions = [],
-}: ChannelPollBridgeAddonOptions): BaseAddon {
+}: ChannelPollBridgeAddonOptions) {
   return defineBaseAddon({
     id,
     i18n,
