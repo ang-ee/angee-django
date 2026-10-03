@@ -20,13 +20,14 @@ export function PartyRecordRedirect(): React.ReactElement {
       : null;
   React.useEffect(() => {
     if (!id) {
-      void navigate({ to: routeHref("parties.overview"), replace: true });
+      void navigate({ to: routeHref("parties.overview"), replace: true, state: true });
       return;
     }
     if (!route || !party) return;
     void navigate({
       to: routeHref(route, { id: party.id }),
       replace: true,
+      state: true,
       search: (current: Record<string, unknown>) => current,
     });
   }, [id, navigate, party, route, routeHref]);

@@ -6,11 +6,12 @@ import { createRouteHref } from "@angee/ui/runtime";
 
 const mocks = vi.hoisted(() => ({
   routeHref: vi.fn(),
+  scopes: {} as Record<string, string>,
 }));
 
 vi.mock("nuqs", () => ({
   parseAsString: {},
-  useQueryState: () => [null],
+  useQueryState: (key: string) => [mocks.scopes[key] ?? null],
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => ({
@@ -25,6 +26,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     textFilterField,
     order,
     fields,
+    defaultGroup,
+    groupOptions,
+    baseFilter,
   }: {
     columns?: ReadonlyArray<{
       field: string;
@@ -35,6 +39,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     textFilterField?: string | null;
     order?: Record<string, unknown>;
     fields?: readonly string[];
+    defaultGroup?: unknown;
+    groupOptions?: unknown;
+    baseFilter?: unknown;
   }) => {
     const row: Record<string, unknown> = resource === "platform.Field"
       ? {
@@ -73,6 +80,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
         data-search-field={textFilterField ?? ""}
         data-order={JSON.stringify(order)}
         data-fields={JSON.stringify(fields)}
+        data-default-group={JSON.stringify(defaultGroup)}
+        data-group-options={JSON.stringify(groupOptions)}
+        data-base-filter={JSON.stringify(baseFilter)}
       >
         {columns.map((column) => (
           <span key={column.field}>{column.render?.(row)}</span>
@@ -115,6 +125,7 @@ import platform from "../index";
 
 beforeEach(() => {
   mocks.routeHref.mockReset();
+  mocks.scopes = {};
   const routeHref = createRouteHref(platform.routes ?? []);
   mocks.routeHref.mockImplementation(routeHref);
   Object.assign(mocks.routeHref, { maybe: routeHref.maybe });
@@ -123,6 +134,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("platform route consumers", () => {
+  test("FieldsPage declares no unsupported grouping on its server-paged resource", () => {
+    render(<FieldsPage />);
+    const list = screen.getByTestId("platform.Field");
+    expect(list.getAttribute("data-default-group")).toBeNull();
+    expect(list.getAttribute("data-group-options")).toBeNull();
+  });
+
+  test("FieldsPage keeps model and addon scopes as exact server filters", () => {
+    mocks.scopes = { model: "notes.Note", addon: "example.notes" };
+    render(<FieldsPage />);
+    expect(JSON.parse(screen.getByTestId("platform.Field").getAttribute("data-base-filter")!)).toEqual({
+      model: { exact: "notes.Note" }, addon: { exact: "example.notes" },
+    });
+  });
+
   test("FieldsPage asks the owner for model and addon record hrefs", () => {
     render(<FieldsPage />);
 

@@ -32,6 +32,7 @@ export function PartyHandleRedirect(): React.ReactElement {
     void navigate({
       to: routeHref("parties.records.record", { id: association.party.id }),
       replace: true,
+      state: true,
       search: (current: Record<string, unknown>) => ({
         ...recordTargetSearch(current, { tab: "identity" }),
         partyHandle: association.id,
