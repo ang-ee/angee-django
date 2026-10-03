@@ -1,8 +1,10 @@
 import { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
 import { decisionResourceFixture } from "@angee/decisions/testing";
+import { titleCase } from "@angee/ui";
 
 import type { Run, StepRun } from "./testing/documents.console";
+import type { RunGraphData } from "./run-graph";
 
 const runStates = [
   { value: "RUNNING", description: "Running" }, { value: "WAITING", description: "Waiting" },
@@ -15,6 +17,8 @@ const origins = [
   { value: "TRIGGER", description: "Trigger" },
 ];
 const stepStates = [{ value: "READY", description: "Ready" }, ...runStates, { value: "SKIPPED", description: "Skipped" }];
+const waitKinds = ["TIME", "RECORD", "DECISION", "MAP", "RUN", "OPERATOR"]
+  .map((value) => ({ value, description: titleCase(value.toLowerCase()) }));
 const statusValues = runStates.map(({ value }) => ({ from: value, to: value.toLowerCase() }));
 
 export function retainedField(name: string, scalar = "String"): DataResourceFieldMetadata {
@@ -100,7 +104,7 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   capabilities: ["list", "detail"],
   recordRepresentation: "node_label",
   fields: [
-    ...["id", "node_key", "node_label", "outcome", "outcome_label", "waiting_kind", "wait_reason", "failure_reason",
+    ...["id", "node_key", "node_label", "outcome", "outcome_label", "wait_reason", "failure_reason",
       "deadline_at", "wake_at", "created_at", "updated_at"].map((name) => retainedField(name)),
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
@@ -108,16 +112,18 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
     ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
     ...["input", "output", "state"].map((name) => retainedField(name, "JSON")),
     { ...retainedField("status"), kind: "enum", values: stepStates },
+    { ...retainedField("waiting_kind"), kind: "enum", values: waitKinds },
   ],
   roots: { list: "steprun", detail: "steprun_by_pk", aggregate: "steprun_aggregate" },
   typeNames: { filter: "steprun_bool_exp", order: "steprun_order_by" },
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "run", "node_key", "node_label", "status", "outcome", "outcome_label", "attempt", "waiting_kind", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["id", "run", "node_key", "node_label", "outcome", "outcome_label", "attempt", "wait_reason", "input", "output", "can_retry", "requires_duplicate_acknowledgement"].map((name) => [name, testQueryField(name)])),
     ...Object.fromEntries(["state", "page_index", "failure_reason", "retries", "deadline_at", "wake_at", "created_at", "updated_at"]
       .map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: stepStates,
       filter: { field: "status", scalar: "String", values: stepStates,
         valueMap: stepStates.map(({ value }) => ({ from: value, to: value.toLowerCase() })), operators: ["exact", "inList"] } }),
+    waiting_kind: testQueryField("waiting_kind", { kind: "enum", values: waitKinds }),
     node_key: testQueryField("node_key", {
       filter: { field: "node_key", scalar: "String", values: [], operators: ["exact", "inList"] } }),
     rank: testQueryField("rank", { scalar: "Int", sort: { field: "rank" } }),
@@ -224,4 +230,30 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     watches: [],
     ...overrides,
   };
+}
+
+/** Authored topology and summary fields, independent of definition JSON and list paging. */
+export function runGraphFixture(step: StepRun = stepRunFixture()): RunGraphData {
+  const { id, status, waiting_kind, wait_reason, outcome, outcome_label, failure_reason, attempt,
+    page_index, map_total, map_settled, created_at, updated_at, deadline_at, wake_at } = step;
+  return { nodes: [
+    { key: "inspect", label: "Inspect source", step_label: "Inspect", rank: 0, body_key: null,
+      outcomes: [{ id: "done", label: "Done" }, { id: "error", label: "Needs attention" }],
+      item_counts: [], item_attempts: 0,
+      step_run: { id, status, waiting_kind, wait_reason, outcome, outcome_label, failure_reason, attempt,
+        page_index, map_total, map_settled, created_at, updated_at, deadline_at, wake_at } },
+    { key: "finish", label: "Finish review", step_label: "Finish", rank: 1, body_key: null,
+      outcomes: [], item_counts: [], item_attempts: 0, step_run: null },
+  ], edges: [{ source: "inspect", outcome: "done", target: "finish", taken: false }] };
+}
+
+export function mappedRunGraphFixture(): RunGraphData {
+  const graph = runGraphFixture(stepRunFixture({ id: "wsr_reviews", status: "WAITING", waiting_kind: "MAP",
+    failure_reason: null, outcome: "", outcome_label: "", wait_reason: "", map_settled: 119, map_total: 122,
+    page_index: 0, attempt: 1 }));
+  graph.nodes[0] = { ...graph.nodes[0]!, key: "reviews", label: "Review items", step_label: "Map", body_key: "reviews.body",
+    item_counts: [{ status: "SUCCEEDED", count: 118 }, { status: "RUNNING", count: 3 }, { status: "FAILED", count: 1 }],
+    item_attempts: 141 };
+  graph.edges[0] = { source: "reviews", outcome: "done", target: "finish", taken: false };
+  return graph;
 }

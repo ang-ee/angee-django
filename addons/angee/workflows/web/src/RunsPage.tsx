@@ -7,6 +7,7 @@ import {
 import { RUN_MODEL, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { StepRuns } from "./StepRuns";
+import { RunGraph } from "./RunGraph";
 
 export function RunsPage() {
   return <RunsList />;
@@ -27,7 +28,9 @@ export function RunsList({ baseFilter, embedded = false }: {
   return <ResourceList<StringIdRow> resource={RUN_MODEL} hideCreate baseFilter={baseFilter}
     placement="inline" routed={!embedded} presentation={embedded ? "embedded" : undefined}
     rowHref={embedded ? (row) => href("workflows.runs.record", { id: row.id }) : undefined}
-    fields={["subject_model"]} recordTabs={[
+    fields={["subject_model"]} defaultRecordTab={embedded ? undefined : "graph"} recordTabs={[
+      { id: "graph", label: t("run.graph"), presentation: "full-bleed", keepMounted: true,
+        render: ({ recordId, active }) => <RunGraph runId={recordId} active={active} /> },
       { id: "steps", label: t("run.steps"), render: ({ recordId }) => <StepRuns runId={recordId} /> },
       { id: "children", label: t("run.children"), render: ({ recordId }) =>
         <RunsList embedded baseFilter={{ "parent_step.run": { exact: recordId } }} /> },

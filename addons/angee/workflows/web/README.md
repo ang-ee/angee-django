@@ -2,7 +2,13 @@
 
 This fragment provides the workflow catalogue, retained execution evidence, and
 operator actions. The Workflows rail opens runs; the catalogue lists definitions, published versions,
-and their recent runs. The studio is a separate, later surface.
+and their recent runs. The studio edits and publishes workflow drafts.
+
+The default Graph run tab draws the pinned version and complete map progress through
+the shared read-only canvas. Selecting a node stores `node` in the URL and opens the
+shell inspector with node-scoped step evidence, checkpoint, attempts and decisions.
+Run changes refresh the graph and inspector summary, including IO claims. StepRun
+lists still lack live refresh: the missing StepRun `changes()` root is deferred debt.
 
 Runs retain the backend's origin, outcomes, attempt evidence, wait reasons, and
 record references. The backend supplies execution rank and mapped-step identity;

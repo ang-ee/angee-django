@@ -2,11 +2,13 @@ import { useMemo, type ReactNode } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
-import { createRouteHref, JsonValueSchema } from "@angee/ui";
+import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
+import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture, stepDecisionResourceFixture } from "./testing";
+import { runFixture, runGraphFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture, stepDecisionResourceFixture } from "./testing";
+import type { RunGraphData } from "./run-graph";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
 
@@ -54,12 +56,13 @@ const runtime = {
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
 export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
-  run, steps, children, evidence = [], onRequest, content }: {
+  run, steps, children, evidence = [], onRequest, content, graph }: {
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
   onRequest?: (request: RunRequest) => void;
   content?: ReactNode;
+  graph?: RunGraphData;
 }) {
   const schemas = useMemo(() => {
     let current = run ?? runFixture();
@@ -96,7 +99,8 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       }
       if (query.includes("workflowrun_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "The run could not be loaded." }] })
-        : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id } } });
+        : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id,
+          ...(query.includes("WorkflowRunGraph") ? { graph: graph ?? runGraphFixture(currentSteps[0]) } : {}) } } });
       if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.version?.workflow } });
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
@@ -133,10 +137,12 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
       triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture,
     ] } } } };
-  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest]);
+  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
     initialEntry={list ? "/workflows/runs" : "/workflows/runs/wfr_review"} runtime={runtime}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>
-    {content ?? <RunsPage />}
+    <ShellPageTestProviders runtime={{ ...runtime, widgets: defaultWidgets }}>
+      {content ?? <div className="grid min-h-0 flex-1 grid-cols-[1fr_24rem] gap-4"><RunsPage /><ChatterTabsTestHost /></div>}
+    </ShellPageTestProviders>
   </RoutedRuntimeFixture>;
 }

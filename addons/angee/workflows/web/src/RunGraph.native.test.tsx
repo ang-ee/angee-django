@@ -1,0 +1,85 @@
+// @vitest-environment happy-dom
+import { useEffect } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { ChatterTabsTestHost } from "@angee/app/testing";
+import { authoredQueryReadsChange, useQueryClient } from "@angee/refine";
+import { RunGraph, RUN_GRAPH_INSPECTOR_TAB } from "./RunGraph";
+import { RunGraphStory } from "./RunGraph.stories";
+import { RunStory, type RunRequest } from "./RunsPage.stories";
+import { RUN_MODEL, STEP_RUN_MODEL } from "./documents.console";
+import { mappedRunGraphFixture } from "./testing";
+
+beforeAll(() => {
+  class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
+  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  Element.prototype.getAnimations ??= () => [];
+});
+afterEach(cleanup);
+
+test.each(["click", "Enter"])("%s selects the URL node and expands the native inspector", async (activation) => {
+  render(<RunGraphStory retained />);
+  fireEvent.click(screen.getByRole("button", { name: "Collapse inspector" }));
+  const node = await screen.findByTestId("rf__node-inspect");
+  if (activation === "click") fireEvent.click(node);
+  else fireEvent.keyDown(node, { key: "Enter" });
+  await waitFor(() => expect(screen.getByTestId("graph-node-selection").textContent).toBe("inspect"));
+  expect(screen.getByTestId("graph-pane-state").textContent).toBe(`false:${RUN_GRAPH_INSPECTOR_TAB}`);
+  expect(await screen.findByRole("dialog", { name: "Step Run" })).toBeTruthy();
+});
+
+test("an inactive graph sends no request and publishes no inspector", async () => {
+  const requests = vi.fn();
+  render(<RunGraphStory active={false} retained onRequest={requests} />);
+  await act(async () => {});
+  expect(requests).not.toHaveBeenCalled();
+  expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "Show graph" }));
+  await screen.findByTestId("rf__node-inspect");
+  expect(requests.mock.calls.filter(([request]) => request.query.includes("WorkflowRunGraph"))).toHaveLength(1);
+});
+
+test("retained tabs preserve the canvas and selection while withdrawing their inspector", async () => {
+  render(<RunGraphStory retained />);
+  const canvas = await screen.findByTestId("run-graph-canvas");
+  fireEvent.click(await screen.findByTestId("rf__node-finish"));
+  await waitFor(() => expect(screen.getByTestId("graph-node-selection").textContent).toBe("finish"));
+  fireEvent.click(screen.getByRole("button", { name: "Hide graph" }));
+  await waitFor(() => expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe(""));
+  fireEvent.click(screen.getByRole("button", { name: "Show graph" }));
+  await waitFor(() => expect(screen.getByTestId(`tab-${RUN_GRAPH_INSPECTOR_TAB}`)).toBeTruthy());
+  expect(screen.getByTestId("run-graph-canvas")).toBe(canvas);
+  expect(screen.getByTestId("graph-node-selection").textContent).toBe("finish");
+});
+
+test("a map inspector shows complete progress and filters both parent and body rows", async () => {
+  const requests: RunRequest[] = [];
+  render(<RunGraphStory graph={mappedRunGraphFixture()} onRequest={(request) => requests.push(request)} />);
+  expect(await screen.findByText("119/122")).toBeTruthy();
+  fireEvent.click(await screen.findByTestId("rf__node-reviews"));
+  await waitFor(() => expect(requests.some(({ query }) => /\bsteprun\s*\(/.test(query))).toBe(true));
+  expect(requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables.where).toEqual({ _and: [
+    { run: { _eq: "wfr_review" } }, { node_key: { _in: ["reviews", "reviews.body"] } },
+  ] });
+  expect(screen.queryByRole("dialog", { name: "Step Run" })).toBeNull();
+  const query = requests.find(({ query }) => query.includes("WorkflowRunGraph"))!.query;
+  expect(query).not.toMatch(/\b(input|output|state|stacktrace)\b/);
+});
+
+test("native authored reads register the exact run and related-only step interests", async () => {
+  let client: ReturnType<typeof useQueryClient> | undefined;
+  function Capture() {
+    const value = useQueryClient();
+    useEffect(() => { client = value; }, [value]);
+    return null;
+  }
+  render(<RunStory content={<><RunGraph runId="wfr_review" /><ChatterTabsTestHost /><Capture /></>} />);
+  await screen.findByTestId("rf__node-inspect");
+  const query = client!.getQueryCache().findAll().find((query) => authoredQueryReadsChange(query.meta, RUN_MODEL, "wfr_review"));
+  expect(query).toBeTruthy();
+  expect(authoredQueryReadsChange(query!.meta, RUN_MODEL, "wfr_review")).toBe(true);
+  expect(authoredQueryReadsChange(query!.meta, RUN_MODEL, "wfr_unrelated")).toBe(false);
+  expect(authoredQueryReadsChange(query!.meta, STEP_RUN_MODEL, "wsr_unrelated")).toBe(false);
+  expect(query!.meta).toMatchObject({ angeeModels: [STEP_RUN_MODEL, RUN_MODEL],
+    angeeRecords: [{ model: RUN_MODEL, id: "wfr_review" }], angeeRelatedModels: [STEP_RUN_MODEL] });
+});
