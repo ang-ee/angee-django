@@ -309,16 +309,12 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
         return system_queryset(self.model).filter(proposals__track_id=project_id).order_by("pk").first()
 
 
-def _adopt(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
-    """Copy persisted scalar/FK state without tripping guarded state descriptors."""
+def _copy_persisted_state(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
+    """Copy the owner's persisted fields together with its optimistic revision."""
 
     if isinstance(source, OptimisticLockMixin):
         fields = (*fields, "revision")
-    for name in fields:
-        field = source._meta.get_field(name)
-        instance.__dict__[field.attname] = source.__dict__[field.attname]
-        if field.is_relation:
-            instance._state.fields_cache.pop(name, None)
+    StateTransitions.copy_persisted_state(instance, source, fields)
 
 
 def _receipt_user_id(fallback: Any | None = None) -> Any | None:
@@ -746,7 +742,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 [rows for rows, _track_rows in collections],
             )
             locked.save(update_fields=("updated_at",))
-        _adopt(self, locked, ("updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("updated_at", "updated_by"))
         return result
 
     def route_clarification(self, task: Any, step: str) -> None:
@@ -1014,26 +1010,12 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 self.allow_immutable_save("opening_policy")
         super().save(*args, **kwargs)
 
-    def deletion_error(self) -> str | None:
-        """Return why this Round cannot be deleted under the untouched-draft rule."""
+    def delete_blocker(self) -> str | None:
+        """Return why this Round's own lifecycle prevents deletion."""
 
         if self.status != RoundStatus.COLLECTING or self.outcome is not None:
             return "Only a collecting round can be deleted."
-        with system_context(reason="proposals.round.delete_guard"):
-            proposals = list(
-                apps.get_model("proposals", "Proposal")._base_manager.filter(round_id=self.pk).order_by("pk")
-            )
-        if any(proposal.deletion_error() is not None for proposal in proposals):
-            return "A round can be deleted only while every proposal is an untouched draft."
         return None
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Delete only a collecting Round whose proposals are untouched drafts."""
-
-        error = self.deletion_error()
-        if error:
-            raise ValidationError(error)
-        return super().delete(*args, **kwargs)
 
     def open(self, expected_revision: int | None = None) -> Self:
         """Lift disclosure once, preserving a canceled round's terminal state."""
@@ -1052,7 +1034,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 else:
                     raise ValidationError("Only an undisclosed round can be lifted.")
                 locked._disclose()
-        _adopt(self, locked, ("status", "opened_at", "opened_by", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("status", "opened_at", "opened_by", "updated_at", "updated_by"))
         return self
 
     def _disclose(self) -> None:
@@ -1104,7 +1086,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 locked.allow_immutable_save("opening_policy")
                 locked.save(update_fields=("opening_policy", "updated_at"))
                 locked._disclose()
-        _adopt(self, locked, ("opening_policy", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("opening_policy", "updated_at", "updated_by"))
         return self
 
     def close(
@@ -1174,7 +1156,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                     else:
                         proposal._mark_declined(locked.facilitator_id)
                 locked._mark_closed(outcome_value)
-        _adopt(
+        _copy_persisted_state(
             self,
             locked,
             ("status", "outcome", "closed_at", "closed_by", "updated_at", "updated_by"),
@@ -1198,7 +1180,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                     raise ValidationError("Canceled round receipts do not match the requested postcondition.")
             else:
                 locked._mark_canceled()
-        _adopt(
+        _copy_persisted_state(
             self,
             locked,
             ("status", "outcome", "closed_at", "closed_by", "updated_at", "updated_by"),
@@ -1221,7 +1203,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 locked.facilitator = user
                 locked.allow_immutable_save("facilitator_id")
                 locked.save(update_fields=("facilitator", "updated_at"))
-        _adopt(self, locked, ("facilitator", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("facilitator", "updated_at", "updated_by"))
         return self
 
     @transition(status, source=RoundStatus.COLLECTING, target=RoundStatus.OPENED, on_success=save_state)
@@ -1849,7 +1831,13 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             .get()
         )
 
-    def deletion_error(self) -> str | None:
+    def lock_for_delete(self, *, queryset: models.QuerySet[Self] | None = None) -> Self | None:
+        """Serialize confirmed and native deletes with round-first submission."""
+
+        apps.get_model("proposals", "Round").system_queryset(lock=("self",)).filter(pk=self.round_id).first()
+        return super().lock_for_delete(queryset=queryset)
+
+    def delete_blocker(self) -> str | None:
         """Return why this Proposal is no longer an untouched draft."""
 
         if self.state != ProposalState.DRAFT or any(
@@ -1875,20 +1863,12 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         ):
             return "Only an untouched draft proposal can be deleted."
         if self.pk is not None:
-            with system_context(reason="proposals.proposal.delete_guard"):
+            with system_context(reason="proposals.proposal.delete_blocker"):
                 if apps.get_model("proposals", "Answer")._base_manager.filter(proposal_id=self.pk).exists():
                     return "A proposal with answers cannot be deleted."
                 if apps.get_model("proposals", "Review")._base_manager.filter(proposal_id=self.pk).exists():
                     return "A proposal with reviews cannot be deleted."
         return None
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Delete only an untouched draft shell."""
-
-        error = self.deletion_error()
-        if error:
-            raise ValidationError(error)
-        return super().delete(*args, **kwargs)
 
     def submit(self, expected_revision: int | None = None) -> Self:
         """Submit under the round-first lock, freezing draft writes by state."""
@@ -1939,7 +1919,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                             locked.unsudo()
                         else:
                             locked.with_actor(actor)
-        _adopt(self, locked, ("state", "submitted_at", "submitted_by", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("state", "submitted_at", "submitted_by", "updated_at", "updated_by"))
         return self
 
     def withdraw(self, expected_revision: int | None = None) -> Self:
@@ -1973,7 +1953,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 raise ValidationError({"round": "Proposals cannot be withdrawn after closure."})
             else:
                 locked._mark_withdrawn(locked.responder_id or locked_round.facilitator_id)
-        _adopt(self, locked, ("state", "decided_at", "decided_by", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("state", "decided_at", "decided_by", "updated_at", "updated_by"))
         return self
 
     def identify_party(self, party: models.Model) -> Self:
@@ -2003,7 +1983,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 locked.party = party
                 locked.allow_immutable_save("party_id")
                 locked.save(update_fields=("party", "updated_at"))
-        _adopt(self, locked, ("party", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("party", "updated_at", "updated_by"))
         return self
 
     def create_track(self) -> models.Model:
@@ -2083,7 +2063,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                     drive = system_queryset(drive_model).get(pk=drive.pk)
                     bind(project=track, target=drive)
         bind_actor(track, actor)
-        _adopt(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
         self._state.fields_cache["track"] = track
         return track
 
@@ -2110,7 +2090,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             track = locked._publish_track_locked()
-        _adopt(self, locked, ("track_published_at", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("track_published_at", "updated_at", "updated_by"))
         return track
 
     @transition(state, source=ProposalState.DRAFT, target=ProposalState.SUBMITTED, on_success=save_state)
@@ -2495,7 +2475,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
                 locked.shared_with_responders = shared
                 locked.allow_immutable_save("shared_with_responders")
                 locked.save(update_fields=("shared_with_responders", "updated_at"))
-        _adopt(self, locked, ("shared_with_responders", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("shared_with_responders", "updated_at", "updated_by"))
         return self
 
     @classmethod
@@ -2734,7 +2714,7 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
                 locked.visibility = value
                 locked.allow_immutable_save("visibility")
                 locked.save(update_fields=("visibility", "updated_at"))
-        _adopt(self, locked, ("visibility", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("visibility", "updated_at", "updated_by"))
         return self
 
     def set_responder_share(self, shared: bool, expected_revision: int | None = None) -> Self:
@@ -2751,7 +2731,7 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
                 locked.shared_with_responders = shared
                 locked.allow_immutable_save("shared_with_responders")
                 locked.save(update_fields=("shared_with_responders", "updated_at"))
-        _adopt(self, locked, ("shared_with_responders", "updated_at", "updated_by"))
+        _copy_persisted_state(self, locked, ("shared_with_responders", "updated_at", "updated_by"))
         return self
 
     class Meta:

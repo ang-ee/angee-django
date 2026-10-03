@@ -13,6 +13,7 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rebac import current_actor
+from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 
@@ -91,7 +92,12 @@ class _PermissionsExtension(FieldExtension):
 
 def _permission_annotation(model: type[models.Model], name: str, info: Any = None) -> Any:
     del info
-    queryset = read_scoped_queryset(model, current_actor(), action=name)
+    return permission_expression(model._default_manager.all(), name)
+
+
+def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Exists:
+    """Project one permission using the target queryset's actor and native scope."""
+    queryset = read_scoped_queryset(queryset.model, relation_actor(queryset), action=name)
     return models.Exists(aggregate_scoped_queryset(queryset).filter(pk=models.OuterRef("pk")))
 
 

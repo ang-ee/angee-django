@@ -1,6 +1,8 @@
 import { makeContext } from "@angee/ui";
 
 import type { AgentChatView, AgentRosterItem } from "./documents";
+import type { AcpSessionNavigation } from "./acp-session";
+import type { ReactNode } from "react";
 
 /** Runtime-specific chat surfaces contributed by the addon owning their transport. */
 export const AGENT_CHAT_SLOT = "agents.chat";
@@ -16,6 +18,10 @@ export interface AgentChatProps {
   fallbackName?: string;
   runtimeClass?: string;
   sessionId?: string;
+  protocolVersion?: 1 | 2;
+  onSessionChange?: (id: string) => void;
+  /** The sessions page supplies its rail; the transport owns the session operations. */
+  renderSessionNavigation?: (sessions: AcpSessionNavigation) => ReactNode;
 }
 
 const chatContext = makeContext<AgentChatProps>("AgentChatContext");

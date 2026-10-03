@@ -8,7 +8,6 @@ rows:
       facilitator: iam.user_admin
       requester_party: proposals.neighborhood_committee
       opening_policy: answers
-      status: collecting
       last_call_at: 2026-09-12 16:00:00+00:00
       submission_deadline: 2026-09-14 16:00:00+00:00
       created_by: iam.user_admin

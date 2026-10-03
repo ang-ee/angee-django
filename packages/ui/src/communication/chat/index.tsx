@@ -166,9 +166,9 @@ export function SessionRail({
 }
 
 // This is a communication-specific multi-slot session row (status dot + name +
-// muted handle) that the consumer binds to any router `Link` via `render`.
+// muted handle) that the consumer binds to a link or button via `render`.
 export const sessionRailItemVariants = tv({
-  base: "flex h-8 items-center gap-2 rounded-6 px-2 text-13 text-fg-2 no-underline outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring",
+  base: "flex h-8 w-full items-center gap-2 rounded-6 px-2 text-left text-13 text-fg-2 no-underline outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring",
   variants: {
     active: {
       true: "bg-brand-soft font-medium text-brand-soft-text hover:bg-brand-soft",
@@ -185,15 +185,15 @@ export interface SessionRailItemProps {
   status?: ReactNode;
   /** Trailing muted handle slot — e.g. the model handle. */
   handle?: ReactNode;
-  /** The router `Link` element to render the row as (defaults to a plain `<a>`). */
+  /** A router `Link` or session-selection button (defaults to a plain `<a>`). */
   render?: UseRenderRenderProp<{ active: boolean }>;
   className?: string;
   /** The row's primary label (the session/agent name). */
   children: ReactNode;
 }
 
-/** One session rail row: a `<li>` wrapping an anchor (the consumer's router `Link` via
- *  `render`) with a leading status slot, a truncated name, and an optional muted handle.
+/** One session rail row: a `<li>` wrapping a link or button supplied via `render`,
+ *  with a leading status slot, a truncated name, and an optional muted handle.
  *  The active row carries `aria-current="page"` and a `data-active` highlight. */
 export function SessionRailItem({
   active = false,

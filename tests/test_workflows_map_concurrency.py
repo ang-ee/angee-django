@@ -13,6 +13,7 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepAttempt, WorkflowRun
+from tests.queries import is_rebac_revision_read
 from tests.test_workflows_map import MapEcho, body_rows, start_map
 from tests.test_workflows_map import map_steps as map_steps
 
@@ -110,7 +111,7 @@ def test_cancel_racing_last_item_fences_its_late_result(execution, map_steps, re
 def test_thousand_items_stay_within_concurrency_and_query_bound(
     execution, map_steps, settings, record_testsuite_property,
 ):
-    """Each full item execution, including commit dispatch, uses at most 100 queries."""
+    """Each full item execution, including commit dispatch, has bounded SQL work."""
     actor, _sent = execution
     settings.ANGEE_WORKFLOW_MAP_CONCURRENCY = 4
     run, mapped = start_map(actor, [{"value": index} for index in range(1000)])
@@ -125,7 +126,12 @@ def test_thousand_items_stay_within_concurrency_and_query_bound(
             with CaptureQueriesContext(connection) as queries:
                 assert runner.execute(item.pk)
             query_counts.append(len(queries))
-            assert 0 < len(queries) <= 100, (item.map_index, len(queries))
+            # The native write owner resolves one installed
+            # policy per write. Its 11 write gates read one schema witness each;
+            # retain a separate bound on the execution's remaining statements.
+            witnesses = sum(is_rebac_revision_read(query["sql"]) for query in queries)
+            assert witnesses <= 11, (item.map_index, witnesses)
+            assert 0 < len(queries) - witnesses <= 100, (item.map_index, len(queries) - witnesses)
             completed += 1
             assert body_rows(run).exclude(status="succeeded").count() <= 4
     run_until(run, max_steps=1000)

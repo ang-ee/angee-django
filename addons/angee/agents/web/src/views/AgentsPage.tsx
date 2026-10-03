@@ -4,44 +4,31 @@ import type {
 } from "@angee/metadata";
 import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  Action, Button, Card, CardContent, Column, ResourceList, Field, Form, Glyph, Group, List, errorMessage, useRecordActionMutation, useToast, type RecordToolbarContext, type RecordTabDescriptor } from "@angee/ui";
+  Card, CardContent, Column, ResourceList, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
 import {
   useModelMetadata,
-  useResourceInvalidates,
 } from "@angee/metadata";
 import {
   refineFieldsFromPaths,
-  runActionResult,
-  useActionMutation,
 } from "@angee/refine";
 import {
   textRoleVariants } from "@angee/ui";
 import {
   refineResourceName,
 } from "@angee/metadata";
-import type { ActionFieldName } from "@angee/gql/console/actions";
 import { usePrincipalAccessRecordTab } from "@angee/iam";
 
 import { useAgentsT } from "../i18n";
+import { AGENT_LIFECYCLE_FIELDS, AGENT_MODEL as MODEL, useAgentLifecycleActions } from "./agent-actions";
 import { booleanField, stringField } from "./agent-record";
 import { AgentChat } from "./AgentChat";
 import { AgentProvisioning } from "./AgentProvisioning";
 import { type AgentChatView } from "../documents";
 
-const MODEL = "agents.Agent";
-
-// The selected runtime's addon contributes the chat transport for a running agent.
+// AgentChat provides ACP by default and admits runtime-owned transports through its slot.
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
 const CHAT_FIELDS = ["id", "can_chat", "runtime_class"] as const;
-
-function canProvisionAgent(record: Row | null): boolean {
-  return booleanField(record, "can_provision");
-}
-
-function canDeprovisionAgent(record: Row | null): boolean {
-  return booleanField(record, "can_deprovision");
-}
 
 function canDeleteAgent(record: Row): boolean {
   return booleanField(record, "can_delete");
@@ -84,62 +71,6 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
 
 type RowRecord = BaseRecord & Row;
 
-function AgentProvisionToolbarAction({
-  record,
-  recordId,
-  reload,
-}: RecordToolbarContext): React.ReactElement | null {
-  const t = useAgentsT();
-  const toast = useToast();
-  const invalidates = useResourceInvalidates([MODEL]);
-  const [optimisticProvisioning, setOptimisticProvisioning] = React.useState(false);
-  const [provisionAgent, provisionState] = useActionMutation<ActionFieldName>(
-    "provision_agent",
-    { invalidates },
-  );
-  const canProvision = canProvisionAgent(record);
-
-  React.useEffect(() => {
-    if (canProvision) setOptimisticProvisioning(false);
-  }, [canProvision]);
-
-  if (!recordId) return null;
-  // Keep the button mounted in its loading state while the mutation is in flight.
-  if (!provisionState.fetching && (optimisticProvisioning || !canProvision)) {
-    return null;
-  }
-
-  const handleProvision = async (): Promise<void> => {
-    setOptimisticProvisioning(true);
-    try {
-      // Keep the throw-on-failure/success-message projection over the in-band
-      // outcome so a domain failure lands in the catch toast below.
-      const message = runActionResult(await provisionAgent(recordId));
-      reload();
-      if (message) toast.success({ title: message });
-    } catch (caught) {
-      setOptimisticProvisioning(false);
-      toast.danger({
-        title: t("provisioning.provisionFailed"),
-        description: errorMessage(caught, t("provisioning.actionFailed")),
-      });
-    }
-  };
-
-  return (
-    <Button
-      type="button"
-      variant="primary"
-      size="sm"
-      loading={provisionState.fetching}
-      onClick={() => void handleProvision()}
-    >
-      <Glyph name="plus" />
-      {t("provisioning.provision")}
-    </Button>
-  );
-}
-
 // Translated copy resolved at a component's render top level (where hooks belong)
 // and threaded into the plain `agentResourceListPage` builder below.
 interface AgentLabels {
@@ -164,20 +95,16 @@ function useAgentLabels(): AgentLabels {
 // One model, two list tabs: the server-side ``is_template`` filter is the only
 // difference between Agents and Templates, and a create on either tab defaults
 // ``is_template`` to match. A real agent renders into the operator; a template is a
-// reusable blueprint, so only the Agents detail carries the Provision/Chat record
-// tabs beside the Overview form.
+// reusable blueprint, so only the Agents detail carries the lifecycle actions and
+// the Service/Workspace/Chat record tabs beside the Overview form.
 function AgentResourceListPage({
   isTemplate,
 }: {
   isTemplate: boolean;
 }): React.ReactElement {
   const labels = useAgentLabels();
-  const t = useAgentsT();
   const accessTab = usePrincipalAccessRecordTab();
-  const [deprovision] = useRecordActionMutation<ActionFieldName>("deprovision_agent", {
-    invalidateModels: [MODEL],
-    missingRecordMessage: t("provisioning.saveFirst"),
-  });
+  const lifecycleActions = useAgentLifecycleActions();
   const recordTabs: readonly RecordTabDescriptor[] | undefined = isTemplate
     ? undefined
     : [
@@ -209,16 +136,7 @@ function AgentResourceListPage({
       returning={
         isTemplate
           ? undefined
-          : [
-              "lifecycle",
-              "runtime_status",
-              "workspace",
-              "service",
-              "can_provision",
-              "can_deprovision",
-              "can_delete",
-              "assignment_subject",
-            ]
+          : ["lifecycle", "runtime_status", "workspace", "service", ...AGENT_LIFECYCLE_FIELDS, "assignment_subject"]
       }
     >
       <List resource={MODEL} pageSize={50}>
@@ -227,32 +145,10 @@ function AgentResourceListPage({
         <Column field="runtime_status" widget="colorDot" />
         <Column field="updated_at" />
       </List>
-      <Form
-        resource={MODEL}
-        deleteVisibleWhen={isTemplate ? undefined : canDeleteAgent}
-        toolbarStart={
-          isTemplate
-            ? undefined
-            : (context) => <AgentProvisionToolbarAction {...context} />
-        }
-      >
-        {!isTemplate ? (
-          <Action
-            id="deprovision"
-            label={t("provisioning.deprovision")}
-            icon="trash"
-            danger
-            confirm={{
-              title: t("provisioning.confirmTitle"),
-              body: t("provisioning.confirmBody"),
-              danger: true,
-            }}
-            visibleWhen={canDeprovisionAgent}
-            run={deprovision}
-          />
-        ) : null}
+      <Form resource={MODEL} deleteVisibleWhen={isTemplate ? undefined : canDeleteAgent}>
+        {isTemplate ? null : lifecycleActions}
         <Field name="name" title />
-        <Field name="lifecycle" widget="statusbar" status />
+        <Field name="lifecycle" widget="statusbar" status readOnly />
         {/* Description then instructions lead the Overview tab as full-width
             textareas; `body={false}` keeps `description` a normal field rather than
             the form's auto-detected body. */}

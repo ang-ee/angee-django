@@ -133,7 +133,7 @@ def test_correction_requires_target_write_even_when_evidence_stays_readable(corr
         type(target).objects.filter(pk=target.pk).update(owner=owner)
         type(target.drive).objects.filter(pk=target.drive_id).update(owner=owner)
     with actor_context(owner):
-        target.grant_record_access("viewer", actor)
+        target.with_actor(owner).grant_record_access("viewer", actor)
     assert target.with_actor(actor).has_access("read")
     assert not target.with_actor(actor).has_access("write")
     assert original.with_actor(actor).has_access("read")

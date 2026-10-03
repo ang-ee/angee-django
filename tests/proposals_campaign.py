@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+import strawberry_django
 from django.apps import apps
 from django.test import override_settings
 from django.utils import timezone
@@ -19,13 +20,42 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from strawberry import Schema
 
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource
+from angee.graphql.node import AngeeNode
+from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.spaces.testing.models import Group, Membership
-from tests.conftest import Backend, Drive
-from tests.proposals_models import Answer, Round, Topic
+from tests.conftest import Backend, Drive, SchemaAddon
+from tests.proposals_models import Answer, Proposal, Round, Topic
 from tests.test_project_access import project_access_schema as project_access_schema
+
+
+@strawberry_django.type(Proposal)
+class ProposalDeleteNode(AngeeNode):
+    """Public identity of the real proposal target for Hasura deletion tests."""
+
+
+@pytest.fixture
+def proposal_delete_schema() -> Schema:
+    """Compose the native Hasura mutation around the shared proposal model."""
+
+    resource = hasura_model_resource(
+        ProposalDeleteNode,
+        model=Proposal,
+        name="proposals",
+        filterable=["id"],
+        sortable=["id"],
+        aggregatable=["id"],
+        insert=False,
+        update=False,
+        write_backend=AngeeHasuraWriteBackend(Proposal),
+    )
+    return GraphQLSchemas([
+        SchemaAddon({"console": {"query": (resource.query,), "mutation": (resource.mutation,)}}),
+    ]).build("console")
 
 
 def grant(row: Any, relation: str, subject: Any) -> None:

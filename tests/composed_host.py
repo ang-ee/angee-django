@@ -278,12 +278,11 @@ def main() -> None:
             assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
             assert settings.DATABASES["default"]["NAME"] == ":memory:"
         settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
-        # Generated apps have no migration history in this disposable host.
-        # Keep REBAC's native migrations and their contenttypes dependency: the
-        # library owns the schema witness required by its cached evaluator.
+        # This disposable host has no migration history. Sync the whole current
+        # model graph together, including contenttypes and REBAC's witness table;
+        # mixed sync/migrate ordering leaves generated foreign keys dangling.
         settings.MIGRATION_MODULES = {
             config.label: None for config in apps.get_app_configs()
-            if config.label not in {"rebac", "contenttypes"}
         }
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
         args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")

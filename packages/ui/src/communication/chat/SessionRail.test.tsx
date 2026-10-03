@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { SessionRail, SessionRailItem } from "./index";
 
@@ -56,5 +56,20 @@ describe("SessionRail", () => {
     expect(link.tagName).toBe("A");
     expect(link.getAttribute("href")).toBe("/agents/sessions/a1");
     expect(link.textContent).toContain("Scout");
+  });
+
+  test("composes a native session button with selection and disabled behavior", () => {
+    const select = vi.fn();
+    const tree = (disabled: boolean) => <SessionRail label="Sessions">
+      <SessionRailItem active render={<button type="button" disabled={disabled} onClick={select} />}>Conversation</SessionRailItem>
+    </SessionRail>;
+    const { rerender } = render(tree(false));
+    const button = screen.getByRole("button", { name: "Conversation" });
+    expect(button.getAttribute("aria-current")).toBe("page");
+    fireEvent.click(button);
+    expect(select).toHaveBeenCalledTimes(1);
+    rerender(tree(true));
+    fireEvent.click(button);
+    expect(select).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,6 +3,8 @@ export { listQueryMeta, type ListQueryTarget } from "./list-query";
 // Story/test consumers that pair these bindings with providers returned by this
 // package must resolve Refine's provider types through the same package identity.
 export { Refine, ResourceContext, type DataProvider, type ResourceProps } from "@refinedev/core";
+// Native transport reads share Refine's QueryClient without a provider-call adapter.
+export { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 export {
   OperationDocumentsProvider,
   actionDocumentForSchema,

@@ -1,10 +1,9 @@
 """GraphQL schema contributions for the agents addon.
 
-Admin console surface for the agent catalogue: agents (and their templates), the
+Console surface for the agent catalogue: agents (and their templates), the
 skills they mount, the MCP servers/tools they reach, and the inference
-provider/model catalogue they run on. Platform-admin gated like the integrate
-console, so the REBAC-guarded relations these types expose (integration, credential,
-source, template) are safe — the const-admin reaches every related row. Skill
+provider/model catalogue they run on. Catalogue operations retain their declared
+permission gates; persisted chat uses the caller's row permissions. Skill
 *sources* are managed in the integrate VCS console (a ``kind="skill"`` source);
 this addon owns only the discovered :class:`Skill` rows.
 """
@@ -16,27 +15,29 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from graphql import GraphQLError
 from rebac import current_actor, system_context
 from strawberry import auto
+from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
 from angee.agents import provisioning
-from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.base.actors import actor_user_id
 from angee.base.identity import public_subject_ref
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.permissions import PlatformAdminPermission, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
@@ -51,7 +52,6 @@ from angee.integrate.schema import (
     save_provided_fields,
 )
 from angee.integrate_vcs.schema import SourceType, TemplateType
-from angee.operator.daemon import OperatorDaemon
 
 InferenceProvider = apps.get_model("agents", "InferenceProvider")
 InferenceModel = apps.get_model("agents", "InferenceModel")
@@ -171,6 +171,7 @@ class AgentType(AngeeNode):
     """Admin projection of an agent (or, when ``is_template``, an agent template)."""
 
     owner: UserType
+    permissions = permissions_field(("call",))
 
     @strawberry.field
     def assignment_subject(self) -> str:
@@ -196,11 +197,24 @@ class AgentType(AngeeNode):
     lifecycle: auto
     runtime_status: auto
     last_error: auto
+    conflict_kind: auto
+    conflict_name: auto
     expects_service: bool = strawberry_django.field(only=["runtime_class"])
+    runs_in_process: bool = strawberry_django.field(only=["runtime_class"])
     can_chat: bool = strawberry_django.field(only=["runtime_status", "runtime_class", "service"])
-    can_provision: bool
-    can_deprovision: bool
-    can_delete: bool
+    can_provision: bool = strawberry_django.field(
+        only=["lifecycle", "runtime_status", "workspace", "conflict_kind", "conflict_name"]
+    )
+    can_adopt: bool = strawberry_django.field(only=["lifecycle", "conflict_kind"])
+    can_replace: bool = strawberry_django.field(only=["lifecycle", "conflict_kind"])
+    can_reprovision: bool = strawberry_django.field(
+        only=["lifecycle", "workspace", "conflict_kind", "conflict_name", "runtime_class"]
+    )
+    can_deprovision: bool = strawberry_django.field(only=["lifecycle", "workspace", "service", "conflict_kind"])
+    can_delete: bool = strawberry_django.field(
+        only=["lifecycle", "workspace", "service", "conflict_kind"],
+        annotate={"_has_active_turns": lambda info: Agent.has_active_turns_expression()},
+    )
     created_at: auto
     updated_at: auto
 
@@ -227,6 +241,7 @@ class AgentTurnType(AngeeNode):
     session: AgentSessionType
     index: auto
     prompt: auto
+    context: JSON
     status: auto
     updates: JSON
     text: auto
@@ -240,10 +255,9 @@ class AgentTurnType(AngeeNode):
 class AgentChatEndpoint:
     """Browser-reachable chat endpoint for a running agent.
 
-    ``url`` is the agent's routed WebSocket URL (no token); the browser appends
-    ``token`` as a query parameter, which the central Caddy forward-auths against
-    the operator. ``mcp_servers`` is the agent's rendered ``.mcp.json`` server map,
-    so the chat session can advertise the same MCP servers the agent runs with.
+    In-process chat uses a same-origin WebSocket and the Django session cookie.
+    Container chat uses an operator-routed URL with ``token`` in the query string.
+    ``mcp_servers`` is the container agent's rendered ``.mcp.json`` server map.
     ``model_handle`` is the selected agent model in the service runtime's convention,
     used to select the ACP session model explicitly after session creation.
     """
@@ -253,6 +267,9 @@ class AgentChatEndpoint:
     expires_at: str
     mcp_servers: JSON
     model_handle: str
+    protocol_version: int = strawberry.field(
+        description="the ACP protocol version the endpoint speaks; the client must know it before it connects",
+    )
 
 
 @strawberry.type
@@ -264,6 +281,7 @@ class AgentChatTarget:
     status: str
     model_handle: str
     runtime_class: AgentRuntimeImpl  # type: ignore[valid-type]
+    runs_in_process: bool
     session_id: PublicID | None = None
 
 
@@ -326,7 +344,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
-        "lifecycle",
     ],
     updatable=[
         "name",
@@ -342,7 +359,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
-        "lifecycle",
     ],
     field_id_decode={
         "owner": public_pk_decoder(User),
@@ -364,7 +380,6 @@ _AGENT_RESOURCE = hasura_model_resource(
             "mcp_tools",
             "workspace_template",
         ),
-        delete_guard=lambda agent: agent.delete_blocker(),
     ),
 )
 _AGENT_SESSION_RESOURCE = hasura_model_resource(
@@ -377,7 +392,7 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     groupable=["agent", "owner", "status"],
     insert=False,
     update=False,
-    delete=False,
+    write_backend=AngeeHasuraWriteBackend(AgentSessionModel),
     field_id_decode={
         "agent": public_pk_decoder(Agent),
         "owner": public_pk_decoder(User),
@@ -602,42 +617,6 @@ class InferenceProviderUpdateMutation:
         return cast(InferenceProviderType, provider)
 
 
-def _mint_session(agent: Any) -> dict[str, Any]:
-    """Mint the chat WebSocket endpoint + per-actor route token for a running ``agent``.
-
-    The one owner of "open a chat session against this agent": ``agentChatEndpoint``
-    (caller knows the agent) and ``resolveSessionForView`` (caller knows the view) both
-    call it, so the token/endpoint logic lives once. Raises when there is no actor, the
-    agent isn't running (no rendered ``service``), or its service isn't routed.
-    """
-
-    actor = current_actor()
-    if actor is None:
-        raise ValueError("No actor in context.")
-    with system_context(reason="agents.graphql.mint_session"):
-        service = agent.service
-        mcp_servers = agent.mcp_config().get("mcpServers", {})
-    if not service:
-        raise GraphQLError(
-            "Agent is not running — provision it first.",
-            extensions={"code": "BAD_USER_INPUT"},
-        )
-    daemon = OperatorDaemon.from_settings()
-    endpoint = daemon.service_endpoint(service)
-    if not endpoint.get("routed"):
-        raise ValueError("Agent service is not reachable over a routed endpoint.")
-    # The agents autoconfig owns the TTL default; source the fallback from it (not a
-    # restated literal) so a bare settings module without the composed value still resolves.
-    ttl = str(getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", _AGENTS_SETTINGS["ANGEE_AGENT_CHAT_TOKEN_TTL"]))
-    token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
-    return {
-        "url": str(endpoint.get("url", "")),
-        "token": str(token.get("token", "")),
-        "expires_at": str(token.get("expires_at", "")),
-        "mcp_servers": mcp_servers,
-    }
-
-
 def _agent_for_view(view: dict[str, Any]) -> Any:
     """Return the running agent that serves ``view`` for the current actor, or ``None``.
 
@@ -671,7 +650,7 @@ class AgentSessionQuery:
 
         The chatter knows the *view*, not the agent: this picks the actor's running agent
         (``view["type"]`` is the routing seam for a later view-specialised agent) so the
-        client can mint its chat endpoint (``agentChatEndpoint``). Returns ``None`` when the
+        client can select its chat surface. Returns ``None`` when the
         user has no running agent, so the chatter shows a call-to-action instead of erroring.
         """
 
@@ -686,7 +665,7 @@ class AgentSessionQuery:
                 .exclude(status=SessionStatus.CLOSED)
                 .order_by("-updated_at")
                 .first()
-                if agent.runtime_backend.runs_in_process
+                if agent.runs_in_process
                 else None
             )
         return AgentChatTarget(
@@ -695,6 +674,7 @@ class AgentSessionQuery:
             status=str(agent.runtime_status),
             model_handle=str(agent.service_model_handle()) if model is not None else "",
             runtime_class=agent.runtime_class,
+            runs_in_process=agent.runs_in_process,
             session_id=PublicID(str(session.sqid)) if session is not None else None,
         )
 
@@ -720,6 +700,36 @@ class InferenceActionMutation:
         return ActionResult(ok=True, message=f"Synced {count} model(s).")
 
 
+class AgentChatEndpointPermission(BasePermission):
+    """Declare the callable-agent gate and the runtime's additional admin policy."""
+
+    message = PlatformAdminPermission.message
+    error_extensions = {"code": "PERMISSION_DENIED"}
+
+    def has_permission(self, source: Any, info: strawberry.Info, **kwargs: Any) -> bool:
+        agent = authorized_permission_target(info, Agent, kwargs["id"], "call")
+        return not agent.runtime_backend.chat_requires_admin or PlatformAdminPermission().has_permission(source, info)
+
+
+@strawberry.type
+class AgentDeletePreviewMutation:
+    """Authored cascade delete preview for agents under the caller's permissions."""
+
+    @strawberry.mutation(name="delete_agent")
+    def delete_agent(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deletion of one agent by public id."""
+
+        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=write_queryset(Agent))
+
+
+attach_delete_preview_metadata(
+    AgentDeletePreviewMutation,
+    model=Agent,
+    node=AgentType,
+    field="delete_agent",
+)
+
+
 @strawberry.type
 class AgentActionMutation:
     """GraphQL action bridge for agent runtime operations."""
@@ -737,41 +747,33 @@ class AgentActionMutation:
         return provisioning.reprovision_agent(id)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def agent_chat_endpoint(self, id: PublicID) -> AgentChatEndpoint:
-        """Mint the chat WebSocket endpoint + route token for a running agent.
+    def adopt_agent(self, id: PublicID) -> ActionResult:
+        """Record the conflicting instance as the agent's own, keeping its container as it is."""
 
-        A mutation, not a query: each call mints a fresh, short-lived per-actor route
-        token (the operator admin bearer never reaches the browser). The browser speaks
-        ACP to the agent's routed WebSocket through the central Caddy, forward-authed
-        with that token. Errors when the agent is not running (no rendered ``service``)
-        or its service is not routed. The actor is the same identity
-        ``operatorConnection`` mints with — the session user.
-        """
+        return provisioning.adopt_agent(id)
 
-        agent = resolve_action_target(
-            Agent,
-            id,
-            reason="agents.graphql.agent_chat_endpoint",
-            select_related=("model",),
-        )
-        session = _mint_session(agent)
-        return AgentChatEndpoint(
-            url=session["url"],
-            token=session["token"],
-            expires_at=session["expires_at"],
-            mcp_servers=session["mcp_servers"],
-            model_handle=str(agent.service_model_handle()),
-        )
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def replace_agent(self, id: PublicID) -> ActionResult:
+        """Destroy the conflicting instance, then provision the agent afresh."""
+
+        return provisioning.replace_agent(id)
+
+    @strawberry.mutation(permission_classes=[AgentChatEndpointPermission])
+    def agent_chat_endpoint(self, info: strawberry.Info, id: PublicID) -> AgentChatEndpoint:
+        """Format the endpoint selected by the agent's runtime."""
+
+        agent = authorized_permission_target(info, Agent, id, "call")
+        return AgentChatEndpoint(**agent.runtime_backend.chat_endpoint(agent, request_from_info(info)))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def render_agent_prompt(self, id: PublicID, view: JSON) -> str:
         """Render the ``<system_context>`` block for an agent and the user's open view.
 
         ``view`` is the view envelope ``{kind, type: "<app>/<model>", sqid?, sqids?,
-        params?}``. The chat client calls this each send and prefixes the result, so
-        the agent reads what the user is looking at. Resolving the agent (admin-gated)
-        confirms the caller may drive it; the model-generic rendering lives in
-        ``agents.context``.
+        params?}``. This preview does not modify a session or a stored prompt.
+        In-process chat supplies the envelope on each ACP prompt; its runtime
+        renders the retained turn context through the same ``agents.context`` owner.
+        Resolving the agent (admin-gated) confirms the caller may drive it.
         """
 
         resolve_action_target(Agent, id, reason="agents.graphql.render_agent_prompt")
@@ -821,6 +823,7 @@ schemas = {
         ],
         "mutation": [
             _AGENT_RESOURCE.mutation,
+            AgentDeletePreviewMutation,
             _AGENT_SESSION_RESOURCE.mutation,
             _AGENT_TURN_RESOURCE.mutation,
             InferenceProviderCreateMutation,

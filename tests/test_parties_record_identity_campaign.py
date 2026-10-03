@@ -62,8 +62,10 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
         str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
-        # Three revision reads, actor-set expansion, 13 arrow sources, row SELECT.
-        assert len(queries) == 18, queries.captured_queries
+        # Fetching guards all projected columns in one schema operation; reads
+        # of the filled result cache skip the guard. There are two revision reads,
+        # actor sets, 13 arrows, and one application row SELECT.
+        assert len(queries) == 17, queries.captured_queries
         assert sum(
             query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
         ) == 1

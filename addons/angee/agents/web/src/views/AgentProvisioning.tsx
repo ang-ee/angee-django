@@ -14,7 +14,7 @@ import {
 import { Skeleton, SkeletonStatus, textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
-import { agentLifecycle, agentRuntime, booleanField, stringField } from "./agent-record";
+import { agentInstanceKind, agentLifecycle, agentRuntime, booleanField, stringField, type AgentInstanceKind } from "./agent-record";
 
 const AGENT_MODEL = "agents.Agent";
 
@@ -27,6 +27,8 @@ const PROVISION_FIELDS = [
   "service",
   "expects_service",
   "workspace_template.path",
+  "conflict_kind",
+  "conflict_name",
 ] as const;
 
 interface AgentProvisionRecord extends Row {
@@ -37,6 +39,8 @@ interface AgentProvisionRecord extends Row {
   service?: string | null;
   expects_service?: boolean | null;
   workspace_template?: { path?: string | null } | null;
+  conflict_kind?: string | null;
+  conflict_name?: string | null;
 }
 
 export type AgentProvisioningPane = "service" | "workspace";
@@ -80,6 +84,8 @@ export function AgentProvisioning({
     agentRuntime(agent) === "RUNNING" && (!workspace || (expectsService && !service));
   const showRuntime = active || Boolean(workspace) || missingRenderedInstances;
   const hasWorkspaceTemplate = Boolean(agent?.workspace_template?.path);
+  const conflictKind = agentInstanceKind(agent);
+  const conflictName = stringField(agent, "conflict_name");
 
   // No poll: `agents.Agent` declares `changes(Agent, field="agentChanged")`, so the
   // record auto-invalidates live through the change subscription; workspace state
@@ -107,6 +113,11 @@ export function AgentProvisioning({
           {agent.last_error ? (
             <p className="text-13 text-danger-text">{String(agent.last_error)}</p>
           ) : null}
+          {conflictName && conflictKind ? (
+            <OperatorTransportProvider>
+              <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
+            </OperatorTransportProvider>
+          ) : null}
           {showRuntime ? (
             <OperatorTransportProvider>
               <AgentOperatorRuntime
@@ -117,7 +128,7 @@ export function AgentProvisioning({
                 workspace={workspace}
               />
             </OperatorTransportProvider>
-          ) : (
+          ) : conflictName ? null : (
             <div className="flex flex-col items-start gap-2">
               <p className={textRoleVariants({ role: "meta" })}>
                 {t("provisioning.intro")}
@@ -136,6 +147,48 @@ export function AgentProvisioning({
 }
 
 type RowRecord = BaseRecord & Row;
+
+/**
+ * The conflicting instance the last provision found, shown read-only so it can be
+ * inspected before choosing Adopt, Replace or Deprovision. Only read-only operator
+ * views compose here: the operator's row components carry destroy buttons that
+ * would bypass the agent's own verification.
+ */
+function ConflictingInstance({
+  kind,
+  name,
+  pane,
+}: {
+  kind: AgentInstanceKind;
+  name: string;
+  pane: AgentProvisioningPane;
+}): React.ReactElement {
+  const t = useAgentsT();
+  return (
+    <section className="flex flex-col gap-4">
+      <p className="text-13 text-fg">{t(`provisioning.conflict.${kind}`, { name })}</p>
+      {kind === "workspace" && pane === "workspace" ? <ConflictingWorkspace name={name} /> : null}
+      {kind === "service" && pane === "service" ? (
+        <ServiceLogs name={name} title={t("provisioning.conflictLogs")} />
+      ) : null}
+    </section>
+  );
+}
+
+function ConflictingWorkspace({ name }: { name: string }): React.ReactElement {
+  const t = useAgentsT();
+  const { status, error } = useWorkspaceStatus(name);
+  return (
+    <>
+      {error ? <p className="text-13 text-danger-text">{error.message}</p> : null}
+      <WorkspaceSources
+        emptyContent={t("provisioning.workspaceSourcesEmpty")}
+        sources={status?.sources ?? []}
+        title={t("provisioning.conflictSources")}
+      />
+    </>
+  );
+}
 
 function AgentOperatorRuntime({
   expectsService,

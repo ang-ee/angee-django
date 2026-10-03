@@ -5,23 +5,25 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from collections.abc import Mapping
-from contextlib import AbstractAsyncContextManager, suppress
+from contextlib import AbstractAsyncContextManager
+from time import monotonic
 from typing import Any
 
-from asgiref.sync import async_to_sync
-from channels.db import database_sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.capabilities import ToolSearch
 from pydantic_ai.messages import BinaryContent, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
+from rebac import SubjectRef, actor_context
 
 from angee.agents.context import render_view_context
 from angee.agents.models import normalize_inference_usage
-from angee.agents.runners import SessionHeartbeat, SessionRunner, SessionUpdateSink, TurnOutcome
+from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
+from angee.base.actors import user_subject_type
 
 _BINARY_CONTENT_OMITTED = "[Binary tool content omitted from persisted history; use a bounded file handle.]"
 """Replay-safe placeholder until the storage-handle follow-on lands."""
@@ -37,33 +39,44 @@ class PydanticAISessionRunner(SessionRunner):
         *,
         deferred_results: list[Mapping[str, Any]],
         emit: SessionUpdateSink,
-        heartbeat: SessionHeartbeat,
+        deadline: float,
     ) -> TurnOutcome:
-        """Bridge the workflow's synchronous task into pydantic-ai's async loop."""
+        """Render the view as its poster, then run as the ambient agent principal.
+
+        AuditMixin retains the poster in ``turn.created_by_id``, including admin
+        posts to another user's session. Unattributed turns add no view context.
+        Native user history retains the rendered block at this turn.
+        """
 
         history = ModelMessagesTypeAdapter.validate_python(session.replay_state or [])
-        context = render_view_context(dict(session.context or {}))
-        instructions = "\n\n".join(part for part in (session.agent.instructions.strip(), context.strip()) if part)
         inference_model = session.agent.inference_model()
         toolsets = toolsets_for_session(session)
-        limits = _usage_limits(session.agent)
+        limits = _usage_limits()
         deferred = _deferred_tool_results(deferred_results)
+        prompt: str | list[str] | None = None
+        if deferred is None:
+            context = ""
+            if turn.created_by_id is not None:
+                with actor_context(SubjectRef.of(user_subject_type(), str(turn.created_by_id))):
+                    context = render_view_context(dict(turn.context))
+            # Native user content persists in all_messages(); instructions apply only to this run.
+            prompt = [context, str(turn.prompt)] if context else str(turn.prompt)
         return async_to_sync(self._run_async)(
-            prompt=None if deferred is not None else str(turn.prompt),
+            prompt=prompt,
             history=history,
             deferred=deferred,
-            instructions=instructions,
+            instructions=session.agent.instructions.strip(),
             inference_model=inference_model,
             toolsets=toolsets,
             limits=limits,
             emit=emit,
-            heartbeat=heartbeat,
+            deadline=deadline,
         )
 
     async def _run_async(
         self,
         *,
-        prompt: str | None,
+        prompt: str | list[str] | None,
         history: list[Any],
         deferred: DeferredToolResults | None,
         instructions: str,
@@ -71,9 +84,9 @@ class PydanticAISessionRunner(SessionRunner):
         toolsets: list[Any],
         limits: UsageLimits,
         emit: SessionUpdateSink,
-        heartbeat: SessionHeartbeat,
+        deadline: float,
     ) -> TurnOutcome:
-        async with inference_model as model:
+        async with asyncio.timeout(deadline - monotonic()), inference_model as model:
             agent = Agent(
                 model=model,
                 instructions=instructions,
@@ -82,24 +95,18 @@ class PydanticAISessionRunner(SessionRunner):
                 output_type=[str, DeferredToolRequests],
             )
             result = None
-            heartbeat_task = asyncio.create_task(_heartbeat_loop(heartbeat))
-            try:
-                async with agent.run_stream_events(
-                    prompt,
-                    message_history=history,
-                    deferred_tool_results=deferred,
-                    usage_limits=limits,
-                ) as events:
-                    async for event in events:
-                        if isinstance(event, AgentRunResultEvent):
-                            result = event.result
-                            continue
-                        for update in updates_for_event(event):
-                            await database_sync_to_async(emit, thread_sensitive=True)(update)
-            finally:
-                heartbeat_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await heartbeat_task
+            async with agent.run_stream_events(
+                prompt,
+                message_history=history,
+                deferred_tool_results=deferred,
+                usage_limits=limits,
+            ) as events:
+                async for event in events:
+                    if isinstance(event, AgentRunResultEvent):
+                        result = event.result
+                        continue
+                    for update in updates_for_event(event):
+                        await sync_to_async(emit, thread_sensitive=True)(update)
             if result is None:
                 raise RuntimeError("pydantic-ai completed without an AgentRunResultEvent.")
 
@@ -124,7 +131,7 @@ class PydanticAISessionRunner(SessionRunner):
 
 
 def _deferred_tool_results(results: list[Mapping[str, Any]]) -> DeferredToolResults | None:
-    """Project resolved workflow decisions into pydantic-ai approvals."""
+    """Project resolved tool decisions into pydantic-ai approvals."""
 
     if not results:
         return None
@@ -164,16 +171,7 @@ def _without_binary_content(value: Any) -> Any:
     return value
 
 
-def _usage_limits(agent: Any) -> UsageLimits:
-    """Return a request-count guard; the workflow ledger owns token spend."""
+def _usage_limits() -> UsageLimits:
+    """Bound model requests within one turn independently of context capacity."""
 
-    del agent
     return UsageLimits(request_limit=50)
-
-
-async def _heartbeat_loop(heartbeat: SessionHeartbeat) -> None:
-    """Refresh the workflow lease independently of model/tool emissions."""
-
-    while True:
-        await asyncio.sleep(60)
-        await database_sync_to_async(heartbeat, thread_sensitive=True)()

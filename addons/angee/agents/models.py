@@ -1,11 +1,12 @@
-"""Source models for the agent catalogue.
+"""Source models for the agent catalogue and persisted conversations.
 
 An :class:`Agent` is a definition the operator later renders into a workspace and
 service. It draws on three catalogues this addon also owns: :class:`Skill` rows
 discovered from an ``integrate_vcs.Source``, :class:`MCPServer`/:class:`MCPTool` rows,
 and an :class:`InferenceProvider` integration child with its
 :class:`InferenceModel` rows. Templates are agents with
-``is_template`` set. This addon keeps definitions only; the operator owns lifecycle.
+``is_template`` set. The operator owns rendered workspaces and services; this
+addon owns definitions and in-process conversations.
 """
 
 from __future__ import annotations
@@ -14,16 +15,16 @@ import hashlib
 import hmac
 import json
 from collections.abc import Collection, Iterator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, cast
+from types import MappingProxyType
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
-from django.db.models.signals import class_prepared, post_delete
 from django.utils import timezone
 from pydantic_ai.messages import (
     BinaryContent,
@@ -38,20 +39,26 @@ from pydantic_ai.output import OutputObjectDefinition
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage, RunUsage
-from rebac import SubjectRef, system_context, to_subject_ref
+from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
 from angee.agents.deployments import InferenceDeploymentIdentity
+from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
+from angee.base.actors import instance_actor
 from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
-from angee.iam.service_users import deactivate_service_user, sync_service_user
+from angee.graphql.events import ChangeRelatedRecord
+from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
+from angee.jobs.enqueue import enqueue_task
+from angee.jobs.locks import LockKey, record_lock_key
+from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 
 
 class InferenceModelUse(models.TextChoices, StrEnum):
@@ -198,12 +205,7 @@ def decode_inference_output(response: ModelResponse) -> dict[str, Any]:
 
 
 def normalize_inference_usage(usage: RequestUsage | RunUsage) -> dict[str, int]:
-    """Project native usage into every numeric workflow budget axis.
-
-    ``requests`` is retained deliberately: ``WorkflowRun.debit_budget`` and the
-    engine budget gate accept arbitrary top-level numeric axes, and both agent
-    sessions and extraction already account for provider request count.
-    """
+    """Project native usage into shared token, request and tool-call counters."""
 
     values = {
         "input_tokens": usage.input_tokens,
@@ -262,7 +264,7 @@ class RuntimeStatus(models.TextChoices):
 
 
 class SessionStatus(models.TextChoices):
-    """Display projection of one persisted agent session's workflow state."""
+    """Conversation state projected from the session's active turn."""
 
     IDLE = "idle", "Idle"
     RUNNING = "running", "Running"
@@ -282,6 +284,16 @@ class TurnStatus(models.TextChoices):
     CANCELED = "canceled", "Canceled"
 
 
+ACTIVE_TURN_STATUSES = (TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL)
+"""Turn states that occupy the session's single execution slot."""
+
+ACTIVE_TURN_DELETE_MESSAGE = "An agent turn is still running or awaiting approval; stop it first."
+"""Turn-owned refusal shared with session deletion guards."""
+
+OPEN_TURN_STATUSES = (TurnStatus.PENDING, *ACTIVE_TURN_STATUSES)
+"""Unfinished turns canceled when their session closes."""
+
+
 class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     """An LLM provider account, materialized as an integration child row.
 
@@ -295,7 +307,8 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.FORM
 
-    backend_class = ImplClassField(InferenceBackend,
+    backend_class = ImplClassField(
+        InferenceBackend,
         default="manual",
         create_only=True,
     )
@@ -828,6 +841,9 @@ class Agent(AuditMixin, AngeeDataModel):
     ``instructions`` into AGENTS.md/CLAUDE.md, the selected skills and MCP servers/tools
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
+
+    Deletion requires teardown and stopped turns on every Django collector path.
+    Sessions and turns derive delete authority from this agent in the Zed schema.
     """
 
     runtime = True
@@ -868,7 +884,8 @@ class Agent(AuditMixin, AngeeDataModel):
     skills = models.ManyToManyField("agents.Skill", blank=True, related_name="agents")
     mcp_servers = models.ManyToManyField("agents.MCPServer", blank=True, related_name="agents")
     mcp_tools = models.ManyToManyField("agents.MCPTool", blank=True, related_name="agents")
-    runtime_class = ImplClassField(AgentRuntime,
+    runtime_class = ImplClassField(
+        AgentRuntime,
         default="none",
     )
     """Registry key for the agent runtime — the program this agent renders into. The
@@ -885,9 +902,9 @@ class Agent(AuditMixin, AngeeDataModel):
     service_inputs = models.JSONField(default=dict, blank=True)
     workspace_inputs = models.JSONField(default=dict, blank=True)
     service = models.CharField(max_length=128, blank=True)
-    """Operator service instance name, set when the agent is rendered."""
+    """Operator service instance this agent records as its own; unique among agents when set."""
     workspace = models.CharField(max_length=128, blank=True)
-    """Operator workspace instance name, set when the agent is rendered."""
+    """Operator workspace instance this agent records as its own; unique among agents when set."""
     lifecycle = StateField(choices_enum=AgentLifecycle, default=AgentLifecycle.DRAFT)
     """Provision-pipeline position (:class:`AgentLifecycle`), set by the render flow."""
     runtime_status = StateField(choices_enum=RuntimeStatus, default=RuntimeStatus.STOPPED)
@@ -895,6 +912,24 @@ class Agent(AuditMixin, AngeeDataModel):
     with ``last_error``. Set by the render flow; the daemon owns the live truth."""
     last_error: str = DiagnosticTextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
+    conflict_kind: OperatorInstanceKind | None = StateField(
+        choices_enum=OperatorInstanceKind, null=True, blank=True, db_index=False
+    )
+    """Kind of the conflicting instance: the one the daemon refused to create because it exists.
+
+    Recorded with :attr:`conflict_name` from the daemon's own 409 report. Adopt,
+    Replace and Deprovision act on it; it is cleared only where it is resolved —
+    when this agent records the instance as its own (adopt, or teardown before a
+    destroy), when a teardown completes, or when a rename makes a conflicting
+    workspace's derived name stale."""
+    conflict_name = models.CharField(max_length=128, blank=True)
+    """The daemon-reported name of the conflicting instance; the operator owns naming."""
+
+    _INSTANCE_FIELDS: ClassVar[Mapping[OperatorInstanceKind, str]] = {
+        OperatorInstanceKind.WORKSPACE: "workspace",
+        OperatorInstanceKind.SERVICE: "service",
+    }
+    """The field that records this agent's operator instance of each kind."""
 
     lifecycle_transitions = StateTransitions(
         lifecycle,
@@ -933,6 +968,16 @@ class Agent(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "agents/agent"
+        # One operator instance is recorded by at most one agent, so no verb can
+        # adopt or destroy an instance another agent records.
+        constraints = (
+            models.UniqueConstraint(
+                fields=("workspace",), condition=~models.Q(workspace=""), name="uniq_agents_agent_workspace"
+            ),
+            models.UniqueConstraint(
+                fields=("service",), condition=~models.Q(service=""), name="uniq_agents_agent_service"
+            ),
+        )
 
     def __str__(self) -> str:
         """Return the agent's name."""
@@ -943,7 +988,9 @@ class Agent(AuditMixin, AngeeDataModel):
         """Persist the agent and sync its service-user label.
 
         Mirrors ``iam.User.save()``: the row save owns a small derived sync, and
-        the manager performs the system-owned dependent write.
+        the manager performs the system-owned dependent write. A rename also clears
+        a conflicting workspace: the daemon derived its name from the old agent name,
+        so the next provision derives a fresh one.
         """
 
         creating = self._state.adding
@@ -952,9 +999,15 @@ class Agent(AuditMixin, AngeeDataModel):
         persisted_name = None
         if not creating and should_check_name:
             persisted_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
+        renamed = not creating and should_check_name and persisted_name != self.name
+        if renamed and self.conflict_kind == OperatorInstanceKind.WORKSPACE:
+            self.conflict_kind = None
+            self.conflict_name = ""
+            if update_fields is not None:
+                kwargs["update_fields"] = {*_update_field_names(update_fields), "conflict_kind", "conflict_name"}
         with transaction.atomic():
             super().save(*args, **kwargs)
-            if creating or (should_check_name and persisted_name != self.name):
+            if creating or renamed:
                 sync_service_user(self, prefix="agent")
 
     def principal_subject(self) -> SubjectRef:
@@ -996,62 +1049,311 @@ class Agent(AuditMixin, AngeeDataModel):
         return self.runtime_backend.renders_service
 
     @property
+    def runs_in_process(self) -> bool:
+        """Whether this agent's runtime executes turns inside the worker."""
+
+        return self.runtime_backend.runs_in_process
+
+    @property
     def can_chat(self) -> bool:
         """Whether the running agent has an in-process runtime or a rendered service."""
 
-        return self.runtime_status == RuntimeStatus.RUNNING and (
-            self.runtime_backend.runs_in_process or bool(self.service)
-        )
+        return self.runtime_status == RuntimeStatus.RUNNING and (self.runs_in_process or bool(self.service))
+
+    def chat_blocker(self) -> str | None:
+        """Return the single refusal for in-process chat availability."""
+
+        if not self.runs_in_process:
+            return "This agent runtime uses container ACP sessions."
+        if not self.can_chat:
+            return "Agent is not running — provision it first."
+        return None
+
+    # --- Lifecycle verb eligibility -------------------------------------------
+    # Each lifecycle verb owns one ``<verb>_blocker``. ``can_<verb>`` is its visibility
+    # projection: the same blocker answered from this row's own columns
+    # (``prerequisites=False``), so a list can select it without per-row queries. The
+    # verb itself enforces the whole blocker, including the configuration it needs.
 
     @property
     def can_provision(self) -> bool:
-        """Whether the provision action may start from the current lifecycle facts."""
+        """Visibility projection of :meth:`provision_blocker`."""
 
-        return str(self.runtime_status) == str(RuntimeStatus.ERROR) or str(self.lifecycle) in {
-            str(AgentLifecycle.DRAFT),
-            str(AgentLifecycle.DEPROVISIONED),
-        }
+        return self.provision_blocker(prerequisites=False) is None
+
+    @property
+    def can_adopt(self) -> bool:
+        """Visibility projection of :meth:`adopt_blocker`."""
+
+        return self.adopt_blocker(prerequisites=False) is None
+
+    @property
+    def can_replace(self) -> bool:
+        """Visibility projection of :meth:`replace_blocker`."""
+
+        return self.replace_blocker(prerequisites=False) is None
+
+    @property
+    def can_reprovision(self) -> bool:
+        """Visibility projection of :meth:`reprovision_blocker`."""
+
+        return self.reprovision_blocker(prerequisites=False) is None
 
     @property
     def can_deprovision(self) -> bool:
-        """Whether the teardown action is meaningful for the current rendered state."""
+        """Visibility projection of :meth:`deprovision_blocker`."""
 
-        return str(self.lifecycle) in {
-            str(AgentLifecycle.PROVISIONING),
-            str(AgentLifecycle.READY),
-            str(AgentLifecycle.DEPROVISIONING),
-        } or bool(self.workspace or self.service)
+        return self.deprovision_blocker() is None
 
     @property
     def can_delete(self) -> bool:
-        """Whether deleting the definition can leave no orphaned operator instance."""
+        """Visibility projection of :meth:`delete_blocker`."""
 
-        return not self.can_deprovision
+        return self.delete_blocker() is None
+
+    @classmethod
+    def has_active_turns_expression(cls) -> models.Exists:
+        """Project active execution across all sessions without exposing transcripts."""
+
+        session_model = cls._meta.get_field("sessions").related_model
+        turn_model = session_model._meta.get_field("turns").related_model
+        return models.Exists(turn_model.system_queryset().active().filter(session__agent_id=models.OuterRef("pk")))
 
     def delete_blocker(self) -> str | None:
-        """Return the delete-blocking reason, or ``None`` when deletion is allowed."""
+        """Require teardown and stopped turns before deleting the agent and its sessions."""
 
-        if self.can_delete:
+        if self.deprovision_blocker() is None:
+            return "Deprovision this agent before deleting it."
+        active = getattr(self, "_has_active_turns", None)
+        if active is None:
+            active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
+        if active:
+            return "Stop all active turns before deleting this agent."
+        return None
+
+    def provision_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Provision may not start now, or ``None``."""
+
+        if blocker := self._in_progress_blocker() or self._conflict_blocker():
+            return blocker
+        if self.workspace or (
+            str(self.lifecycle) == str(AgentLifecycle.READY) and str(self.runtime_status) != str(RuntimeStatus.ERROR)
+        ):
+            return "Agent is already provisioned — deprovision it first."
+        return self._render_blocker() if prerequisites else None
+
+    def adopt_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Adopt may not start now, or ``None``.
+
+        Adopt needs a recorded conflicting instance, and the workspace template the
+        daemon's report of it is verified against.
+        """
+
+        if blocker := self._in_progress_blocker():
+            return blocker
+        if self.conflict_kind is None:
+            return "This agent records no conflicting operator instance to adopt."
+        if prerequisites and self.workspace_template_id is None:
+            return "Set a workspace template on this agent first."
+        return None
+
+    def replace_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Replace may not start now, or ``None``.
+
+        Replace provisions afresh after its teardown, so it needs everything
+        Provision needs; refusing up front means it never destroys an instance it
+        cannot rebuild.
+        """
+
+        if blocker := self._in_progress_blocker():
+            return blocker
+        if self.conflict_kind is None:
+            return "This agent records no conflicting operator instance to replace."
+        return self._render_blocker() if prerequisites else None
+
+    def reprovision_blocker(self, *, prerequisites: bool = True) -> str | None:
+        """Return why Reprovision may not start now, or ``None``."""
+
+        if blocker := self._in_progress_blocker():
+            return blocker
+        if not self.workspace:
+            return "Agent isn't provisioned — provision it first."
+        if blocker := self._conflict_blocker():
+            return blocker
+        if not self.runtime_backend.renders_service:
+            return "This agent's runtime renders no service to reprovision."
+        return self._render_blocker(needs_template=False) if prerequisites else None
+
+    def deprovision_blocker(self) -> str | None:
+        """Return why Deprovision has nothing to do, or ``None``.
+
+        Teardown stays available from ``PROVISIONING`` and ``DEPROVISIONING``: a verb
+        that stalled there leaves through Deprovision.
+        """
+
+        idle = str(self.lifecycle) in {str(AgentLifecycle.DRAFT), str(AgentLifecycle.DEPROVISIONED)}
+        if idle and not (self.workspace or self.service or self.conflict_kind is not None):
+            return "This agent has no operator instance to tear down."
+        return None
+
+    def _in_progress_blocker(self) -> str | None:
+        """Refuse a verb while the lifecycle records another one under way."""
+
+        if str(self.lifecycle) == str(AgentLifecycle.PROVISIONING):
+            return "This agent is being provisioned; if that stalled, deprovision it to recover."
+        if str(self.lifecycle) == str(AgentLifecycle.DEPROVISIONING):
+            return "This agent is being torn down; deprovision it again to finish."
+        return None
+
+    def _conflict_blocker(self) -> str | None:
+        """Refuse a render while a conflicting instance is recorded: the daemon would refuse it again."""
+
+        if self.conflict_kind is None:
             return None
-        return "Deprovision this agent before deleting it."
+        label = OperatorInstanceKind(self.conflict_kind).label.lower()
+        return (
+            f"The operator already has {label} “{self.conflict_name}” for this agent: "
+            "adopt it, replace it, or deprovision to clear the record."
+        )
+
+    def _render_blocker(self, *, needs_template: bool = True) -> str | None:
+        """Return what a render of this agent still lacks, or ``None``."""
+
+        if needs_template and not self.runs_in_process and self.workspace_template_id is None:
+            return "Set a workspace template on this agent first."
+        if not self.inference_credential_ready():
+            return "Connect a usable inference credential to this agent's provider first."
+        return None
+
+    # --- Operator instances ----------------------------------------------------
+
+    def provisioning_lock_key(self) -> LockKey:
+        """Return the advisory lock key every lifecycle verb on this agent shares.
+
+        It serialises the verbs' daemon work on one agent. It is advisory: the
+        lifecycle transitions and the unique instance constraints stay authoritative.
+        """
+
+        return record_lock_key(self._meta.label_lower, self.pk, "provisioning")
+
+    def instance_recorded_by(self, kind: OperatorInstanceKind, name: str) -> Agent | None:
+        """Return another agent that records the operator ``kind`` instance ``name``, or ``None``.
+
+        Rows are read unscoped: which agent records an instance is a fact about every
+        agent, not about the rows the current actor can see.
+        """
+
+        field = self._INSTANCE_FIELDS[kind]
+        return type(self)._base_manager.filter(**{field: name}).exclude(pk=self.pk).first()
+
+    def records_instance(self, kind: OperatorInstanceKind, name: str) -> bool:
+        """Whether this agent records the operator ``kind`` instance ``name`` as its own."""
+
+        return bool(name) and getattr(self, self._INSTANCE_FIELDS[kind]) == name
+
+    def workspace_identity_inputs(self) -> dict[str, str]:
+        """Return the workspace template inputs that identify this agent's workspace.
+
+        The daemon derives the workspace name from them and records them on the
+        workspace, so its report of an existing workspace can be checked against them.
+        """
+
+        return {"agent_name": self.name}
+
+    def conflicting_instance_blocker(self, status: WorkspaceStatus, *, template_ref: str | None) -> str | None:
+        """Return why the conflicting instance is not this agent's to adopt or destroy, or ``None``.
+
+        ``status`` is the daemon's report of the workspace involved: the conflicting
+        workspace itself, or — for a conflicting service — the workspace this agent
+        records. ``template_ref`` is the daemon's ref for this agent's workspace
+        template. A conflicting workspace must have been rendered from that template
+        with this agent's identity inputs. Every service mounting the workspace counts
+        toward the instance: no more may mount it than this agent's runtime renders,
+        and a conflicting service must be one of them. No workspace or mounting
+        service may be recorded by another agent, and none may differ from one this
+        agent already records, which recording it would overwrite.
+
+        Limit: the daemon reports no provenance for a service (no template, no inputs),
+        so a service counts as this agent's only by mounting the workspace verified here.
+        """
+
+        if self.conflict_kind == OperatorInstanceKind.WORKSPACE:
+            if template_ref is None or status.template != template_ref:
+                return (
+                    f"Workspace “{status.name}” was rendered from template “{status.template}”, "
+                    f"not this agent's “{template_ref or 'none'}”."
+                )
+            for key, value in self.workspace_identity_inputs().items():
+                recorded = status.inputs.get(key, "")
+                if recorded != value:
+                    return f"Workspace “{status.name}” was rendered with {key} “{recorded}”, not “{value}”."
+        elif self.conflict_name not in status.services:
+            return f"Service “{self.conflict_name}” does not mount this agent's workspace “{status.name}”."
+        renders = 1 if self.runtime_backend.renders_service else 0
+        if len(status.services) > renders:
+            return (
+                f"Workspace “{status.name}” is mounted by {', '.join(status.services)}, "
+                "more services than this agent's runtime renders."
+            )
+        instances = [(OperatorInstanceKind.SERVICE, service) for service in status.services]
+        if self.conflict_kind == OperatorInstanceKind.WORKSPACE:
+            instances.insert(0, (OperatorInstanceKind.WORKSPACE, status.name))
+        for kind, name in instances:
+            label = OperatorInstanceKind(kind).label.lower()
+            # Recording it would overwrite — and so forget — this agent's own instance.
+            own = getattr(self, self._INSTANCE_FIELDS[kind])
+            if own and own != name:
+                return f"This agent already records {label} “{own}”, so it cannot also take over “{name}”."
+            if other := self.instance_recorded_by(kind, name):
+                return f"The operator {label} “{name}” is recorded by agent “{other.name}”."
+        return None
+
+    # --- Lifecycle transitions -------------------------------------------------
 
     @transition(
         lifecycle,
-        source=[
-            AgentLifecycle.DRAFT,
-            AgentLifecycle.PROVISIONING,
-            AgentLifecycle.READY,
-            AgentLifecycle.DEPROVISIONED,
-        ],
+        source=[AgentLifecycle.DRAFT, AgentLifecycle.READY, AgentLifecycle.DEPROVISIONED],
         target=AgentLifecycle.PROVISIONING,
         on_success=save_state,
     )
     def mark_provisioning(self) -> None:
-        """Enter the provision flow: lifecycle provisioning, run state reset to stopped."""
+        """Enter the provision flow: lifecycle provisioning, run state reset to stopped.
+
+        Not from ``PROVISIONING``: a second provision never runs over one under way.
+        """
 
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
         self._transition_fields = {"runtime_status", "last_error"}
+
+    @transition(
+        lifecycle,
+        source=[AgentLifecycle.DRAFT, AgentLifecycle.READY, AgentLifecycle.DEPROVISIONED],
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
+    def mark_adopting(self, *, workspace: str, service: str) -> None:
+        """Record the verified conflicting instance as this agent's own and enter provisioning.
+
+        One write records the workspace and service and clears the conflict, so no
+        failure between them can forget the instance. The unique instance constraints
+        refuse it when another agent records either.
+        """
+
+        self.workspace = workspace
+        self.service = service
+        self.conflict_kind = None
+        self.conflict_name = ""
+        self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
+        self.last_error = ""
+        self._transition_fields = {
+            "workspace",
+            "service",
+            "conflict_kind",
+            "conflict_name",
+            "runtime_status",
+            "last_error",
+        }
 
     @transition(
         lifecycle,
@@ -1082,6 +1384,22 @@ class Agent(AuditMixin, AngeeDataModel):
     @transition(
         lifecycle,
         source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
+    def mark_service_destroyed(self) -> None:
+        """Forget the service as soon as the operator confirms it destroyed.
+
+        A service recorded afterwards — usually under the same name — is then never
+        mistaken for the destroyed one.
+        """
+
+        self.service = ""
+        self._transition_fields = {"service"}
+
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
         target=AgentLifecycle.READY,
         on_success=save_state,
     )
@@ -1107,13 +1425,26 @@ class Agent(AuditMixin, AngeeDataModel):
         on_success=save_state,
     )
     def mark_deprovisioned(self) -> None:
-        """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped."""
+        """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped.
+
+        A completed teardown also resolves the recorded conflicting instance: it was
+        either destroyed as this agent's own or left in place as not this agent's.
+        """
 
         self.workspace = ""
         self.service = ""
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
+        self.conflict_kind = None
+        self.conflict_name = ""
+        self._transition_fields = {
+            "workspace",
+            "service",
+            "runtime_status",
+            "last_error",
+            "conflict_kind",
+            "conflict_name",
+        }
 
     @transition(
         lifecycle,
@@ -1127,37 +1458,58 @@ class Agent(AuditMixin, AngeeDataModel):
         target=AgentLifecycle.DEPROVISIONING,
         on_success=save_state,
     )
-    def mark_deprovisioning(self) -> None:
-        """Mark the agent as tearing down through the operator teardown flow."""
+    def mark_deprovisioning(self, *, workspace: str = "", service: str = "") -> None:
+        """Mark the agent as tearing down through the operator teardown flow.
+
+        ``workspace``/``service`` record a verified conflicting instance as this agent's
+        own in this same write — clearing the conflict, under the unique instance
+        constraints — so the teardown only ever destroys instances this agent records.
+        """
 
         self.last_error = ""
-        self._transition_fields = {"last_error"}
+        transition_fields = {"last_error"}
+        if workspace or service:
+            self.workspace = workspace or self.workspace
+            self.service = service or self.service
+            self.conflict_kind = None
+            self.conflict_name = ""
+            transition_fields.update({"workspace", "service", "conflict_kind", "conflict_name"})
+        self._transition_fields = transition_fields
 
     def mark_provision_failed(
-        self, message: str, *, clear_instances: bool = False, clear_service: bool = False
+        self,
+        message: str,
+        *,
+        destroyed: Mapping[OperatorInstanceKind, str] | None = None,
+        conflict_kind: OperatorInstanceKind | None = None,
+        conflict_name: str = "",
     ) -> None:
         """Record a failed operation: run state ``ERROR`` (the red dot), reason kept.
 
         The failure lands on the run-state axis: ``last_error`` holds the reason and the
-        dot turns red. ``clear_instances`` blanks both instance names (a provision rolled
-        the workspace back); ``clear_service`` blanks only the service (a reprovision
-        destroyed the old service before the recreate failed — the workspace is preserved).
-        The lifecycle then follows the workspace, never stranding mid-flow: an agent left
-        holding a workspace is still provisioned (``READY``), one rolled back to nothing is
-        a clean ``DRAFT`` retry. The red run-state dot carries the failure either way, and
-        the persisted names never point at a torn-down instance. This deliberately bypasses
-        the declared lifecycle graph because the target is data-dependent recovery state,
+        dot turns red. ``destroyed`` maps each instance kind to the name the failed
+        operation confirmed gone; a recorded name is blanked only while it is still
+        that name, so the row never points at a torn-down instance and never forgets
+        one recorded later or whose destroy did not succeed.
+        ``conflict_kind``/``conflict_name`` record the conflicting instance the daemon
+        reported; without them a recorded conflict is kept. Only the fields this
+        changes are written. The lifecycle then follows the workspace, never stranding
+        mid-flow: an agent left holding a workspace is still provisioned (``READY``),
+        one holding none is a clean ``DRAFT`` retry. This deliberately bypasses the
+        declared lifecycle graph because the target is data-dependent recovery state,
         not a user-visible lifecycle action.
         """
 
         transition_fields = {"runtime_status", "last_error"}
-        if clear_instances:
-            self.workspace = ""
-            self.service = ""
-            transition_fields.update({"workspace", "service"})
-        elif clear_service:
-            self.service = ""
-            transition_fields.add("service")
+        for kind, name in (destroyed or {}).items():
+            if name and self.records_instance(kind, name):
+                field = self._INSTANCE_FIELDS[kind]
+                setattr(self, field, "")
+                transition_fields.add(field)
+        if conflict_kind is not None:
+            self.conflict_kind = conflict_kind
+            self.conflict_name = conflict_name
+            transition_fields.update({"conflict_kind", "conflict_name"})
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.ERROR)
         self.last_error = message[:2000]
         self._transition_fields = transition_fields
@@ -1177,7 +1529,7 @@ class Agent(AuditMixin, AngeeDataModel):
         """
 
         structured = {
-            "agent_name": self.name,
+            **self.workspace_identity_inputs(),
             "instructions": self.instructions,
             "mcp_json": json.dumps(self.mcp_config(), separators=(",", ":")),
         }
@@ -1410,16 +1762,52 @@ class Agent(AuditMixin, AngeeDataModel):
         return model.credential
 
 
+class AgentSessionManager(AngeeManager):
+    """Create conversations under the caller's native REBAC create gate."""
+
+    def start(self, agent: Any, *, owner: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
+        """Start an idle conversation with a callable, running in-process agent."""
+
+        actor = actor or instance_actor(agent)
+        with transaction.atomic():
+            locked = type(agent).system_queryset(lock=("self",)).get(pk=agent.pk)
+            blocker = locked.chat_blocker()
+            if blocker:
+                raise ValidationError({"agent": blocker})
+            return self.with_actor(actor).create(agent=locked, owner=owner, context=dict(context))
+
+    def close_for_agent_as_system(self, agent: Any) -> None:
+        """Close an agent's sessions as part of its authorized in-process teardown."""
+
+        with system_context(reason="agents.session.deprovision"), transaction.atomic():
+            for session in (
+                self.model.system_queryset(lock=("self",))
+                .filter(agent=agent)
+                .exclude(
+                    status=SessionStatus.CLOSED,
+                )
+                .order_by("pk")
+            ):
+                session._close_locked()
+
+
 class AgentSession(AuditMixin, AngeeDataModel):
-    """Runtime-neutral persisted conversation backed by one workflow run."""
+    """Runtime-neutral conversation whose turns run once, without crash recovery.
+
+    A pending turn retained across a rebuild runs first when the user next posts.
+    A session left awaiting approval is released through Stop or Close. If an
+    after-commit settlement signal is lost, the turn stays parked until Stop.
+    Delete authority derives from the agent, independently of session ownership.
+    """
 
     runtime = True
 
     sqid_prefix = "ase_"
-    agent = models.ForeignKey("agents.Agent", on_delete=models.PROTECT, related_name="sessions")
+    agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
+    """The view from which this conversation was started, independent of its turns."""
     status = StateField(choices_enum=SessionStatus, default=SessionStatus.IDLE)
     replay_state = models.JSONField(default=list, blank=True)
     usage = models.JSONField(default=dict, blank=True)
@@ -1437,6 +1825,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
                 SessionStatus.ERROR,
             ],
             SessionStatus.AWAITING_APPROVAL: [
+                SessionStatus.IDLE,
                 SessionStatus.RUNNING,
                 SessionStatus.CLOSED,
                 SessionStatus.ERROR,
@@ -1450,7 +1839,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = AgentSessionManager()
 
     class Meta:
         """Django model options for persisted agent sessions."""
@@ -1463,6 +1852,170 @@ class AgentSession(AuditMixin, AngeeDataModel):
         """Return the session title or its agent name."""
 
         return self.title or str(self.agent)
+
+    def post(self, text: str, *, context: Mapping[str, Any] = MappingProxyType({}), actor: Any = None) -> Any:
+        """Queue a prompt with this message's view context under the posting actor.
+
+        Context must be an object; omission retains no view context and never
+        inherits the session's starting view. Broker failure leaves the turn pending.
+        """
+
+        actor = actor or instance_actor(self)
+        if not isinstance(context, Mapping):
+            raise ValidationError({"context": "Message context must be an object."})
+        prompt = text.strip()
+        if not prompt:
+            raise ValidationError({"text": "A message is required."})
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            actor = locked.require_access("post", actor)
+            if locked.status == SessionStatus.CLOSED:
+                raise ValidationError({"session": "This agent session is closed."})
+            blocker = locked.agent.chat_blocker()
+            if blocker:
+                raise ValidationError({"agent": blocker})
+            if locked.status == SessionStatus.AWAITING_APPROVAL:
+                raise ValidationError({"session": "Stop the pending tool approval before sending another message."})
+            turns = locked.turns.with_actor(actor)
+            next_index = int(turns.aggregate(last=models.Max("index"))["last"] or 0) + 1
+            turn = turns.create(session=locked, index=next_index, prompt=prompt, context=dict(context))
+            if not locked.title:
+                locked.title = prompt[:200]
+                locked.save(update_fields=["title", "updated_at"])
+            enqueue_task("agents.run_session", kwargs={"session_id": self.pk})
+            self.refresh_from_db()
+        return turn
+
+    def close(self, *, actor: Any = None) -> None:
+        """Cancel every open turn and close the conversation atomically."""
+
+        actor = actor or instance_actor(self)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            actor = locked.require_access("write", actor)
+            with actor_context(actor) if actor is not None else nullcontext():
+                locked._close_locked()
+            self.refresh_from_db()
+
+    def _close_locked(self) -> None:
+        """Cancel open turns after the caller locks and authorizes this session."""
+
+        with system_context(reason="agents.session.close"):
+            for turn in self.turns.lock_if_supported().filter(status__in=OPEN_TURN_STATUSES).order_by("index"):
+                turn.mark_canceled()
+            if self.status != SessionStatus.CLOSED:
+                self.mark_closed()
+
+    def cancel_turn(self, turn: Any, *, actor: Any = None) -> None:
+        """Stop one turn, release its execution slot and dispatch queued work.
+
+        Stop is observed at the next batched stream flush. Already issued tools
+        cannot be recalled, and silent tools cannot be reached until they return.
+        """
+
+        actor = actor or instance_actor(self)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            actor = locked.require_access("write", actor)
+            with (
+                actor_context(actor) if actor is not None else nullcontext(),
+                system_context(
+                    reason="agents.session.cancel_turn",
+                ),
+            ):
+                current = locked.turns.lock_if_supported().get(pk=turn.pk)
+                if current.status in OPEN_TURN_STATUSES:
+                    active = current.status in ACTIVE_TURN_STATUSES
+                    current.mark_canceled()
+                    if active and locked.status != SessionStatus.CLOSED:
+                        locked.mark_idle()
+                    locked._enqueue_pending_turn()
+                turn.refresh_from_db()
+            self.refresh_from_db()
+
+    def cancel_active_turn(self, *, actor: Any = None) -> None:
+        """Select and stop the active turn while holding the session lock."""
+
+        actor = actor or instance_actor(self)
+        with transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            actor = locked.require_access("write", actor)
+            turn = locked.turns.with_actor(actor).active().order_by("index").first()
+            if turn is not None:
+                locked.cancel_turn(turn, actor=actor)
+            self.refresh_from_db()
+
+    def claim_turn(self) -> Any | None:
+        """Claim the oldest pending turn under the session lock, never an active turn.
+
+        A worker crash or hard time limit leaves a running turn for the user to
+        stop. Duplicate deliveries neither reclaim it nor execute another turn.
+        """
+
+        with system_context(reason="agents.session.claim"), transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+            if locked is None or locked.status == SessionStatus.CLOSED:
+                return None
+            if locked.turns.active().exists():
+                return None
+            turn = locked.turns.lock_if_supported().filter(status=TurnStatus.PENDING).order_by("index").first()
+            if turn is None:
+                if locked.status in (SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL):
+                    locked.mark_idle()
+            else:
+                turn.mark_running()
+                locked.mark_running()
+                blocker = locked.agent.chat_blocker()
+                if blocker:
+                    locked.settle_turn(
+                        turn,
+                        TurnOutcome(
+                            kind="failed",
+                            error=blocker,
+                        ),
+                    )
+                    turn = None
+            self.refresh_from_db()
+            return turn
+
+    def settle_turn(self, turn: Any, outcome: TurnOutcome) -> None:
+        """Store one still-running turn's outcome and dispatch its next pending turn."""
+
+        with system_context(reason="agents.session.settle"), transaction.atomic():
+            locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+            if locked is None:
+                return
+            current = locked.turns.lock_if_supported().filter(pk=turn.pk).order_by("pk").first()
+            if current is None or current.status != TurnStatus.RUNNING:
+                return
+            usage = dict(locked.usage or {})
+            for key, value in outcome.usage.items():
+                usage[key] = usage.get(key, 0) + value
+            locked.usage = usage
+            fields = ["usage", "updated_at"]
+            if outcome.kind == "completed":
+                locked.replay_state = outcome.replay_state
+                fields.append("replay_state")
+                current.mark_completed(text=outcome.text, usage=outcome.usage)
+                locked.mark_idle()
+            else:
+                error = (
+                    "Tool approvals are not available yet."
+                    if outcome.kind == "needs_approval"
+                    else outcome.error or "Agent runtime failed."
+                )
+                current.mark_failed(error, usage=outcome.usage)
+                locked.mark_error(current.error)
+            locked.save(update_fields=fields)
+            locked._enqueue_pending_turn()
+            self.refresh_from_db()
+            turn.refresh_from_db()
+
+    def _enqueue_pending_turn(self) -> None:
+        """Send the next delivery on commit when this locked session has queued work."""
+
+        if self.status != SessionStatus.CLOSED and self.turns.filter(status=TurnStatus.PENDING).exists():
+            enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, robust=True)
 
     @transition(
         status,
@@ -1478,7 +2031,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
 
     @transition(
         status,
-        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.ERROR],
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
         target=SessionStatus.IDLE,
         on_success=save_state,
     )
@@ -1503,8 +2056,8 @@ class AgentSession(AuditMixin, AngeeDataModel):
         target=SessionStatus.CLOSED,
         on_success=save_state,
     )
-    def close(self) -> None:
-        """Close the conversation so its workflow step can finish."""
+    def mark_closed(self) -> None:
+        """Mark the conversation closed after its open turns have been canceled."""
 
     @transition(
         status,
@@ -1515,8 +2068,17 @@ class AgentSession(AuditMixin, AngeeDataModel):
     def mark_error(self, message: str) -> None:
         """Project a session-level runtime error."""
 
-        self.last_error = message[:2000]
+        self.last_error = message
         self._transition_fields = {"last_error"}
+
+
+class AgentTurnQuerySet(AngeeQuerySet[Any]):
+    """Turn scopes shared by session execution and transport callers."""
+
+    def active(self) -> Self:
+        """Select claimed work, including a turn parked on approval."""
+
+        return self.filter(status__in=ACTIVE_TURN_STATUSES)
 
 
 class AgentTurn(AuditMixin, AngeeDataModel):
@@ -1528,6 +2090,8 @@ class AgentTurn(AuditMixin, AngeeDataModel):
     session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")
     index = models.PositiveIntegerField()
     prompt = models.TextField()
+    context = models.JSONField(default=dict, blank=True, editable=False)
+    """Server-retained view context supplied when this message was posted."""
     status = StateField(choices_enum=TurnStatus, default=TurnStatus.PENDING)
     updates = models.JSONField(default=list, blank=True)
     text = models.TextField(blank=True)
@@ -1539,14 +2103,12 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         {
             TurnStatus.PENDING: [TurnStatus.RUNNING, TurnStatus.CANCELED],
             TurnStatus.RUNNING: [
-                TurnStatus.RUNNING,
                 TurnStatus.AWAITING_APPROVAL,
                 TurnStatus.COMPLETED,
                 TurnStatus.FAILED,
                 TurnStatus.CANCELED,
             ],
             TurnStatus.AWAITING_APPROVAL: [
-                TurnStatus.RUNNING,
                 TurnStatus.COMPLETED,
                 TurnStatus.FAILED,
                 TurnStatus.CANCELED,
@@ -1554,7 +2116,7 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = AngeeManager.from_queryset(AgentTurnQuerySet)()
 
     class Meta:
         """Django model options for agent turns."""
@@ -1562,16 +2124,59 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("session", "index")
         rebac_resource_type = "agents/turn"
-        constraints = (models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),)
+        constraints = (
+            models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),
+            models.UniqueConstraint(
+                fields=("session",),
+                condition=models.Q(status__in=ACTIVE_TURN_STATUSES),
+                name="uniq_agents_turn_active_session",
+            ),
+        )
+
+    def append_updates(self, batch: Sequence[dict[str, Any]]) -> bool:
+        """Save the worker's emitted batch, then report whether it may keep running.
+
+        The claiming worker is the sole transcript writer. A canceled turn retains
+        its final batch emitted before Stop was observed at this flush. A deleted
+        turn is stopped and no longer has a transcript to retain.
+        """
+
+        with transaction.atomic():
+            locked = (
+                type(self)
+                .objects.only("pk", "status", "updated_at")
+                .lock_if_supported()
+                .filter(pk=self.pk)
+                .order_by("pk")
+                .first()
+            )
+            if locked is None:
+                return False
+            if batch and locked.status in (TurnStatus.RUNNING, TurnStatus.CANCELED):
+                locked.updates = [*(self.updates or []), *batch]
+                locked.save(update_fields=["updates", "updated_at"])
+                self.updates = locked.updates
+            return locked.status == TurnStatus.RUNNING
+
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """Name the session without loading its guarded relation, including on delete."""
+
+        model = self._meta.get_field("session").remote_field.model
+        return (ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(self.session_id)),)
+
+    def delete_blocker(self) -> str | None:
+        """Refuse deletion of claimed work, including work parked on approval."""
+
+        return ACTIVE_TURN_DELETE_MESSAGE if self.status in ACTIVE_TURN_STATUSES else None
 
     @transition(
         status,
-        source=[TurnStatus.PENDING, TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        source=TurnStatus.PENDING,
         target=TurnStatus.RUNNING,
         on_success=save_state,
     )
     def mark_running(self) -> None:
-        """Claim or resume this turn for runtime execution."""
+        """Claim this pending turn for its single runtime execution."""
 
         self.error = ""
         self._transition_fields = {"error"}
@@ -1605,11 +2210,12 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         target=TurnStatus.FAILED,
         on_success=save_state,
     )
-    def mark_failed(self, message: str) -> None:
-        """Persist a terminal failure for this turn."""
+    def mark_failed(self, message: str, *, usage: Mapping[str, int]) -> None:
+        """Persist a runtime-authored public failure message for this turn."""
 
-        self.error = message[:2000]
-        self._transition_fields = {"error"}
+        self.error = message
+        self.usage = dict(usage)
+        self._transition_fields = {"error", "usage"}
 
     @transition(
         status,
@@ -1617,39 +2223,5 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         target=TurnStatus.CANCELED,
         on_success=save_state,
     )
-    def cancel(self) -> None:
+    def mark_canceled(self) -> None:
         """Cancel this turn without deleting its audit trail."""
-
-
-def _deactivate_agent_service_user(
-    sender: type[models.Model],
-    instance: models.Model,
-    **kwargs: Any,
-) -> None:
-    """Deactivate an agent service user after every delete path Django supports."""
-
-    del sender, kwargs
-    deactivate_service_user(instance)
-
-
-def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:
-    """Connect concrete Agent lifecycle handlers."""
-
-    del kwargs
-    try:
-        is_agent = issubclass(sender, Agent)
-    except TypeError:
-        return
-    if not is_agent or sender._meta.abstract:
-        return
-    post_delete.connect(
-        _deactivate_agent_service_user,
-        sender=sender,
-        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.service_user.deactivate",
-    )
-
-
-class_prepared.connect(
-    _connect_agent_lifecycle,
-    dispatch_uid="angee.agents.agent_lifecycle.class_prepared",
-)

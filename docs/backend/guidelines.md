@@ -639,13 +639,16 @@ data through REBAC, never a queryset bypass.
   [`angee.E024`](../../angee/base/checks.py) rejects caveated subjects in every
   effective schema. Actor-scoped querysets carry no caveat context. Express
   row-dependent conditions as live field-backed relations.
-- Bracket every server-side read/write in `system_context`/`asystem_context` and
-  resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
-  an actor is denied.
-- A per-row `create` permission cannot gate an insert (the unsaved row has no id →
-  deny). Gate explicitly with a preflight (`has_access("write")` /
-  `rebac.check_new`), then insert via `row.sudo()` + `save()`; `.sudo()` never
-  auto-clears, so follow with `.with_actor(actor)`.
+- User-requested reads and writes retain their actor scope. Reserve
+  `system_context`/`asystem_context` for named system-owned work; do not elevate
+  a user factory merely because it inserts a row.
+- Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
+  const-backed relationships, so per-row `create` gates remain authoritative.
+  Compose that path for ordinary factories, as
+  [`AgentSessionManager.start`](../../addons/angee/agents/models.py) does.
+  Manual factories needing an explicit relationship preflight use
+  [`AngeeManager.check_create`](../../angee/base/models.py); restore the
+  authorized actor after any required per-instance elevated insert.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
@@ -722,11 +725,11 @@ data through REBAC, never a queryset bypass.
 - The local backend compiles permissions into queries over application tables;
   it maintains no permission index. Run `migrate` and `rebac sync` to prepare
   the database and store the schema. There is nothing to rebuild or verify.
-- Hierarchies deeper than 8 levels need PostgreSQL. A permission over a recursive
-  hierarchy compiles to nested SQL, and at the framework's default
-  `REBAC_DEPTH_LIMIT` of 16 it exceeds SQLite's expression-depth limit of 1000
-  (storage folders, and the extraction and decisions reads that pass through
-  them). The SQLite test host pins the limit to 8 in `tests/settings.py`.
+- `REBAC_DEPTH_LIMIT` bounds compiled SQL nesting and inherited permission hops.
+  On SQLite (default 8), access inherited through more than eight parent hops is
+  denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
+  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../angee/base/autoconfig.py)
+  owns the defaults; explicit environment values take precedence over project settings.
 - If a removed or renamed definition in an otherwise composed package fails
   `rebac.E009`, run the check-free `reconcile_permissions` first; it prunes stale
   package-managed schema rows before `makemigrations` / `rebac sync` can run.
@@ -976,6 +979,12 @@ and current contracts before applying a historical example to a new deployment.
   `transaction.on_commit(...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
+  Guards follow Django's final concrete fields, including inherited and deferred
+  columns. See [seeded transition state](#seeded-transition-state) for initialization.
+  Reload committed state through `AngeeModel.refresh_from_db`, or copy loaded
+  values from the owner's persisted copy of the same row through
+  `StateTransitions.copy_persisted_state`; reload authorization stays private.
+  Recovery writes outside the graph use `force_state` with a concrete reason.
   Compose a custom final save through `persist(instance, *, update_fields)`;
   the success hook must explicitly forward it to `save_state`, which retains the
   concurrency guard and transaction.
@@ -993,8 +1002,22 @@ and current contracts before applying a historical example to a new deployment.
   `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
   free.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
-  Lifecycle side effects that must survive those paths belong on Django signals; Agent's
-  service-user deactivation is a `post_delete` receiver for this reason.
+  Lifecycle guards and side effects that must survive those paths belong on Django
+  signals calling the owning model rules. Agents' teardown and active-turn guards
+  use `pre_delete`; service-user deactivation uses `post_delete`. See the
+  [agents receivers](../../addons/angee/agents/signals.py).
+- **Deletion refusals have one model owner.** Override
+  [`AngeeModel.delete_blocker()`](../../angee/base/models.py) with a public-safe
+  message. [`DeletePreview`](../../addons/angee/graphql/deletion.py) reports each
+  distinct refusal before deleting, without row counts or hidden identities.
+  A model overriding the hook must bind a `pre_delete` receiver enforcing that
+  same rule on every deletion path; an instance override cannot protect cascades.
+  Receivers remain authoritative when state changes after preview and ensure
+  Django collects those models rather than fast-deleting them.
+  When deleting a model needs locks in a domain order (a parent before the row),
+  override its [`lock_for_delete()`](../../angee/base/models.py); its `pre_delete`
+  receiver and every confirmed-delete caller of that model then lock through the
+  hook, callers only after their permission preflight.
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with
@@ -1068,6 +1091,17 @@ and current contracts before applying a historical example to a new deployment.
   name; that field also owns the content-type and object-id backing column names.
   Source omission and explicit null must remain
   distinguishable through dataset normalization.
+- <a id="seeded-transition-state"></a>**Transition-owned state in a seed is an initial value, applied on create and never on update.**
+  Seed initial state through model construction.
+  This covers only fields guarded by a
+  [`StateTransitions`](../../angee/base/transitions.py) declaration; the
+  [resource loader](../../addons/angee/resources/loader.py) validates seeded state
+  before discarding it on updates. Companion fields written by transitions
+  (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
+  such as `submitted_at`) remain ordinary seed fields and are not protected.
+  Seeds must omit those fields to preserve their live values.
+  Unchanged rows with hashes from the previous state-inclusive rule migrate
+  only their ledger hash; changed seed values or keys still trigger import.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
@@ -1515,6 +1549,12 @@ validated at the driver boundary.
   owner already: `angee.integrate.http.HttpClient` (`self.http`), which builds the
   one context; route new outbound calls through it rather than hand-rolling
   `urlopen` + context.
+- **Instance names on a row follow daemon-confirmed facts.** Record a daemon
+  instance's name when the daemon reports it created and blank it only when the
+  daemon confirms it gone. A 409 is the typed
+  [`OperatorDaemonConflict`](../../addons/angee/operator/daemon.py) whose `kind` and
+  `name` come from the daemon's error body; never parse the message or re-derive
+  the name.
 - **MCP bearers are per agent and derived from the server credential.**
   `MCPServer.bearer_for()` mints `<agent sqid>.<hmac>` for an internal server; rotating
   the credential (or changing placement) invalidates every provisioned agent's bearer
@@ -1632,6 +1672,15 @@ Their docstrings own the exact behavior.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
 
+### Addon WebSocket endpoints
+
+Mount addon sockets through `asgi.websocket_urlpatterns` and compose
+`RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
+The [shared router](../../angee/asgi.py) owns Origin trust and Django session
+authentication; never repeat those handshake checks per consumer. Long-lived
+protocols that accept writes must revalidate the session at each request and
+open fresh evaluator scopes for authorization and change-feed reads.
+
 ### GraphQL actor and write contracts
 
 - **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
@@ -1640,7 +1689,7 @@ Their docstrings own the exact behavior.
   [ViewAs](../../addons/angee/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
-  [WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
+  [GraphQL WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
   handshake actor and does not support this header. [MCP execution](../../addons/angee/mcp/graphql.py)
   has no request and continues under its own actor.
 - **Concurrency and replay tokens are GraphQL root arguments.** On models

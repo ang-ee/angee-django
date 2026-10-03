@@ -223,7 +223,8 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case, d
         .order_by("stage__position")
     )
     list(query.values_list("pk", flat=True))
-    # Three revision reads, actor-set expansion, nine arrow sources, ordered SELECT.
-    with django_assert_num_queries(14) as queries:
+    # The fetch-only column guard shares one schema operation. Together with
+    # scoping: two revision reads, actor sets, nine arrow sources, ordered SELECT.
+    with django_assert_num_queries(13) as queries:
         assert list(query.values_list("pk", flat=True)) == [first.pk, task.pk]
     assert sum(query["sql"].startswith(f'SELECT "{Task._meta.db_table}".') for query in queries.captured_queries) == 1

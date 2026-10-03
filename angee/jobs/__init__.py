@@ -5,6 +5,7 @@ Celery tasks in conventional ``tasks.py`` modules and enqueue through the small
 Angee seam when they need framework-owned defaults.
 
 Kept import-light because Django imports the package during app population.
-Callers import the concrete seam from ``angee.jobs.enqueue`` or
-``angee.jobs.locks``; Celery imports ``angee.jobs.celery`` as its application.
+Callers import the concrete seam from ``angee.jobs.enqueue``,
+``angee.jobs.locks`` or ``angee.jobs.timeouts``; Celery imports
+``angee.jobs.celery`` as its application.
 """

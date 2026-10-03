@@ -15,7 +15,15 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+import strawberry
+from channels.testing import WebsocketCommunicator
+from django.contrib.auth.models import AnonymousUser
+from django.urls import path
+
+from angee import asgi
 from angee.asgi import _http_app, _Lifespan, _run_boot_hooks
+from angee.graphql.consumers import AngeeGraphQLWSConsumer
 
 
 def _recording_app(name: str, sink: list[tuple[str, str]]) -> Any:
@@ -136,9 +144,7 @@ def test_lifespan_enters_and_exits_each_mount() -> None:
     events: list[str] = []
     lifespan = _Lifespan([_mount(events)])
 
-    sent = asyncio.run(
-        _drive_lifespan(lifespan, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
-    )
+    sent = asyncio.run(_drive_lifespan(lifespan, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]))
 
     assert sent == [
         {"type": "lifespan.startup.complete"},
@@ -155,3 +161,60 @@ def test_lifespan_reports_a_startup_failure_to_the_server() -> None:
     sent = asyncio.run(_drive_lifespan(lifespan, [{"type": "lifespan.startup"}]))
 
     assert sent == [{"type": "lifespan.startup.failed", "message": "boom"}]
+
+
+@pytest.mark.parametrize(
+    ("host", "origin", "debug", "accepted"),
+    [
+        ("localhost:5173", "http://localhost:5173", False, True),
+        ("localhost:5173", "https://trusted.example", False, True),
+        ("localhost:5173", "http://localhost:5174", False, False),
+        ("app.example", "http://sibling.app.example", False, False),
+        ("app.example", None, False, False),
+        ("app.example", "http://localhost:5174", True, True),
+        ("app.example", "http://127.0.0.1:8000", True, True),
+        ("app.example", "http://[::1]:8000", True, True),
+        ("app.example", None, True, False),
+        ("app.example", "https://untrusted.example", True, False),
+    ],
+)
+def test_shared_router_validates_graphql_websocket_origins(
+    settings: Any,
+    host: str,
+    origin: str | None,
+    debug: bool,
+    accepted: bool,
+) -> None:
+    """Wildcard allowed hosts never bypass the shared cookie-write Origin rule."""
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ready(self) -> bool:
+            return True
+
+    settings.ALLOWED_HOSTS = ["*"]
+    settings.CSRF_TRUSTED_ORIGINS = ["https://trusted.example"]
+    settings.DEBUG = debug
+    route = path("graphql/test/", AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)))
+    application = asgi.websocket_application([route])
+
+    async def scenario() -> None:
+        headers = [(b"host", host.encode())]
+        if origin:
+            headers.append((b"origin", origin.encode()))
+        socket = WebsocketCommunicator(
+            application,
+            "/graphql/test/",
+            subprotocols=["graphql-transport-ws"],
+            headers=headers,
+        )
+        socket.scope["user"] = AnonymousUser()
+        connected, _ = await socket.connect()
+        assert connected is accepted
+        if connected:
+            await socket.send_json_to({"type": "connection_init"})
+            assert await socket.receive_json_from() == {"type": "connection_ack"}
+        await socket.disconnect()
+
+    asyncio.run(scenario())

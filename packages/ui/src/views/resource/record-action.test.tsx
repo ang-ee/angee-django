@@ -151,6 +151,14 @@ describe("record action helpers", () => {
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith("open_round", expect.objectContaining({ idArgument: "round" }));
   });
 
+  test("forwards that the verb's failures are recorded state", () => {
+    renderHook(() => useRecordActionMutation("provision_agent", { invalidateOnFailure: true }));
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
+      "provision_agent",
+      expect.objectContaining({ invalidateOnFailure: true }),
+    );
+  });
+
   test("uses the declared schema outside the resource view context", () => {
     renderHook(() => useRecordActionMutation("reprocess_workflow_run", { dataProviderName: "console" }));
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith("reprocess_workflow_run", expect.objectContaining({ dataProviderName: "console" }));

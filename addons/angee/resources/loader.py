@@ -16,13 +16,16 @@ from django.db import models
 from django.db.models.fields import NOT_PROVIDED
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
+from import_export.results import RowResult
 from import_export.utils import get_related_model
 
 from angee.base.identity import instances_from_public_ids, public_id_of
 from angee.base.impl import ImplDefaultsMixin
+from angee.base.mixins import update_fields_with_auto_now
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.base.serialization import json_safe
+from angee.base.transitions import StateTransitions
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.mixins import ResourceLoadMixin
@@ -130,6 +133,39 @@ class AngeeResource(resources.ModelResource):
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
 
+    @functools.cached_property
+    def _transition_state_fields(self) -> tuple[fields.Field, ...]:
+        """Project model-owned state names onto native import fields."""
+
+        names = StateTransitions.get_field_names(self._meta.model)
+        return tuple(field for field in self.get_import_fields() if field.attribute in names)
+
+    def init_instance(self, row: Mapping[str, Any] | None = None) -> models.Model:
+        """Supply seeded state during initial model construction."""
+
+        values = {
+            field.attribute: field.clean(row)
+            for field in self._transition_state_fields
+            if row is not None and field.column_name in row and not field.readonly
+        }
+        return self._meta.model(**values)
+
+    def after_init_instance(
+        self, instance: models.Model, new: bool, row: dict[str, Any], **kwargs: Any,
+    ) -> None:
+        """Leave live state intact on existing targets, including adopted rows."""
+
+        if not new:
+            for field in self._transition_state_fields:
+                if field.column_name in row and not field.readonly:
+                    model_field = instance._meta.get_field(field.attribute)
+                    try:
+                        model_field.clean(field.clean(row), instance)
+                    except ValidationError as error:
+                        raise ValidationError({field.attribute: error}) from error
+                row.pop(field.column_name, None)
+        super().after_init_instance(instance, new, row, **kwargs)
+
     def import_instance(self, instance: models.Model, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Keep hash-skipped instances intact, including operator-authored values."""
 
@@ -142,6 +178,21 @@ class AngeeResource(resources.ModelResource):
         """Let native import-export record hash skips and all other row outcomes."""
 
         return row["_xref"] in self._hash_skips or super().skip_row(instance, original, row, import_validation_errors)
+
+    def after_import_row(self, row: Mapping[str, Any], row_result: RowResult, **kwargs: Any) -> None:
+        """Carry an unchanged row's old state-inclusive hash forward without saving its target."""
+
+        xref = row["_xref"]
+        if (
+            xref in self._hash_skips and row_result.import_type == RowResult.IMPORT_TYPE_SKIP
+            and (self._is_using_transactions(kwargs) or not self._is_dry_run(kwargs))
+        ):
+            ledger = self._ledger_for_xref(xref)
+            row_hash = self._row_hashes[xref]
+            if ledger is not None and ledger.content_hash != row_hash:
+                self.ledger_model._default_manager.filter(pk=ledger.pk).update(content_hash=row_hash)
+                ledger.content_hash = row_hash
+        super().after_import_row(row, row_result, **kwargs)
 
     def after_save_instance(
         self,
@@ -166,17 +217,33 @@ class AngeeResource(resources.ModelResource):
         row: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        """Mark model fields supplied by import-export before impl defaults run."""
+        """Select imported columns for saving and mark them before impl defaults."""
 
         del kwargs
-        if not isinstance(instance, ImplDefaultsMixin):
-            return
         imported_fields = {
             field.attribute
             for field in self.fields.values()
             if not field.readonly and isinstance(field.attribute, str) and field.column_name in row
         }
-        instance.mark_impl_provided_fields(imported_fields)
+        self._update_fields = {
+            field.name
+            for field in instance._meta.concrete_fields
+            if not field.primary_key and (field.name in imported_fields or field.attname in imported_fields)
+        }
+        if isinstance(instance, RecordRefMixin):
+            reference = instance.record_ref_field()
+            if reference.name in imported_fields:
+                self._update_fields.update((reference.ct_field, reference.fk_field))
+        if isinstance(instance, ImplDefaultsMixin):
+            instance.mark_impl_provided_fields(imported_fields)
+
+    def do_instance_save(self, instance: models.Model, is_create: bool) -> None:
+        """Save updates without writing omitted columns or stale live state."""
+
+        if is_create:
+            super().do_instance_save(instance, is_create)
+        else:
+            instance.save(update_fields=update_fields_with_auto_now(instance, self._update_fields))
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""
@@ -198,8 +265,11 @@ class AngeeResource(resources.ModelResource):
             instance = None
         if instance is None:
             instance = self._adopt_existing_target(row, identity)
-        elif ledger is not None and ledger.content_hash == self._row_hashes.get(xref):
-            self._hash_skips.add(xref)
+        elif ledger is not None and (row_hash := self._row_hashes.get(xref)) is not None:
+            if ledger.content_hash == row_hash or ledger.content_hash == self._row_content_hash(
+                row, include_initial_state=True,
+            ):
+                self._hash_skips.add(xref)
         self._instances[xref] = instance
         return instance
 
@@ -318,10 +388,20 @@ class AngeeResource(resources.ModelResource):
             raise ResourceLoadError(f"{self.entry.display} row {row_number}: missing _xref")
         return value.strip()
 
-    def _row_content_hash(self, row: Mapping[str, Any]) -> str:
-        """Return a deterministic hash for model field values in ``row``."""
+    def _row_content_hash(self, row: Mapping[str, Any], *, include_initial_state: bool = False) -> str:
+        """Hash updateable seed values, excluding identity and initial state.
 
-        payload = {key: value for key, value in sorted(row.items()) if key != "_xref"}
+        ``include_initial_state`` exists only to carry stored ledger hashes
+        across the rule change that excluded transition-owned state. Once those
+        hashes have been migrated, delete this keyword, its conditional, and
+        the old-hash comparison in ``instance_for_row``, and the ledger rewrite
+        hook in ``after_import_row``.
+        """
+
+        excluded = {"_xref"}
+        if not include_initial_state:
+            excluded.update(field.column_name for field in self._transition_state_fields)
+        payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
         body = json.dumps(
             json_safe(payload),
             sort_keys=True,

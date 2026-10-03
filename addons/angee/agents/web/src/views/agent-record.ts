@@ -22,3 +22,11 @@ export function agentLifecycle(record: Row | null): string {
 export function agentRuntime(record: Row | null): string {
   return stringField(record, "runtime_status").toUpperCase();
 }
+
+export type AgentInstanceKind = "workspace" | "service";
+
+/** Narrow the backend instance kind once for provisioning views and typed i18n families. */
+export function agentInstanceKind(record: Row | null): AgentInstanceKind | undefined {
+  const kind = stringField(record, "conflict_kind").toLowerCase();
+  return kind === "workspace" || kind === "service" ? kind : undefined;
+}

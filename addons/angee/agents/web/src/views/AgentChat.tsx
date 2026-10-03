@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, EmptyState, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, SlotOutlet, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, optionToken, useStatusTone, textRoleVariants, useModelSlot } from "@angee/ui";
+import { Alert, Badge, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, SlotOutlet, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, optionToken, useStatusTone, textRoleVariants, useModelSlot } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -8,6 +8,8 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAttachment,
+  useMessage,
+  unstable_useThreadMessageIds,
   type ImageMessagePartComponent,
   type ReasoningMessagePartComponent,
   type TextMessagePartComponent,
@@ -21,11 +23,11 @@ import { AGENT_CHAT_SLOT, AgentChatProvider, useAgentChatContext, type AgentChat
 import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";
+import { AgentPermission } from "./AgentPermission";
 import type { AgentChatView, McpServerConfig } from "../documents";
-import { AgentSessionContributions } from "../session-contributions";
 
 /**
- * Chat with a running agent through its addon's contributed transport. The
+ * Chat with a running agent through ACP, or a runtime-owned transport in the slot. The
  * surface is the `@angee/ui` chat primitives: a dense top bar (an agent chooser + a single
  * ⋯ overflow holding Settings/Reconnect/Clear), streamed markdown replies, reasoning frames,
  * and tool-call cards. `modelHandle` (when known) labels the agent's model in the bar + the
@@ -39,7 +41,6 @@ import { AgentSessionContributions } from "../session-contributions";
  * loads or for a default agent not yet in the list.
  */
 export function AgentChat(props: AgentChatProps): React.ReactElement {
-  const t = useAgentsT();
   const target = React.useMemo(() => ({
     slot: AGENT_CHAT_SLOT,
     model: "agents.Agent",
@@ -49,40 +50,25 @@ export function AgentChat(props: AgentChatProps): React.ReactElement {
   if (props.runtimeClass === undefined) {
     return <div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />;
   }
-  if (entries.length === 0) {
-    return (
-      <div className="flex h-full min-h-[28rem] flex-col bg-sheet">
-        {props.agents && props.onSelectAgent ? (
-          <ChatBar start={
-            <AgentChooser
-              agents={props.agents}
-              value={props.selectedAgentId ?? props.agentId}
-              onSelect={props.onSelectAgent}
-              status="error"
-              statusLabel={t("chat.unavailable")}
-              fallbackName={props.fallbackName}
-              fallbackHandle={props.modelHandle}
-            />
-          } />
-        ) : null}
-        <EmptyState title={t("chat.unavailable")} icon="agent" fill />
-      </div>
-    );
-  }
   return (
     <AgentChatProvider value={props}>
       <LazyBoundary pending={<div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />}>
-        <SlotOutlet entries={entries} />
+        {entries.length > 0 ? <SlotOutlet entries={entries} /> : <AcpAgentChat />}
       </LazyBoundary>
     </AgentChatProvider>
   );
 }
 
-/** Container-backed chat contributed for the agents addon's ACP runtimes. */
-export function AcpAgentChat(): React.ReactElement {
+/** The default chat for every ACP endpoint; runtime-owned transports may fill the slot. */
+export function AcpAgentChat({ protocolVersion }: { protocolVersion?: 1 | 2 } = {}): React.ReactElement {
   const props = useAgentChatContext();
-  const runtimeState = useAcpRuntime(props.agentId, props.view);
-  return <AgentChatContent {...props} runtimeState={runtimeState} />;
+  const runtimeState = useAcpRuntime({ agentId: props.agentId, view: props.view, knownSessionId: props.sessionId,
+    protocolVersion: protocolVersion ?? props.protocolVersion, showSessions: props.renderSessionNavigation !== undefined,
+    onSessionChange: props.onSessionChange });
+  return <>
+    {props.renderSessionNavigation?.(runtimeState.sessions)}
+    <AgentChatContent {...props} runtimeState={runtimeState} />
+  </>;
 }
 
 /** Chat chrome and transcript for the ACP runtime. */
@@ -107,17 +93,23 @@ function AgentChatContent({
     mcpServers,
     availableCommands,
     imageSupported,
-    recordAttachmentSupported,
     recordAttached,
     attachRecord,
     clearRecord,
     renderContext,
   } = runtimeState;
-  const sessionRecord = runtimeState.sessionRecord;
   const effectiveModelHandle = runtimeState.modelHandle || modelHandle;
   const ready = status === "ready";
   const statusLabel = t(`chat.status.${status}`);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const composerRef = React.useRef<HTMLTextAreaElement>(null);
+  const permissionCount = React.useRef(0);
+  React.useEffect(() => {
+    if (permissionCount.current > runtimeState.permissions.length) {
+      queueMicrotask(() => composerRef.current?.focus());
+    }
+    permissionCount.current = runtimeState.permissions.length;
+  }, [runtimeState.permissions.length]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -208,7 +200,10 @@ function AgentChatContent({
               <ThreadPrimitive.Empty>
                 <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{t("chat.empty")}</p>
               </ThreadPrimitive.Empty>
-              <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+              <Transcript />
+              {runtimeState.permissions.map((permission) => (
+                <AgentPermission key={permission.id} permission={permission} answer={runtimeState.answerPermission} />
+              ))}
             </ThreadPrimitive.Viewport>
             <ThreadPrimitive.ScrollToBottom
               aria-label={t("chat.scrollToBottom")}
@@ -220,29 +215,28 @@ function AgentChatContent({
               <Glyph name="arrow-down" className="h-4 w-4" />
             </ThreadPrimitive.ScrollToBottom>
           </div>
-          <AgentSessionContributions session={sessionRecord} />
           <SlashCommandComposer commands={availableCommands}>
             <ComposerPrimitive.Root className="border-t border-border-subtle p-3">
               <MessageComposer
                 input={
                   <ComposerPrimitive.Input
+                    ref={composerRef}
                     render={<textarea />}
                     className={messageComposerInputClassName}
                     rows={3}
                     placeholder={ready ? t("chat.placeholder") : t(`chat.status.${status}`)}
+                    aria-label={t("chat.placeholder")}
                     disabled={!ready}
                   />
                 }
                 attachments={
                   <>
-                    {recordAttachmentSupported ? (
-                      <RecordAttachmentChip
-                        attached={recordAttached}
-                        attachRecord={attachRecord}
-                        clearRecord={clearRecord}
-                        renderContext={renderContext}
-                      />
-                    ) : null}
+                    <RecordAttachmentChip
+                      attached={recordAttached}
+                      attachRecord={attachRecord}
+                      clearRecord={clearRecord}
+                      renderContext={renderContext}
+                    />
                     <ComposerPrimitive.Attachments>
                       {() => <ComposerImageAttachment />}
                     </ComposerPrimitive.Attachments>
@@ -259,7 +253,7 @@ function AgentChatContent({
                         <Glyph name="attachment" className="h-4 w-4" />
                       </ComposerPrimitive.AddAttachment>
                     ) : null}
-                    <ThreadPrimitive.If running={false}>
+                    <ThreadPrimitive.If running={runtimeState.protocolVersion === 2 ? undefined : false}>
                       <ComposerPrimitive.Send
                         disabled={!ready}
                         className="text-13 text-accent disabled:text-fg-muted"
@@ -268,7 +262,7 @@ function AgentChatContent({
                       </ComposerPrimitive.Send>
                     </ThreadPrimitive.If>
                     <ThreadPrimitive.If running>
-                      <ComposerPrimitive.Cancel className="text-13 text-danger-text">
+                      <ComposerPrimitive.Cancel disabled={!ready} className="text-13 text-danger-text">
                         {t("chat.stop")}
                       </ComposerPrimitive.Cancel>
                     </ThreadPrimitive.If>
@@ -283,12 +277,22 @@ function AgentChatContent({
   );
 }
 
+/** Native id scopes survive session replacement and message-id reconciliation. */
+function Transcript(): React.ReactElement {
+  const ids = unstable_useThreadMessageIds();
+  return <>{ids.map((id) => <ThreadPrimitive.Unstable_MessageById key={id} messageId={id}
+    components={{ UserMessage, AssistantMessage }} />)}</>;
+}
+
 /** One user message: a right-aligned bubble of plain text and any inline images sent with it. */
 function UserMessage(): React.ReactElement {
+  const failed = useMessage((message) => message.metadata.custom.acpDeliveryFailed === true);
+  const t = useAgentsT();
   return (
     <MessagePrimitive.Root className="mb-3">
       <ChatBubble role="user">
         <MessagePrimitive.Parts components={{ Text: PlainText, Image: UserImagePart }} />
+        {failed ? <Alert tone="danger">{t("chat.responseFailed")}</Alert> : null}
       </ChatBubble>
     </MessagePrimitive.Root>
   );
@@ -357,11 +361,9 @@ function useObjectUrl(file: File | undefined): string | null {
 }
 
 /**
- * The current-view-as-record chip. This is deliberately NOT a native assistant-ui attachment:
- * composer attachments are cleared on every send and freeze their content at create-time, which
- * would break the record's default-present/persistent and fresh-at-send requirements, and would
- * route a second context-assembly path through `onNew`. Instead its presence is runtime state
- * (`recordAttached`) that gates the single leading context block in `buildPromptBlocks`.
+ * The runtime owns automatic attachment, consumption and manual toggles for both
+ * protocol carriers. Compose the shared attachment chip and reattach button here;
+ * native image attachments retain their own adapter and lifecycle.
  *
  * When attached it shows a chip whose label opens an inspector (the freshly rendered
  * `<system_context>`) and whose remove control clears the record; when cleared it shows a button
@@ -383,7 +385,7 @@ function RecordAttachmentChip({
   const context = useRenderedContext(renderContext, open);
 
   if (!attached) {
-    return <ChatHeaderAction onClick={attachRecord}>{t("chat.attachView")}</ChatHeaderAction>;
+    return <ChatHeaderAction type="button" onClick={attachRecord}>{t("chat.attachView")}</ChatHeaderAction>;
   }
 
   return (
@@ -423,12 +425,14 @@ function RecordAttachmentChip({
  *  with a hover/focus action row to copy the reply text. */
 function AssistantMessage(): React.ReactElement {
   const t = useAgentsT();
+  const failed = useMessage((message) => message.metadata.custom.acpTurnFailed === true);
   return (
     <MessagePrimitive.Root className="group mb-3">
       <ChatBubble role="assistant">
         <MessagePrimitive.Parts
           components={{ Text: AssistantText, Reasoning: ReasoningPart, tools: { Fallback: ToolPart } }}
         />
+        {failed ? <Badge tone="danger" density="compact" role="status">{t("chat.failed")}</Badge> : null}
         {/* Pre-token "thinking" dots: only on the last assistant turn that has started but has no
             content yet, and only while the thread is running. `hasContent` flips true the moment
             the first text/reasoning/tool part streams in, which removes the indicator. */}

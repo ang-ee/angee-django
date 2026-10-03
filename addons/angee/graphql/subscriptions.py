@@ -58,7 +58,7 @@ def changes(
             actor,
             gate_type,
         )
-        async for payload in _subscribe(model):
+        async for payload in subscribe(model):
             event = await sync_to_async(_filter_change_event, thread_sensitive=False)(gate, payload)
             if event is not None:
                 yield event
@@ -104,14 +104,21 @@ def _filter_change_event(gate: ChangeReadGate, payload: Any) -> ChangeEvent | No
         close_old_connections()
 
 
-async def _subscribe(
+async def subscribe(
     model: type[models.Model],
+    *,
+    ready: asyncio.Event | None = None,
 ) -> AsyncGenerator[ChangePayload, None]:
-    """Yield change payloads for ``model`` from the channel layer."""
+    """Yield model changes; signal ``ready`` after subscribing, before a caller's snapshot.
+
+    Payloads are unfiltered. Callers must read through their actor's row scope.
+    A change publisher must be connected for this model, normally through a
+    ``changes(...)`` declaration. Without a channel layer this raises immediately.
+    """
 
     layer = change_channel_layer()
     if layer is None:
-        return
+        raise RuntimeError("Model changes require a channel layer.")
     group = change_group(model)
     channel = await layer.new_channel()
     await layer.group_add(group, channel)
@@ -128,6 +135,8 @@ async def _subscribe(
 
     renewal = asyncio.create_task(renew_lease(), name=f"angee-change-lease:{group}")
     try:
+        if ready is not None:
+            ready.set()
         while True:
             message = await layer.receive(channel)
             payload = message.get("payload")

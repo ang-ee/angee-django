@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import Mock
 
@@ -11,6 +11,18 @@ from django.apps import apps
 from django.db import transaction
 
 from angee.jobs.enqueue import enqueue_task
+from angee.jobs.timeouts import task_time_budget
+
+
+@pytest.mark.parametrize("soft,hard,seconds", [(840, 900, 810), (180, 120, 90), (30, 60, 0)])
+def test_task_time_budget_reserves_settlement_below_both_limits(
+    settings: Any, soft: int, hard: int, seconds: int,
+) -> None:
+    """Bounded task bodies finish before whichever worker limit comes first."""
+
+    settings.CELERY_TASK_SOFT_TIME_LIMIT = soft
+    settings.CELERY_TASK_TIME_LIMIT = hard
+    assert task_time_budget() == timedelta(seconds=seconds)
 
 
 def test_jobs_app_exports_celery_app() -> None:

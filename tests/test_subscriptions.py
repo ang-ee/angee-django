@@ -118,9 +118,10 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
     monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
 
     async def scenario() -> ChangePayload:
-        stream = subscriptions._subscribe(Group)
+        ready = asyncio.Event()
+        stream = subscriptions.subscribe(Group, ready=ready)
         pending = asyncio.ensure_future(stream.__anext__())
-        await asyncio.sleep(0.05)  # let the subscriber join the group
+        await asyncio.wait_for(ready.wait(), timeout=1)
         await layer.group_send(
             publishing.change_group(Group),
             {"type": "angee.change", "payload": _payload(id="7")},
@@ -134,6 +135,16 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
     assert payload.id == "7"
 
 
+def test_subscribe_requires_a_channel_layer(monkeypatch) -> None:
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: None)
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError, match="require a channel layer"):
+            await subscriptions.subscribe(Group).__anext__()
+
+    asyncio.run(scenario())
+
+
 def test_subscription_renews_its_group_lease_and_releases_it_on_close(monkeypatch) -> None:
     """A live subscriber keeps refreshing membership; closing cancels renewal and leaves."""
 
@@ -143,7 +154,7 @@ def test_subscription_renews_its_group_lease_and_releases_it_on_close(monkeypatc
     group = publishing.change_group(Group)
 
     async def scenario() -> tuple[float, float, dict[str, float], int]:
-        stream = subscriptions._subscribe(Group)
+        stream = subscriptions.subscribe(Group)
         pending = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0.01)
         (joined,) = layer.groups[group].values()
@@ -200,7 +211,7 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
 
         return wrapper
 
-    monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
+    monkeypatch.setattr(subscriptions, "subscribe", subscribe)
     monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     monkeypatch.setattr(
         subscriptions,
@@ -255,7 +266,7 @@ def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
             seen.append((self.actor, current_actor()))
             return ChangeEvent.from_payload(payload)
 
-    monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
+    monkeypatch.setattr(subscriptions, "subscribe", subscribe)
     monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     surface = changes(Group, field="groupChanged")
     resolver = _subscription_resolver(surface)
@@ -297,7 +308,7 @@ def test_subscription_resolver_denies_without_current_actor(
             calls.append(payload)
             return ChangeEvent.from_payload(payload)
 
-    monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
+    monkeypatch.setattr(subscriptions, "subscribe", subscribe)
     monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     surface = changes(Group, field="groupChanged")
     resolver = _subscription_resolver(surface)
@@ -317,7 +328,10 @@ def test_subscription_resolver_denies_without_current_actor(
 
 def test_change_occurrence_identity_round_trips_and_legacy_payloads_remain_unidentified() -> None:
     payload = ChangePayload(
-        model="tests.Row", id="1", action="update", occurrence_id="change-1",
+        model="tests.Row",
+        id="1",
+        action="update",
+        occurrence_id="change-1",
         related_records=(ChangeRelatedRecord(model="tests.Parent", id="parent-1"),),
     )
     assert ChangePayload.from_mapping(payload.as_message()).occurrence_id == "change-1"
@@ -342,7 +356,9 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
 
     monkeypatch.setattr(access, "instance_from_public_id", unreadable)
     change = ChangePayload(
-        model="tests.Child", id="child-1", action="update",
+        model="tests.Child",
+        id="child-1",
+        action="update",
         related_records=(ChangeRelatedRecord(model="tests.Parent", id="parent-1"),),
     )
     assert gate._filter_related_records(change).related_records == ()

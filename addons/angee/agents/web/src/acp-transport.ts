@@ -1,123 +1,47 @@
-// ACP transport over a WebSocket: bridges a browser `WebSocket` to the ndjson byte
-// stream the ACP SDK's `ndJsonStream` consumes. The agent's WebSocket is fronted by
-// the operator's central Caddy, which forward-auths the upgrade against a route token;
-// browsers cannot set WebSocket headers, so the token rides in the URL query.
+// The SDK owns WebSocket framing for routed tokens and same-origin cookies.
+import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client";
+import type { Stream } from "@agentclientprotocol/sdk";
+import type { Stream as StreamV2, AnyWireMessage } from "@agentclientprotocol/sdk/experimental/v2";
 
-import { ndJsonStream, type Stream } from "@agentclientprotocol/sdk";
-
-/** A live ACP transport: the ndjson `Stream` plus the socket's open/close lifecycle. */
-export interface AcpTransport {
-  stream: Stream;
-  /** Resolves once the socket is open, rejects if it errors/closes first. */
+interface TransportLifecycle {
   ready: Promise<void>;
-  /** Resolves when the socket closes (clean or not), carrying the close code. */
   closed: Promise<number>;
   close(): void;
 }
+export type AcpTransport = TransportLifecycle & (
+  | { protocolVersion: 1; stream: Stream }
+  | { protocolVersion: 2; stream: StreamV2 }
+);
 
-/** Human-readable meaning for the close codes the edge path produces. */
-const CLOSE_MEANINGS: Record<number, string> = {
-  1000: "normal",
-  1001: "going away",
-  1002: "protocol error",
-  1005: "no status received",
-  1006: "abnormal — TLS/DNS/connection failed before any close frame (no response from the edge)",
-  1008: "policy violation — the edge rejected the route token (forward_auth denied)",
-  1011: "server error",
-  1015: "TLS handshake failed",
-};
-
-/** Describe a WebSocket close: the code, its decoded meaning, and any server reason. */
-function describeClose(code: number, reason: string): string {
-  const meaning = CLOSE_MEANINGS[code] ?? "unexpected close";
-  return `closed (${code} — ${meaning})${reason ? `: ${reason}` : ""}`;
-}
-
-/**
- * Open a WebSocket to `url?token=<token>` and adapt it to an ACP ndjson `Stream`.
- *
- * The route token is appended as a query parameter (the central Caddy reads it from
- * `?token=` since a browser cannot set the upgrade headers). Incoming text frames
- * become the readable side; writes from the ACP connection are sent as text frames.
- */
-export function openAcpTransport(url: string, token: string): AcpTransport {
-  const socket = new WebSocket(appendToken(url, token));
-  socket.binaryType = "arraybuffer";
-  const encoder = new TextEncoder();
-
-  let pushIncoming: ((chunk: Uint8Array) => void) | null = null;
-  let closeIncoming: (() => void) | null = null;
-  const input = new ReadableStream<Uint8Array>({
-    start(controller) {
-      pushIncoming = (chunk) => controller.enqueue(chunk);
-      closeIncoming = () => {
-        try {
-          controller.close();
-        } catch {
-          // already closed — the socket closed twice; ignore.
-        }
-      };
-    },
-  });
-
-  const output = new WritableStream<Uint8Array>({
-    write(chunk) {
-      // The ACP SDK appends the trailing newline per ndjson frame; forward the bytes,
-      // copied into a fresh ArrayBuffer-backed view so `send` accepts the BufferSource.
-      socket.send(new Uint8Array(chunk));
-    },
-  });
-
-  let resolveReady: () => void;
-  let rejectReady: (reason: unknown) => void;
+/** The bridge emits one JSON text frame per message and accepts text frames in both versions. */
+export function openAcpTransport(url: string, token: string | null | undefined, protocolVersion: 1 | 2): AcpTransport {
+  const endpoint = new URL(url, window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" || endpoint.protocol === "wss:" ? "wss:" : "ws:";
+  if (token) endpoint.searchParams.set("token", token);
+  let socket: WebSocket | undefined;
+  let resolveReady: () => void = () => undefined;
+  let rejectReady: () => void = () => undefined;
   const ready = new Promise<void>((resolve, reject) => {
     resolveReady = resolve;
-    rejectReady = reject;
+    rejectReady = () => reject(new Error());
   });
-  let resolveClosed: (code: number) => void;
-  const closed = new Promise<number>((resolve) => {
-    resolveClosed = resolve;
-  });
-
-  socket.addEventListener("open", () => resolveReady());
-  socket.addEventListener("message", (event) => {
-    const data = event.data;
-    if (typeof data === "string") {
-      // `ndJsonStream` delimits records by newline, but the stdio-to-ws bridge sends
-      // each ndjson record as a WebSocket frame with the trailing newline stripped —
-      // so re-add it, or the parser buffers forever and `initialize` never resolves.
-      pushIncoming?.(encoder.encode(data.endsWith("\n") ? data : `${data}\n`));
-    } else if (data instanceof ArrayBuffer) {
-      pushIncoming?.(new Uint8Array(data));
+  let resolveClosed: (code: number) => void = () => undefined;
+  const closed = new Promise<number>((resolve) => { resolveClosed = resolve; });
+  class ObservedWebSocket extends WebSocket {
+    constructor(address: string, protocols?: string | string[]) {
+      super(address, protocols);
+      socket = this;
+      this.addEventListener("open", resolveReady, { once: true });
+      this.addEventListener("error", rejectReady, { once: true });
+      this.addEventListener("close", (event) => {
+        rejectReady();
+        resolveClosed(event.code);
+      }, { once: true });
     }
-  });
-  socket.addEventListener("error", () => {
-    // A browser WebSocket `error` event carries no detail, and the `close` event
-    // that always follows it carries the actionable close code — so log the URL
-    // here (token redacted; `url` excludes it) and let `close` reject `ready` with
-    // the decoded reason rather than masking it with a generic "error".
-    console.warn(`agent WebSocket error: ${url}`);
-  });
-  socket.addEventListener("close", (event) => {
-    const reason = describeClose(event.code, event.reason);
-    if (event.code !== 1000 && event.code !== 1001) {
-      console.error(`agent WebSocket ${reason} — ${url}`);
-    }
-    rejectReady(new Error(`agent WebSocket ${reason}`));
-    closeIncoming?.();
-    resolveClosed(event.code);
-  });
-
-  return {
-    stream: ndJsonStream(output, input),
-    ready,
-    closed,
-    close: () => socket.close(),
-  };
-}
-
-/** Return `url` with `token` appended as a `token` query parameter. */
-function appendToken(url: string, token: string): string {
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}token=${encodeURIComponent(token)}`;
+  }
+  const options = { WebSocket: ObservedWebSocket };
+  const lifecycle = { ready, closed, close: () => socket?.close() };
+  return protocolVersion === 2
+    ? { ...lifecycle, protocolVersion, stream: createWebSocketStream<AnyWireMessage>(endpoint.href, options) }
+    : { ...lifecycle, protocolVersion, stream: createWebSocketStream(endpoint.href, options) };
 }

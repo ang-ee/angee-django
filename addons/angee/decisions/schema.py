@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -10,7 +12,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
-from angee.graphql.capabilities import permission_annotations, permissions_field
+from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.data.hasura import with_filter_aliases
 from angee.graphql.ids import PublicID
@@ -101,10 +103,9 @@ _DECISIONS = hasura_model_resource(
     sortable=["id", "index", "created_at", "expires_at"], aggregatable=["id"],
     groupable=["kind", "verdict", "closed_reason"], insert=False, update=False, delete=False,
     field_id_decode={"assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model)},
-    get_queryset=lambda info: Decision.objects.with_open_state().alias(**permission_annotations(Decision, ("act",))),
     filter_expressions={
         "is_open": Decision.objects.open_expression(),
-        "can_act": models.ExpressionWrapper(models.F("_angee_permission_act"), output_field=models.BooleanField()),
+        "can_act": partial(permission_expression, name="act"),
     },
     record_ref_filters=("subject_model", "subject_id"), record_ref_requires_read=True,
 )

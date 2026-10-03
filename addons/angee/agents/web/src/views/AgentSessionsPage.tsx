@@ -1,18 +1,19 @@
 import * as React from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId } from "@angee/ui";
+  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
+import type { AcpSessionNavigation } from "../acp-session";
 import { AgentChat } from "./AgentChat";
+import { AgentSessionsRail } from "./AgentSessionsRail";
 import { KeptAliveAgents, useOpenedAgents } from "./useOpenedAgents";
 import { useRunningAgents } from "./useRunningAgents";
 
 /**
- * The full-page agent sessions view: a left rail of the running agents (the
- * session/thread switcher) and the selected agent's live ACP conversation filling the
- * rest.
+ * The full-page agent sessions view: shared rails select the running agent and its
+ * ACP session; the selected session's replay and live conversation fill the rest.
  *
  * The rail is published into the shell's primary (left explorer) pane; this
  * component returns only the conversation content. The URL `:id`
@@ -30,6 +31,11 @@ export function AgentSessionsPage(): React.ReactElement {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const selectedId = useRouteRecordId() ?? null;
+  const search = useRouteSearch();
+  const selectedSessionId = routeSearchParam(search, "session") || undefined;
+  const navigateSession = React.useCallback((id: string, replace = false) => {
+    void navigate({ to: ".", search: updateRouteSearch({ session: id }), replace });
+  }, [navigate]);
   const agentsHref = routeHref("agents.agents");
   const sessionHref = React.useCallback(
     (id: string) => routeHref("agents.session", { id }),
@@ -49,7 +55,7 @@ export function AgentSessionsPage(): React.ReactElement {
   React.useEffect(() => {
     const first = agents[0];
     if (first && (!selectedId || !selectedRunning)) {
-      void navigate({ to: sessionHref(first.id), replace: true });
+      void navigate({ to: sessionHref(first.id), search: updateRouteSearch({ session: undefined }), replace: true });
     }
   }, [selectedId, selectedRunning, agents, navigate, sessionHref]);
 
@@ -91,6 +97,7 @@ export function AgentSessionsPage(): React.ReactElement {
     return (
       <SessionRail
         label={t("sessions.railLabel")}
+        className="h-auto max-h-[40%] shrink-0"
         action={
           <Link className={buttonVariants({ variant: "ghost", size: "sm" })} to={agentsHref}>
             <Glyph name="plus" />
@@ -109,7 +116,7 @@ export function AgentSessionsPage(): React.ReactElement {
               />
             }
             handle={agent.model?.name ?? undefined}
-            render={<Link to={sessionHref(agent.id)} />}
+            render={<Link to={sessionHref(agent.id)} search={updateRouteSearch({ session: undefined })} />}
           >
             {agent.name}
           </SessionRailItem>
@@ -170,6 +177,9 @@ export function AgentSessionsPage(): React.ReactElement {
                 agentId={id}
                 view={viewForAgent(id)}
                 runtimeClass={runtimeClass}
+                sessionId={id === activeId ? selectedSessionId : undefined}
+                onSessionChange={(sessionId) => { if (id === activeId) navigateSession(sessionId); }}
+                renderSessionNavigation={(sessions) => id === activeId ? <SessionNavigation rail={rail} sessions={sessions} selectedId={selectedSessionId} navigate={navigateSession} /> : null}
               />
             );
           }}
@@ -177,4 +187,21 @@ export function AgentSessionsPage(): React.ReactElement {
       </div>
     </>
   );
+}
+
+function SessionNavigation({ rail, sessions, selectedId, navigate }: { rail: React.ReactNode; sessions: AcpSessionNavigation; selectedId?: string; navigate: (id: string, replace?: boolean) => void }): React.ReactElement {
+  // Dispatch each route selection once; a newly created id precedes its URL update.
+  const routedSession = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    if (!selectedId && sessions.currentId) navigate(sessions.currentId, true);
+    else if (sessions.ready && selectedId && selectedId !== routedSession.current) {
+      routedSession.current = selectedId;
+      if (selectedId !== sessions.currentId) sessions.select(selectedId, sessions.items.find((item) => item.sessionId === selectedId)?.cwd ?? "/workspace");
+    }
+  }, [selectedId, sessions.currentId, sessions.ready, sessions.items, sessions.select, navigate]);
+  const node = React.useMemo(() => <div className="flex h-full min-h-0 flex-col">
+    {rail}
+    <AgentSessionsRail sessions={{ ...sessions, select: (id) => navigate(id) }} />
+  </div>, [rail, sessions, navigate]);
+  return <PrimaryPanePublisher node={node} />;
 }

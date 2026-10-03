@@ -9,8 +9,35 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — in-process agent sessions
+
+- Enforce transition-owned state assignment guards on composed concrete models,
+  including inherited and deferred fields. Reload through `AngeeModel`, and copy
+  loaded persisted row values through `StateTransitions.copy_persisted_state`.
+  Remove `lifecycle` from agent generic update and insert inputs; lifecycle
+  changes use the owning actions, and the statusbar is read-only.
+- Run one persisted chat turn per Celery task through the agent's runtime and
+  service-user actor. Model verbs own start, post, Stop, Close, streamed updates
+  and settlement; a partial unique constraint permits one active turn per
+  session. Add the `call` permission and console session mutations. Deprovision
+  closes sessions, and retained sessions block agent deletion.
+- Replace the session heartbeat with a bounded runtime deadline. Jobs owns the
+  worker time budget shared with workflows. Chat has no automatic retries or
+  crash recovery; Stop releases a stranded turn. Tool approval requests fail
+  readably until session approvals are implemented.
+- Protected relations now report readable GraphQL deletion errors. Sessions
+  can be deleted after their active turn is stopped; streamed batches emitted
+  before Stop is observed remain in the transcript.
+
 ## Unreleased — workflow and integration upgrades
 
+- Resource seeds apply transition-owned state only when creating a target;
+  updates and adoption preserve live state. Initial state is excluded from
+  content hashes, so changing it alone does not trigger re-import.
+  Unchanged seeds with state-inclusive ledger hashes skip import and migrate
+  only their ledger hash. Seeds whose values or keys changed still import once,
+  overwriting operator edits to other fields they name while preserving live
+  transition-owned state.
 - Workflow IO steps commit claims before their bodies, fence results, reap
   deadlines and retain effect markers. Operator actions recover failed or
   stalled work with explicit duplicate acknowledgement when required. Add
@@ -24,7 +51,7 @@ live in code docstrings.
   discovery no longer evaluates money settings prematurely, preserving the
   original dependency error during Django startup.
 - `AngeeModel.require_access(permission, actor)` resolves the explicit requester,
-  then ambient requester, then the instance's pinned actor, and returns the
+  then the instance's pinned actor, then the ambient requester, and returns the
   authorized actor. Missing actors fail closed outside system scope.
   `_require_record_access` remains a temporary alias for downstream callers;
   remove it after those callers migrate. Workflow starters can read identities

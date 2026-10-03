@@ -16,4 +16,10 @@ describe("Glyph", () => {
     expect(logo?.getAttribute("width")).toBe("20");
     expect(container.querySelector(".angee-scene")).toBeNull();
   });
+
+  test("resolves the generic refresh verb glyph from the base registry", () => {
+    const { container } = render(<Glyph name="refresh" />);
+
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
 });

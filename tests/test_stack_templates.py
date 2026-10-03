@@ -103,7 +103,8 @@ _CONDITIONAL_TAG = re.compile(r"{%\s*(if\s+.*?|elif\s+.*?|else|endif)\s*%}")
 
 
 def _render_stack_manifest(
-    manifest_path: Path, variables: dict[str, str],
+    manifest_path: Path,
+    variables: dict[str, str],
 ) -> dict[str, Any]:
     """Render a wrapper manifest + its shared body into a YAML contract dict.
 
@@ -212,11 +213,7 @@ def _apply_set_line(line: str, variables: dict[str, str]) -> None:
             frames.append({"active": active, "matched": active, "parent": parent})
         elif body.startswith("elif "):
             frame = frames[-1]
-            active = (
-                frame["parent"]
-                and not frame["matched"]
-                and _eval_condition(body[len("elif ") :], variables)
-            )
+            active = frame["parent"] and not frame["matched"] and _eval_condition(body[len("elif ") :], variables)
             frame["active"] = active
             frame["matched"] = frame["matched"] or active
         elif body == "else":
@@ -247,11 +244,7 @@ def _render_conditionals(text: str, variables: dict[str, str]) -> str:
             frames.append({"active": active, "matched": active, "parent": parent})
         elif body.startswith("elif "):
             frame = frames[-1]
-            active = (
-                frame["parent"]
-                and not frame["matched"]
-                and _eval_condition(body[len("elif ") :], variables)
-            )
+            active = frame["parent"] and not frame["matched"] and _eval_condition(body[len("elif ") :], variables)
             frame["active"] = active
             frame["matched"] = frame["matched"] or active
         elif body == "else":
@@ -360,8 +353,13 @@ def _eval_atom(atom: str, variables: dict[str, str]) -> str:
 
 
 def _render_local_stack(
-    *, framework: str = "source", celery_queues: str = "", serve_mode: str = "development",
-    serve_workers: int = 0, db_pool_max_size: int = 2, db_pool_timeout: int = 5,
+    *,
+    framework: str = "source",
+    celery_queues: str = "",
+    serve_mode: str = "development",
+    serve_workers: int = 0,
+    db_pool_max_size: int = 2,
+    db_pool_timeout: int = 5,
 ) -> dict[str, Any]:
     """Render the docker-mode local stack enough for YAML contract tests."""
 
@@ -456,9 +454,7 @@ def _render_dev_stack(
     return _render_stack_manifest(DEV_TEMPLATE, variables)
 
 
-def _render_dev_docker_stack(
-    *, celery_queues: str = "", ingress_domain: str = "localhost"
-) -> dict[str, Any]:
+def _render_dev_docker_stack(*, celery_queues: str = "", ingress_domain: str = "localhost") -> dict[str, Any]:
     """Render the Docker-mode framework-dev stack with every dev input present."""
 
     return _render_dev_stack(
@@ -628,9 +624,7 @@ def test_local_stack_copier_contract() -> None:
     # 8090 ≠ the dev stack's 8080: side-by-side stacks must not share the
     # process-compose control port (a shared port lets one stack's down stop the other).
     assert manifest["process_compose_port"]["default"] == 8090
-    assert "operator support for readiness and chained jobs" in TEMPLATES_README.read_text(
-        encoding="utf-8"
-    )
+    assert "operator support for readiness and chained jobs" in TEMPLATES_README.read_text(encoding="utf-8")
 
 
 def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
@@ -1122,7 +1116,6 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     assert "workspace_defaults" not in local
 
 
-
 def test_dev_stack_shares_one_machine_wide_cache_per_repository() -> None:
     """sources_home moves every git cache to `<home>/<repository>` so all stacks
     on a machine cut worktrees from one clone; empty keeps per-stack caches.
@@ -1141,9 +1134,7 @@ def test_dev_stack_shares_one_machine_wide_cache_per_repository() -> None:
         work_state_repo="git@github.com:ang-ee/work-angee.git",
     )
     assert shared["sources"]["angee"]["cache_path"] == "/home/dev/sources/angee-django"
-    assert shared["sources"]["angee-messaging-bridges"]["cache_path"] == (
-        "/home/dev/sources/angee-messaging-bridges"
-    )
+    assert shared["sources"]["angee-messaging-bridges"]["cache_path"] == ("/home/dev/sources/angee-messaging-bridges")
     assert shared["sources"]["angee-arp"]["cache_path"] == "/home/dev/sources/angee-arp"
     assert shared["sources"]["work-angee"]["cache_path"] == "/home/dev/sources/work-angee"
     assert shared["workspace_defaults"]["workspaces/src"]["inputs"]["branch_prefix"] == "app"
@@ -1152,6 +1143,7 @@ def test_dev_stack_shares_one_machine_wide_cache_per_repository() -> None:
     assert copier["sources_home"]["type"] == "str"
     assert copier["sources_home"]["default"] == ""
     assert "<project_name>/<workspace>" in copier["project_name"]["help"]
+
 
 def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     """Docker mode keeps the framework roster with containerized lifecycle jobs."""
@@ -1342,14 +1334,14 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
 
     workspace = DEV_PNPM_WORKSPACE.read_text(encoding="utf-8")
     framework_globs = (
-        "  - \"workspaces/src/angee/packages/*\"",
-        "  - \"workspaces/src/angee/addons/angee/*/web\"",
+        '  - "workspaces/src/angee/packages/*"',
+        '  - "workspaces/src/angee/addons/angee/*/web"',
     )
     full_profile_globs = (
-        "  - \"workspaces/src/angee/examples/addons/*/*/web\"",
-        "  - \"workspaces/src/angee/examples/e2e\"",
+        '  - "workspaces/src/angee/examples/addons/*/*/web"',
+        '  - "workspaces/src/angee/examples/e2e"',
     )
-    guard_index = workspace.index("{% if addons_profile == \"full\" %}")
+    guard_index = workspace.index('{% if addons_profile == "full" %}')
     assert all(workspace.index(glob) < guard_index for glob in framework_globs)
     assert all(workspace.index(glob) > guard_index for glob in full_profile_globs)
 
@@ -1436,6 +1428,7 @@ def test_development_rendering_keeps_existing_serve_paths() -> None:
     assert "ANGEE_DB_POOL" not in local["services"]["django"]["env"]
     assert local["services"]["caddy"]["after"] == ["frontend-build"]
     assert "/mcp /mcp/*" in local["services"]["caddy"]["command"][-1]
+    assert "/acp/*" in local["services"]["caddy"]["command"][-1]
 
 
 def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
@@ -1452,7 +1445,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         assert copier["db_pool_timeout"]["default"] == 5
     assert dev_copier["runtime_mode"]["choices"] == ["process", "docker"]
     assert "runtime_mode" not in local_copier
-    assert "serve_mode == \"production\" and runtime_mode == \"process\"" in dev_copier["serve_mode"]["validator"]
+    assert 'serve_mode == "production" and runtime_mode == "process"' in dev_copier["serve_mode"]["validator"]
     assert "Production serving requires runtime_mode: docker." in dev_copier["serve_mode"]["validator"]
     assert dev_copier["_angee"]["inputs"]["serve_mode"] == dev_copier["serve_mode"]
     assert dev_copier["_angee"]["inputs"]["serve_workers"] == dev_copier["serve_workers"]
@@ -1490,6 +1483,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
             assert "file_server" in caddyfile
             assert "try_files {path} /index.html" in caddyfile
             assert "/mcp /mcp/*" in caddyfile
+            assert "/acp/*" in caddyfile
             assert "@operator_graphql path /operator/graphql /operator/graphql/*" in caddyfile
             assert "uri strip_prefix /operator" in caddyfile
             assert "@operator_logs" not in caddyfile
@@ -1509,7 +1503,8 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
 
 def test_process_render_is_development_even_when_serve_validator_is_bypassed() -> None:
     assert _render_dev_stack(_runtime_mode="process", serve_mode="production") == _render_dev_stack(
-        _runtime_mode="process", serve_mode="development",
+        _runtime_mode="process",
+        serve_mode="development",
     )
 
 
@@ -1523,8 +1518,7 @@ def test_production_serve_workers_use_cpu_count_and_reject_one(
     started: list[dict[str, Any]] = []
     monkeypatch.setattr(serve.os, "cpu_count", lambda: 8)
     monkeypatch.setattr(serve.uvicorn, "run", lambda _app, **kwargs: started.append(kwargs))
-    options = {"workers": 0, "production": True, "host": "0.0.0.0", "port": 8000,
-               "forwarded_allow_ips": "10.0.0.2"}
+    options = {"workers": 0, "production": True, "host": "0.0.0.0", "port": 8000, "forwarded_allow_ips": "10.0.0.2"}
     serve.Command().handle(**options)
     assert started[0]["workers"] == 8
     assert started[0]["forwarded_allow_ips"] == "10.0.0.2"
@@ -1534,7 +1528,10 @@ def test_production_serve_workers_use_cpu_count_and_reject_one(
 
 def test_production_pool_inputs_reach_only_django() -> None:
     stack = _render_dev_stack(
-        _runtime_mode="docker", serve_mode="production", db_pool_max_size=3, db_pool_timeout=7,
+        _runtime_mode="docker",
+        serve_mode="production",
+        db_pool_max_size=3,
+        db_pool_timeout=7,
     )
     assert stack["services"]["django"]["env"]["ANGEE_DB_POOL_MAX_SIZE"] == "3"
     assert stack["services"]["django"]["env"]["ANGEE_DB_POOL_TIMEOUT"] == "7"
@@ -1544,7 +1541,9 @@ def test_production_pool_inputs_reach_only_django() -> None:
 
 def test_public_production_frontend_routes_after_operator_graphql() -> None:
     stack = _render_dev_stack(
-        _runtime_mode="docker", serve_mode="production", ingress_domain="app.example.test",
+        _runtime_mode="docker",
+        serve_mode="production",
+        ingress_domain="app.example.test",
     )
     frontend = stack["services"]["frontend"]
     assert frontend["route"] == {"port": 80, "path": "/", "auth": "none"}
@@ -1557,7 +1556,7 @@ def test_public_production_frontend_routes_after_operator_graphql() -> None:
     caddyfile = _rendered_caddyfile(frontend)
     assert "trusted_proxies static 192.0.2.0/24 198.51.100.0/24\n    trusted_proxies_strict" in caddyfile
     assert "until EDGE_IP=$$(getent hosts edge" in command
-    assert 'EDGE_PROXY_CIDRS=$$(ip -4 route | awk' in command
+    assert "EDGE_PROXY_CIDRS=$$(ip -4 route | awk" in command
     assert 'sed -i "s|EDGE_PROXY_CIDRS|$$EDGE_PROXY_CIDRS|"' in command
     assert "header_up X-Forwarded-For {client_ip}" in caddyfile
     assert "header_up X-Forwarded-Proto" not in caddyfile
@@ -1567,7 +1566,9 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
     stack = _render_dev_stack(
-        _runtime_mode="docker", serve_mode="production", ingress_domain="app.example.test",
+        _runtime_mode="docker",
+        serve_mode="production",
+        ingress_domain="app.example.test",
     )
     command = stack["services"]["django"]["command"][-1]
     assert 'socket.gethostbyname("frontend")' in command
@@ -1598,7 +1599,9 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
         ("198.51.100.9", "198.51.100.9", "https"),
     ):
         scope: dict[str, Any] = {
-            "type": "http", "client": (peer, 4123), "scheme": "http",
+            "type": "http",
+            "client": (peer, 4123),
+            "scheme": "http",
             "headers": [
                 (b"x-forwarded-for", forwarded_for.encode()),
                 (b"x-forwarded-proto", forwarded_proto.encode()),

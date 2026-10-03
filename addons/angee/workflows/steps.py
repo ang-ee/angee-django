@@ -10,7 +10,6 @@ from types import get_original_bases
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models.functions import Now
 from django.utils import timezone
@@ -21,6 +20,7 @@ from angee.base.jsonschema import check_schema, validate, validator
 from angee.base.serialization import strip_null_bytes
 from angee.base.validation import get_type_adapter
 from angee.decisions.contracts import DecisionRequest
+from angee.jobs.timeouts import TASK_SETTLEMENT_RESERVE_SECONDS, task_time_budget
 from angee.workflows.states import (
     DONE_OUTCOME,
     ERROR_OUTCOME,
@@ -29,17 +29,8 @@ from angee.workflows.states import (
     WaitingKind,
 )
 
-IO_SETTLE_WINDOW = timedelta(seconds=30)
-"""Time reserved below worker limits for an IO attempt's fenced settlement."""
-
 if TYPE_CHECKING:
     from angee.workflows.reviews import ReviewStep
-
-
-def io_timeout_budget() -> timedelta:
-    """Bound IO leases by the worker lifetime, retaining the settlement reserve."""
-    worker_limit = timedelta(seconds=min(settings.CELERY_TASK_SOFT_TIME_LIMIT, settings.CELERY_TASK_TIME_LIMIT))
-    return worker_limit - IO_SETTLE_WINDOW
 
 
 class Retryable(Exception):
@@ -264,7 +255,7 @@ class Step[I, O, C](ImplBase):
     Changing mode without declaring timeout selects that mode's default: 30
     seconds for DATABASE, five minutes for IO. Subclasses retain custom limits
     while inheriting the same mode. IO deadlines must remain strictly below the
-    worker's soft and hard limits minus the 30-second settlement reserve.
+    worker's soft and hard limits minus the jobs owner's settlement reserve.
     """
     retry: ClassVar[RetryPolicy] = RetryPolicy()
     effect_idempotent: ClassVar[bool] = False
@@ -381,8 +372,9 @@ def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
             raise ImproperlyConfigured(f"Unknown step subject model {step.subject!r}.") from error
     if not timedelta(milliseconds=1) <= step.timeout <= timedelta(seconds=900):
         raise ImproperlyConfigured("A step timeout must be at least 1 millisecond and at most 900 seconds.")
-    if step.mode == StepMode.IO and step.timeout >= io_timeout_budget():
+    if step.mode == StepMode.IO and step.timeout >= task_time_budget():
         raise ImproperlyConfigured(
-            "An IO timeout must leave more than 30 seconds below the worker's soft and hard time limits."
+            f"An IO timeout must leave more than {TASK_SETTLEMENT_RESERVE_SECONDS} seconds "
+            "below the worker's soft and hard time limits."
         )
     return step
