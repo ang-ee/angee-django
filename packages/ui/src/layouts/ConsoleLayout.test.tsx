@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { SurfacePresentationProvider } from "../chrome/surface-policy";
+import { AppRuntimeProvider, containersFromChildren } from "../runtime";
 import { createUiTestProviders } from "../testing";
 import { ConsoleLayout } from "./ConsoleLayout";
 
@@ -32,7 +32,7 @@ describe("ConsoleLayout breadcrumb strip", () => {
     expect(strip.nextElementSibling?.classList.contains("area-control")).toBe(true);
   });
 
-  test("surface.shell.breadcrumb hides the strip and releases its reserved route height", async () => {
+  test("hiding the chrome.breadcrumbs region hides the strip and releases its reserved route height", async () => {
     renderConsole(false);
     await screen.findByRole("banner", { name: "Workspace top bar" });
     expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
@@ -58,9 +58,12 @@ describe("ConsoleLayout breadcrumb strip", () => {
 
 function renderConsole(breadcrumb = true) {
   const root = createRootRoute({ component: () => <ui.Provider>
-    <SurfacePresentationProvider value={{ chatter: "hidden", shell: { breadcrumb, commandSearch: false } }}>
+    <AppRuntimeProvider runtime={breadcrumb ? {} : {
+      // The regions container as a layer leaves it once it hides the breadcrumb strip.
+      containers: containersFromChildren([{ address: "shell#regions" }], { "shell#regions": { "chrome.app-menu": { content: null } } }),
+    }}>
       <ConsoleLayout><div>Page</div></ConsoleLayout>
-    </SurfacePresentationProvider>
+    </AppRuntimeProvider>
   </ui.Provider> });
   const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/notes" })]),
     history: createMemoryHistory({ initialEntries: ["/notes"] }) });

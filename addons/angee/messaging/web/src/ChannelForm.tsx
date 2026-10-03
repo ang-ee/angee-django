@@ -1,14 +1,12 @@
 import * as React from "react";
-import { Field, Form, Group, registerForm, SlotOutlet, useSlot, type RegisteredFormProps } from "@angee/ui";
+import { Field, Form, Group, registerForm, type RegisteredFormProps } from "@angee/ui";
 import { IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 
 import { CHANNEL_MODEL } from "./documents";
 import { useMessagingT } from "./i18n";
-import { MESSAGING_CHANNEL_FORM_FIELDS_SLOT } from "./slots";
 
 function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
-  const extensionFields = useSlot(MESSAGING_CHANNEL_FORM_FIELDS_SLOT);
   const syncAction = useIntegrationSyncAction("sync_integration", t("channel.action.sync"));
   return (
     <Form {...props} resource={CHANNEL_MODEL}>
@@ -20,7 +18,6 @@ function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): Re
       <Field name="runtime_status" widget="colorDot" readOnly />
       <Field name="backend_class" readOnly />
       <Field name="config" readOnly />
-      <SlotOutlet entries={extensionFields} />
       <Group label={t("channel.group.webform")} columns={2}>
         <Field name="slug" widget="slug" showWhen={isWebformChannel} />
         <Field name="is_published" showWhen={isWebformChannel} />

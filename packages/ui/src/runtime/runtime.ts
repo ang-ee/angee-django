@@ -11,18 +11,14 @@ import {
 
 import type {
   RuntimeVocabulary,
-  ChatterContribution,
   ChatterRoute,
-  DrawerContribution,
-  DrawerEdge,
   FormOverrideMap,
-  ModelSlotTarget,
   PreviewContribution,
   RuntimeBrand,
   RuntimeComposition,
-  SlotContribution,
   WidgetMap,
 } from "./contracts";
+import type { ComposedContainers, ContainerScope } from "./containers";
 import { makeContext } from "./make-context";
 import { createAngeeI18nInstance } from "./i18n";
 import {
@@ -86,7 +82,7 @@ export type ResourceRecordHrefLookup = (
 
 /**
  * The merged app runtime an app composes once from its addon manifests. The
- * registry lookups (`useWidget` / `useSlot` / `useT`) read from it;
+ * registry lookups (`useWidget` / `useContainer` / `useT`) read from it;
  * there is no separate provider per registry.
  */
 export interface AppRuntime {
@@ -106,14 +102,11 @@ export interface AppRuntime {
   userPreferences: RuntimeUserPreferencesState;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
-  chatter: readonly ChatterContribution[];
   /** Inherited route policies for the shell aside. */
   chatterRoutes: readonly ChatterRoute[];
-  slots: readonly SlotContribution[];
   /** Addon-owned detail search keys cleared by routed record navigation. */
   recordSearchKeys: readonly string[];
   previews: readonly PreviewContribution[];
-  drawers: readonly DrawerContribution[];
   /** Composed dashboard definitions, kinds and optional persistence adapter. */
   dashboards: DashboardRegistry;
   /** Composed collection/record route names per resource id. */
@@ -124,6 +117,10 @@ export interface AppRuntime {
   loginPath: string;
   /** Installed theme catalogue composed from addon contributions. */
   themes: readonly ThemeContribution[];
+  /** The composed containers every container owner renders from. */
+  containers?: ComposedContainers;
+  /** The page's apps, routes and perspective, which container conditions read. */
+  containerScope?: ContainerScope;
   /** How the composition came out; developer mode shows it. */
   composition?: RuntimeComposition | null;
   /** The active route's name and its app (menu root), per page. */
@@ -228,12 +225,9 @@ const EMPTY_RUNTIME: AppRuntime = {
   },
   icons: {},
   forms: {},
-  chatter: [],
   chatterRoutes: [],
-  slots: [],
   recordSearchKeys: [],
   previews: [],
-  drawers: [],
   dashboards: {
     definitions: {},
     resourceDefaults: {},
@@ -431,52 +425,6 @@ export function useRuntimeUserPreferences(): RuntimeUserPreferencesState {
   return useAppRuntime().userPreferences ?? EMPTY_RUNTIME.userPreferences;
 }
 
-/**
- * The slot entries contributed to one slot, in merged order.
- *
- * Given several slot names, the entries for each are concatenated in name order.
- * Memoize the array you pass; a fresh identity each render recomputes the filter.
- */
-export function useSlot(
-  slot: string | readonly string[],
-): readonly SlotContribution[] {
-  const { slots } = useAppRuntime();
-  return useMemo(
-    () =>
-      typeof slot === "string"
-        ? slots.filter((entry) => entry.slot === slot)
-        : slot.flatMap((key) => slots.filter((entry) => entry.slot === key)),
-    [slots, slot],
-  );
-}
-
-/**
- * Look up contributions addressed to one or more typed model-slot targets.
- * Target order is preserved so a render owner can apply its own specificity
- * policy without reimplementing the slot/model/impl match.
- */
-export function useModelSlot(
-  target: ModelSlotTarget | readonly ModelSlotTarget[],
-  options: { admit?: readonly string[]; inventorySlots?: readonly string[]; owner?: string } = {},
-): readonly SlotContribution[] {
-  const { slots } = useAppRuntime();
-  return useMemo(() => {
-    const targets: readonly ModelSlotTarget[] = Array.isArray(target)
-      ? target as readonly ModelSlotTarget[]
-      : [target as ModelSlotTarget];
-    // The route policy has already projected `slots`. Legacy page admission can
-    // name a contribution excluded by that policy until its prop is removed.
-    return targets.flatMap((candidate) =>
-      slots.filter(
-        (entry) =>
-          entry.slot === candidate.slot
-          && entry.model === candidate.model
-          && entry.impl === candidate.impl,
-      ).filter((entry) => options.admit === undefined || options.admit.includes(entry.id)),
-    );
-  }, [slots, target, options.admit]);
-}
-
 /** The addon-contributed file-preview renderers, in composed order. */
 export function usePreviews(): readonly PreviewContribution[] {
   return useAppRuntime().previews;
@@ -485,21 +433,6 @@ export function usePreviews(): readonly PreviewContribution[] {
 /** The route metadata Chatter uses to build the active view envelope. */
 export function useChatterRoutes(): readonly ChatterRoute[] {
   return useAppRuntime().chatterRoutes ?? [];
-}
-
-/**
- * The composed drawer contributions, optionally narrowed to one edge, in merged
- * order. Mirrors `useSlot`: the shell reads `useDrawers("right")` /
- * `useDrawers("bottom")` to render an edge's stripe-tabs and overlay.
- */
-export function useDrawers(
-  edge?: DrawerEdge,
-): readonly DrawerContribution[] {
-  const { drawers } = useAppRuntime();
-  return useMemo(
-    () => (edge ? drawers.filter((drawer) => drawer.edge === edge) : drawers),
-    [drawers, edge],
-  );
 }
 
 /** A translator bound to one namespace; resolves keys against merged i18n. */

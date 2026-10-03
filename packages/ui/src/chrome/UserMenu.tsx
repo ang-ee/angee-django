@@ -5,8 +5,8 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useColorSchemePreference, type ColorSchemePreference } from "../lib/color-scheme";
 import { useOptionalAppearance } from "../theme";
-import { useLoginPath, useRuntimeAuth, useRuntimeLogoutAction, useSlot } from "../runtime";
-import { SlotOutlet } from "../lib/slot-outlet";
+import { useContainer, useLoginPath, useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
+import { ContainerOutlet } from "../lib/container-outlet";
 import { avatarInitials } from "../ui/avatar";
 import {
   DropdownMenu,
@@ -22,7 +22,6 @@ export interface UserMenuProps {
   sideOffset?: DropdownMenuPositionerProps["sideOffset"];
 }
 
-export const USER_MENU_ITEMS_SLOT = "chrome.user-menu.items";
 
 export function UserMenu({
   className,
@@ -43,7 +42,7 @@ export function UserMenu({
   const appearance = useOptionalAppearance();
   const resolved = appearance?.colorScheme ?? localScheme.resolved;
   const nextTheme: ColorSchemePreference = resolved === "dark" ? "light" : "dark";
-  const contributedItems = useSlot(USER_MENU_ITEMS_SLOT);
+  const contributedItems = useContainer("shell#user-menu");
   const themeLabel = nextTheme === "dark"
     ? t("chrome.switchToDarkTheme")
     : t("chrome.switchToLightTheme");
@@ -83,7 +82,7 @@ export function UserMenu({
               <Glyph name={nextTheme === "dark" ? "moon" : "sun"} />
               <span className="flex-1 truncate">{themeLabel}</span>
             </DropdownMenu.Item>
-            <SlotOutlet entries={contributedItems} />
+            <ContainerOutlet entries={contributedItems} />
             <DropdownMenu.Separator />
             <DropdownMenu.Item
               disabled={fetching}

@@ -2,15 +2,14 @@
 
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import type { ComponentProps, ReactElement } from "react";
+import type { ReactElement } from "react";
 import { testDataResource } from "@angee/metadata/testing";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, Field, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, Field, ModalsHost, ToastProvider, baseIcons, containersFromChildren, defaultWidgets, type ContainerChild } from "@angee/ui";
 import { OrganizationForm } from "./OrganizationForm";
 import { PersonForm } from "./PersonForm";
-import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 vi.mock("@angee/ui", async (importOriginal) => {
   const { createUiTestModule } = await import("@angee/ui/testing");
@@ -44,8 +43,10 @@ afterEach(() => {
 
 function renderPartyForm(
   form: ReactElement,
-  slots: ComponentProps<typeof AppRuntimeProvider>["runtime"]["slots"] = [],
+  organizationFields: Readonly<Record<string, ContainerChild>> = {},
 ) {
+  // The parties addon declares `parties.organization#fields`; consumers add form fields there.
+  const containers = containersFromChildren([{ address: "parties.organization#fields" }], { "parties.organization#fields": organizationFields });
   const provider = {
     getOne: vi.fn(async () => ({ data: { id: "party-1", display_name: "Saved party" } })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
@@ -54,7 +55,7 @@ function renderPartyForm(
   return render(
     <Provider resources={resources} dataProvider={provider} queryClientConfig={{ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }}>
       <RouterContextProvider router={router}>
-        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, slots }}>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, containers }}>
           {form}
         </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
@@ -92,9 +93,9 @@ describe("organization form extensions", () => {
   });
 
   test.each([false, true])("keeps base fields with consumer extension present: %s", (withExtension) => {
-    renderPartyForm(<OrganizationForm resource="parties.Organization" id={null} />, withExtension ? [
-      { slot: ORGANIZATION_FORM_FIELDS_SLOT, id: "consumer.reference", content: <Field name="external_reference" label="External reference" /> },
-    ] : []);
+    renderPartyForm(<OrganizationForm resource="parties.Organization" id={null} />, withExtension ? {
+      "consumer.reference": { content: <Field name="external_reference" label="External reference" /> },
+    } : {});
     const title = screen.getByRole("textbox", { name: /display name/i });
     expect(screen.getByRole("textbox", { name: "Legal name" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Domain" })).toBeTruthy();

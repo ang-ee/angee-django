@@ -1,8 +1,5 @@
 export {
-  AUTH_LOGIN_CARD_FOOTER_SLOT,
-  AUTH_LOGIN_METHOD_SLOT,
-  AUTH_LOGIN_PAGE_FOOTER_SLOT,
-  AUTH_LOGIN_PASSWORD_HELP_SLOT,
+  LOGIN_CONTAINERS,
   LoginPage,
   type LoginPageProps,
 } from "./LoginPage";

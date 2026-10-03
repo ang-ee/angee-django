@@ -1,12 +1,8 @@
-import type { ComponentType, ReactElement } from "react";
-import { makeContext, SlotOutlet, useSlot, type SlotContribution } from "@angee/ui";
+import { useMemo, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { makeContext, ContainerOutlet, useContainer, type ComposedContainerChild, type ContainerChild } from "@angee/ui";
 
 import type { Decision } from "./documents.console";
 
-/** Exactly one consumer presentation may claim a decision kind. */
-export const DECISION_CONTENT_SLOT = "decisions.content";
-/** Waiting owners contribute their own links without adding dependencies here. */
-export const DECISION_ORIGIN_SLOT = "decisions.origin";
 
 type ReadonlyTree<T> = T extends object ? { readonly [Key in keyof T]: ReadonlyTree<T[Key]> } : T;
 type PayloadField = "basis" | "context" | "form_schema" | "resolution";
@@ -24,9 +20,12 @@ const binding = makeContext<DecisionContentProps>("DecisionContentProvider");
 export const DecisionContentProvider = binding.Provider;
 export const useDecisionContent = binding.use;
 
-/** Native slot identity makes duplicate kind claims fail during addon composition. */
-export function decisionContent(kind: string, Component: ComponentType<DecisionContentProps>): SlotContribution {
-  return { slot: DECISION_CONTENT_SLOT, id: kind, content: <ConsumerContent Component={Component} /> };
+/**
+ * A decision kind's presentation, for an addon's `decisions#content` child.
+ * The container holds one child per kind, so a second claim fails composition.
+ */
+export function decisionContent(kind: string, Component: ComponentType<DecisionContentProps>): ContainerChild<ReactNode> {
+  return { key: kind, content: <ConsumerContent Component={Component} /> };
 }
 
 function ConsumerContent({ Component }: { Component: ComponentType<DecisionContentProps> }): ReactElement {
@@ -36,15 +35,16 @@ function ConsumerContent({ Component }: { Component: ComponentType<DecisionConte
 /** Mount inside the page's React Hook Form provider so content can edit the form. */
 export function DecisionContentOutlet(): ReactElement {
   const { decision } = useDecisionContent();
-  return <SlotOutlet entries={useDecisionContentEntries(decision.kind)} />;
+  return <ContainerOutlet entries={useDecisionContentEntries(decision.kind)} />;
 }
 
 /** The selected kind's registered presentation replaces generic fact display. */
-export function useDecisionContentEntries(kind: string): readonly SlotContribution[] {
-  return useSlot(DECISION_CONTENT_SLOT).filter((entry) => entry.id === kind);
+export function useDecisionContentEntries(kind: string): readonly ComposedContainerChild[] {
+  const entries = useContainer("decisions#content");
+  return useMemo(() => entries.filter((entry) => entry.key === kind), [entries, kind]);
 }
 
-/** An unfilled origin slot renders nothing. Contributions use useDecisionContent. */
+/** An empty `decisions#origin` renders nothing. Children read the decision with useDecisionContent. */
 export function DecisionOriginOutlet(): ReactElement {
-  return <SlotOutlet entries={useSlot(DECISION_ORIGIN_SLOT)} />;
+  return <ContainerOutlet entries={useContainer("decisions#origin")} />;
 }

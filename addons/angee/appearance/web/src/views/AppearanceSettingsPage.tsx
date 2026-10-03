@@ -1,20 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
-import {
-  Alert,
-  Button,
-  RadioGroupItem,
-  RadioGroupRoot,
-  SettingsSection,
-  SettingsShell,
-  SlotOutlet,
-  useAppRuntime,
-  useAppearance,
-  ThemePreviewFrame,
-  useSlot,
-  useT,
-} from "@angee/ui";
+import { Alert, Button, RadioGroupItem, RadioGroupRoot, SettingsSection, SettingsShell, ContainerOutlet, useAppRuntime, useAppearance, ThemePreviewFrame, useContainer, useT } from "@angee/ui";
 import { parseThemeCustomization, resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeCustomizationLogo, type ThemeOptionsEnvelope } from "@angee/ui/theme";
-import { APPEARANCE_TOOLS_SLOT } from "../index";
 import { useAppearanceT } from "../i18n";
 
 const HOST_VALUE = "__host__";
@@ -24,7 +10,7 @@ export function AppearanceSettingsPage(): ReactElement {
   const themeT = useT("themes");
   const runtime = useAppRuntime();
   const appearance = useAppearance();
-  const tools = useSlot(APPEARANCE_TOOLS_SLOT);
+  const tools = useContainer("appearance.settings#tools");
   const selectedTheme = appearance.preferences.themeId ?? HOST_VALUE;
   const selectedScheme = appearance.preferences.colorScheme ?? HOST_VALUE;
   const OptionsEditor = appearance.theme?.optionsEditor;
@@ -58,7 +44,7 @@ export function AppearanceSettingsPage(): ReactElement {
     {appearance.theme ? <SettingsSection title={t("preview.title")} description={t("preview.description")}>
       <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={draft ?? appearance.preferences.options} />)}</div>
     </SettingsSection> : null}
-    {tools.length && !readOnly ? <SettingsSection title={t("tools.title")}><SlotOutlet entries={tools} /></SettingsSection> : null}
+    {tools.length && !readOnly ? <SettingsSection title={t("tools.title")}><ContainerOutlet entries={tools} /></SettingsSection> : null}
     <div><Button variant="secondary" loading={appearance.saving} onClick={() => void appearance.reset()}>{t("reset")}</Button></div>
   </SettingsShell>;
 }

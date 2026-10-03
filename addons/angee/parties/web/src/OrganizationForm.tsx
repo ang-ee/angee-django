@@ -1,20 +1,10 @@
 import * as React from "react";
-import {
-  Field,
-  Form,
-  Group,
-  registerForm,
-  slotContents,
-  useSlot,
-  type RecordTabDescriptor,
-  type RegisteredFormProps,
-} from "@angee/ui";
+import { Field, Form, Group, registerForm, containerContents, useContainer, type RecordTabDescriptor, type RegisteredFormProps } from "@angee/ui";
 
 import { usePartiesT } from "./i18n";
 import { PartyAddresses } from "./PartyAddresses";
 import { IdentityTab } from "./IdentityTab";
 import { usePartyContactActions } from "./party-contact-actions";
-import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 const MODEL = "parties.Organization";
 
@@ -40,7 +30,7 @@ function organizationTabs(t: ReturnType<typeof usePartiesT>): readonly RecordTab
  */
 export function useOrganizationFields(): React.ReactElement {
   const t = usePartiesT();
-  const extraFields = useSlot(ORGANIZATION_FORM_FIELDS_SLOT);
+  const extraFields = useContainer("parties.organization#fields");
   return (
     <>
       <Field name="display_name" title />
@@ -48,7 +38,7 @@ export function useOrganizationFields(): React.ReactElement {
         <Field name="legal_name" label={t("organization.field.legalName")} />
         <Field name="domain" label={t("organization.field.domain")} />
       </Group>
-      {slotContents(extraFields)}
+      {containerContents(extraFields)}
       <Field name="notes" />
     </>
   );

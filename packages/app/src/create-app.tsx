@@ -58,17 +58,18 @@ import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
   applyDeveloperModeSearch,
+  modelChain,
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
   HOME_PATH_PREFERENCE_KEY,
   createRouteHref,
   type AppRuntime,
+  type ComposedContainers,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
-  type SlotContribution,
 } from "@angee/ui/runtime";
-import { validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
+import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import { composeAddons } from "./define-addon";
 import {
   ModalsHost,
@@ -78,11 +79,7 @@ import {
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
-import { ViewAsBanner, ViewAsPicker } from "@angee/ui/chrome/ViewAs";
-import { DeveloperModeMenuItem } from "@angee/ui/chrome/DeveloperMode";
-import { USER_MENU_ITEMS_SLOT } from "@angee/ui/chrome/UserMenu";
-import { SurfacePresentationProvider, type SurfacePresentation } from "@angee/ui/chrome/surface-policy";
-import { CONSOLE_NOTICE_SLOT } from "@angee/ui/layouts/ConsoleLayout";
+import { ViewAsBanner } from "@angee/ui/chrome/ViewAs";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
   MenuTree,
@@ -131,7 +128,6 @@ import {
 import { chatterRouteIndex } from "./chatter-routes";
 import { explainComposition, type CompositionExplanation } from "./explain";
 import { developmentMode } from "@angee/ui/lib/development-mode";
-import { admittedContributions, routePolicyIndex } from "./route-policy";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
   compareCodePoint,
@@ -179,8 +175,6 @@ export interface CreateAppInput {
   confineTo?: string;
   /** Auth-owned sign-in destination. Defaults to `/login`. */
   loginPath?: string;
-  /** Host-level UI slot contributions, merged with the addons'. */
-  slots?: readonly SlotContribution[];
   /** Build-owned defaults used until an authenticated user overrides them. */
   appearance?: HostAppearanceDefaults;
 }
@@ -238,7 +232,7 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
 /**
  * `createApp` — the single composition root. It merges the addon manifests into
  * one runtime (routes · route-resolved menus · widgets ·
- * i18n · slots), owns the provider stack (GraphQL clients · runtime · live
+ * i18n · containers), owns the provider stack (GraphQL clients · runtime · live
  * invalidation · auth), builds the router, and mounts one persistent layout
  * route per refine layout. The host writes one
  * `createApp({...}).mount(...)`.
@@ -268,16 +262,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   const composed = composeAddons(
     [
-      { id: "base", icons: baseIcons, slots: [
-        { slot: CONSOLE_NOTICE_SLOT, id: "view-as", content: <ViewAsBanner /> },
-        { slot: USER_MENU_ITEMS_SLOT, id: "view-as", content: <ViewAsPicker /> },
-        { slot: USER_MENU_ITEMS_SLOT, id: "developer-mode", sequence: 90, content: <DeveloperModeMenuItem /> },
-      ], layoutProviders: layoutNamesForRoutes(input.layouts)
+      { id: "base", icons: baseIcons, layoutProviders: layoutNamesForRoutes(input.layouts)
         .filter((layout) => layout !== "console")
         .map((layout) => ({ id: "view-as", layout, component: ViewAsLayoutNotice })),
       },
       ...input.addons,
-      ...(input.slots ? [{ id: "host", slots: input.slots }] : []),
     ],
     {
       canonicalModelLabel: (spelling) =>
@@ -319,9 +308,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
     : routeHref;
-  const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
-  const unrestrictedSurface: SurfacePresentation = {};
   const navigationTree = projection.navigationTree;
+  validateContainerConditions(composed.containers, {
+    routes: routesByName,
+    apps: menuTree.byId,
+    perspectives: new Set(input.addons.flatMap((addon) => Object.keys(addon.perspectives ?? {}))),
+  });
   for (const preset of Object.values(composed.resourceViews)) {
     const models = Object.values(schemas).flatMap((schema) => {
       const model = schema.fieldMetadata.labels[preset.resource];
@@ -333,6 +325,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
       catch (error) { failure = error; return false; }
     });
     if (!valid) throw failure ?? new Error(`Unknown resource "${preset.resource}" in view "${preset.id}".`);
+    // A preset may open on a contributed kind only where `resource#views` offers it for that resource.
+    if (preset.view && !isBuiltInResourceViewKind(preset.view)) {
+      const chain = modelChain(models[0]?.resource.canonicalLabel, preset.resource);
+      const offered = ["resource#views", ...chain.map((model) => `${model}#views`)]
+        .some((address) => composed.containers.children[address]?.some((child) => child.id === preset.view));
+      if (!offered) throw new Error(`Resource view "${preset.id}" opens on view kind "${preset.view}", which no addon contributes to "${preset.resource}#views".`);
+    }
   }
   const validateDefaultView = (id: string, route: BaseAddonRoute | undefined, menuId?: string) => {
     const preset = composed.resourceViews[id];
@@ -381,19 +380,24 @@ export function createApp(input: CreateAppInput): AngeeApp {
     resourceViews: composed.resourceViews,
     icons: composed.icons,
     forms: composed.forms,
-    chatter: composed.chatter,
     chatterRoutes: chatterRouteIndex(routes, modelLabelInventory),
-    slots: composed.slots,
     recordSearchKeys: composed.recordSearchKeys,
     // Built-in renderers are universal (PreviewPane always includes them); the
     // runtime carries only addon-contributed providers.
     previews: composed.previews,
-    drawers: composed.drawers,
     dashboards: composed.dashboards,
     routesByResource,
     routeHref: runtimeRouteHref,
     loginPath,
     themes: composed.themes as readonly ThemeContribution[],
+    containers: composed.containers,
+  };
+  const routeTrail = (route: BaseAddonRoute | undefined): string[] => {
+    const names: string[] = [];
+    for (let current = route; current && !names.includes(current.name); current = current.parent ? routesByName.get(current.parent) : undefined) {
+      names.push(current.name);
+    }
+    return names;
   };
   const operationDocuments = operationDocumentsForSchemas(schemas);
   function resourceRegistryFor(
@@ -462,7 +466,6 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const words = vocabularyForRoute(app, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
-    const surface = publicRoute ? unrestrictedSurface : surfaceForRoute(app, activeRoute?.name);
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
       const menuResourceViewIds = new Set<string>();
@@ -476,29 +479,30 @@ export function createApp(input: CreateAppInput): AngeeApp {
         i18n: words.i18n.instance,
         vocabulary: words.vocabulary,
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
-        slots: admittedContributions(runtime.slots, surface.admit, "slots"),
-        chatter: admittedContributions(runtime.chatter, surface.admit, "aside"),
-        drawers: admittedContributions(runtime.drawers, surface.admit, "drawers"),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
         routeHref: runtimeRouteHref,
         composition: explain,
+        // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
+        containerScope: {
+          apps: app && !publicRoute ? [app] : [],
+          routes: routeTrail(activeRoute),
+          perspective: confineTo !== undefined ? composed.shell.perspective?.id ?? null : null,
+        },
         activeRouteName: activeRoute?.name ?? null,
         activeApp: app ?? null,
       };
-    }, [app, activeRoute, words, surface]);
+    }, [app, activeRoute, words, publicRoute]);
     return (
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
-          <SurfacePresentationProvider value={surface}>
-            <AppRuntimeProvider runtime={scopedRuntime}>
-              <ModalsHost>
-                <ToastProvider>
-                  <RefineRoot i18nProvider={words.i18n.provider} />
-                </ToastProvider>
-              </ModalsHost>
-            </AppRuntimeProvider>
-          </SurfacePresentationProvider>
+          <AppRuntimeProvider runtime={scopedRuntime}>
+            <ModalsHost>
+              <ToastProvider>
+                <RefineRoot i18nProvider={words.i18n.provider} />
+              </ToastProvider>
+            </ModalsHost>
+          </AppRuntimeProvider>
         </OperationDocumentsProvider>
       </NuqsAdapter>
     );
@@ -588,7 +592,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
     home,
     confineTo: confineTo ?? null,
-  });
+  }, composed.containers);
   if (developmentMode()) {
     for (const diagnostic of composed.shell.diagnostics) console.warn(`[angee] ${diagnostic}`);
     const menuFindings = composed.menuComposition.diagnostics.length;
@@ -870,4 +874,30 @@ function mergeI18n(base: I18nResources, addons: I18nResources): I18nResources {
     }
   }
   return { ...base, ...addons };
+}
+
+/**
+ * A container condition names a route, an app (a menu node) or a perspective
+ * that exists; a misspelt one would never match, so it fails at boot.
+ */
+function validateContainerConditions(
+  containers: ComposedContainers,
+  known: { routes: ReadonlyMap<string, unknown>; apps: ReadonlyMap<string, unknown>; perspectives: ReadonlySet<string> },
+): void {
+  const listed = (value: string | readonly string[] | undefined): readonly string[] =>
+    value === undefined ? [] : typeof value === "string" ? [value] : value;
+  for (const [address, rules] of Object.entries(containers.rules)) {
+    for (const rule of rules) {
+      const where = `Addon "${rule.layer}" narrows "${address}"`;
+      for (const route of listed(rule.when?.route)) {
+        if (!known.routes.has(route)) throw new Error(`${where} on unknown route "${route}".`);
+      }
+      for (const app of listed(rule.when?.app)) {
+        if (!known.apps.has(app)) throw new Error(`${where} in unknown app "${app}".`);
+      }
+      for (const perspective of listed(rule.when?.perspective)) {
+        if (!known.perspectives.has(perspective)) throw new Error(`${where} in unknown perspective "${perspective}".`);
+      }
+    }
+  }
 }

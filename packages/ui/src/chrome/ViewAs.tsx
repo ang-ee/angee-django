@@ -7,7 +7,7 @@ import { Button } from "../ui/button";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { RelationField } from "../widgets/RelationField";
 
-/** Compose into CONSOLE_NOTICE_SLOT after the app supplies preview identity. */
+/** Compose into `shell#notices` after the app supplies preview identity. */
 export function ViewAsBanner() {
   const preview = useRuntimeViewAs();
   const t = useUiT();

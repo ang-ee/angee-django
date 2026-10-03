@@ -62,7 +62,7 @@ test("the workflow trigger tab uses its canonical scope and routes retained poli
 
 test("unreadable workflows show an empty state without a retry action", async () => {
   render(Unavailable.render());
-  expect(await screen.findByRole("heading", { name: "Record not found" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Record unavailable" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
@@ -70,5 +70,5 @@ test("transport errors offer the shared reload action", async () => {
   render(QueryError.render());
   await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy(), { timeout: 10000 });
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-  expect(screen.queryByText("Record not found")).toBeNull();
+  expect(screen.queryByText("Record unavailable")).toBeNull();
 }, 15000);

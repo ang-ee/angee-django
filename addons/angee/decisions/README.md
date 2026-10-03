@@ -18,8 +18,8 @@ class owns its `key`, typed Pydantic form and verdict; the decisions addon
 registers it and its group policies through the base implementation registry.
 
 The inbox owns the form and its React Hook Form context. A consumer contributes
-one `decisionContent(kind, Component)` presentation per decision kind through
-the decisions content slot; its retained basis and context arrive as read-only
+one `decisionContent(kind, Component)` presentation per decision kind as a
+`decisions#content` child; its retained basis and context arrive as read-only
 payloads for the consumer to parse. A waiting addon contributes a separate
 origin link without making decisions depend on that waiter.
 

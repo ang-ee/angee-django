@@ -11,7 +11,7 @@ the smallest accurate statement.
 deterministic product surface. It owns the seams, not the concerns.
 
 **Addon** — the unit of capability. An addon declares a contract (source models,
-operations, routes, slots, resources) that the composer assembles into a project.
+operations, routes, containers, resources) that the composer assembles into a project.
 Everything that gives a product a capability, including its API protocol, is an
 addon. The framework core is not. **Addon** is also the user-facing name;
 **App** is reserved for a domain root or an included, non-flattened app in the
@@ -316,7 +316,7 @@ names the technical models, resources, routes, and APIs behind it.
 `iam` is the technical addon, route, model, and i18n namespace.
 
 **`defineAddon`** — the frontend entry point an addon uses to contribute routes,
-views, slots, and other UI to the composition.
+views, container children, and other UI to the composition.
 
 **`createApp`** — the frontend entry point the host uses to compose addons into the
 running app.
@@ -333,10 +333,15 @@ other console routes home. Declared by an addon, selected by the shell.
 items as the aggregator's own while the app keeps its routes and words.
 
 **Layer** — one composed addon manifest, ordered by its addon dependencies; the
-deployment layer comes last. Menus and the shell resolve layer by layer.
+deployment layer comes last. Menus, containers and the shell resolve layer by
+layer.
 
-**Slot** — an additive extension point in the component tree. Contribute to a slot
-before copying or forking a component.
+**Container** — a named, ordered list on a node that the node's owner renders,
+addressed `node#name` (`form#sections`, `projects.Task#actions`,
+`record#aside`). Its entries are **children**, one addressed
+`node#name/id`. An addon declares children in its own namespace and alters or
+narrows its dependencies' children. Add a child before copying or forking a
+component.
 
 **Token** — a semantic styling value (Tailwind). Theme by overriding tokens rather
 than passing color props or one-off variants.

@@ -1,11 +1,10 @@
 import * as React from "react";
-import { ActionMenu, Column, ResourceList, List, SlotOutlet, slotEntriesHaveContent, useSlot } from "@angee/ui";
+import { ActionMenu, Column, ContainerOutlet, ResourceList, List, containerHasContent, useContainer } from "@angee/ui";
 import { IntegrationSyncColumns } from "@angee/integrate";
 
 import { channelForm } from "./ChannelForm";
 import { CHANNEL_MODEL } from "./documents";
 import { useMessagingT } from "./i18n";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 /**
  * Connected message channels. Channels are created through bespoke connect flows
@@ -14,12 +13,12 @@ import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
  */
 export function ChannelsPage(): React.ReactElement {
   const t = useMessagingT();
-  const toolbarEntries = useSlot(MESSAGING_CHANNEL_TOOLBAR_SLOT);
+  const toolbarEntries = useContainer("messaging.channels#toolbar");
   return (
     <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={
-      slotEntriesHaveContent(toolbarEntries) ? (
+      containerHasContent(toolbarEntries) ? (
         <ActionMenu label={t("channel.connect.menu")} glyph="plus" variant="primary" size="sm">
-          <SlotOutlet entries={toolbarEntries} />
+          <ContainerOutlet entries={toolbarEntries} />
         </ActionMenu>
       ) : null
     }>

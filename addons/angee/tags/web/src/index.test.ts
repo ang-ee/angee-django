@@ -34,7 +34,11 @@ describe("angee.tags addon manifest", () => {
     });
   });
 
-  test("contributes the record-scoped Tags chatter tab", () => {
-    expect((tags.chatter ?? []).map((tab) => tab.id)).toContain("tags");
+  test("contributes the record-scoped Tags chatter tab and declares the Tags page's containers", () => {
+    // `?chatterTab=tags` links keep resolving through the alias.
+    expect(tags.containers?.["record#aside"]).toMatchObject({
+      "tags.tags": { sequence: 15, content: { label: "Tags", icon: "tag", aliases: ["tags"] } },
+    });
+    expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields", "record#aside"]);
   });
 });

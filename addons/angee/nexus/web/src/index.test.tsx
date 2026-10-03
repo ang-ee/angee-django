@@ -1,4 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
+import type { ChatterTabContent, ContainerChild } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import nexus from "./index";
@@ -41,11 +42,13 @@ describe("nexus addon manifest", () => {
   });
 
   test("declares canonical model and record scopes for chatter tabs", () => {
-    const chatter = nexus.chatter ?? [];
-    expect(chatter.map(({ id, sequence, model }) => ({ id, sequence, model }))).toEqual([
-      { id: "timeline", sequence: 30, model: "parties.Party" },
-      { id: "network", sequence: 31, model: "parties.Party" },
-      { id: "feed", sequence: 32, model: "parties.Circle" },
+    const containers = (nexus.containers ?? {}) as Record<string, Record<string, ContainerChild<ChatterTabContent>>>;
+    const chatter = ["parties.Party#aside", "parties.Circle#aside"].flatMap((address) =>
+      Object.entries(containers[address] ?? {}).map(([id, child]) => ({ id, address, ...child })));
+    expect(chatter.map(({ id, sequence, address, content }) => ({ id, sequence, address, aliases: content.aliases }))).toEqual([
+      { id: "nexus.timeline", sequence: 30, address: "parties.Party#aside", aliases: ["timeline"] },
+      { id: "nexus.network", sequence: 31, address: "parties.Party#aside", aliases: ["network"] },
+      { id: "nexus.feed", sequence: 32, address: "parties.Circle#aside", aliases: ["feed"] },
     ]);
     const recordContext = {
       pathname: "/parties/people/abc",
@@ -57,9 +60,9 @@ describe("nexus addon manifest", () => {
       params: {},
       view: { kind: "dashboard" as const, type: "list" },
     };
-    for (const entry of chatter) {
-      expect(entry.when?.(recordContext)).toBe(true);
-      expect(entry.when?.(dashboardContext)).toBe(false);
+    for (const { content } of chatter) {
+      expect(content.when?.(recordContext)).toBe(true);
+      expect(content.when?.(dashboardContext)).toBe(false);
     }
   });
 });

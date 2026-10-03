@@ -2,9 +2,9 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, createAngeeI18nInstance, type AppRuntime } from "@angee/ui/runtime";
+import { AppRuntimeProvider, containersFromChildren, createAngeeI18nInstance, type AppRuntime } from "@angee/ui/runtime";
 
-import { AUTH_LOGIN_METHOD_SLOT, LoginPage, type LoginPageProps } from "./LoginPage";
+import { LOGIN_CONTAINERS, LoginPage, type LoginPageProps } from "./LoginPage";
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../providers/auth", () => ({
@@ -70,8 +70,10 @@ describe("login identity precedence", () => {
     expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
   });
 
-  test("methods use the slot by default and allow replacement or suppression", () => {
-    const runtime = { ...branded, slots: [{ slot: AUTH_LOGIN_METHOD_SLOT, id: "sso", content: <button>Slot sign-in</button> }] };
+  test("methods use auth.login#method by default and allow replacement or suppression", () => {
+    const runtime = { ...branded, containers: containersFromChildren(LOGIN_CONTAINERS, {
+      "auth.login#method": { "oidc.sso": { content: <button>Slot sign-in</button> } },
+    }) };
     const page = (methods?: LoginPageProps["methods"]) => <AppRuntimeProvider runtime={runtime}>
       <LoginPage methods={methods} showAtmosphere={false} />
     </AppRuntimeProvider>;

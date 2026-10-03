@@ -105,7 +105,7 @@ permissions, or cross-addon composition policy.
 
 When policy needs an implementation detail, use the appropriate explicit
 contract: an addon manifest, settings/autoconfig, `ImplClassField`, schema bucket,
-slot, registered form/glyph, or addon-owned interface. Do not introduce a parallel
+container, registered form/glyph, or addon-owned interface. Do not introduce a parallel
 registry merely to avoid the framework's extension point.
 
 ### Put Behavior on the Owning Object

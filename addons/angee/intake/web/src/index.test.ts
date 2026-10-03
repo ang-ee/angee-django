@@ -10,14 +10,20 @@ describe("intake addon manifest", () => {
   });
 
   test("contributes one form-section pane to project and task records", () => {
-    expect((intake.slots ?? []).map(({ id, model, slot }) => [id, model, slot])).toEqual([
-      ["intake.requester", TASK_MODEL, "access.roles"],
-      ["intake.people-rail", TASK_MODEL, "form-view.rail"],
-      ["decisions.subject.intake.Need", NEED_MODEL, "form-view.sections"],
-      ["intake.task-access-decisions", TASK_MODEL, "form-view.sections"],
-      ["intake.project-needs", PROJECT_MODEL, "form-view.sections"],
-      ["intake.task-needs", TASK_MODEL, "form-view.sections"],
-    ]);
+    const children = Object.fromEntries(Object.entries(intake.containers ?? {}).map(([address, entry]) =>
+      [address, Object.keys(entry as object)]));
+    expect(children).toEqual({
+      [`${TASK_MODEL}#access-roles`]: ["intake.requester"],
+      [`${TASK_MODEL}#aside`]: ["intake.access-decisions"],
+      [`${NEED_MODEL}#sections`]: ["intake.decisions"],
+      [`${TASK_MODEL}#rail`]: ["intake.people-rail"],
+      [`${TASK_MODEL}#sections`]: ["intake.task-access-decisions", "intake.task-needs"],
+      [`${PROJECT_MODEL}#sections`]: ["intake.project-needs"],
+    });
+    // Access decisions are the request's writers' business.
+    expect(intake.containers?.[`${TASK_MODEL}#sections`]).toMatchObject({
+      "intake.task-access-decisions": { permission: "write", requiredFields: ["permissions"] },
+    });
     expect(intake.routes ?? []).toEqual([]);
     expect(intake.menus ?? []).toEqual([]);
   });
@@ -27,7 +33,11 @@ describe("intake addon manifest", () => {
     expect(intake.icons?.["intake-needs"]).toBeDefined();
   });
 
-  test("offers the same actor-scoped access projection in the record aside", () => {
-    expect(intake.chatter?.map(({ id }) => id)).toContain("intake.access-decisions");
+  test("offers the same actor-scoped access projection in the task aside, on record views only", () => {
+    const tab = (intake.containers?.[`${TASK_MODEL}#aside`] as Record<string, { sequence?: number; content: { when?: (context: unknown) => boolean } }>)["intake.access-decisions"];
+    expect(tab?.sequence).toBe(50);
+    const view = (kind: string) => ({ pathname: "/", params: {}, view: { kind, type: "projects/task" } });
+    expect(tab?.content.when?.(view("record"))).toBe(true);
+    expect(tab?.content.when?.(view("list"))).toBe(false);
   });
 });

@@ -4,9 +4,6 @@ import type { AgentChatView, AgentRosterItem } from "./documents";
 import type { AcpSessionNavigation } from "./acp-session";
 import type { ReactNode } from "react";
 
-/** Runtime-specific chat surfaces contributed by the addon owning their transport. */
-export const AGENT_CHAT_SLOT = "agents.chat";
-
 /** Shared presentation inputs for the selected agent's chat transport. */
 export interface AgentChatProps {
   agentId: string;

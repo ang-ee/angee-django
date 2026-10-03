@@ -12,8 +12,6 @@ import { testDataResource } from "@angee/metadata/testing";
 import {
   AppRuntimeProvider,
   useAppRuntime,
-  useDrawers,
-  useModelSlot,
   useResourceRecordHref,
   useResourceRecordHrefLookup,
   useRouteHref,
@@ -21,12 +19,12 @@ import {
   useRuntimeViewAs,
   useRuntimeUserPreferences,
   useNamespaceT,
-  useSlot,
   useT,
   useWidget,
   type AppRuntime,
   type RuntimeAuthState,
 } from "./runtime";
+import { containersFromChildren, useContainer, useDrawers, type ContainerScope } from "./containers";
 import { createRouteHref } from "./route-href";
 import { createAngeeI18nInstance } from "./i18n";
 import { ViewAsBanner, ViewAsPicker } from "../chrome/ViewAs";
@@ -258,55 +256,45 @@ describe("AppRuntimeProvider", () => {
   });
 });
 
-describe("useSlot", () => {
-  test("returns only the entries contributed to the requested slot", () => {
-    const wrapper = wrapperFor({
-      slots: [
-        { slot: "header", id: "a" },
-        { slot: "footer", id: "b" },
-        { slot: "header", id: "c" },
-      ],
-    });
-    const { result } = renderHook(() => useSlot("header"), { wrapper });
-    expect(result.current.map((entry) => entry.id)).toEqual(["a", "c"]);
-  });
-});
+describe("useContainer", () => {
+  const containers = containersFromChildren(
+    [{ address: "form#actions", models: true }, { address: "shell#notices" }],
+    {
+      "form#actions": { "base.share": { content: "share", sequence: 50 } },
+      "messaging.Thread#actions": {
+        "messaging.resume": { content: "resume", sequence: 10 },
+        "matrix.resume": { content: "matrix resume", sequence: 10, variant: { of: "messaging.resume", impl: "matrix" } },
+      },
+      "messaging.Message#actions": { "messaging.reply": { content: "reply" } },
+      "shell#notices": { "operator.banner": { content: "banner" } },
+    },
+  );
 
-describe("useModelSlot", () => {
-  test("matches slot, model, and impl in target order", () => {
-    const wrapper = wrapperFor({
-      slots: [
-        { slot: "form-view.record-actions", model: "messaging.Thread", id: "base" },
-        {
-          slot: "form-view.record-actions",
-          model: "messaging.Thread",
-          impl: "matrix",
-          id: "specialized",
-        },
-        { slot: "form-view.record-actions", model: "messaging.Message", id: "other" },
-      ],
-    });
-    const targets = [
-      { slot: "form-view.record-actions", model: "messaging.Thread" },
-      { slot: "form-view.record-actions", model: "messaging.Thread", impl: "matrix" },
-    ];
-    const { result } = renderHook(() => useModelSlot(targets), { wrapper });
-
-    expect(result.current.map((entry) => entry.id)).toEqual([
-      "base",
-      "specialized",
-    ]);
+  test("merges the kind address with the record's model addresses in position order", () => {
+    const models = ["messaging.Thread"];
+    const { result } = renderHook(() => useContainer("form#actions", { models }), { wrapper: wrapperFor({ containers }) });
+    expect(result.current.map((child) => child.id)).toEqual(["messaging.resume", "base.share"]);
   });
 
-  test("ignores a legacy page id excluded by the route projection", () => {
-    const wrapper = wrapperFor({ slots: [
-      { slot: "form-view.sections", model: "notes.Note", id: "notes.kept" },
-    ] });
-    const { result } = renderHook(() => useModelSlot(
-      { slot: "form-view.sections", model: "notes.Note" },
-      { admit: ["notes.kept", "notes.excluded"] },
-    ), { wrapper });
-    expect(result.current.map((entry) => entry.id)).toEqual(["notes.kept"]);
+  test("a variant replaces its original on rows of its implementation", () => {
+    const models = ["messaging.Thread"];
+    const impls = ["matrix"];
+    const { result } = renderHook(() => useContainer("form#actions", { models, impls }), { wrapper: wrapperFor({ containers }) });
+    expect(result.current.map((child) => child.content)).toEqual(["matrix resume", "share"]);
+  });
+
+  test("applies a layer's narrowing only where the runtime scope matches its condition", () => {
+    const narrowed = { ...containers, rules: { "shell#notices": [{ layer: "pm", rank: 1, when: { route: "pm.board" }, only: [], exempt: [] }] } };
+    const scoped = (routes: string[]): ContainerScope => ({ apps: [], routes, perspective: null });
+    const onBoard = renderHook(() => useContainer("shell#notices"), { wrapper: wrapperFor({ containers: narrowed, containerScope: scoped(["pm.board.card", "pm.board"]) }) });
+    expect(onBoard.result.current).toEqual([]);
+    const elsewhere = renderHook(() => useContainer("shell#notices"), { wrapper: wrapperFor({ containers: narrowed, containerScope: scoped(["pm.list"]) }) });
+    expect(elsewhere.result.current.map((child) => child.id)).toEqual(["operator.banner"]);
+  });
+
+  test("an undeclared container or a runtime without containers resolves empty", () => {
+    expect(renderHook(() => useContainer("nobody#toolbar"), { wrapper: wrapperFor({ containers }) }).result.current).toEqual([]);
+    expect(renderHook(() => useContainer("form#actions")).result.current).toEqual([]);
   });
 });
 
@@ -320,22 +308,28 @@ describe("useRuntimeUserPreferences", () => {
 });
 
 describe("useDrawers", () => {
-  const drawers = [
-    { id: "logs", edge: "bottom" as const, title: "Logs", render: () => null },
-    { id: "chat", edge: "right" as const, title: "Chat", render: () => null },
-    { id: "tail", edge: "bottom" as const, title: "Tail", render: () => null },
-  ];
+  const containers = containersFromChildren(
+    [{ address: "shell#drawers-right" }, { address: "shell#drawers-bottom" }],
+    {
+      "shell#drawers-bottom": {
+        "operator.logs": { content: { title: "Logs", icon: "terminal", render: () => null }, sequence: 20 },
+        "operator.tail": { content: { title: "Tail", render: () => null }, sequence: 10 },
+      },
+      "shell#drawers-right": { "agents.chat": { content: { title: "Chat", render: () => null } } },
+    },
+  );
 
-  test("returns every drawer when no edge is given", () => {
-    const wrapper = wrapperFor({ drawers });
-    const { result } = renderHook(() => useDrawers(), { wrapper });
-    expect(result.current.map((d) => d.id)).toEqual(["logs", "chat", "tail"]);
+  test("returns the edge's drawers in composed order, tagged with their edge", () => {
+    const { result } = renderHook(() => useDrawers("bottom"), { wrapper: wrapperFor({ containers }) });
+    expect(result.current.map(({ id, edge, title, sequence, icon }) => ({ id, edge, title, sequence, icon }))).toEqual([
+      { id: "operator.tail", edge: "bottom", title: "Tail", sequence: 10, icon: undefined },
+      { id: "operator.logs", edge: "bottom", title: "Logs", sequence: 20, icon: "terminal" },
+    ]);
   });
 
   test("returns only the drawers contributed to the requested edge", () => {
-    const wrapper = wrapperFor({ drawers });
-    const { result } = renderHook(() => useDrawers("bottom"), { wrapper });
-    expect(result.current.map((d) => d.id)).toEqual(["logs", "tail"]);
+    const { result } = renderHook(() => useDrawers("right"), { wrapper: wrapperFor({ containers }) });
+    expect(result.current.map((drawer) => drawer.id)).toEqual(["agents.chat"]);
   });
 
   test("is empty when nothing is contributed", () => {

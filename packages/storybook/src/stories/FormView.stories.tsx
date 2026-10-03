@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FormView, type FormField, type GroupDescriptor } from "@angee/ui";
+import { FORM_CONTAINERS, FormView, containersFromChildren, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
 
@@ -225,12 +225,13 @@ railSchemas.public!.metadata = { angee: { resources: [testDataResource("notes.No
 })] } };
 
 export const RecordRail: Story = {
-  render: () => <RuntimeFixture schemas={railSchemas} runtime={{ slots: [{
-    id: "record-properties", ...FormView.railSlot("notes.Note"),
-    content: <FormView.RailGroup id="properties" label="Properties" hint="Edit values here"
-      fields={[{ field: { name: "owner" } }, { field: { name: "priority", widget: "select",
-        options: [{ value: "HIGH", label: "High" }, { value: "LOW", label: "Low" }] } }]} />,
-  }] }}>
+  render: () => <RuntimeFixture schemas={railSchemas} runtime={{ containers: containersFromChildren(FORM_CONTAINERS, {
+    "notes.Note#rail": { "notes.record-properties": {
+      content: <FormView.RailGroup id="properties" label="Properties" hint="Edit values here"
+        fields={[{ field: { name: "owner" } }, { field: { name: "priority", widget: "select",
+          options: [{ value: "HIGH", label: "High" }, { value: "LOW", label: "Low" }] } }]} />,
+    } },
+  }) }}>
     <FormView resource="notes.Note" id={storyRecord.id} fields={[titleField, bodyField]}
       acknowledgedSource={{ record: { ...storyRecord, permissions: ["read", "write"] }, values: storyRecord }} />
   </RuntimeFixture>,

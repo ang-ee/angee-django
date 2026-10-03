@@ -7,7 +7,7 @@ export * from "./lib";
 export * from "./theme";
 
 // The app-runtime registry + contribution contracts the binding owns: the
-// `AppRuntime` provider and its `useWidget`/`useSlot`/`usePreviews`/`useT`
+// `AppRuntime` provider and its `useWidget`/`useContainer`/`usePreviews`/`useT`
 // lookups, the `makeContext` factory, and the menu/slot/preview/widget/form
 // contracts the render surfaces consume. The binding owns the runtime it
 // consumes; `@angee/app` mounts the provider.

@@ -8,6 +8,7 @@ import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
 import { CommandPalette } from "./CommandPalette";
 import { AppMenu } from "./AppMenu";
+import { useShellRegion } from "./shell-containers";
 import { Glyph } from "./Glyph";
 import { Systray } from "./Systray";
 import { UserMenu } from "./UserMenu";
@@ -57,6 +58,7 @@ export function TopBar({
   children,
 }: TopBarProps): ReactElement {
   const t = useUiT();
+  const showAppMenu = useShellRegion("chrome.app-menu");
   return (
     <header
       aria-label={t("chrome.topBar")}
@@ -70,7 +72,7 @@ export function TopBar({
       {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
       {brand}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
-      <AppMenu />
+      {showAppMenu ? <AppMenu /> : null}
       <div className="min-w-2 flex-1" />
       {children}
       {hideSearch ? null : (

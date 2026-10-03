@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { GroupSpecsSchema, ResourceQuery, type ModelMetadata, type QueryFilter } from "@angee/metadata";
 import type { VisibilityState } from "@tanstack/react-table";
-import { RESOURCE_VIEW_KINDS, RESOURCE_VIEW_SORT_DIRECTIONS } from "./capabilities";
+import { RESOURCE_VIEW_SORT_DIRECTIONS, isResourceViewKind } from "./capabilities";
 import type { ResourceViewKind } from "./capabilities";
 import { Filter } from "./filter";
 import type { ResourceViewSort, ResourceViewInitialState } from "./filter";
@@ -42,7 +42,7 @@ export const ResourceViewFavoriteSchema = v.object({
   sort: v.optional(v.nullable(ResourceViewSortSchema)),
   filter: v.optional(v.unknown()),
   groupStack: v.optional(v.unknown()),
-  view: v.optional(v.picklist(RESOURCE_VIEW_KINDS)),
+  view: v.optional(v.custom<ResourceViewKind>((value) => typeof value === "string" && isResourceViewKind(value))),
   preset: v.optional(v.string()),
   columnVisibility: v.optional(v.record(v.string(), v.boolean())),
 });

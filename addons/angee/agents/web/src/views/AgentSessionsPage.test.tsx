@@ -10,7 +10,7 @@ import {
 } from "@angee/app/testing";
 
 import type { AgentRosterItem } from "../documents";
-import type { AgentChatProps } from "../chat-slot";
+import type { AgentChatProps } from "../chat-context";
 import agents from "../index";
 
 const routerMocks = vi.hoisted(() => ({

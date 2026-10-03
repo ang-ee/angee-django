@@ -7,22 +7,21 @@ import {
   isConnectedOrPaused,
   type IntegrationLifecycleToken,
 } from "@angee/integrate";
-import { formViewRecordActionsSlot } from "@angee/ui";
+import type { ContainersDeclaration } from "@angee/ui/runtime";
 import type { ReactNode } from "react";
 
 import { CHANNEL_MODEL } from "./documents";
 import { useMessagingT } from "./i18n";
 import { ChannelPairingAction } from "./PairingDialog";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 /**
- * One vendor-owned record verb on the channel form, scoped by the addon to the
- * vendor's own rows (the impl-keyed record-actions slot). The vendor renders the
- * verb itself — typically `ConditionalMutationButton` over its own generated
- * action, with `args` when the verb collects input (re-entering a login).
+ * One vendor-owned record verb in the channel form's overflow menu, shown only
+ * on the vendor's own rows (`impl`). The vendor renders the verb itself —
+ * typically `ConditionalMutationButton` over its own generated action, with
+ * `args` when the verb collects input (re-entering a login).
  */
 export interface ChannelRecordAction {
-  /** Stable contribution id, unique across the channel record-actions slot. */
+  /** Child id in the vendor addon's namespace (`<addon id>.<verb>`). */
   id: string;
   /** Order among the record verbs; messaging's shared lifecycle verbs sit at 10–14. */
   sequence: number;
@@ -69,9 +68,6 @@ export function defineChannelBridgeAddon({
   disconnectAction = <ChannelDisconnectAction />,
   recordActions = [],
 }: ChannelBridgeAddonOptions) {
-  const connectActionId = `${id}.connect`;
-  const pairingActionId = `${id}.pairing`;
-  const channelActions = formViewRecordActionsSlot(CHANNEL_MODEL, key);
   const pairingAction = (
     lifecycle: IntegrationLifecycleToken,
     labelKey: string,
@@ -88,34 +84,18 @@ export function defineChannelBridgeAddon({
   return defineBaseAddon({
     id,
     i18n,
-    slots: [
-      channelBridgeConnectSlot(id, sequence, connectAction),
-      {
-        ...channelActions,
-        id: connectActionId,
-        sequence: 10,
-        content: pairingAction("disconnected", "channel.pairing.connect", true),
-      },
-      {
-        ...channelActions,
-        id: pairingActionId,
-        sequence: 10,
-        content: pairingAction("connected", "channel.pairing.status"),
-      },
-      {
-        ...channelActions,
-        id: INTEGRATION_RESUME_ACTION_ID,
+    containers: channelContainers(id, sequence, connectAction, key, recordActions, {
+      // Pairing replaces Integration's resume and disconnect on this vendor's rows only.
+      [`${id}.connect`]: { impl: key, sequence: 10, content: pairingAction("disconnected", "channel.pairing.connect", true) },
+      [`${id}.pairing`]: { impl: key, sequence: 10, content: pairingAction("connected", "channel.pairing.status") },
+      [`${id}.resume`]: {
+        variant: { of: INTEGRATION_RESUME_ACTION_ID, impl: key },
         sequence: 12,
         content: pairingAction("paused", "channel.pairing.resume", true),
       },
-      {
-        ...channelActions,
-        id: INTEGRATION_DISCONNECT_ACTION_ID,
-        sequence: 13,
-        content: disconnectAction,
-      },
-      ...channelRecordActionSlots(key, recordActions),
-    ],
+    }, {
+      [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, content: disconnectAction },
+    }),
   });
 }
 
@@ -131,31 +111,31 @@ export function defineChannelPollBridgeAddon({
   return defineBaseAddon({
     id,
     i18n,
-    slots: [
-      channelBridgeConnectSlot(id, sequence, connectAction),
-      ...channelRecordActionSlots(key, recordActions),
-    ],
+    containers: channelContainers(id, sequence, connectAction, key, recordActions),
   });
 }
 
-/** Scope each vendor record verb to the vendor's own channel rows. */
-function channelRecordActionSlots(key: string, recordActions: readonly ChannelRecordAction[]) {
-  const target = formViewRecordActionsSlot(CHANNEL_MODEL, key);
-  return recordActions.map((action) => ({
-    ...target,
-    ...action,
-    recordActionPlacement: "menu" as const,
-  }));
-}
+type ChannelActionChildren = Record<`${string}.${string}`, { content: ReactNode; sequence: number; impl?: string; variant?: { of: string; impl: string } }>;
 
-/** Emit one vendor connect action in the shared channel toolbar. */
-function channelBridgeConnectSlot(id: string, sequence: number, connectAction: ReactNode) {
+/**
+ * One vendor's channel children: its connect verb on the Channels toolbar, its
+ * own form verbs, and its menu verbs scoped to its rows.
+ */
+function channelContainers(
+  id: string,
+  sequence: number,
+  connectAction: ReactNode,
+  key: string,
+  recordActions: readonly ChannelRecordAction[],
+  toolbar: ChannelActionChildren = {},
+  menu: ChannelActionChildren = {},
+): ContainersDeclaration {
+  const vendorVerbs = Object.fromEntries(recordActions.map(({ id: verb, sequence: order, content }) => [verb, { impl: key, sequence: order, content }]));
   return {
-    slot: MESSAGING_CHANNEL_TOOLBAR_SLOT,
-    id: `${id}.connect`,
-    sequence,
-    content: connectAction,
-  };
+    "messaging.channels#toolbar": { [`${id}.connect`]: { sequence, content: connectAction } },
+    ...(Object.keys(toolbar).length ? { [`${CHANNEL_MODEL}#actions`]: toolbar } : {}),
+    [`${CHANNEL_MODEL}#actions-menu`]: { ...menu, ...vendorVerbs },
+  } as ContainersDeclaration;
 }
 
 /** Default disconnect for live channels whose reusable pairing material remains. */

@@ -2,14 +2,13 @@
 // app folds the manifests into a single runtime with `composeAddons`. Every
 // contribution is keyed, and the key decides what a second claim on it means:
 //
-// - Registry facts (routes, menu ids, widgets, status tones, icons, i18n keys, forms, previews,
-//   data providers) and the keyed contribution lists that are extension points
-//   (slot entries by `(slot, model?, impl?, id)`, drawers by `(edge, id)`) are
-//   unique — a second addon claiming one is a collision, and a composition-time
-//   error (app boot;
-//   `pnpm run test` composes the full addon set — `typecheck`/`build` do not).
-// - Chatter tabs are unique by `(model?, id)`; a second addon claiming the same
-//   scoped tab is a composition-time collision.
+// - Registry facts (routes, menu ids, widgets, status tones, icons, i18n keys,
+//   forms, previews, data providers, layout providers) are unique: a second
+//   addon claiming one is a composition-time error (app boot; `pnpm run test`
+//   composes the full addon set, `typecheck`/`build` do not).
+// - Menus and containers are layered: an addon declares in its own namespace
+//   and alters what the addons it depends on declared; unrelated layers setting
+//   one field collide (`menus.ts`, `containers.ts`).
 //
 // The ordered lists sort by sequence and contribution key, never by addon order.
 
@@ -21,30 +20,28 @@ import type { I18nResources } from "@angee/refine";
 // against them. Re-exported here so addon manifests import one composition seam.
 import type {
   AppVocabulary,
-  ChatterContribution,
   ComposedMenuItem,
-  DrawerContribution,
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
-  ModelSlotTarget,
   PreviewContribution,
   RuntimeFormRegistration,
   RuntimeBrand,
-  SlotContribution,
+  ComposedContainers,
+  ContainersDeclaration,
+  DockedDrawerContent,
   WidgetMap,
 } from "@angee/ui/runtime";
-import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
+import { RECORD_SEARCH_KEYS } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
 import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
-import type { AppSurface } from "./route-policy";
 import { resolveShell, type PerspectiveDeclaration, type ResolvedShell, type ShellDeclaration } from "./shell";
 import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
 import { layerAncestry } from "./layers";
-export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
+import { compileContainers } from "./containers";
+import { CORE_CONTAINERS } from "./core-containers";
 import {
-  DASHBOARD_STORE_SLOT,
   parseDashboardSnapshot,
   type DashboardDefinition,
   type DashboardRegistry,
@@ -59,17 +56,14 @@ import {
 
 export type {
   AppVocabulary,
-  ChatterContribution,
   ComposedMenuItem,
-  DrawerContribution,
+  DockedDrawerContent,
   DrawerEdge,
   FormOverrideMap,
   MenuItem,
-  ModelSlotTarget,
   PreviewContribution,
   RuntimeFormRegistration,
   RuntimeBrand,
-  SlotContribution,
   WidgetMap,
 };
 
@@ -133,22 +127,18 @@ export interface AddonManifest {
   statusTones?: StatusToneMap;
   i18n?: I18nResources;
   vocabulary?: readonly AppVocabulary[];
-  /** App and app-keyed route scopes, inherited like vocabulary. */
-  surface?: readonly AppSurface[];
   resourceViews?: readonly ResourceViewPreset[];
   icons?: Readonly<Record<string, unknown>>;
   forms?: FormOverrideMap;
-  chatter?: readonly ChatterContribution[];
-  slots?: readonly SlotContribution[];
+  /**
+   * Children of named containers, keyed by address (`node#name`): own-namespace
+   * keys declare children, other keys alter a dependency's; `only`, `except` and
+   * `when` narrow what renders. An address on the addon's own node declares the container.
+   */
+  containers?: ContainersDeclaration;
   previews?: readonly PreviewContribution[];
   /** Addon-owned search keys that expire when the active record changes. */
   recordSearchKeys?: readonly string[];
-  /**
-   * Non-modal overlay drawers the addon contributes to the console shell's edge
-   * stripe-tabs (right + bottom). Merged by `(edge, id)` — fail-fast on a second
-   * claim of the same pair — and ordered by `sequence`.
-   */
-  drawers?: readonly DrawerContribution[];
   /**
    * Refine data providers an addon contributes, keyed by provider name. The SDK
    * manifest keeps the value opaque (only the name matters for collision
@@ -163,6 +153,8 @@ export interface AddonManifest {
   dashboards?: readonly DashboardDefinition[];
   /** Namespaced widget kinds or explicit compatible replacements. */
   dashboardWidgetKinds?: readonly DashboardWidgetKind[];
+  /** The persistence behind saved dashboards; at most one installed addon provides it. */
+  dashboardStore?: DashboardStore;
   /** Installed visual implementations. Theme ids are globally unique. */
   themes?: readonly ThemeManifestContribution[];
 }
@@ -185,15 +177,13 @@ export interface ComposedAddons {
   statusTones: StatusToneMap;
   i18n: I18nResources;
   vocabulary: readonly AppVocabulary[];
-  surface: readonly AppSurface[];
   resourceViews: Readonly<Record<string, ResourceViewPreset>>;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
-  chatter: readonly ChatterContribution[];
-  slots: readonly SlotContribution[];
+  /** The compiled containers: children per address, render-time narrowing, removals, provenance. */
+  containers: ComposedContainers;
   previews: readonly PreviewContribution[];
   recordSearchKeys: readonly string[];
-  drawers: readonly DrawerContribution[];
   dataProviders: Readonly<Record<string, unknown>>;
   layoutProviders: readonly LayoutProviderContribution[];
   dashboards: DashboardRegistry;
@@ -219,18 +209,7 @@ export function defineAddon(manifest: AddonManifest): AddonManifest {
  * Merge sequence-ordered contributions: dedupe by `keyOf` and sort by
  * `sequence`, then the contribution key. By default later groups win (an addon
  * overrides a default); pass `uniqueKind` to instead fail fast on a duplicate
- * key (two addons claiming one key is a collision, like widgets/previews). The chatter, slot, and drawer
- * merges are the same fold over different keys.
- *
- * Slots are additive extension points, so a slot entry is a unique key: a second
- * addon claiming one silently deciding the winner by array order is a collision,
- * not an override. An addon that needs to vary a contribution per row keys it on
- * the fact the row already carries — an `ImplClassField` value — through the
- * record-verb slot's typed impl address
- * (`formViewRecordActionsSlot(resource, implValue)`),
- * which resolves by declared specificity rather than by array order. Two vendors
- * then specialize the same verb on the same model as siblings, each reaching only
- * its own rows.
+ * key (two addons claiming one key is a collision, like widgets/previews).
  */
 function mergeByKey<T extends { sequence?: number }>(
   groups: readonly (readonly T[])[],
@@ -256,33 +235,6 @@ function mergeByKey<T extends { sequence?: number }>(
     const right = keyOf(b);
     return left < right ? -1 : left > right ? 1 : 0;
   });
-}
-
-export function mergeChatterContributions(
-  ...groups: readonly (readonly ChatterContribution[])[]
-): ChatterContribution[] {
-  return mergeByKey(
-    groups,
-    (tab) => `${tab.model ?? ""}\0${tab.id}`,
-    "chatter tab",
-  );
-}
-
-export function mergeSlotContributions(
-  ...groups: readonly (readonly SlotContribution[])[]
-): SlotContribution[] {
-  return mergeByKey(
-    groups,
-    (entry) =>
-      `${entry.slot}\0${entry.model ?? ""}\0${entry.impl ?? ""}\0${entry.id}`,
-    "slot entry",
-  );
-}
-
-export function mergeDrawerContributions(
-  ...groups: readonly (readonly DrawerContribution[])[]
-): DrawerContribution[] {
-  return mergeByKey(groups, (drawer) => `${drawer.edge}\0${drawer.id}`, "drawer");
 }
 
 /** Assert a registry key is still unclaimed for one addon. */
@@ -312,6 +264,7 @@ export function composeAddons(
   const shell = resolveShell(addons, ancestors);
   const routes: AddonRoute[] = [];
   const compiledMenus = compileMenus(addons, ancestors);
+  const containers = compileContainers(addons, CORE_CONTAINERS, { ancestors, canonicalizeModel });
   const widgets: WidgetMap = {};
   const statusTones: Record<string, StatusToneMap[string]> = Object.create(null);
   const i18n: Record<string, Record<string, string>> = {};
@@ -429,15 +382,6 @@ export function composeAddons(
     throw new Error(`Brand mark "${shell.brand.mark}" is not registered by any addon.`);
   }
 
-  const slots = mergeSlotContributions(
-    ...addons.map((addon) =>
-      normalizeSlotContributions(
-        addon.slots ?? [],
-        canonicalizeModel,
-        addon.id,
-      ),
-    ),
-  );
   return {
     shell,
     brand: shell.brand,
@@ -448,7 +392,6 @@ export function composeAddons(
     statusTones,
     i18n,
     vocabulary: addons.flatMap((addon) => addon.vocabulary ?? []),
-    surface: addons.flatMap((addon) => addon.surface ?? []),
     resourceViews,
     icons,
     forms,
@@ -458,16 +401,10 @@ export function composeAddons(
       (provider) => `${provider.layout}\0${provider.id}`,
       "layout provider",
     ),
-    chatter: mergeChatterContributions(
-      ...addons.map((addon) =>
-        normalizeChatterContributions(addon.chatter ?? [], canonicalizeModel),
-      ),
-    ),
-    slots,
-    drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
+    containers,
     previews,
     recordSearchKeys: Object.keys(recordSearchKeys).sort(),
-    dashboards: composeDashboardRegistry(addons, slots, canonicalizeModel),
+    dashboards: composeDashboardRegistry(addons, canonicalizeModel),
     themes: themes.sort((left, right) => {
       const leftId = "definition" in left ? left.definition.id : left.id;
       const rightId = "definition" in right ? right.definition.id : right.id;
@@ -478,7 +415,6 @@ export function composeAddons(
 
 function composeDashboardRegistry(
   addons: readonly AddonManifest[],
-  slots: readonly SlotContribution[],
   canonicalizeModel: (spelling: string) => string,
 ): DashboardRegistry {
   const definitions: Record<string, DashboardDefinition> = {};
@@ -530,21 +466,11 @@ function composeDashboardRegistry(
   }
   for (const [id, replacement] of replacements) widgetKinds[id] = replacement;
 
-  const stores = slots.filter((slot) => slot.slot === DASHBOARD_STORE_SLOT);
-  if (stores.length > 1) throw new Error("The dashboard.store slot accepts exactly zero or one contribution.");
-  const storeEntry = stores[0];
-  if (storeEntry?.model || storeEntry?.impl) throw new Error("The dashboard.store contribution must be unscoped.");
-  const store = storeEntry?.content == null ? null : dashboardStore(storeEntry.content);
-  return { definitions, resourceDefaults, widgetKinds, store };
-}
-
-function dashboardStore(value: unknown): DashboardStore {
-  if (!value || typeof value !== "object") throw new Error("The dashboard.store contribution has invalid content.");
-  const candidate = value as Partial<Record<keyof DashboardStore, unknown>>;
-  for (const method of ["useDashboard", "useCatalogue"] as const) {
-    if (typeof candidate[method] !== "function") throw new Error(`The dashboard.store contribution is missing ${method}().`);
+  const providers = addons.filter((addon) => addon.dashboardStore);
+  if (providers.length > 1) {
+    throw new Error(`Addons ${providers.map((addon) => `"${addon.id}"`).join(", ")} each provide the dashboard store; install one.`);
   }
-  return value as DashboardStore;
+  return { definitions, resourceDefaults, widgetKinds, store: providers[0]?.dashboardStore ?? null };
 }
 
 function isRuntimeFormRegistration(value: unknown): value is RuntimeFormRegistration {
@@ -553,36 +479,3 @@ function isRuntimeFormRegistration(value: unknown): value is RuntimeFormRegistra
   );
 }
 
-function normalizeChatterContributions(
-  contributions: readonly ChatterContribution[],
-  canonicalizeModel: (spelling: string) => string,
-): ChatterContribution[] {
-  return contributions.map((entry) =>
-    entry.model === undefined
-      ? entry
-      : { ...entry, model: canonicalizeModel(entry.model) },
-  );
-}
-
-function normalizeSlotContributions(
-  slots: readonly SlotContribution[],
-  canonicalizeModel: (spelling: string) => string,
-  addonId: string,
-): SlotContribution[] {
-  return slots.map((entry) => {
-    if (isModelScopedSlot(entry.slot) && entry.model === undefined) {
-      throw new Error(
-        `Addon "${addonId}" declares model-scoped slot "${entry.slot}" without a model.`,
-      );
-    }
-    if (entry.impl !== undefined && entry.model === undefined) {
-      throw new Error(
-        `Addon "${addonId}" declares slot "${entry.slot}" impl "${entry.impl}" ` +
-          "without a model.",
-      );
-    }
-    return entry.model === undefined
-      ? entry
-      : { ...entry, model: canonicalizeModel(entry.model) };
-  });
-}

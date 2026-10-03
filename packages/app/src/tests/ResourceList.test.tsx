@@ -93,9 +93,14 @@ import { testDataResource, withTestResourceInventory, testResourceQuery, testQue
 import { installTestLocalStorage } from "../testing";
 import {
   AppRuntimeProvider,
+  containersFromChildren,
   type RuntimeUserPreferences,
   type RuntimeUserPreferencesPatch,
 } from "@angee/ui/runtime";
+import { CORE_CONTAINERS } from "../core-containers";
+
+// The framework's containers, as `createApp` composes them: the view switcher offers the `resource#views` kinds.
+const CORE_RUNTIME = { containers: containersFromChildren(CORE_CONTAINERS, {}) };
 
 interface ResourceListOptions {
   fields?: readonly string[];
@@ -842,7 +847,7 @@ function render(
 ): RenderResult {
   return rtlRender(
     <ModelMetadataProvider metadata={TEST_SCHEMA_METADATA}>
-      {ui}
+      <AppRuntimeProvider runtime={CORE_RUNTIME}>{ui}</AppRuntimeProvider>
     </ModelMetadataProvider>,
     options,
   );

@@ -1,16 +1,9 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  DashboardView,
-  ErrorBanner,
-  Metric,
-  SlotOutlet,
-  useSlot,
-} from "@angee/ui";
+import { DashboardView, ErrorBanner, Metric, ContainerOutlet, useContainer } from "@angee/ui";
 
 import { PartiesOverview } from "./documents";
 import { usePartiesT } from "./i18n";
-import { PARTIES_OVERVIEW_SLOT } from "./slots";
 
 const DUPLICATE_COUNT_LIMIT = 100;
 const DUPLICATE_QUERY_LIMIT = DUPLICATE_COUNT_LIMIT + 1;
@@ -30,7 +23,7 @@ export function OverviewPage(): React.ReactElement {
       "parties.MergeVeto",
     ],
   });
-  const contributions = useSlot(PARTIES_OVERVIEW_SLOT);
+  const contributions = useContainer("parties.overview#items");
   const data = overview.data;
   const duplicateCount = data?.duplicate_party_candidates.length;
 
@@ -79,7 +72,7 @@ export function OverviewPage(): React.ReactElement {
       />
 
       {overview.error ? <ErrorBanner description={t("overview.error")} /> : null}
-      <SlotOutlet entries={contributions} />
+      <ContainerOutlet entries={contributions} />
     </DashboardView>
   );
 }

@@ -1,7 +1,9 @@
 import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import type { HiddenMenuItem, MenuItem, RemovedMenuItem } from "@angee/ui/runtime";
 
-import { DEPLOYMENT_LAYER_ID, layerAncestry, type Layer } from "./layers";
+import { positionSiblings } from "@angee/ui/lib/position";
+
+import { DEPLOYMENT_LAYER_ID, assertMayAlter, layerAncestry, overridesField, type Layer } from "./layers";
 
 /** An included node, optionally rendered flat into the including node. */
 export type MenuInclude = string | { id: string; flatten?: boolean };
@@ -136,18 +138,12 @@ export function compileMenus(
   const target = (layer: string, id: string): Node => {
     const node = nodes.get(id);
     if (!node) throw new Error(`Addon "${layer}" alters unknown menu item "${id}".`);
-    if (node.owner !== layer && !ancestors.get(layer)?.has(node.owner)) {
-      throw new Error(`Addon "${layer}" alters menu item "${id}" of "${node.owner}", which it does not depend on.`);
-    }
+    assertMayAlter(ancestors, layer, node.owner, `menu item "${id}"`);
     return node;
   };
   const set = (layer: string, id: string, field: Field, value: unknown): void => {
     const node = target(layer, id);
-    const previous = node.setBy[field];
-    if (previous !== undefined && previous !== layer && !ancestors.get(layer)?.has(previous)) {
-      if (ancestors.get(previous)?.has(layer)) return;
-      throw new Error(`Unrelated addons "${previous}" and "${layer}" both set menu "${id}" ${field}.`);
-    }
+    if (!overridesField(ancestors, node.setBy[field], layer, `menu "${id}" ${field}`)) return;
     node.fields[field] = value;
     node.setBy[field] = layer;
   };
@@ -340,43 +336,14 @@ function resolve(
   };
 }
 
-/**
- * Order one list of siblings: by sequence (missing sorts last), then declaration
- * or include order. A node with `before`/`after` is then placed next to its
- * anchor when the anchor is in the same list (nodes on one anchor keep that
- * order); an anchor elsewhere or removed leaves the node in place. Anchors that
- * depend on each other in a cycle fail composition.
- */
+/** Order one list of siblings by the shared rule, from declaration or include order. */
 function position(siblings: readonly Node[]): Node[] {
-  const sorted = [...siblings].sort((left, right) => sequenceOf(left) - sequenceOf(right) || left.index - right.index);
-  const present = new Set(sorted.map((node) => node.id));
-  const anchorOf = (node: Node): { id: string; before: boolean } | undefined => {
-    const id = (node.fields.before ?? node.fields.after) as string | undefined;
-    return id !== undefined && present.has(id) ? { id, before: node.fields.before !== undefined } : undefined;
-  };
-  const result = sorted.filter((node) => !anchorOf(node));
-  let pending = sorted.filter((node) => anchorOf(node));
-  const lastAfter = new Map<string, string>();
-  while (pending.length) {
-    const placeable = pending.filter((node) => result.some((placed) => placed.id === anchorOf(node)!.id));
-    if (!placeable.length) {
-      throw new Error(`Menu items ${pending.map((node) => `"${node.id}"`).join(", ")} position themselves in a before/after cycle.`);
-    }
-    for (const node of placeable) {
-      const anchor = anchorOf(node)!;
-      if (anchor.before) {
-        result.splice(result.findIndex((placed) => placed.id === anchor.id), 0, node);
-      } else {
-        const last = lastAfter.get(anchor.id) ?? anchor.id;
-        result.splice(result.findIndex((placed) => placed.id === last) + 1, 0, node);
-        lastAfter.set(anchor.id, node.id);
-      }
-    }
-    pending = pending.filter((node) => !placeable.includes(node));
-  }
-  return result;
-}
-
-function sequenceOf(node: Node): number {
-  return typeof node.fields.sequence === "number" ? node.fields.sequence : Number.POSITIVE_INFINITY;
+  const entries = [...siblings].sort((left, right) => left.index - right.index).map((node) => ({
+    id: node.id,
+    node,
+    ...(typeof node.fields.sequence === "number" ? { sequence: node.fields.sequence } : {}),
+    ...(typeof node.fields.before === "string" ? { before: node.fields.before } : {}),
+    ...(typeof node.fields.after === "string" ? { after: node.fields.after } : {}),
+  }));
+  return positionSiblings(entries, "Menu items").map((entry) => entry.node);
 }

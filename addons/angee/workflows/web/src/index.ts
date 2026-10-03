@@ -2,7 +2,7 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
-import { decisionRunOrigin, workflowsChatter } from "./contributions";
+import { decisionRunOrigin, workflowsRunsTab } from "./contributions";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
@@ -24,8 +24,11 @@ export default defineBaseAddon({
     "workflows.catalogue": { parent: "workflows", label: "Workflows", icon: "versions", route: "workflows.catalogue" },
     "workflows.triggers": { parent: "workflows", label: "Triggers", icon: "activity", route: "workflows.triggers" },
   },
-  chatter: [workflowsChatter],
-  slots: [decisionRunOrigin],
+  containers: {
+    "record#aside": { "workflows.runs": workflowsRunsTab },
+    "decisions#origin": { "workflows.run": decisionRunOrigin },
+  },
+
   widgets: { "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition } },
   i18n: { workflows: enWorkflowsMessages },
 });
