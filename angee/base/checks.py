@@ -1,7 +1,8 @@
-"""Django system checks for Angee's runtime persistence contracts."""
+"""Django system checks for Angee's runtime contracts."""
 
 from __future__ import annotations
 
+import pyexpat
 from collections.abc import Sequence
 
 from django.apps import AppConfig, apps
@@ -23,6 +24,25 @@ from angee.base.impl import (
 )
 from angee.base.mixins import CreationKeyMixin, HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
 from angee.base.permissions import effective_rebac_definition, effective_rebac_schema
+
+
+def check_expat_version(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Require Expat's amplification and large-token protections for untrusted XML."""
+
+    del app_configs, kwargs
+    if pyexpat.version_info >= (2, 7, 2):
+        return []
+    version = ".".join(str(part) for part in pyexpat.version_info)
+    return [
+        checks.Error(
+            f"Expat 2.7.2 or later is required to parse untrusted XML; Python is linked against {version}.",
+            hint="Upgrade Python or its linked Expat library.",
+            id="angee.E035",
+        )
+    ]
 
 
 def check_rebac_caveats(

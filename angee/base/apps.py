@@ -13,12 +13,13 @@ class BaseConfig(AppConfig):
     name = "angee.base"
 
     def ready(self) -> None:
-        """Validate persistence and queryset composition independently of API addons."""
+        """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
         # The check imports REBAC models, which require completed app population.
         from angee.base.checks import (
             check_creation_key_constraints,
+            check_expat_version,
             check_hierarchy_queryset_order,
             check_hooks,
             check_impl_registries,
@@ -27,6 +28,7 @@ class BaseConfig(AppConfig):
             check_rebac_database,
         )
 
+        checks.register(check_expat_version, checks.Tags.security)
         checks.register(check_rebac_database, checks.Tags.models)
         checks.register(check_hierarchy_queryset_order, checks.Tags.models)
         checks.register(check_impl_registries, checks.Tags.models)
