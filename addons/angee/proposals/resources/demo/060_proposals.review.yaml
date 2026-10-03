@@ -1,0 +1,10 @@
+_meta:
+  model: proposals.Review
+rows:
+  - xref: mvp_alice_review
+    fields:
+      proposal: proposals.mvp_alice
+      reviewer: iam.user_admin
+      body: The proposed boundaries are clear. Confirm the delivery checkpoints before awarding the build track.
+      created_by: iam.user_admin
+      updated_by: iam.user_admin

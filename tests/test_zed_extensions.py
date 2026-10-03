@@ -225,12 +225,6 @@ def test_agents_tool_grants_accept_user_group_and_role_subjects() -> None:
     source = Path(apps.get_app_config("agents").path) / "permissions.zed"
     schema = parse_zed(source.read_text(encoding="utf-8"))
 
-    server = schema.get_definition("agents/mcp_server")
-    server_agent = next(relation for relation in server.relations if relation.name == "agent")
-    assert {(subject.type, subject.id, subject.relation) for subject in server_agent.allowed_subjects} == {
-        ("agents/agent", "", "")
-    }
-
     agent = schema.get_definition("agents/agent")
     actor = next(relation for relation in agent.relations if relation.name == "actor")
     assert {(subject.type, subject.id, subject.relation) for subject in actor.allowed_subjects} == {

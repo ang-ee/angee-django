@@ -444,7 +444,7 @@ def test_append_and_prepend_grow_body_and_record_revisions(composed_tables: None
 def test_mcp_body_write_records_a_revision(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A section patch driven through the MCP engine is versioned like an HTTP edit.
 
-    The MCP path runs GraphQL with ``request=None``, so ``RevisionMiddleware`` never
+    The MCP path has no HTTP middleware, so ``RevisionMiddleware`` never
     opens the ``create_revision()`` block an HTTP write rides — the engine itself must.
     Drive ``patch_page_section`` through :func:`execute_under_actor` (the MCP engine
     entry point, not the HTTP schema) and assert a ``Version`` lands, bound to the actor,

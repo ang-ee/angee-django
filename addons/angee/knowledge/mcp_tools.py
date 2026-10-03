@@ -46,7 +46,8 @@ def register(server: FastMCP) -> None:
                 operation="search_pages",
                 name="search_pages",
                 fields=("sqid", "title", "kind"),
-                args=("vault", "query", "first"),
+                args=("vault", "query"),
+                limit_arg="first",
                 description="Search a vault for pages matching a query, returning the matching pages. "
                 "vault is the vault's public id (sqid).",
             ),

@@ -7,3 +7,15 @@ rows:
       given_name: Demo
       family_name: Manager
       user: pm.manager
+  - xref: alice_person
+    fields:
+      display_name: Alice Morgan
+      given_name: Alice
+      family_name: Morgan
+      user: iam.user_alice
+  - xref: bob_person
+    fields:
+      display_name: Bob Chen
+      given_name: Bob
+      family_name: Chen
+      user: iam.user_bob

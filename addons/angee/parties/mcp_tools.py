@@ -51,7 +51,8 @@ def register(server: FastMCP) -> None:
                 operation="search_parties",
                 name="search_parties",
                 fields=("sqid", "display_name", "given_name", "family_name", "nickname"),
-                args=("query", "limit"),
+                args=("query",),
+                limit_arg="limit",
                 description="Find people whose display name contains query. Returns public party ids "
                 "(pty_ sqids); use this before reads, circle membership, relationships, or merges.",
             ),

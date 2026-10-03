@@ -26,9 +26,10 @@ def register(server: FastMCP) -> None:
                 operation="semantic_search",
                 name="semantic_search",
                 fields=("sqid", "title", "kind"),
-                args=("vault", "query", "first"),
-                description="Semantically search a vault for pages related to a query, most relevant first. "
-                "vault is the vault's public id (sqid). Uses the plugin's vector retrieval provider.",
+                args=("vault", "query"),
+                limit_arg="first",
+                description="Search a vault for pages matching query text using the plugin's lexical stub. "
+                "vault is the vault's public id (sqid). Embeddings and vector retrieval are not implemented.",
             ),
         ],
     )

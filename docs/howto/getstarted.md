@@ -117,11 +117,9 @@ works:
 
 ## How much of this is built today?
 
-Every capability in the [feature list](../features.md) is already **prototyped
-and working end to end** — proven inside production platforms the team has built.
-Angee is the exercise of *lifting* those capabilities out of those codebases and
-open-sourcing them here, reconstructed to the framework's conventions one addon
-at a time. Expect a lot of movement over the coming weeks as new addons land.
+The [feature list](../features.md) distinguishes shipped capabilities from planned
+work. Angee remains an early alpha preview; addon availability and production
+readiness are separate questions.
 
 Concretely, today:
 
@@ -131,16 +129,14 @@ Concretely, today:
   and the base addons: GraphQL via strawberry-django, relationship-based
   authorization (REBAC), aggregates, tiered resources, history/revisions, and
   the React frontend (layouts, list/board/form views).
-- **Being lifted in now.** The higher-level addons — agents, integrations,
-  knowledge, storage, and communications. They already run in the team's other
-  platforms; the work in flight is reconstructing and open-sourcing them here,
-  addon by addon.
+- **Also landed.** Agents, integrations, knowledge, storage, communications,
+  and MCP are available as addons. Knowledge's retrieval seam includes a skeleton
+  `knowledge_graph_pgvector` plugin using lexical search; embeddings and Graph RAG
+  are not implemented.
 
-This is the whole point of the framework — and why it is **technical investment,
-not technical debt**. Every component and its permissions are tested end to end,
-so the foundation each new addon builds on is already proven, and each addon that
-lands makes the next one easier instead of adding to a pile of things to fix
-later.
+The shared owners let addons compose existing behavior and permission rules.
+See [Checks](../checks.md) for automated coverage and the browser checks that
+still require manual verification.
 
 For exactly which libraries are wired versus still proposed, the
 [opinionated stack](../stack.md) is the source of truth; for the full breakdown
@@ -148,12 +144,10 @@ of every capability see **[Features](../features.md)**.
 
 ## When will it be ready for production?
 
-The target is **Q3 2026**. That is a target, not a promise — and
-production-readiness arrives capability-by-capability rather than as one flip of
-a switch. The operator and the framework core harden first; the higher-level
-addons follow as they land. Until then, Angee is an **early alpha preview**:
-excellent for prototyping and for shaping the framework, not yet a platform to
-run a business-critical product on unattended.
+Production readiness is assessed capability by capability as the operator,
+framework core, and addons harden. Angee remains an **early alpha preview** for
+prototyping and shaping the framework; there is no current production release
+date.
 
 ## How do I get it?
 
