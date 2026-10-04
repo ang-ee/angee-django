@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
+from django.db import DataError
 
 INTEGRATION_FAILURE_MESSAGE = "Integration operation failed."
 """The bounded message every unclassified integration failure projects to."""
@@ -48,4 +49,6 @@ def _safe_integration_failure(error: Exception) -> IntegrationFailure:
         return IntegrationFailure(error.public_message)
     if isinstance(error, ValidationError):
         return IntegrationFailure("Integration configuration is invalid.")
+    if isinstance(error, DataError):
+        return IntegrationFailure("Database rejected invalid or oversized record data.")
     return IntegrationFailure(INTEGRATION_FAILURE_MESSAGE)

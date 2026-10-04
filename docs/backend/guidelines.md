@@ -1372,9 +1372,12 @@ validated at the driver boundary.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
-  one transaction. Semantic record failures use
-  savepoints so later records continue. Infrastructure failures roll back the
-  page. Conditional remote writes happen outside database transactions and are
+  one transaction. Semantic, field-validation and record-level database data
+  failures use savepoints and the existing discrepancy owner so later records
+  continue. Domain write owners truncate source display text to model-field limits;
+  identifiers stay lossless or are refused, never silently truncated.
+  Infrastructure failures roll back the page. Conditional remote writes happen
+  outside database transactions and are
   reflected only after their response; no cross-system atomicity is implied.
 - **Compare both sides with their last applied bases.** Unchanged pairs do
   nothing, remote-only changes apply, and local-only changes may write back with
