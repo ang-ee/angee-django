@@ -1,19 +1,27 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const DECISION_MODEL = "decisions.Decision";
-export const DECISION_MODELS = [DECISION_MODEL, "decisions.DecisionGroup"];
+export const DECISION_MODELS = [DECISION_MODEL, "decisions.DecisionRecord"];
 
-export const DecisionDocument = graphql(`
-  query DecisionDetail($id: String!) {
-    decisions_by_pk(id: $id) {
-      id kind revision is_open permissions form_schema basis context
-      verdict closed_reason resolution resolved_at expires_at
-      subject_model subject_id
-      requester { display_name }
-      resolved_by { display_name }
-      group { id }
-    }
+export const DecisionFields = graphql(`
+  fragment DecisionCardFields on DecisionType {
+    id kind kind_label revision is_open permissions context proposal verdict answered_at
+    records { id record_model record_id }
+    requester { display_name }
+    answered_by { display_name }
   }
 `);
 
-export type Decision = NonNullable<DocumentType<typeof DecisionDocument>["decisions_by_pk"]>;
+export const DecisionDocument = graphql(`
+  query DecisionDetail($id: String!) {
+    decisions_by_pk(id: $id) { ...DecisionCardFields }
+  }
+`);
+
+export const OpenDecisionsDocument = graphql(`
+  query OpenDecisions($model: String!, $id: ID!) {
+    open_decisions(record_model: $model, record_id: $id) { ...DecisionCardFields }
+  }
+`);
+
+export type Decision = DocumentType<typeof DecisionFields>;

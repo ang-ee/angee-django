@@ -1,8 +1,8 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { decisionFixture, decisionGroupFixture, decisionResourceFixture } from "@angee/decisions/testing";
+import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { describe, expect, test } from "vitest";
 
-import decisions, { DECISION_MODEL, DecisionsList, decisionContent, decisionRecordTab } from "./index";
+import decisions, { DECISION_MODEL, DecisionsList, DecisionCard, fieldsToMark, decisionRecordTab } from "./index";
 import { DecisionsList as OwnedDecisionsList } from "./RecordDecisions";
 
 describe("decisions fragment", () => {
@@ -10,7 +10,6 @@ describe("decisions fragment", () => {
   test("publishes its neutral fixtures through the testing entry", () => {
     expect(decisionFixture().kind).toBe("review");
     expect(decisionResourceFixture).toBeTruthy();
-    expect(decisionGroupFixture).toBeTruthy();
   });
   test("registers one routed inbox and an inherited record route", () => {
     expect(decisions.menus).toMatchObject({
@@ -35,9 +34,10 @@ describe("decisions fragment", () => {
   test("exports consumer and waiting-owner contracts without registering mandatory content", () => {
     expect(DecisionsList).toBe(OwnedDecisionsList);
     expect(DECISION_MODEL).toBe("decisions.Decision");
-    // The addon declares its containers empty; contributors name their `decisions#content` children.
-    expect(decisions.containers).toEqual({ "decisions#content": { unique: "key" }, "decisions#origin": {} });
-    expect(decisionContent("review", () => null)).toMatchObject({ key: "review", content: expect.anything() });
+    // Independent waiters contribute origin links through the declared container.
+    expect(decisions.containers).toEqual({ "decisions#origin": {} });
+    expect(DecisionCard).toBeTypeOf("function");
+    expect(fieldsToMark([], "nte_7")).toEqual([]);
     // A subject model's addon declares it at `<model>#sections` under its own id.
     expect(decisionRecordTab()).toMatchObject({ sequence: 50, content: expect.anything() });
   });

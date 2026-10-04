@@ -108,7 +108,6 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
       "deadline_at", "wake_at", "created_at", "updated_at"].map((name) => retainedField(name)),
     ...["run", "awaited_run"].map((name) => ({ ...retainedField(name), kind: "relation" as const,
       relationObject: true, relationModelLabel: "workflows.WorkflowRun" })),
-    { ...retainedField("decision_group"), kind: "relation", relationObject: true, relationModelLabel: "decisions.DecisionGroup" },
     ...["rank", "map_index", "map_settled", "map_total", "attempt", "page_index", "retries"].map((name) => retainedField(name, "Int")),
     ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
     ...["input", "output", "state"].map((name) => retainedField(name, "JSON")),
@@ -124,10 +123,6 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
       relation: { model: "workflows.WorkflowRun", identityPath: `${name}.id`, labelPath: `${name}.id` },
       row: { path: `${name}.id`, paths: [`${name}.id`] },
     })])),
-    decision_group: testQueryField("decision_group", { kind: "relation", scalar: "ID",
-      relation: { model: "decisions.DecisionGroup", identityPath: "decision_group.id", labelPath: "decision_group.id" },
-      row: { path: "decision_group.id", paths: ["decision_group.id"] },
-    }),
     ...Object.fromEntries(["state", "page_index", "failure_reason", "retries", "deadline_at", "wake_at", "created_at", "updated_at"]
       .map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: stepStates,
@@ -186,8 +181,8 @@ export const stepDecisionResourceFixture = testDataResource("decisions.Decision"
   ...decisionResourceFixture,
   query: testResourceQuery({ ...decisionResourceFixture.query, fields: {
     ...decisionResourceFixture.query.fields,
-    "group.step_run": testQueryField("group.step_run", { kind: "relation", scalar: "ID",
-      filter: { field: "group__step_run", scalar: "ID", values: [], operators: ["exact"] } }),
+    "step_run": testQueryField("step_run", { kind: "relation", scalar: "ID",
+      filter: { field: "step_run", scalar: "ID", values: [], operators: ["exact"] } }),
   } }),
 });
 
@@ -237,7 +232,7 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     attempts: [{ id: "wsa_inspect", number: 1, page_index: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
     artifacts: [{ id: "wfa_note", label: "Retained note", record_model: "notes.Note", record_id: "nte_7" }],
-    watches: [], decision_group: null,
+    watches: [], decisions: [],
     ...overrides,
   };
 }

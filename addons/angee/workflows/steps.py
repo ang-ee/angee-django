@@ -7,13 +7,14 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import cache
 from types import get_original_bases
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
+from typing import Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
+from rebac import system_context
 
 from angee.base.impl import ImplBase, resolve_impl_class
 from angee.base.jsonschema import check_schema, validate, validator
@@ -28,9 +29,6 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-
-if TYPE_CHECKING:
-    from angee.workflows.reviews import ReviewStep
 
 
 class Retryable(Exception):
@@ -93,8 +91,11 @@ class Done(_Settlement):
 
     def check(self, step: type[Step], *, config: Any = None) -> Done:
         outcome = step.parse_value(self.outcome, Outcome, "outcome")
-        if (outcome == ERROR_OUTCOME and outcome not in step.outcomes_for(config)
-                or outcome not in step.available_outcomes(config)):
+        if (
+            outcome == ERROR_OUTCOME
+            and outcome not in step.outcomes_for(config)
+            or outcome not in step.available_outcomes(config)
+        ):
             raise ValidationError(f"Step {step.key!r} does not offer success outcome {outcome!r}.")
         if outcome in step.empty_outcomes:
             return Done(outcome=outcome)
@@ -108,8 +109,11 @@ class Done(_Settlement):
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
         return rows.update(
-            **rows._cleared_wait(), status=StepRunStatus.SUCCEEDED,
-            output=self.output, outcome=self.outcome, retries=0,
+            **rows._cleared_wait(),
+            status=StepRunStatus.SUCCEEDED,
+            output=self.output,
+            outcome=self.outcome,
+            retries=0,
         )
 
 
@@ -176,49 +180,47 @@ class Fail(_Settlement):
         if attempt.retryable and retries < step_run.step.retry.max_attempts:
             return rows.to_waiting(
                 until=Now() + step_run.step.retry.delay_for(retries),
-                state=step_run.state, retries=retries,
+                state=step_run.state,
+                retries=retries,
             )
         error_field = apps.get_model("workflows", "StepAttempt")._meta.get_field("error")
         return rows.update(
-            **rows._cleared_wait(), status=StepRunStatus.FAILED,
-            outcome=ERROR_OUTCOME, output={"error": error_field.get_prep_value(self.error)}, retries=retries,
+            **rows._cleared_wait(),
+            status=StepRunStatus.FAILED,
+            outcome=ERROR_OUTCOME,
+            output={"error": error_field.get_prep_value(self.error)},
+            retries=retries,
         )
 
 
 @dataclass(frozen=True)
 class Ask(_Settlement):
-    """A review request checked before the decision owner admits it."""
+    """Independent questions admitted with the step's own continuation state."""
 
     requests: tuple[DecisionRequest, ...] = ()
-    policy: str = "first"
-    group_id: Any = None
-    errors: dict[str, list[str]] = field(default_factory=dict)
+    decision_ids: tuple[Any, ...] = ()
     state: Any = field(default_factory=dict)
 
     def check(self, step: type[Step], *, config: Any = None) -> Ask:
-        review = cast("type[ReviewStep[Any, Any, Any, Any]]", step)
-        offered = review.actions_for(config)
-        requests = []
-        for request in self.requests:
-            if any(action not in offered for action in request.actions):
-                raise ValidationError("A seat offers an action outside this review's declaration.")
-            parsed = review.parse_value(request.basis, review.basis_model, "basis")
-            basis = get_type_adapter(review.basis_model).dump_python(parsed, mode="json", by_alias=True)
-            requests.append(request.model_copy(update={"basis": basis}))
-        return replace(self, requests=tuple(requests), state=step.serialize_state(self.state))
+        if not self.requests:
+            raise ValidationError("Ask requires at least one independent question.")
+        requests = tuple(DecisionRequest.model_validate(request) for request in self.requests)
+        offered = step.available_outcomes(config)
+        if any(
+            alternative.outcome not in offered for request in requests for alternative in request.proposal.alternatives
+        ):
+            raise ValidationError("A proposal names an outcome not declared by the asking step.")
+        return replace(self, requests=requests, state=step.serialize_state(self.state))
 
     def admit(self, ctx: Any) -> Ask:
         manager = apps.get_model("decisions", "Decision").objects
-        if self.group_id is None:
-            group = manager.admit_group(self.requests, actor=ctx.actor, policy=self.policy)
-        else:
-            group = manager.reask(
-                self.group_id, actor=ctx.actor, actions=ctx.step.actions_for(ctx.config), errors=self.errors,
-            )
-        return replace(self, group_id=group.pk)
+        decisions = tuple(manager.ask(request, actor=ctx.actor) for request in self.requests)
+        with system_context(reason="workflows.ask.link_decisions"):
+            manager.filter(pk__in=[decision.pk for decision in decisions]).owner_update(step_run=ctx.step_run)
+        return replace(self, decision_ids=tuple(decision.pk for decision in decisions))
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_group_id=self.group_id)
+        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state)
 
 
 type Settlement = Done | Wait | NextPage | Fail | Ask

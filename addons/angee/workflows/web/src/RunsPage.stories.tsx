@@ -1,7 +1,6 @@
 import { useMemo, type ComponentProps, type ReactNode } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { decisionGroupFixture } from "@angee/decisions/testing";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
@@ -126,7 +125,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       }
       if (query.includes("steprun_aggregate")) return jsonResponse({ data: { steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
       if (/\bdecisions(?:\s*\(|\s*\{)/.test(query)) return jsonResponse({ data: {
-        decisions: [{ id: "dcn_review", kind: "review", verdict: "PENDING", resolved_at: null }],
+        decisions: [{ id: "dcn_review", kind: "review", verdict: null, answered_at: null }],
         decisions_aggregate: { aggregate: { count: 1 } },
       } });
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [{
@@ -141,7 +140,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, runEvidenceResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
-      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture, decisionGroupFixture,
+      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"

@@ -423,9 +423,6 @@ class StepRun(AngeeDataModel):
     """
 
     runtime = True
-    decision_group = models.OneToOneField(
-        "decisions.DecisionGroup", on_delete=models.PROTECT, null=True, blank=True, related_name="step_run",
-    )
     awaited_run = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="waiters",
     )
@@ -602,7 +599,7 @@ class StepRun(AngeeDataModel):
                              wake_at__isnull=False, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-                               decision_group__isnull=False, wake_at__isnull=True, wait_reason="")
+                               wake_at__isnull=True, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RUN,
                                awaited_run__isnull=False, wake_at__isnull=True, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.MAP,
@@ -723,13 +720,16 @@ class DecisionWorkflow(models.Model):
     """Contribute execution query axes without coupling decisions to its waiter."""
 
     extends: str | None = "decisions.Decision"
+    step_run = models.ForeignKey(
+        "workflows.StepRun", on_delete=models.PROTECT, null=True, blank=True, related_name="decisions",
+    )
     hasura_filterable_fields = (
-        "group__step_run", "group__step_run__run", "group__step_run__run__version__workflow",
-        "group__step_run__run__version__workflow__key",
+        "step_run", "step_run__run", "step_run__run__version__workflow",
+        "step_run__run__version__workflow__key",
     )
     hasura_aliases = {
-        "workflow_name": "group__step_run__run__version__workflow__name",
-        "node_key": "group__step_run__node_key",
+        "workflow_name": "step_run__run__version__workflow__name",
+        "node_key": "step_run__node_key",
     }
 
     class Meta:

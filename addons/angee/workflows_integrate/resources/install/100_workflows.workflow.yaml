@@ -28,7 +28,7 @@ rows:
             input: {from: import_units}
         results:
           - {from: probe, when: [unrecognized]}
-          - {from: gate, when: [skipped, unsupported, expired, superseded]}
+          - {from: gate, when: [skipped, unsupported]}
           - {from: summary, when: [complete, partial]}
   - xref: archive_import_drive
     fields:

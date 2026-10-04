@@ -16,7 +16,7 @@ from rebac.managers import TrackedQuerySet
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import aggregate_scoped_queryset, lock_if_supported, read_scoped_queryset, system_queryset
-from angee.decisions.testing.models import DecisionEvidence
+from angee.decisions.testing.models import DecisionRecord
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
 
@@ -94,7 +94,7 @@ def test_read_scope_preserves_permission_naive_manager_predicates() -> None:
     assert rows.query.where == GuardedSystemQueryThing.objects.all().query.where
 
 
-@pytest.mark.parametrize("model", (Drive, DecisionEvidence))
+@pytest.mark.parametrize("model", (Drive, DecisionRecord))
 def test_read_scope_without_actor_is_empty_without_querying(model) -> None:
     """An empty protected scope can be consumed without an ambient actor or a database."""
 

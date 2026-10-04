@@ -17,7 +17,6 @@ const ContextSchema = v.strictObject({
     pointer: v.string(),
     label: v.string(),
     value: JsonValueSchema,
-    subject: v.nullish(ReferenceSchema, null),
     authority: v.picklist(["source", "correction", "unverified"]),
     evidence: v.optional(v.array(ReferenceSchema), []),
   })), []),
@@ -26,24 +25,24 @@ const ContextSchema = v.strictObject({
 type Reference = v.InferOutput<typeof ReferenceSchema>;
 
 /** Project only the decisions-owned context contract; record peeks retain native navigation. */
-export function DecisionContext({ context, showFacts = true }: { context: unknown; showFacts?: boolean }): ReactElement | null {
+export function DecisionContext({ context }: { context: unknown }): ReactElement | null {
   const t = useDecisionsT();
   const openRecord = useRecordPeek();
   const parsed = v.safeParse(ContextSchema, context);
   if (!parsed.success) return <ErrorBanner description={t("context.invalid")} />;
   const { facts, references } = parsed.output;
-  if ((!showFacts || !facts.length) && !references.length) return null;
+  if (!facts.length && !references.length) return null;
   const authorityLabels = {
     source: t("context.source"), correction: t("context.correction"), unverified: t("context.unverified"),
   };
   return <section aria-label={t("context.title")} className="min-w-0 space-y-4 [overflow-wrap:anywhere]">
-    {showFacts && facts.length ? <section aria-label={t("context.facts")} className="space-y-3">
+    {facts.length ? <section aria-label={t("context.facts")} className="space-y-3">
       <h2 className="font-semibold">{t("context.facts")}</h2>
       <dl className="space-y-4">{facts.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="space-y-2">
         <dt className="flex min-w-0 flex-wrap items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
         <dd className="space-y-2">
           <FactValue value={fact.value} />
-          {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || undefined} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
+
           <References heading="h3" title={t("context.evidence")} references={fact.evidence} openRecord={openRecord} />
         </dd>
       </div>)}</dl>

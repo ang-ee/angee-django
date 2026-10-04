@@ -16,10 +16,11 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
-from rebac import MissingActorError, PermissionDenied, RebacMixin
+from rebac import MissingActorError, PermissionDenied
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
+from rebac.resources import model_resource_type
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
 from strawberry.types.arguments import convert_argument
@@ -601,7 +602,7 @@ class GraphQLSchemas:
 
         for surface in types:
             model = self._django_model_or_none(surface)
-            if model is None or not issubclass(model, RebacMixin):
+            if model is None or not model_resource_type(model):
                 continue
             if not isinstance(model._default_manager, RebacManager):
                 raise ImproperlyConfigured(

@@ -1,10 +1,10 @@
-// Request relationships are derived from Need.party; following grants no access.
+// Requester access is derived from the account admitted by the Need owner; following grants no access.
 // @rebac_package: intake
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 definition projects/task {
-    relation requester: auth/user // rebac:field={"path":"needs__party__person__user","filters":{"needs__access_decision__verdict":"completed"}}
+    relation requester: auth/user // rebac:field=needs__admitted_user
     permission read_granted = requester
     permission comment_granted = requester
 }
@@ -22,16 +22,4 @@ definition parties/person {
 definition auth/user {
     relation requested_task: projects/task // rebac:field=person__needs__task
     permission view_as = requested_task->write
-}
-
-// Domain seats inherit current authority from their request, including history.
-definition decisions/decision {
-    relation intake_need: intake/need // rebac:field=intake_need
-    permission read = intake_need->share
-    permission eligible = (intake_need->share - requester) & person->active_member
-}
-
-definition decisions/group {
-    relation intake_need: intake/need // rebac:field=decisions__intake_need
-    permission read = intake_need->share
 }

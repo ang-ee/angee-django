@@ -26,13 +26,18 @@ Rules:
 
 1. Business rules live with the record's owner. A step calls owners; it does not hold rules.
 2. People can change records directly at any time. Runs do not own the records they work on.
-3. A run moves unless its current step holds it. It ends when its plan is done or it is cancelled.
-4. The timeline is a view. It stores nothing of its own.
+3. A run moves unless its current step holds it. It ends when its plan is done or a person stops it.
+4. A person can stop a run at any point and do the work by hand. Stopping withdraws the run's open decisions, so
+   nothing keeps asking for attention; the record stays as it is.
+5. A run does not ask for a final verdict. When its plan is done the record is ready, and what happens next (for
+   example posting it) is the record's own action.
+6. The timeline is a view. It stores nothing of its own.
 
 Example: a file arrives (trigger); a step decodes it, falling back to text recognition; a step creates a draft
 record from it; a step matches the sender and asks to confirm the match; a step asks to confirm two uncertain
-fields; a step asks for the verdict, and on "suspicious" the next step sets a flag on the draft. The timeline of
-the draft shows all of this, past and planned.
+fields; a review step finds the amount unusual, sets a flag on the draft and asks whether to clear it. The run
+ends with the draft ready. At any point the person could have stopped the run and finished the draft by hand.
+The timeline of the draft shows all of this, past and planned.
 
 ## Implementation
 
@@ -42,6 +47,8 @@ How the ontology maps to this addon.
   today `StepArtifact` and `WorkflowRunEvidence` each cover part of it). The timeline and its links come from this.
 - **Asking:** the existing ask-and-wait step outcome creates a decision with its concern links and resumes on the
   answer. Step authors get one small call for it; no review-specific step classes per consumer.
+- **Stopping:** one action on a run, offered in the timeline: cancel the run and withdraw its open decisions
+  through the decisions owner.
 - **Flags:** nothing in this addon. A step creates or deletes a tag assignment through the
   [tags addon](../../tags/) as it would any record.
 - **Timeline read:** one GraphQL read for a record: its runs and their ancestors, each as the run graph that

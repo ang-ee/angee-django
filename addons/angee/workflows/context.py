@@ -14,11 +14,9 @@ from rebac.resources import model_resource_type
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
-from angee.decisions.managers import ResolvedDecision
-from angee.workflows.reviews import Ask, ReviewStep
 from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, RunRelation
-from angee.workflows.steps import Done, Fail, NextPage, Step, StepMode, Wait
+from angee.workflows.steps import Ask, Done, Fail, NextPage, Step, StepMode, Wait
 
 
 @dataclass
@@ -126,15 +124,23 @@ class StepContext:
         """Return a permanent failure; settlement owns its routing outcome."""
         return Fail(error=message)
 
-    def ask(self, *requests: DecisionRequest, policy: str = "first") -> Ask:
+    def ask(self, *requests: DecisionRequest, state: Any = None) -> Ask:
         """Construct review requests; the body boundary owns validation and admission."""
         self._require_mode(StepMode.DATABASE)
-        return Ask(requests=requests, policy=policy)
+        return Ask(requests=requests, state=self.state if state is None else state)
 
-    def resolution(self, decision_ref: str) -> ResolvedDecision:
-        """Lock and revalidate a prior review's public decision reference."""
+    def decision(self, decision_ref: str) -> Any:
+        """Read a prior decision asked by a step in this run."""
         self._require_mode(StepMode.DATABASE)
-        return ReviewStep.resolution(decision_ref, run=self.run, actor=self.actor)
+        model = apps.get_model("decisions", "Decision")
+        row = instance_from_public_id(
+            model,
+            decision_ref,
+            queryset=model.objects.with_actor(self.actor).filter(step_run__run=self.run),
+        )
+        if row is None:
+            raise PermissionDenied("The decision is absent or inaccessible in this run.")
+        return row
 
     def begin_effect(self) -> None:
         """Record possible external effects only while this IO attempt owns its fence."""
@@ -161,12 +167,26 @@ class StepContext:
         self.pending_artifacts.append(artifact)
         return artifact
 
-    def start_run(self, workflow: Any, *, subject: Any = None, input: Any = None,
-                  request_key: str | None = None, relation: str = str(RunRelation.OWNED), version: Any = None) -> Any:
+    def start_run(
+        self,
+        workflow: Any,
+        *,
+        subject: Any = None,
+        input: Any = None,
+        request_key: str | None = None,
+        relation: str = str(RunRelation.OWNED),
+        version: Any = None,
+    ) -> Any:
         """Start one child through admission, deriving a retry-stable key when omitted."""
         return type(self.run).objects.start(
-            workflow, actor=self.actor, subject=subject, input=input, request_key=request_key,
-            parent_step=self.step_run, relation=relation, version=version,
+            workflow,
+            actor=self.actor,
+            subject=subject,
+            input=input,
+            request_key=request_key,
+            parent_step=self.step_run,
+            relation=relation,
+            version=version,
         )
 
     def cancel_run(self, run: Any) -> None:

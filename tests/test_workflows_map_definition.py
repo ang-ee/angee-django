@@ -9,8 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from angee.base.jsonschema import schemas_match, validator
 from angee.workflows.definition import Definition
 from angee.workflows.maps import Map, MapItem
-from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import EmptyOutput, Step
+from angee.workflows.steps import Step
 
 
 class Value(BaseModel):
@@ -235,26 +234,3 @@ def test_items_source_requires_a_list_even_when_body_is_untyped(register_step):
     data["nodes"]["each"]["input"]["items"]["path"] = ["value"]
     _, issues = Definition.check(data)
     assert any(issue.code == "input" and "list" in issue.message for issue in issues)
-
-
-def test_review_body_output_includes_typed_unanswered_closures(register_step):
-    """A collector must admit both applied output and the review's empty outcomes."""
-    class TypedReview(ReviewStep[Value, Value, None, None]):
-        key = "map_typed_review"
-
-    class ReviewCollector(Step[list[MapItem[Value | EmptyOutput]], None, None]):
-        key = "map_review_collector"
-
-    register_step(TypedReview)
-    register_step(ReviewCollector)
-    data = document(body={"step": TypedReview.key})
-    data["nodes"]["each"]["next"] = {"done": "collect"}
-    data["nodes"]["collect"] = {"step": ReviewCollector.key}
-    definition, issues = Definition.check(data)
-    assert issues == []
-    contract = validator(definition.output_schema("each"))
-    assert contract.is_valid([{"index": 0, "outcome": "expired", "output": {}}])
-    assert contract.is_valid([{"index": 0, "outcome": "done", "output": {"value": 4}}])
-    data["nodes"]["collect"]["step"] = Collect.key
-    _, issues = Definition.check(data)
-    assert any(issue.code == "input" and issue.node == "collect" for issue in issues)

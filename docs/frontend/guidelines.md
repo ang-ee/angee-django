@@ -632,10 +632,9 @@ shared UI copy through an addon bundle.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
-  widget that cannot accept it; compose the shared `rows` widget for decision
-  forms with fixed-size tables. Decision-specific presentation is a
-  `decisions#content` child built with `decisionContent(kind, Component)`, one
-  per kind; the inbox owns the form and its React Hook Form context.
+  widget that cannot accept it; compose the shared `rows` widget for fixed-size
+  tables. The exported `DecisionCard` renders concerned records, proposal
+  alternatives, evidence, and the chosen verdict for any question.
 - Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
@@ -712,7 +711,7 @@ the `ContainerKinds` interface, so a `#aside` child carries
 `ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
 `#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
 There are no per-kind constructor functions; an addon helper returns a plain
-child (`recordPagesTab()`, `decisionContent(kind, Component)`). A new
+child (`recordPagesTab()`, `decisionRecordTab()`). A new
 container name is added by declaration merging, as
 [IAM](../../addons/angee/iam/web/src/ShareAccess.tsx) does:
 
@@ -766,9 +765,7 @@ framework's placeholder chatter tabs this way:
 An addon declares a container of its own by naming an address on its own node,
 with no children or with its own: `"messaging.channels#toolbar": {}`. Two
 entry keys apply only there. `unique: "key"` makes every child carry a `key`
-and fails two children with one key: `decisions#content` renders one
-presentation per decision kind
-([decisions](../../addons/angee/decisions/web/src/index.ts)). `models: true`
+and fails two children with one key. `models: true`
 makes the container model-scoped: IAM declares `iam#access-roles`, and
 [proposals](../../addons/angee/proposals/web/src/record-rounds.tsx) adds
 children at `proposals.Round#access-roles`; the owner passes the record's
@@ -880,8 +877,8 @@ The `form`, `resource` and `record` containers also take model addresses. The
 declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
 and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
 Addons own theirs, such as `messaging.channels#toolbar`,
-`parties.overview#items`, `appearance.settings#tools`, `decisions#content`,
-`decisions#origin` and `iam#access-visibility`.
+`parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
+and `iam#access-visibility`.
 
 ### Chatter
 

@@ -23,7 +23,7 @@ from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.streams import CursorInvalid, StreamDefinition, advance_stream, open_stream
+from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
 from angee.messaging_integrate_imap import parser as imap_parser
@@ -2190,18 +2190,25 @@ def test_failed_run_never_persists_the_cursor(
         raise RuntimeError("ingest died")
 
     monkeypatch.setattr(type(Message.objects), "ingest", explode)
-    with system_context(reason="test imap failed sync"), pytest.raises(RuntimeError):
+    with (
+        system_context(reason="test imap failed sync"),
+        pytest.raises(BridgeSyncError, match="Integration operation failed"),
+    ):
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
     assert Message._base_manager.count() == 0
-    assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_stage == Channel.SyncStage.FAILED
-    assert channel.sync_error == "Integration operation failed."
+    assert channel.sync_error == "messages (INBOX): Integration operation failed."
     assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
-    assert channel.sync_progress["details"]["backend"] == "imap"
-    assert channel.sync_progress["details"]["mailbox"] == "INBOX"
+    assert channel.sync_progress["details"] == {
+        "stream": "messages", "partition": "INBOX", "stage": "pull",
+        "failures": [{
+            "stream": "messages", "partition": "INBOX", "stage": "pull",
+            "message": "Integration operation failed.",
+        }],
+    }
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2235,14 +2242,17 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
         return original_ingest(manager, *args, **kwargs)
 
     monkeypatch.setattr(manager_type, "ingest", fail_second_batch)
-    with system_context(reason="test imap partial sync"), pytest.raises(RuntimeError):
+    with (
+        system_context(reason="test imap partial sync"),
+        pytest.raises(BridgeSyncError, match="Integration operation failed"),
+    ):
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
     assert Message._base_manager.count() == 2
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
     assert channel.sync_stage == channel.SyncStage.FAILED
-    assert channel.sync_error == "Integration operation failed."
+    assert channel.sync_error == "messages (INBOX): Integration operation failed."
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2268,8 +2278,13 @@ def test_failed_second_record_rolls_back_the_whole_page(
         return ingest(manager, *args, **kwargs)
 
     monkeypatch.setattr(manager_type, "ingest", fail_second)
-    with system_context(reason="test imap page rollback"), pytest.raises(RuntimeError, match="second record"):
+    with (
+        system_context(reason="test imap page rollback"),
+        pytest.raises(BridgeSyncError, match="Integration operation failed") as error,
+    ):
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert str(error.value.__cause__) == "second record failed"
     assert Message._base_manager.count() == 0
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
 

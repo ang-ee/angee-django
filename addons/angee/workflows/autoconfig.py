@@ -13,7 +13,7 @@ SETTINGS = {
         },
     },
     "ANGEE_WORKFLOW_STEP_CLASSES": {
-        "review": "angee.workflows.reviews.Review",
+        "ask_decision": "angee.workflows.reviews.AskDecision",
         "map": "angee.workflows.maps.Map",
         "await_run": "angee.workflows.awaits.AwaitRun",
     },

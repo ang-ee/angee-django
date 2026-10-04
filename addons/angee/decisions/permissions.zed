@@ -1,36 +1,22 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
-
-definition decisions/group {
-    relation reasked_by: decisions/group // rebac:field=reasked_by
-    relation issuer: auth/user // rebac:field=issuer
-    relation assignee: auth/user // rebac:field=decisions__assignees
-    relation requester: auth/user // rebac:field=decisions__requester
-    relation admin: angee/role // rebac:const=admin
-    permission create = admin->member
-    permission waiter_read = reasked_by->waiter_read
-    permission read = issuer + assignee + requester + admin->member + waiter_read
-    permission write = admin->member
-    permission delete = admin->member
-}
+// @rebac_schema_revision: 6
 
 definition decisions/decision {
-    relation group: decisions/group // rebac:field=group
     relation assignee: auth/user // rebac:field=assignees
     relation requester: auth/user // rebac:field=requester
-    relation issuer: auth/user // rebac:field=group__issuer
     relation person: iam/kind // rebac:const=person
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member
-    permission read = assignee + requester + issuer + admin->member + group->waiter_read
-    permission eligible = (assignee - requester) & person->active_member
-    permission act = eligible + (admin->member & person->active_member)
+    permission waiter_read = nil
+    permission read = assignee + requester + admin->member + waiter_read
+    permission eligible = (assignee - requester) & person->active_actor
+    permission act = eligible + (admin->member & person->active_actor)
     permission write = admin->member
     permission delete = admin->member
 }
 
-definition decisions/evidence {
+definition decisions/record {
     relation decision: decisions/decision // rebac:field=decision
     relation admin: angee/role // rebac:const=admin
     permission create = admin->member

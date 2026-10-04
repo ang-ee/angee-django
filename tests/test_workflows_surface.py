@@ -28,7 +28,7 @@ EXPECTED_MODELS = {
         "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun "
         "WorkflowRunEvidence WorkflowVersion"
     ),
-    "decisions": "Decision DecisionEvidence DecisionGroup",
+    "decisions": "Decision DecisionRecord",
     "extraction": "Extraction ExtractionLineage ExtractionPage ExtractionPart ExtractionSource",
 }
 
@@ -47,8 +47,8 @@ EXPECTED_VERBS = {
     "workflows.StepAttempt.queryset": "close",
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
-        "cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
-        "extend_deadline fenced for_map settle settled_decisions terminal_runs to_ready to_running "
+        "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
+        "extend_deadline fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
         "to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change register wait_kind",
@@ -59,19 +59,17 @@ EXPECTED_VERBS = {
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": "cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
     "workflows.WorkflowRun.queryset": "for_subject hold hold_owned retention_candidates",
-    "decisions.Decision.manager": "admit_group cancel_group decide expire_due reask resolution resolutions",
+    "decisions.Decision.manager": "ask decide",
     "decisions.Decision.queryset": (
-        "close due hold open open_expression pending reject_attempt resolve unanswered with_open_state"
+        "attention_expression open open_expression open_for records_with_open_decisions"
     ),
-    "decisions.DecisionEvidence.queryset": "for_records protect_record",
-    "decisions.DecisionGroup.queryset": "hold settle settled",
 }
 
 EXPECTED_TYPES = {
     "awaits": "AwaitRun AwaitRunConfig AwaitRunInput",
     "context": "StepContext",
     "maps": "Map MapInput MapItem",
-    "reviews": "Review ReviewConfig ReviewSeat ReviewStep",
+    "reviews": "AskDecision DecisionConfig DecisionStep",
     "steps": "Ask Done EmptyOutput Fail NextPage RetryPolicy Retryable Step StepMode Superseded Wait",
 }
 
@@ -83,11 +81,6 @@ EXPECTED_RUNNER = tuple(
 )
 
 EXPECTED_SETTINGS = {
-    "intake": "ANGEE_DECISION_ACTION_CLASSES",
-    "decisions": (
-        "ANGEE_DECISION_ACTION_CLASSES ANGEE_DECISION_MAX_ATTEMPTS ANGEE_DECISION_POLICY_CLASSES "
-        "ANGEE_IMPL_REGISTRIES:append"
-    ),
     "extraction": "ANGEE_EXTRACTION_MAX_BYTES ANGEE_EXTRACTION_PROFILE_CLASSES ANGEE_IMPL_REGISTRIES:append",
     "workflows": (
         "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES "
@@ -241,12 +234,10 @@ def test_trigger_principal_and_source_grant_surface() -> None:
 
 def test_evidence_owner_surface() -> None:
     """Decision, run and extraction evidence compose the base derivation and admission owners."""
-    evidence = apps.get_model("decisions", "DecisionEvidence")
     run_evidence = apps.get_model("workflows", "WorkflowRunEvidence")
     extraction_source = apps.get_model("extraction", "ExtractionSource")
     extraction = apps.get_model("extraction", "Extraction")
     decision = apps.get_model("decisions", "Decision")
-    assert issubclass(evidence, DerivedFrom)
     assert issubclass(run_evidence, DerivedFrom)
     assert issubclass(extraction_source, DerivedFrom)
     assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
@@ -255,6 +246,10 @@ def test_evidence_owner_surface() -> None:
     assert issubclass(DecisionRequest, BaseModel)
     assert tuple(FactAuthority) == ("source", "correction", "unverified")
     assert callable(readable_records)
-    assert next(index.fields for index in decision._meta.indexes if index.name == "decisions_subject") == [
-        "subject_content_type", "subject_object_id", "kind",
+    concern = apps.get_model("decisions", "DecisionRecord")
+    assert issubclass(concern, DerivedFrom)
+    assert decision._meta.get_field("records").related_model is concern
+    assert next(index.fields for index in concern._meta.indexes if index.name == "decisions_record_target") == [
+        "content_type",
+        "object_id",
     ]

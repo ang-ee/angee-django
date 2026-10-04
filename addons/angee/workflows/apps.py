@@ -6,15 +6,15 @@ from django.apps import AppConfig, apps
 from django.core import checks
 from django.db.models.signals import post_delete, pre_delete
 
-from angee.decisions.signals import decision_group_settled
+from angee.decisions.signals import decision_answered
 from angee.iam.service_users import deactivate_service_user
 
 
-def wake_review(sender: Any, *, group: Any, **kwargs: Any) -> None:
+def wake_review(sender: Any, *, decision: Any, **kwargs: Any) -> None:
     """Let the workflow lock owner enqueue settled decision waiters after commit."""
     from angee.workflows.runner import runner
 
-    runner.wake_decisions(group.pk)
+    runner.wake_decisions(decision.pk)
 
 
 def deactivate_workflow_principal(sender: Any, *, instance: Any, **kwargs: Any) -> None:
@@ -43,7 +43,7 @@ class WorkflowsConfig(AppConfig):
 
         checks.register(check_record_changed_models, checks.Tags.models)
         checks.register(check_run_subject_models, checks.Tags.models)
-        decision_group_settled.connect(wake_review, dispatch_uid="workflows.review_settled")
+        decision_answered.connect(wake_review, dispatch_uid="workflows.decision_answered")
         post_delete.connect(
             deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),
             dispatch_uid="workflows.service_user.deactivate",

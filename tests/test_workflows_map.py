@@ -4,25 +4,22 @@ from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db.models.functions import Now
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
-from rebac import system_context
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
-from angee.decisions.contracts import DecisionRequest
-from angee.decisions.forms import Action
-from angee.decisions.states import Verdict
-from angee.decisions.testing.models import Decision, DecisionGroup
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.testing.models import Decision
 from angee.workflows import schema as workflow_schema
 from angee.workflows.maps import MapItem
-from angee.workflows.reviews import ReviewStep
+from angee.workflows.reviews import DecisionStep
 from angee.workflows.runner import runner
-from angee.workflows.steps import EmptyOutput, Retryable, RetryPolicy, Step, StepMode
+from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 
 
 class MapEcho(Step[None, None, None]):
@@ -286,8 +283,6 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
     assert system_queryset(StepAttempt).get(step_run=item, number=2).acknowledged_by_id == actor.pk
 
 
-class MapAccept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
-    """A typed answer shared by independent item reviews."""
 
 
 class ReviewedValue(BaseModel):
@@ -296,104 +291,6 @@ class ReviewedValue(BaseModel):
     value: int
 
 
-def test_expired_typed_review_body_reaches_a_typed_map_collector(execution, register_step):
-    """The empty-output outcome belongs in the map's published and runtime contract."""
-    actor, _sent = execution
-    reviewer = create_user("map-expiry-reviewer")
-
-    class ExpiringReview(ReviewStep[None, ReviewedValue, None, None]):
-        key = "map_expiring_review"
-        actions = (MapAccept,)
-
-        def ask(self, ctx):
-            return ctx.ask(DecisionRequest(
-                kind=self.key, subject=None, assignees=(reviewer,), actions=self.actions,
-                expires_at=ctx.now + timedelta(days=1),
-            ))
-
-        def apply(self, ctx, settled):
-            raise AssertionError("An expired unanswered review must not apply an answer.")
-
-    class CollectReview(Step[list[MapItem[ReviewedValue | EmptyOutput]], None, None]):
-        key = "map_collect_review"
-
-        def run(self, ctx):
-            item = ctx.input[0]
-            assert isinstance(item, MapItem) and isinstance(item.output, EmptyOutput)
-            return ctx.done({"index": item.index, "outcome": item.outcome, "value": item.output.model_dump()})
-
-    register_step(ExpiringReview)
-    register_step(CollectReview)
-    workflow = load_workflow({
-        "nodes": {
-            "items": {"step": "map", "body": {"step": ExpiringReview.key}, "next": {"done": "collect"}},
-            "collect": {"step": CollectReview.key},
-        },
-        "results": [{"from": "collect"}],
-    }, actor=actor)
-    run = start_run(workflow, actor=actor, input={"items": [{"value": 1}]})
-    run_until(run)
-    item = body_rows(run).get()
-    seat = system_queryset(Decision).get(group_id=item.decision_group_id)
-    with system_context(reason="test elapsed map review deadline"):
-        Decision.objects.filter(pk=seat.pk).owner_update(expires_at=Now() - timedelta(seconds=1))
-    assert Decision.objects.expire_due() == 1
-    run_until(run)
-    assert run.status == "succeeded"
-    assert run.output == {"index": 0, "outcome": "expired", "value": {}}
-    assert system_queryset(StepRun).get(run=run, node_key="items").output == [
-        {"index": 0, "outcome": "expired", "output": {}},
-    ]
-    assert system_queryset(Decision).get(pk=seat.pk).closed_reason == "expired"
-
-
-def test_review_body_has_independent_groups_reasks_and_typed_resolution(execution, map_steps, register_step):
-    actor, _sent = execution
-    reviewer = create_user("map-reviewer")
-    applied = []
-
-    class ItemReview(ReviewStep[None, None, None, None]):
-        key = "map_review"
-        actions = (MapAccept,)
-
-        def ask(self, ctx):
-            return ctx.ask(DecisionRequest(
-                kind=self.key, subject=None, assignees=(reviewer,), actions=self.actions,
-            ))
-
-        def apply(self, ctx, settled):
-            answer = settled[0]
-            retained = ctx.resolution(public_id_of(answer.decision))
-            assert isinstance(retained.action, MapAccept) and retained.resolver.pk == reviewer.pk
-            assert ctx.actor.pk == ctx.run.run_as_id
-            if ctx.map_index == 0 and ctx.state["review_round"] == 1:
-                raise ValidationError({"answer": "Please revise this item's answer."})
-            applied.append((ctx.map_index, answer.decision.group_id))
-            return ctx.done(ctx.input, outcome="accepted")
-
-    register_step(ItemReview)
-    run, _mapped = start_map(actor, [{"value": 0}, {"value": 1}], body=ItemReview.key)
-    run_until(run)
-    original = list(body_rows(run))
-    groups = [row.decision_group_id for row in original]
-    assert len(set(groups)) == 2 and None not in groups
-    for row in original:
-        seat = system_queryset(Decision).get(group_id=row.decision_group_id)
-        decide(seat, actor=reviewer, action="accept")
-    run_until(run)
-    first, second = list(body_rows(run))
-    assert first.status == "waiting" and second.status == "succeeded"
-    assert first.decision_group_id != groups[0] and second.decision_group_id == groups[1]
-    assert [group.pk for group in system_queryset(DecisionGroup).get(pk=first.decision_group_id).rounds()] == [
-        first.decision_group_id, groups[0],
-    ]
-    replacement = system_queryset(Decision).get(group_id=first.decision_group_id)
-    decide(replacement, actor=reviewer, action="accept")
-    run_until(run)
-    assert run.status == "succeeded"
-    assert applied == [(1, groups[1]), (0, first.decision_group_id)]
-    assert [item["outcome"] for item in run.output] == ["accepted", "accepted"]
-    assert system_queryset(StepAttempt).filter(step_run__run=run).count() == 7
 
 
 def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps, settings):
@@ -417,3 +314,41 @@ def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps,
     assert [row["display_name"] for row in bodies] == [f"items.body [{index}]" for index in range(3)]
     assert all(not row["is_map"] for row in bodies)
     assert all(row["rank"] == mapped.rank and row["map_total"] == row["map_settled"] == 0 for row in bodies)
+
+
+def test_decision_map_body_has_independent_questions_and_typed_outputs(execution, map_steps, register_step):
+    actor, _sent = execution
+    reviewer = create_user("map-reviewer")
+    reference = vault_for(actor)
+    write_relationships([RelationshipTuple(to_object_ref(reference), "viewer", to_subject_ref(reviewer))])
+    applied = []
+
+    class ItemReview(DecisionStep[None, None, None]):
+        key = "map_review"
+        outcomes = {"accepted": "Accepted"}
+        def ask(self, ctx):
+            return ctx.ask(DecisionRequest(
+                kind=self.key, records=(reference,), assignees=(reviewer,),
+                proposal=DecisionProposal(alternatives=[{"key": "accept", "label": "Accept", "outcome": "accepted"}]),
+            ))
+        def continue_with(self, ctx, decisions, outcomes):
+            retained = ctx.decision(public_id_of(decisions[0]))
+            assert retained.verdict == ["accept"] and retained.answered_by_id == reviewer.pk
+            applied.append(ctx.map_index)
+            return ctx.done(ctx.input, outcome=next(iter(outcomes)))
+
+    register_step(ItemReview)
+    run, _ = start_map(actor, [{"value": 0}, {"value": 1}], body=ItemReview.key)
+    run_until(run)
+    original = list(body_rows(run))
+    decisions = [system_queryset(Decision).get(step_run=row) for row in original]
+    assert decisions[0].pk != decisions[1].pk
+    decide(decisions[1], actor=reviewer, chosen=["accept"])
+    run_until(run)
+    assert applied == [1] and body_rows(run)[0].status == "waiting"
+    decide(decisions[0], actor=reviewer, chosen=["accept"])
+    run_until(run)
+    assert run.status == "succeeded" and applied == [1, 0]
+    assert [item["output"] for item in system_queryset(StepRun).get(run=run, node_key="items").output] == [
+        {"value": 0}, {"value": 1},
+    ]

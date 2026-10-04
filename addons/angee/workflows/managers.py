@@ -95,7 +95,6 @@ class Cancellation:
 
     canceled: bool
     steps: int
-    reviews: int = 0
     children: int = 0
 
     @property
@@ -105,9 +104,6 @@ class Cancellation:
         if self.steps:
             noun = "step" if self.steps == 1 else "steps"
             changes.append(f"{self.steps} open {noun} canceled")
-        if self.reviews:
-            noun = "review" if self.reviews == 1 else "reviews"
-            changes.append(f"{self.reviews} pending {noun} closed")
         if self.children:
             noun = "run" if self.children == 1 else "runs"
             changes.append(f"{self.children} child {noun} canceled")
@@ -578,19 +574,19 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
     def _cancel_locked(self, runs: list[Any]) -> Cancellation:
         """Cancel open rows in an already-held tree without rewriting terminal facts."""
-        steps = reviews = children = 0
+        steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            changed, closed = run.step_runs.cancel_open()
-            steps, reviews = steps + changed, reviews + closed
+            changed = run.step_runs.cancel_open()
+            steps += changed
             if not run.is_terminal:
                 children += bool(index)
                 self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={})
                 changed = 1
-            if changed or closed:
+            if changed:
                 run.refresh_from_db()
                 publish_change(run, action="update", update_fields=None)
-        return Cancellation(canceled, steps, reviews, children)
+        return Cancellation(canceled, steps, children)
 
     def cancel_on_commit(self, run: Any, actor: Any) -> None:
         """Deliver an authorized cancellation after this transaction releases its locks.
@@ -663,18 +659,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                             if any(run is None or not run.is_terminal for run in [*runs, *continuations]):
                                 raise ProtectedError("A descendant is still running.", runs)
                             steps = runs[0].step_runs.model.objects.filter(run_id__in=ids)
-                            groups: dict[int, Any] = {}
-                            for step in steps.exclude(decision_group_id=None).select_related("decision_group"):
-                                for group in step.decision_group.rounds():
-                                    groups.setdefault(group.pk, group)
                             # Internal wait references must not protect rows in the same deleted tree.
                             steps.update(awaited_run=None)
+                            self.model._meta.apps.get_model("decisions.Decision").objects.filter(
+                                step_run__run_id__in=ids,
+                            ).owner_update(step_run=None)
                             for run in reversed(runs):
                                 self.filter(pk=run.pk).delete()
-                            for group in groups.values():
-                                if not group.is_deletable:
-                                    raise ProtectedError("Decision evidence must remain retained.", [group])
-                                group.delete()
                         count += len(runs)
                     except (ProtectedError, RestrictedError) as error:
                         self.filter(pk=run_id).update(
@@ -863,7 +854,6 @@ class StepRunQuerySet(AngeeQuerySet):
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
         kind: WaitingKind = cast(WaitingKind, WaitingKind.TIME), reason: str = "",
-        decision_group_id: Any = None,
     ) -> int:
         """Park running rows, preserving retries unless a failure consumed one."""
         if kind == WaitingKind.OPERATOR and not reason:
@@ -874,7 +864,6 @@ class StepRunQuerySet(AngeeQuerySet):
             }),
             status=StepRunStatus.WAITING, state=F("state") if state is None else state, outcome="",
             retries=F("retries") if retries is None else retries,
-            decision_group_id=F("decision_group_id") if decision_group_id is None else decision_group_id,
         )
 
     def to_ready(
@@ -890,23 +879,17 @@ class StepRunQuerySet(AngeeQuerySet):
             page_index=F("page_index") + 1 if next_page else F("page_index"),
         )
 
-    def cancel_open(self) -> tuple[int, int]:
-        """Return canceled step and pending-review counts, preserving completed evidence."""
+    def cancel_open(self) -> int:
+        """Cancel open steps while leaving their questions and answers intact."""
         opened = self.exclude(status__in=StepRunStatus.terminal_values())
         list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
         attempts = self.model._meta.get_field("attempts").related_model
-        decisions = apps.get_model("decisions", "Decision").objects
-        reviews = 0
-        for group_id in opened.exclude(decision_group_id=None).order_by("decision_group_id").values_list(
-            "decision_group_id", flat=True,
-        ):
-            reviews += decisions.cancel_group(group_id)
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
         apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
-        changed = opened.update(
-            **self._cleared_wait(), status=StepRunStatus.CANCELED,
+        return opened.update(
+            **self._cleared_wait(),
+            status=StepRunStatus.CANCELED,
         )
-        return changed, reviews
 
     def due(self) -> Any:
         """Return time or record waits whose optional database deadline has arrived."""
@@ -921,12 +904,12 @@ class StepRunQuerySet(AngeeQuerySet):
             pending = pending.filter(content_type_id=content_type_id, object_id=object_id)
         return self.filter(Exists(pending), status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD)
 
-    def settled_decisions(self) -> Any:
-        """Select decision waiters whose retained group has durably settled."""
+    def answered_decisions(self) -> Any:
+        """Wake a step when none of its directly linked questions remains open."""
         return self.filter(
             status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_group__settled_at__isnull=False,
-        )
+            decisions__isnull=False,
+        ).exclude(decisions__verdict__isnull=True).distinct()
 
     def terminal_runs(self) -> Any:
         """Select run waiters whose protected target has reached a terminal state."""

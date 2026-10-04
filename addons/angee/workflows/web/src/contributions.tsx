@@ -1,4 +1,4 @@
-import { useDecisionContent } from "@angee/decisions";
+import { useDecision } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import { lazy, type ReactNode } from "react";
 import { ErrorBanner, LazyBoundary, LoadingPanel, MetaSection, TextLink, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
@@ -9,17 +9,15 @@ import { useWorkflowsT } from "./i18n";
 const RunsList = lazy(() => import("./RunsPage").then(({ RunsList }) => ({ default: RunsList })));
 
 export function DecisionRunOrigin() {
-  const { decision } = useDecisionContent();
+  const { decision } = useDecision();
   const t = useWorkflowsT();
   const href = useRouteHref();
-  const groupId = decision.group?.id;
-  const query = useAuthoredQuery(DecisionWaitingRunsDocument, { group: groupId ?? "" }, {
-    enabled: groupId != null,
-    models: ["decisions.DecisionGroup", "workflows.StepRun"],
-    records: groupId != null ? [{ model: "decisions.DecisionGroup", id: groupId }] : [],
+  const decisionId = decision.id;
+  const query = useAuthoredQuery(DecisionWaitingRunsDocument, { decision: decisionId }, {
+    models: ["decisions.Decision", "workflows.StepRun"],
+    records: [{ model: "decisions.Decision", id: decisionId }],
     relatedModels: ["workflows.StepRun"],
   });
-  if (groupId == null) return null;
   if (query.isLoading) return null;
   if (query.error) return <ErrorBanner description={t("catalogue.originUnavailable")} />;
   const steps = query.data?.steprun.flatMap((step) => step.run ? [{ ...step, run: step.run }] : []) ?? [];

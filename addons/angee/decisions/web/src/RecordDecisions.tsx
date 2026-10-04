@@ -1,26 +1,32 @@
+import { useAuthoredQuery } from "@angee/refine";
+import { DecisionCard } from "./DecisionCard";
 import type { ResourceFilter } from "@angee/metadata";
-import { ListView, Tab, useRecordChromeContext } from "@angee/ui";
+import { ListView, Tab, LoadingPanel, ErrorBanner, useRecordChromeContext } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import { useDecisionsT } from "./i18n";
-import { DECISION_MODEL } from "./documents.console";
+import { DECISION_MODEL, DECISION_MODELS, OpenDecisionsDocument } from "./documents.console";
 
-/** Readable decisions for a subject or step run compose the shared embedded list. */
+/** A caller's readable decision selection composes the shared embedded list. */
 export function DecisionsList({ baseFilter }: { baseFilter: ResourceFilter<string> }): ReactElement {
   const t = useDecisionsT();
   return <ListView resource={DECISION_MODEL} presentation="embedded" scope="local"
-    fields={["id", "kind", "verdict", "resolved_at"]} baseFilter={baseFilter}
+    fields={["id", "kind", "verdict", "answered_at"]} baseFilter={baseFilter}
     order={{ created_at: "DESC" }} columns={[
       { field: "kind", header: t("decisions.kind") },
-      { field: "verdict", header: t("decisions.verdict"), widget: "statusBadge" },
-      { field: "resolved_at", header: t("decisions.resolved") },
+      { field: "verdict", header: t("decisions.verdict") },
+      { field: "answered_at", header: t("decisions.answered") },
     ]} />;
 }
 
 export function RecordDecisions(): ReactElement {
   const { resource, recordId } = useRecordChromeContext();
-  return <DecisionsList baseFilter={{ subject_model: { exact: resource },
-    subject_id: { exact: recordId } }} />;
+  const query = useAuthoredQuery(OpenDecisionsDocument, { model: resource, id: recordId }, { models: DECISION_MODELS });
+  const t = useDecisionsT();
+  if (query.isLoading) return <LoadingPanel />;
+  if (query.error) return <ErrorBanner description={t("decision.unavailable")} />;
+  return <div className="space-y-4">{query.data?.open_decisions.map((decision) =>
+    <DecisionCard key={decision.id} decision={decision} onAnswered={query.refetch} />)}</div>;
 }
 
 function DecisionsLabel(): ReactElement {
@@ -29,7 +35,7 @@ function DecisionsLabel(): ReactElement {
 }
 
 /**
- * The generic Decision.subject tab, for a subject model's `#sections`: an addon
+ * The generic record decisions tab, for a model's `#sections`: an addon
  * opts its model in under its own id, `"<addon>.decisions"`.
  */
 export function decisionRecordTab() {

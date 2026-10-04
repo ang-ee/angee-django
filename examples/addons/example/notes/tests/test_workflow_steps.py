@@ -56,8 +56,10 @@ class NoteWorkflowStepTests(TransactionTestCase):
         """Create a subject owned by the non-administrator execution actor."""
 
         values = {
-            "title": "Release notes", "body": "Ready for readers.",
-            "status": Note.Status.IN_REVIEW, "reviewer": self.reviewer,
+            "title": "Release notes",
+            "body": "Ready for readers.",
+            "status": Note.Status.IN_REVIEW,
+            "reviewer": self.reviewer,
         }
         values.update(kwargs)
         with system_context(reason="note workflow subject fixture"):
@@ -66,7 +68,10 @@ class NoteWorkflowStepTests(TransactionTestCase):
     def load_trigger(self):
         """Install the example's disabled policy through its declared resource."""
         return Resource.objects.load_xref(
-            "example.notes.note_review_trigger", model=Trigger, actor=self.admin, allow_non_dev=True,
+            "example.notes.note_review_trigger",
+            model=Trigger,
+            actor=self.admin,
+            allow_non_dev=True,
         )
 
     def test_watch_wait_resumes_after_note_save_and_rechecks_the_locked_predicate(self) -> None:
@@ -150,21 +155,24 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="note trigger admission identity assertion"):
             self.assertEqual(WorkflowRun.objects.filter(trigger_event=event).count(), 1)
 
-    def answer_review(self, run, *, action="approve", values=None):
+    def answer_review(self, run, *, action="approve"):
         """Answer a real waiting decision through its revision-checked owner."""
 
         run_until(run)
         with system_context(reason="note review seat assertion"):
             step_run = StepRun.objects.get(run=run, node_key="review")
-            self.assertEqual(step_run.status, StepRunStatus.WAITING)
+            self.assertEqual(
+                step_run.status, StepRunStatus.WAITING, list(step_run.attempts.values_list("stacktrace", flat=True))
+            )
             self.assertEqual(step_run.waiting_kind, WaitingKind.DECISION)
-            decision = Decision.objects.get(group=step_run.decision_group)
+            decision = Decision.objects.get(step_run=step_run)
             self.assertEqual(decision.requester_id, self.owner.pk)
             self.assertEqual(list(decision.assignees.values_list("pk", flat=True)), [self.reviewer.pk])
-            self.assertEqual(decision.basis["body"], "Ready for readers.")
         return Decision.objects.decide(
-            decision.pk, actor=self.reviewer, revision=decision.revision,
-            action=action, values=values or {},
+            decision.pk,
+            actor=self.reviewer,
+            revision=decision.revision,
+            chosen=[action],
         )
 
     def start_parent(self, note):
@@ -215,7 +223,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
 
         note = self.note()
         parent, child = self.start_parent(note)
-        self.answer_review(child, action="reject", values={"reason": "Needs another revision"})
+        self.answer_review(child, action="reject")
         run_until(child)
         runner.tick()
         run_until(parent)
@@ -227,15 +235,15 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual(parent.output, child.output)
             self.assertEqual(note.status, Note.Status.IN_REVIEW)
 
-    def test_canceling_parent_cancels_owned_publication_and_open_review(self) -> None:
-        """Parent cancellation reaches the live child and its decision lifecycle owner."""
+    def test_canceling_parent_cancels_owned_publication_and_retains_open_review(self) -> None:
+        """Parent cancellation reaches its child while the question remains answerable."""
 
         note = self.note()
         parent, child = self.start_parent(note)
         run_until(child)
         with system_context(reason="note child open review assertion"):
             review = StepRun.objects.get(run=child, node_key="review")
-            decision = Decision.objects.get(group=review.decision_group)
+            decision = Decision.objects.get(step_run=review)
             self.assertTrue(decision.is_open)
         cancellation = WorkflowRun.objects.cancel(parent, actor=self.owner)
         with system_context(reason="note parent cancellation assertions"):
@@ -245,7 +253,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             note.refresh_from_db()
             self.assertEqual(parent.status, RunStatus.CANCELED)
             self.assertEqual(child.status, RunStatus.CANCELED)
-            self.assertFalse(decision.is_open)
+            self.assertTrue(decision.is_open)
             self.assertIn("child", cancellation.message)
             self.assertEqual(note.status, Note.Status.IN_REVIEW)
 
@@ -296,16 +304,19 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="mapped note review waiting assertions"):
             parent = StepRun.objects.get(run=run, node_key="reviews")
             bodies = list(parent.map_rows().order_by("map_index"))
-            decisions = [Decision.objects.get(group=body.decision_group) for body in bodies]
+            decisions = [Decision.objects.get(step_run=body) for body in bodies]
             self.assertEqual((parent.map_total, parent.map_settled), (2, 0))
             self.assertEqual([body.map_index for body in bodies], [0, 1])
             self.assertTrue(all(body.status == StepRunStatus.WAITING for body in bodies))
             self.assertTrue(all(body.waiting_kind == WaitingKind.DECISION for body in bodies))
-            self.assertNotEqual(decisions[0].group_id, decisions[1].group_id)
-            self.assertEqual([decision.record_public_id for decision in decisions], [note.sqid for note in notes])
-            self.assertEqual([decision.basis["title"] for decision in decisions], [note.title for note in notes])
-        Decision.objects.decide(decisions[0].pk, actor=self.reviewer, revision=decisions[0].revision,
-                                action="approve", values={})
+            self.assertNotEqual(decisions[0].pk, decisions[1].pk)
+            self.assertEqual(
+                [decision.records.get().record_public_id for decision in decisions],
+                [note.sqid for note in notes],
+            )
+        Decision.objects.decide(
+            decisions[0].pk, actor=self.reviewer, revision=decisions[0].revision, chosen=["approve"]
+        )
         run_until(run)
         with system_context(reason="mapped note review partial settlement assertions"):
             parent.refresh_from_db()
@@ -313,8 +324,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual((parent.map_total, parent.map_settled), (2, 1))
             self.assertTrue(decisions[1].is_open)
             self.assertFalse(StepRun.objects.filter(run=run, node_key="summarize").exists())
-        Decision.objects.decide(decisions[1].pk, actor=self.reviewer, revision=decisions[1].revision,
-                                action="reject", values={"reason": "Needs revision"})
+        Decision.objects.decide(decisions[1].pk, actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
         run_until(run)
         self.assertEqual(run.status, RunStatus.SUCCEEDED)
         self.assertEqual(run.output, {"approved": 1, "rejected": 1})
@@ -329,11 +339,11 @@ class NoteWorkflowStepTests(TransactionTestCase):
 
         note = self.note()
         run = start_run(self.workflow, actor=self.owner, subject=note)
-        answered = self.answer_review(run, action="reject", values={"reason": "Needs clearer wording"})
+        answered = self.answer_review(run, action="reject")
         run_until(run)
         with system_context(reason="note rejection assertions"):
             note.refresh_from_db()
-            self.assertEqual(answered.resolved_by_id, self.reviewer.pk)
+            self.assertEqual(answered.answered_by_id, self.reviewer.pk)
             self.assertEqual(run.status, RunStatus.SUCCEEDED)
             self.assertEqual(run.outcome, "rejected")
             self.assertEqual(run.output["id"], note.sqid)
@@ -341,29 +351,21 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual(note.history.count(), 1)
             self.assertEqual(StepRun.objects.get(run=run, node_key="publish").status, StepRunStatus.SKIPPED)
 
-    def test_changed_body_reasks_and_preserves_the_answered_round(self) -> None:
-        """A stale body cannot proceed to publication even after approval."""
-
+    def test_direct_body_edit_then_answer_continues_with_current_note(self):
         note = self.note()
         run = start_run(self.workflow, actor=self.owner, subject=note)
-        answered = self.answer_review(run)
-        note.body = "Revised text that the reviewer has not approved."
-        note.with_actor(self.owner).save(update_fields={"body"})
         run_until(run)
-        with system_context(reason="changed note review assertions"):
+        note.body = "Corrected current text."
+        note.with_actor(self.owner).save(update_fields={"body"})
+        answered = self.answer_review(run)
+        run_until(run)
+        with system_context(reason="current note assertions"):
             note.refresh_from_db()
-            step = StepRun.objects.get(run=run, node_key="review")
-            replacement = Decision.objects.get(group_id=step.decision_group_id)
-            answered.refresh_from_db()
-            self.assertEqual(step.status, StepRunStatus.WAITING)
-            self.assertEqual(step.waiting_kind, WaitingKind.DECISION)
-            self.assertEqual(step.state["review_round"], 2)
-            self.assertNotEqual(replacement.group_id, answered.group_id)
-            self.assertIn("body", replacement.errors)
-            self.assertEqual(answered.resolution["action"], "approve")
-            self.assertIsNotNone(answered.group.settled_at)
-            self.assertEqual(note.status, Note.Status.IN_REVIEW)
-            self.assertFalse(StepRun.objects.filter(run=run, node_key="publish").exists())
+            self.assertEqual(run.status, RunStatus.SUCCEEDED)
+            self.assertEqual(note.status, Note.Status.ACTIVE)
+            self.assertEqual(note.body, "Corrected current text.")
+            self.assertEqual(Decision.objects.filter(step_run__run=run).count(), 1)
+            self.assertEqual(answered.verdict, ["approve"])
 
     def test_author_cannot_be_the_note_reviewer(self) -> None:
         """Publication readiness rejects a seat its requester could not answer."""
@@ -496,10 +498,20 @@ class NoteWorkflowStepTests(TransactionTestCase):
         for step in (ValidateNotePublication, PublishNote):
             self.assertEqual(step.subject, "notes.Note")
         self.assertIsNone(ReviewNotePublication.subject)
-        self.assertEqual(ValidateNotePublication.available_outcomes(None), {
-            "needs_review": "Needs review", "ok": "Ready", "error": "Error",
-        })
-        self.assertEqual(set(ReviewNotePublication.available_outcomes(None)), {
-            "approved", "rejected", "expired", "superseded", "error",
-        })
+        self.assertEqual(
+            ValidateNotePublication.available_outcomes(None),
+            {
+                "needs_review": "Needs review",
+                "ok": "Ready",
+                "error": "Error",
+            },
+        )
+        self.assertEqual(
+            set(ReviewNotePublication.available_outcomes(None)),
+            {
+                "approved",
+                "rejected",
+                "error",
+            },
+        )
         self.assertEqual(PublishNote.available_outcomes(None), {"published": "Published", "error": "Error"})

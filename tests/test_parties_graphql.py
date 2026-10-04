@@ -48,6 +48,7 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert metadata.roots.update_name == "update_people_by_pk"
     assert metadata.roots.delete_name is None
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
+        "has_open_decisions",
         "display_name",
         "created_at",
         "id",
@@ -210,6 +211,7 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert address.roots.update_name == "update_addresses_by_pk"
     assert address.roots.delete_name == "delete_addresses_by_pk"
     assert {name for name, field in address.query.fields.items() if field.filter} == {
+        "has_open_decisions",
         "id",
         "party",
         "label",

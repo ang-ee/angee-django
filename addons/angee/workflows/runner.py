@@ -25,7 +25,6 @@ from rebac.actors import is_sudo
 from angee.base.errors import exception_text
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
@@ -250,7 +249,7 @@ class Runner:
     def _failure(failure: Exception) -> _AttemptRecord:
         return _AttemptRecord.failure(
             exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            retryable=isinstance(failure, (Retryable, RetryableDecisionError)) or (
+            retryable=isinstance(failure, (Retryable,)) or (
                 isinstance(failure, OperationalError)
                 and _sqlstate(failure) in RETRYABLE_SQLSTATES
             ),
@@ -357,11 +356,11 @@ class Runner:
             candidates = candidates.filter(awaited_run_id=run_id)
         return self._each_candidate(candidates, self._wake)
 
-    def wake_decisions(self, group_id: Any = None) -> int:
+    def wake_decisions(self, decision_id: Any = None) -> int:
         """Signal and sweep share the run-lock owner and commit-time dispatch."""
-        candidates = self.step_model.objects.settled_decisions()
-        if group_id is not None:
-            candidates = candidates.filter(decision_group_id=group_id)
+        candidates = self.step_model.objects.answered_decisions()
+        if decision_id is not None:
+            candidates = candidates.filter(decisions__pk=decision_id)
         return self._each_candidate(candidates, self._wake)
 
     def wake_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> int:

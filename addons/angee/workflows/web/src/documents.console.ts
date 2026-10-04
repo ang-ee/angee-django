@@ -42,8 +42,8 @@ export const RevokeWorkflowTriggerGrantDocument = graphql(`
 `);
 
 export const DecisionWaitingRunsDocument = graphql(`
-  query DecisionWaitingRuns($group: String!) {
-    steprun(where: { decision_group: { _eq: $group }, status: { _eq: "waiting" } }, order_by: [{ rank: asc }, { map_index: asc }]) {
+  query DecisionWaitingRuns($decision: String!) {
+    steprun(where: { decisions: { _eq: $decision }, status: { _eq: "waiting" } }, order_by: [{ rank: asc }, { map_index: asc }]) {
       id node_label map_index is_mapped
       run { id display_name }
     }

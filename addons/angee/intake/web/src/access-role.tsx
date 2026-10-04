@@ -8,7 +8,7 @@ import { AdmitNeedRequesterDocument, RemoveNeedRequesterDocument, TaskAccessNeed
 import { useIntakeT } from "./i18n";
 import { NEED_MODEL } from "./resources";
 
-/** A completed Need decision is the Requester's read seat on the target task. */
+/** The Need owner's admitted account holds requester access on the target task. */
 export function TaskRequesterAccessRole({ targetId, record }: AccessRoleOwnerProps): null {
   const t = useIntakeT();
   const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: targetId }, {
@@ -25,7 +25,7 @@ export function TaskRequesterAccessRole({ targetId, record }: AccessRoleOwnerPro
   const vacant = React.useMemo(() => needs.filter((need) => !need.party && holdsPermission(need, "write")), [needs]);
   const canManage = Boolean(record && holdsPermission(record, "share"));
   const people = React.useMemo(() => needs.flatMap((need) =>
-    need.requester_user && String(need.access_decision?.verdict ?? "").toUpperCase() === "COMPLETED" ? [{
+    need.requester_user && need.requester_access_granted ? [{
       subject: `auth/user:${need.requester_user}`, label: need.party?.display_name || need.claimed_name || t("access.requester"),
       roleId: "intake.requester", seatId: need.id,
       roleLabel: t("access.requester"), removable: canManage && holdsPermission(need, "write"),

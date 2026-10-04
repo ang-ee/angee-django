@@ -585,7 +585,6 @@ def test_attempt_result_and_wait_companions_are_database_invariants(execution):
     invalid_waits = (
         {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.TIME},
         {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.RECORD, "wait_reason": "bad"},
-        {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.DECISION},
         {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.RUN},
         {"wake_at": Now()},
     )

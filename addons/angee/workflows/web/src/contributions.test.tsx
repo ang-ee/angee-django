@@ -12,7 +12,7 @@ import { DecisionWaitingRunsDocument } from "./documents.console";
 
 vi.mock("@angee/decisions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/decisions")>()),
-  useDecisionContent: () => ({ decision: { group: { id: "dcg_review" } } }),
+  useDecision: () => ({ decision: { id: "dcn_review" } }),
 }));
 
 const { Provider, clearClients, clients } = createUiTestProviders({
@@ -36,16 +36,16 @@ function origin(data: WaitingRuns = visible, error = false, pending = false) {
   return { ...result, custom };
 }
 
-test("decision origin asks for the current group and links its waiting run and step", async () => {
+test("decision origin asks for the current decision and links its waiting run and step", async () => {
   const { custom } = origin();
   expect((await screen.findByRole("link", { name: "Record review" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
   expect(screen.getByText(/· Review document$/)).toBeTruthy();
   expect(screen.queryByText(/\[0\]/)).toBeNull();
-  expect(custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ group: "dcg_review" });
+  expect(custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ decision: "dcn_review" });
   expect(custom.mock.calls[0]?.[0].meta?.gqlQuery).toBe(DecisionWaitingRunsDocument);
   const query = clients.flatMap((client) => client.getQueryCache().getAll())
     .find((entry) => entry.meta?.angeeRecords);
-  expect(query?.meta?.angeeRecords).toEqual([{ model: "decisions.DecisionGroup", id: "dcg_review" }]);
+  expect(query?.meta?.angeeRecords).toEqual([{ model: "decisions.Decision", id: "dcn_review" }]);
   expect(query?.meta?.angeeRelatedModels).toEqual(["workflows.StepRun"]);
   expect(query?.meta?.angeeBroadModels).toBeUndefined();
 });
@@ -62,7 +62,7 @@ test("the optional decision origin occupies no space while loading", () => {
 });
 
 test.each([{ steprun: [] }, { steprun: [{ id: "wsr_hidden", node_label: "Hidden", map_index: 0, is_mapped: false, run: null }] }])(
-  "groups without a visible waiting run render no contribution: %j", async ({ steprun }) => {
+  "decisions without a visible waiting run render no contribution: %j", async ({ steprun }) => {
     const { container, custom } = origin({ steprun });
     await vi.waitFor(() => expect(custom).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(container.textContent).toBe(""));

@@ -16,7 +16,7 @@ from strawberry.scalars import JSON
 from angee.base.impl import resolve_all_impl_classes
 from angee.base.models import record_display_label
 from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.decisions.schema import DecisionGroupType
+from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -58,7 +58,6 @@ StepArtifact = apps.get_model("workflows", "StepArtifact")
 StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
-DecisionGroup = apps.get_model("decisions", "DecisionGroup")
 Decision = apps.get_model("decisions", "Decision")
 _RUN_POLICY_VERSION = Prefetch(
     "version",
@@ -185,7 +184,7 @@ class StepRunType(AngeeNode):
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     child_runs: list[WorkflowRunType] = actor_scoped_to_many("child_runs")
     awaited_run: WorkflowRunType | None = actor_scoped_to_one("awaited_run")
-    decision_group: DecisionGroupType | None = actor_scoped_to_one("decision_group")
+    decisions: list[DecisionType] = actor_scoped_to_many("decisions")
     attempts: list[StepAttemptType] = actor_scoped_to_many("attempts")
     artifacts: list[StepArtifactType] = actor_scoped_to_many("artifacts")
     watches: list[StepWatchType] = actor_scoped_to_many("watches")
@@ -231,15 +230,12 @@ class StepRunType(AngeeNode):
         return bool(cast(Any, self).requires_duplicate_acknowledgement)
 
 
-@strawberry_django.type(DecisionGroup, name="DecisionGroupType", extend=True)
-class DecisionGroupWorkflowExtension:
-    """Expose the unique waiting execution through its own read permission."""
 
-    step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
 
 @strawberry_django.type(Decision, name="DecisionType", extend=True)
 class DecisionWorkflowExtension:
+    step_run: StepRunType | None = actor_scoped_to_one("step_run")
     """Project execution display fields through every related owner's read scope."""
 
     workflow_name: str | None = strawberry_django.field(annotate=F("workflow_name"))
@@ -552,7 +548,7 @@ _STEP_RESOURCE = hasura_model_resource(
     filterable=[
         "id",
         "run",
-        "decision_group",
+        "decisions",
         "awaited_run",
         "node_key",
         "map_index",
@@ -867,7 +863,7 @@ schemas = {
         "query": [WorkflowStudioQuery, *(resource.query for resource in _RESOURCES)],
         "mutation": [WorkflowStudioMutation, WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
         "subscription": [changes(WorkflowRun, field="workflowRunChanged")],
-        "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
+        "type_extensions": [DecisionWorkflowExtension],
         "types": [
             RunOrigin,
             WorkflowType,

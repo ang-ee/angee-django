@@ -1,14 +1,5 @@
-"""Decision policy registrations and expiry scheduling defaults."""
+"""Generic record attention supplied by decisions."""
 
 SETTINGS = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.decisions.policies.DecisionPolicy", "angee.decisions.forms.Action"],
-    "ANGEE_DECISION_ACTION_CLASSES": {},
-    "ANGEE_DECISION_POLICY_CLASSES": {
-        "first": "angee.decisions.policies.First",
-        "all": "angee.decisions.policies.All",
-    },
-    "ANGEE_DECISION_MAX_ATTEMPTS": 3,
-    "CELERY_BEAT_SCHEDULE:append": {
-        "decisions.expire": {"task": "decisions.expire", "schedule": 15.0, "options": {"expires": 45}},
-    },
+    "ANGEE_GRAPHQL_RESOURCE_FILTERS:append": ["angee.decisions.attention.resource_filters"],
 }

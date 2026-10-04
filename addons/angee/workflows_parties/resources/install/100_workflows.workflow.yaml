@@ -5,14 +5,14 @@ rows:
     fields:
       key: parties_identity_review
       name: Party identity review
-      description: Review proposed identity values against the retained party facts.
+      description: Review proposed identity values or keep the current party facts.
       publish: true
       draft:
         nodes:
           identity:
             step: parties_identity_review
         results:
-          - {from: identity, when: [applied, unchanged, conflict, rejected, escalated, expired, superseded]}
+          - {from: identity, when: [applied, unchanged, rejected, escalated]}
   - xref: parties_dedupe
     fields:
       key: parties_dedupe

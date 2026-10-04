@@ -52,7 +52,7 @@ while its siblings' evidence is retained.
 
 `ExtractionProfile` owns its registry setting,
 `ANGEE_EXTRACTION_PROFILE_CLASSES`; the domain manifest
-owns native parser dependencies. Decision-backed corrections compose the typed resolution contract in
-`angee.decisions`; [`ExtractionManager`](managers.py) owns revision and reviewed
+owns native parser dependencies. Decision-backed corrections require the expected chosen alternative and a
+caller-owned `CorrectionBinding` with exact authority and parent revisions; [`ExtractionManager`](managers.py) owns revision and reviewed
 authority validation. [`schema.py`](schema.py) exposes read-only evidence through
 the framework resource owner and actor-scoped relations.

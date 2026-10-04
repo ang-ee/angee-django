@@ -18,7 +18,7 @@ from rebac.roles import grant as grant_role
 from angee.base.fields import SqidField
 from angee.jobs.enqueue import celery_app
 from angee.workflows.context import StepContext
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, load_workflow, publish_draft, run_until, start_run
 from angee.workflows_integrate.archive_steps import ArchiveExecute, ArchiveExtractor, ArchiveMappingUnit
 
 
@@ -101,6 +101,15 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 mime_type="application/zip", defaults={"category": "archive", "label": "ZIP archive"},
             )
 
+    def configure_targets(self, workflow, suffix, extra=()):
+        from copy import deepcopy
+        draft = deepcopy(workflow.draft)
+        draft["nodes"]["gate"]["config"] = {"mappings": [
+            {"extractor": key, "target": str(self.target.sqid)}
+            for key in (f"test_{suffix}", *extra)
+        ]}
+        publish_draft(workflow, draft=draft, actor=self.actor)
+
     def test_execute_requires_target_write_before_effect_and_uses_authorized_id(self):
         """A read-only reviewer cannot import; the extractor receives the resolved target id."""
         with system_context(reason="archive target reader"):
@@ -144,20 +153,15 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 )
                 self.assertIsNotNone(workflow.published_id)
                 self.assertEqual(set(workflow.published.definition.nodes), {"probe", "gate", "import_units", "summary"})
+                self.configure_targets(workflow, suffix)
                 run = start_run(workflow, actor=self.actor, subject=subject)
                 run_until(run)
                 with system_context(reason="archive review assertion"):
                     gate = run.step_runs.get(node_key="gate")
                     self.assertEqual(gate.waiting_kind, "decision")
-                    decision = apps.get_model("decisions.Decision").objects.get(group_id=gate.decision_group_id)
-                    expected = decision.basis["proposals"][0]
-                    self.assertEqual(decision.basis["proposals"], [expected])
-                decide(decision, actor=self.actor, action="apply_archive_mappings", values={
-                    "mappings": [{
-                        "extractor": expected["extractor"], "label": expected["label"],
-                        "target": str(self.target.sqid),
-                    }],
-                })
+                    decision = apps.get_model("decisions.Decision").objects.get(step_run=gate)
+                    self.assertEqual(gate.state["mappings"][0]["extractor"], f"test_{suffix}")
+                decide(decision, actor=self.actor, chosen=["import"])
                 run_until(run)
                 with system_context(reason="archive result assertion"):
                     run.refresh_from_db()
@@ -194,12 +198,13 @@ class ArchiveWorkflowTests(TransactionTestCase):
         workflow = load_workflow(
             "angee.workflows_integrate.archive_import_file", actor=self.actor, allow_non_dev=True,
         )
+        self.configure_targets(workflow, "file")
         run = start_run(workflow, actor=self.actor, subject=file)
         run_until(run)
         with system_context(reason="skip archive review"):
             gate = run.step_runs.get(node_key="gate")
-            decision = apps.get_model("decisions.Decision").objects.get(group_id=gate.decision_group_id)
-        decide(decision, actor=self.actor, action="skip_archive")
+            decision = apps.get_model("decisions.Decision").objects.get(step_run=gate)
+        decide(decision, actor=self.actor, chosen=["skip"])
         run_until(run)
         with system_context(reason="skip archive result"):
             run.refresh_from_db()
@@ -217,25 +222,20 @@ class ArchiveWorkflowTests(TransactionTestCase):
             workflow = load_workflow(
                 "angee.workflows_integrate.archive_import_file", actor=self.actor, allow_non_dev=True,
             )
+            self.configure_targets(workflow, "file", extra=("test_fail",))
             run = start_run(workflow, actor=self.actor, subject=file)
             run_until(run)
             with system_context(reason="partial archive review"):
                 gate = run.step_runs.get(node_key="gate")
-                decision = apps.get_model("decisions.Decision").objects.get(group_id=gate.decision_group_id)
-                proposals = decision.basis["proposals"]
-            decide(decision, actor=self.actor, action="apply_archive_mappings", values={
-                "mappings": [
-                    {"extractor": row["extractor"], "label": row["label"], "target": str(self.target.sqid)}
-                    for row in proposals
-                ],
-            })
+                decision = apps.get_model("decisions.Decision").objects.get(step_run=gate)
+            decide(decision, actor=self.actor, chosen=["import"])
             run_until(run)
             with system_context(reason="partial archive results"):
                 run.refresh_from_db()
                 self.assertEqual((run.status, run.outcome), ("succeeded", "partial"))
                 mapped = run.step_runs.get(node_key="import_units")
                 self.assertEqual(mapped.map_total, 2)
-                self.assertEqual([item["outcome"] for item in mapped.output], ["error", "completed"])
+                self.assertEqual([item["outcome"] for item in mapped.output], ["completed", "error"])
                 self.assertEqual(mapped.map_rows().filter(outcome="completed").get().artifacts.count(), 1)
 
     def test_mixed_target_resources_route_without_a_decision(self):
@@ -255,4 +255,4 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 run.refresh_from_db()
                 self.assertEqual((run.status, run.outcome), ("succeeded", "unsupported"))
                 gate = run.step_runs.get(node_key="gate")
-                self.assertIsNone(gate.decision_group_id)
+                self.assertFalse(gate.decisions.exists())

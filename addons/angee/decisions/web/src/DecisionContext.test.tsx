@@ -16,8 +16,7 @@ describe("decision context", () => {
   test("shows attributed facts and evidence and passes complete locators to the native record peek", async () => {
     const evidence = { model: "notes.Note", id: "nte_evidence", label: "Evidence note", tab: "source", page: 2, search: { query: "passage", stale: null } };
     render(<ShellPageTestProviders><DecisionContext context={{
-      facts: [{ pointer: "/count", label: "Count", value: 7, authority: "source", evidence: [evidence],
-        subject: { model: "notes.Note", id: "nte_subject", label: "Subject note" } }],
+      facts: [{ pointer: "/count", label: "Count", value: 7, authority: "source", evidence: [evidence] }],
       references: [{ model: "notes.Note", id: "nte_related", label: "Related note" }],
     }} /></ShellPageTestProviders>);
     expect(await screen.findByText("7")).toBeTruthy();
@@ -29,8 +28,7 @@ describe("decision context", () => {
     expect(within(screen.getByRole("region", { name: "References" })).getByRole("button", { name: "Related note" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Evidence note" }));
     expect(mocks.openRecord).toHaveBeenCalledWith(evidence);
-    fireEvent.click(screen.getByRole("button", { name: "Subject note" }));
-    expect(mocks.openRecord).toHaveBeenLastCalledWith({ model: "notes.Note", id: "nte_subject", label: "Subject note", tab: null, page: null, search: {} });
+
   });
 
   test("renders nothing for empty context", () => {
@@ -49,15 +47,6 @@ describe("decision context", () => {
     expect(screen.getByText("Line Number")).toBeTruthy();
     expect(screen.getByText("Ready")).toBeTruthy();
     expect(container.querySelector("pre, code")).toBeNull();
-  });
-
-  test("hides generic facts for registered content but keeps references", () => {
-    render(<ShellPageTestProviders><DecisionContext showFacts={false} context={{
-      facts: [{ pointer: "/review", label: "Review", value: { result: "Ready" }, authority: "source" }],
-      references: [{ model: "notes.Note", id: "nte_related", label: "Related note" }],
-    }} /></ShellPageTestProviders>);
-    expect(screen.queryByRole("region", { name: "Facts" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Related note" })).toBeTruthy();
   });
 
   test.each([

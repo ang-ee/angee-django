@@ -9,7 +9,7 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import { InboxPage } from "./InboxPage";
 import decisions from "./index";
-import { decisionGroupFixture, decisionResourceFixture as resource, decisionSubjectFixture } from "./testing";
+import { decisionResourceFixture as resource, decisionRecordFixture } from "./testing";
 
 const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://decisions-inbox",
@@ -20,8 +20,8 @@ afterEach(() => { cleanup(); clearClients(); });
 
 function fixture(initialEntry = "/decisions", authenticated = true) {
   const getList = vi.fn(async (_params: GetListParams) => ({ data: [{
-    id: "decision-1", kind: "review", kind_label: "Review", subject_model: "notes.Note", subject_id: "note-1",
-    requester: { display_name: "River" }, expires_at: null, verdict: "PENDING",
+    id: "decision-1", kind: "review", kind_label: "Review",
+    requester: { display_name: "River" }, verdict: null,
   }], total: 1 }));
   const root = createRootRoute({
     validateSearch: (search: Record<string, unknown>) => search,
@@ -43,7 +43,7 @@ function fixture(initialEntry = "/decisions", authenticated = true) {
     stringifySearch: (value) => { const query = routeSearchString(value); return query ? `?${query}` : ""; },
   });
   const getOne = vi.fn(async () => ({ data: { id: "note-1", display_name: "Review notes" } }));
-  render(<Provider resources={[resource, decisionGroupFixture, decisionSubjectFixture]} dataProvider={{ getList, getOne }}><RouterProvider router={router} /></Provider>);
+  render(<Provider resources={[resource, decisionRecordFixture]} dataProvider={{ getList, getOne }}><RouterProvider router={router} /></Provider>);
   return { getList, router };
 }
 
@@ -54,7 +54,6 @@ test("queries the open inbox and links the loaded decision", async () => {
     is_open: { _eq: true },
   });
   expect(screen.getByRole("link", { name: "Open Review" }).getAttribute("href")).toMatch(/^\/decisions\/decision-1\?recordNav=/);
-  expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /New Decision/ })).toBeNull();
 });
 
@@ -62,12 +61,12 @@ test("the native filter box edits personal predicates and preserves unrelated se
   const { getList, router } = fixture("/decisions?preset=decisions.waiting&keep=external&page=3");
   await screen.findByText("River");
   fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
-  fireEvent.click(await screen.findByRole("button", { name: "I can act" }));
+  fireEvent.click(await screen.findByRole("button", { name: "I can answer" }));
   fireEvent.click(await screen.findByRole("button", { name: "Requested by me" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     _and: [{ is_open: { _eq: true } }, { requester: { _eq: "user-1" } }],
   }));
-  fireEvent.click(screen.getByRole("button", { name: "Settled" }));
+  fireEvent.click(screen.getByRole("button", { name: "Answered" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     _and: [{ is_open: { _eq: false } }, { requester: { _eq: "user-1" } }],
   }));
@@ -75,11 +74,11 @@ test("the native filter box edits personal predicates and preserves unrelated se
   expect(screen.queryByRole("combobox", { name: "Decisions" })).toBeNull();
 });
 
-test("finds delegated seats through the server authority filter", async () => {
+test("finds assigned questions through the server authority filter", async () => {
   const { getList } = fixture();
   await screen.findByText("River");
   fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
-  fireEvent.click(await screen.findByRole("button", { name: "I can act" }));
+  fireEvent.click(await screen.findByRole("button", { name: "I can answer" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     _and: [{ can_act: { _eq: true } }, { is_open: { _eq: true } }],
   }));

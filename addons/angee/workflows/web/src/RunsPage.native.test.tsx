@@ -37,7 +37,7 @@ test("node-scoped step evidence keeps the run filter and selects parent plus ite
 
 test("step checkpoint and linked decisions compose the existing form and list", async () => {
   const requests: RunRequest[] = [];
-  render(<RunStory steps={[stepRunFixture({ decision_group: { id: "dcg_review" } })]}
+  render(<RunStory steps={[stepRunFixture({ decisions: [{ id: "dcn_review" }] })]}
     onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   expect(await within(step).findByText("Checkpoint")).toBeTruthy();
@@ -45,14 +45,14 @@ test("step checkpoint and linked decisions compose the existing form and list", 
   fireEvent.click(within(step).getByRole("tab", { name: "Decisions" }));
   expect(await within(step).findByText("review")).toBeTruthy();
   expect(requests.find(({ query }) => /\bdecisions\s*\(/.test(query))?.variables.where).toEqual({ _and: [
-    { group__step_run: { _eq: "wsr_inspect" } },
+    { step_run: { _eq: "wsr_inspect" } },
   ] });
 });
 
-test("steps without a decision group hide the Decisions tab", async () => {
+test("steps always offer their scoped Decisions tab", async () => {
   render(<RunStory />);
   const step = await openStep();
-  expect(within(step).queryByRole("tab", { name: "Decisions" })).toBeNull();
+  expect(within(step).getByRole("tab", { name: "Decisions" })).toBeTruthy();
   expect(await within(step).findByText("Created")).toBeTruthy();
   expect((await within(step).findAllByText("Page 2")).length).toBeGreaterThan(0);
 });

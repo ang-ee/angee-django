@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import types as _types
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
-from typing import Any
+from typing import Any, cast
 
 import strawberry
+import strawberry_django
 from asgiref.sync import sync_to_async
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
@@ -21,6 +22,7 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
+from strawberry.types.nodes import SelectedField
 from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
@@ -49,6 +51,7 @@ from angee.base.identity import (
     public_data_id_field,
     public_id_for,
 )
+from angee.base.impl import resolve_hooks
 from angee.base.mixins import CreationKeyMixin, OptimisticLockMixin
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import (
@@ -498,16 +501,22 @@ def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
 def _relation_axis_fields(
     model: type[models.Model],
     paths: Sequence[str],
+    *, include_reverse: bool = False,
 ) -> dict[str, Any]:
-    """Resolve declared direct/nested to-one axes for public identity codecs."""
+    """Resolve relation axes; filters also accept reverse relation membership."""
 
     relations = {}
     for path in paths:
         try:
             field = require_field_for_path(model, path)
         except FieldPathError:
-            continue
-        if is_to_one_relation(field):
+            if not include_reverse or "__" in path:
+                continue
+            try:
+                field = model._meta.get_field(path)
+            except FieldDoesNotExist:
+                continue
+        if is_to_one_relation(field) or include_reverse and getattr(field, "one_to_many", False):
             relations[path] = field
     return relations
 
@@ -653,7 +662,7 @@ def _relation_filter_decoders(
 ) -> Mapping[str, Callable[[Any], Any]] | None:
     """Return the filter decoders for filterable public-id relation columns.
 
-    A filterable foreign-key / one-to-one column whose related model carries a
+    A filterable relation whose related model carries a
     public identity is filtered by that related row's public id — the node
     projects the relation as one — so its ``bool_exp`` operand is a public id,
     never the raw primary key. Each such operand resolves through the related
@@ -662,7 +671,7 @@ def _relation_filter_decoders(
     """
 
     decoders = dict(declared or {})
-    for name, field in _relation_axis_fields(model, filterable).items():
+    for name, field in _relation_axis_fields(model, filterable, include_reverse=True).items():
         related = field.related_model
         if public_data_id_field(related) is None:
             continue
@@ -1030,15 +1039,66 @@ class _FilterInputExtension(FieldExtension):
         return value
 
 
+def _resource_filter_annotation(
+    source: Callable[[strawberry.Info], models.QuerySet[Any]], expression: Any, info: strawberry.Info,
+) -> Any:
+    """Resolve a contributed scalar for the actor loading the resource node."""
+    queryset = source(info)
+    return expression(queryset) if callable(expression) else expression
+
+
+def _filter_field_names(value: Any) -> set[str]:
+    """Inspect native request inputs to prepare only filters the query uses."""
+    if dataclasses.is_dataclass(value):
+        value = input_to_dict(value)
+    if isinstance(value, Mapping):
+        return set(value) | set().union(*(_filter_field_names(item) for item in value.values()))
+    if isinstance(value, (list, tuple)):
+        return set().union(*(_filter_field_names(item) for item in value))
+    return set()
+
+
+def _request_filter_fields(info: strawberry.Info) -> set[str]:
+    return set().union(*(
+        _filter_field_names(selection.arguments.get("where"))
+        for selection in info.selected_fields if isinstance(selection, SelectedField)
+    ))
+
+
+def _resource_filter_projection(
+    node: type, model: type[models.Model], expressions: tuple[tuple[str, Any], ...],
+    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+) -> type:
+    """Native type extensions expose contributed filters as readable badge values."""
+    definition = get_object_definition(node, strict=True)
+    if collisions := {field.python_name for field in definition.fields} & dict(expressions).keys():
+        raise ImproperlyConfigured(f"{definition.name} shadows contributed resource fields: {sorted(collisions)}.")
+    empty = model._default_manager.none()
+    attributes = {
+        "__annotations__": {
+            name: field_type_map[type((expression(empty) if callable(expression) else expression).output_field)]
+            for name, expression in expressions
+        },
+        **{
+            name: strawberry_django.field(
+                annotate={name: partial(_resource_filter_annotation, source, expression)},
+            )
+            for name, expression in expressions
+        },
+    }
+    return strawberry_django.type(model, name=definition.name, extend=True)(
+        type(f"{definition.name}ResourceFilters", (), attributes),
+    )
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
     model: type[models.Model],
     name: str | None = None,
     filterable: Sequence[str],
-    filter_expressions: Mapping[
-        str, models.Expression | Callable[[models.QuerySet[Any]], models.Expression]
-    ] | None = None,
+    filter_expressions: Mapping[str, models.Expression | Callable[[models.QuerySet[Any]], models.Expression]]
+    | None = None,
     record_ref_filters: tuple[str, str] | None = None,
     record_ref_requires_read: bool = False,
     sortable: Sequence[str],
@@ -1105,8 +1165,15 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     inspected on an empty queryset at composition; it must perform no row reads.
     """
 
-    model_aliases, model_filter_aliases = _declared_aliases(model)
+    model_aliases, model_filter_aliases = _declared_aliases(cast(Hashable, model))
     expressions = dict(filter_expressions or {})
+    contributed_filters: dict[str, Any] = {}
+    for provider in resolve_hooks("ANGEE_GRAPHQL_RESOURCE_FILTERS"):
+        contributed = provider(model)
+        if collisions := contributed.keys() & (expressions.keys() | contributed_filters.keys()):
+            raise ImproperlyConfigured(f"{model._meta.label} has duplicate resource filters: {sorted(collisions)}.")
+        contributed_filters.update(contributed)
+    expressions.update(contributed_filters)
     if collisions := expressions.keys() & model_filter_aliases.keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate filter aliases: {sorted(collisions)}.")
     expressions.update({name: expression for name, (expression, _) in model_filter_aliases.items()})
@@ -1131,8 +1198,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             **(field_id_decode or {}), model_name: str.lower, id_name: model.record_public_id_operand,
         }
     container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
-    filterable = tuple(dict.fromkeys((*filterable, *sorted(container_scopes), *model_filter_aliases,
-                                      *(record_ref_filters or ()))))
+    filterable = tuple(
+        dict.fromkeys(
+            (
+                *filterable,
+                *contributed_filters,
+                *sorted(container_scopes),
+                *model_filter_aliases,
+                *(record_ref_filters or ()),
+            )
+        )
+    )
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
     sortable = tuple(dict.fromkeys((*sortable, *model_aliases)))
@@ -1169,11 +1245,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     # Scope membership is intentionally testable without reading the container.
     # It never changes the actor scope of the root rows or their projections.
     relation_paths = tuple(path for path in relation_paths if path not in container_scopes)
-    read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
-    aggregate_source = (
+    source_read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
+    source_aggregate = (
         _relation_scalar_queryset(model, get_aggregate_queryset, relation_paths)
         if get_aggregate_queryset is not None
-        else _aggregate_queryset(read_queryset)
+        else _aggregate_queryset(source_read_queryset)
     )
     if unknown := expressions.keys() - set(filterable):
         raise ImproperlyConfigured(f"Filter expressions must be declared filterable: {sorted(unknown)}")
@@ -1184,12 +1260,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             continue
         raise ImproperlyConfigured(f"Filter expression {key!r} shadows a model field.")
 
-    def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    def prepare_filters(queryset: models.QuerySet[Any], requested: set[str]) -> models.QuerySet[Any]:
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
             queryset = with_record_reference_access(queryset)
         queryset = with_filter_aliases(queryset)
         aliases: dict[str, models.Expression] = {}
         for name, expression in expressions.items():
+            if name in contributed_filters and name not in requested:
+                continue
             if name in model_filter_aliases:
                 continue
             if callable(expression):
@@ -1202,13 +1280,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             aliases[name] = expression
         return queryset.alias(**aliases) if aliases else queryset
 
-    source_read_queryset, source_aggregate = read_queryset, aggregate_source
-
     def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_read_queryset(info))
+        return prepare_filters(source_read_queryset(info), _request_filter_fields(info))
 
     def aggregate_source(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_aggregate(info))
+        return prepare_filters(source_aggregate(info), _request_filter_fields(info))
 
     model_filters = tuple(field for field in filterable if field not in expressions)
     # Native Hasura aliases cannot shadow a model field (or contain path
@@ -1287,6 +1363,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if contributed_filters:
+        resource.types.append(_resource_filter_projection(
+            node, model, tuple(contributed_filters.items()), source_read_queryset,
+        ))
     if relation_sort_aliases:
         assert resource.order_by_type is not None
         wire_names = {alias: path for path, alias in relation_sort_aliases.items()}
@@ -1317,7 +1397,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         for field in get_object_definition(resource.query, strict=True).fields:
             if any(argument.python_name == "where" for argument in field.arguments):
                 field.extensions.insert(0, adapter)
-    if relation_filter_aliases:
+    if any(isinstance(decoder, _RelationIDDecoder) for decoder in (field_id_decode or {}).values()):
         assert resource.filter_type is not None
         filter_type = adapter.combined if adapter is not None else resource.filter_type
         for field in get_object_definition(resource.query, strict=True).fields:
@@ -1337,7 +1417,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             where, id_column=id_column, id_decode=id_decode,
             field_decoders=field_id_decode, lookups=filter_lookups,
         )
-        return lambda queryset: prepare_filters(queryset).filter(predicate)
+        return lambda queryset: prepare_filters(queryset, _filter_field_names(where)).filter(predicate)
 
     return attach_hasura_resource_metadata(
         resource,

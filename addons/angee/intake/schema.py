@@ -41,8 +41,6 @@ Queue = apps.get_model("work", "Queue")
 
 NeedImportance = Need._meta.get_field("importance").choices_enum
 strawberry.enum(cast(Any, NeedImportance))
-NeedAccessVerdict = apps.get_model("decisions", "Decision")._meta.get_field("verdict").choices_enum
-strawberry.enum(cast(Any, NeedAccessVerdict))
 strawberry.enum(cast(Any, NeedAccessAction))
 
 
@@ -85,14 +83,12 @@ class NeedType(AngeeNode):
         """Project the linked account without resolving each party separately."""
 
         return optional_public_id(user_public_id(cast(Any, self)._requester_user_id))
+    requester_access_granted: bool = strawberry_django.field(only=["admitted_user_id"])
     access_decision: DecisionType | None = actor_scoped_to_one("access_decision")
-    access_verdict: NeedAccessVerdict | None = strawberry_django.field(  # type: ignore[valid-type]
+    access_verdict: JSON | None = strawberry_django.field(
         only=["access_decision_id"], prefetch_related=["access_decision"],
     )
-    access_resolved_at: datetime | None = strawberry_django.field(
-        only=["access_decision_id"], prefetch_related=["access_decision"],
-    )
-    access_resolution: JSON | None = strawberry_django.field(
+    access_answered_at: datetime | None = strawberry_django.field(
         only=["access_decision_id"], prefetch_related=["access_decision"],
     )
     created_at: auto
@@ -103,8 +99,8 @@ class NeedType(AngeeNode):
     project: ProjectType | None = actor_scoped_to_one("project")
     source_message: MessageType | None = actor_scoped_to_one("source_message")
     original_task: TaskType | None = actor_scoped_to_one("original_task")
-    access_resolved_by: UserType | None = strawberry_django.field(
-        only=["access_decision_id"], prefetch_related=["access_decision__resolved_by"],
+    access_answered_by: UserType | None = strawberry_django.field(
+        only=["access_decision_id"], prefetch_related=["access_decision__answered_by"],
     )
 
 
@@ -255,13 +251,12 @@ class IntakeActionMutation:
         info: strawberry.Info,
         need: PublicID,
         action: NeedAccessAction,
-        reason: str = "",
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Apply the need owner's access decision and return the approved account."""
 
         target = authorized_permission_target(info, Need, need, "write")
-        user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
+        user = target.decide_access(action, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
 
     @strawberry.mutation

@@ -28,15 +28,26 @@ code executes under the actor's permissions. It must keep external effects out
 of database steps. Consumer settlements validate their own values; the runner
 records retry, timeout and diagnostic facts on attempts.
 
-[`ReviewStep`](reviews.py) asks through the independent decisions addon and
-applies settled answers in a worker as the run actor. Each answer carries its
-resolver and frozen basis. Rejected application starts another review round;
-`ReviewStep.max_rounds` bounds re-asks, while each decision's `max_attempts`
-bounds invalid submissions to that seat. Other failures retain the answers for
-operator recovery. Decision admission
-requires standing evidence access and creates no grants. The built-in `review`
-uses this same contract for configured seats. Under `all`, differing actions
-take an explicitly routed `disputed` branch.
+[`DecisionStep`](reviews.py) asks independent decisions, linked directly through
+`Decision.step_run` and `StepRun.decisions`. The step resumes when none is open.
+`ctx.ask(*requests, state=...)` keeps continuation facts in the step's state.
+The built-in `ask_decision` asks one configured question about the run's subject.
+
+[`apply_proposals`](reviews.py) is the shared application path: as the run actor
+it sets fields through normal validated model saves, resolves relation sets through
+public identities, and invokes named public record methods. It returns the chosen
+outcomes as a set. Application and continuation share the worker's body transaction;
+failure rolls back record actions and retains final answers for operator retry.
+No automatic replacement question is asked. Repeated delivery still requires
+idempotent public methods. Decisions and alternatives apply in authored order;
+a later selected alternative wins when it sets the same field.
+
+The default continuation routes one distinct outcome directly. Several distinct
+outcomes route `done`, with sorted outcomes and decision IDs in the output.
+Consumers may map that set to their declared outcomes in `continue_with`.
+`ctx.decision(id)` loads a retained decision from this run with normal read scope.
+Run operators inherit decision read through the direct link, without answer grants.
+Pruning detaches the link through its owner and retains the question and verdict.
 
 The [`permission schema`](permissions.zed) lets starters discover and read the
 workflows they may start, without editing them. Run readers see the pinned topology
@@ -121,7 +132,7 @@ terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
 
 **Named gap: run budgets.** The rebuilt engine bounds individual attempts,
-dispatch recovery and review rounds, but has no owner for an overall run budget
+dispatch recovery, but has no owner for an overall run budget
 or deadline. Workflows that need an aggregate time, page or resource budget still
 need that engine contract; step bounds do not establish a run-wide limit.
 

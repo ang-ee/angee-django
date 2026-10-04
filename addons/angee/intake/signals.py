@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 def connect() -> None:
     """Listen for ingested messages without adding another messaging hook."""
 
+    from angee.decisions.signals import decision_answered
+    decision_answered.connect(apply_access_answer, dispatch_uid="intake.apply_access_answer")
     message_ingested.connect(
         capture_channel_message,
         dispatch_uid="intake.capture_channel_message.message_ingested",
@@ -51,3 +53,15 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
             instance.channel_id,
             error,
         )
+
+
+def apply_access_answer(sender: Any, decision: Any, **kwargs: Any) -> None:
+    """The request owner consumes its current answer through its public write path."""
+    if decision.kind != "intake.access":
+        return
+    need = apps.get_model("intake", "Need")
+    from rebac import system_context
+    with system_context(reason="intake.answer.current_need"):
+        rows = list(need.objects.filter(access_decision=decision))
+    for row in rows:
+        row.with_actor(decision.answered_by).apply_access_answer(decision)

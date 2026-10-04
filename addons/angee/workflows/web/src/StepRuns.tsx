@@ -46,8 +46,8 @@ export function StepRuns({ runId, nodeKeys }: {
             typeof row.record_model === "string" && typeof row.record_id === "string"
               ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
         </List> },
-      { id: "decisions", label: t("step.decisions"), visibleWhen: (row) => row.decision_group != null, render: ({ recordId }) =>
-        <DecisionsList baseFilter={{ "group.step_run": { exact: recordId } }} /> },
+      { id: "decisions", label: t("step.decisions"), render: ({ recordId }) =>
+        <DecisionsList baseFilter={{ "step_run": { exact: recordId } }} /> },
     ]}>
     <List fields={["is_mapped", "is_map"]} order={{ rank: "ASC", map_index: "ASC" }} pageSize={10} emptyContent={t("run.noSteps")}>
       <Facet field="status" />
@@ -59,7 +59,7 @@ export function StepRuns({ runId, nodeKeys }: {
       <Column field="outcome_label" header={t("run.outcome")} />
       <Column field="attempt" header={t("step.attempts")} />
     </List>
-    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement", "decision_group"]}>
+    <Form readOnly returning={["can_retry", "requires_duplicate_acknowledgement"]}>
       <Field name="is_mapped" hidden />
       <Field name="is_map" hidden />
       <Field name="node_label" title />

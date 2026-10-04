@@ -56,9 +56,10 @@ vi.mock("@angee/ui", async () => {
 function need(verdict: "PENDING" | "COMPLETED" | "REJECTED", permissions = ["write"]): CurrentAccessRow {
   return {
     id: "need-1", revision: 3, permissions,
-    claimed_name: "Alex Example", claimed_email: "alex@example.net", access_verdict: verdict,
+    requester_access_granted: verdict === "COMPLETED",
+    claimed_name: "Alex Example", claimed_email: "alex@example.net", access_verdict: verdict === "PENDING" ? null : [verdict === "COMPLETED" ? "intake.approve" : "intake.deny"],
     party: { id: "party-1", display_name: "Alex Example" },
-    access_decision: { id: "decision-1", verdict, is_open: verdict === "PENDING" },
+    access_decision: { id: "decision-1", verdict: verdict === "PENDING" ? null : [verdict === "COMPLETED" ? "intake.approve" : "intake.deny"], is_open: verdict === "PENDING" },
   };
 }
 
@@ -98,6 +99,16 @@ describe("requester access cards", () => {
     expect(mocks.reset).toHaveBeenCalledExactlyOnceWith("need-1", {
       confirmed: true, expected_revision: 3,
     });
+  });
+
+  test("a recorded approval grants no role before owner application and can be applied again", async () => {
+    const row = { ...need("COMPLETED"), requester_access_granted: false };
+    render(<TaskAccessDecisions needs={[row]} canManage />);
+    expect(screen.getByText("Approval recorded")).toBeTruthy();
+    expect(screen.getByText(/Access has not been granted yet/)).toBeTruthy();
+    expect(screen.queryByText("Already has access")).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Grant approved access" })); });
+    expect(mocks.decide).toHaveBeenLastCalledWith("need-1", { action: "INTAKE_APPROVE", expected_revision: 3 });
   });
 
   test("denied access has a danger state and no approve or deny verb", () => {

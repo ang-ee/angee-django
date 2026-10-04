@@ -1,8 +1,28 @@
 {
   "criticalExports": [
-    { "name": "DECISION_MODEL", "ownerFile": "src/documents.console.ts" },
-    { "name": "decisionContent", "ownerFile": "src/content.tsx" },
-    { "name": "decisionRecordTab", "ownerFile": "src/RecordDecisions.tsx" },
-    { "name": "DecisionsList", "ownerFile": "src/RecordDecisions.tsx" }
+    {
+      "name": "DECISION_MODEL",
+      "ownerFile": "src/documents.console.ts"
+    },
+    {
+      "name": "decisionRecordTab",
+      "ownerFile": "src/RecordDecisions.tsx"
+    },
+    {
+      "name": "DecisionsList",
+      "ownerFile": "src/RecordDecisions.tsx"
+    },
+    {
+      "name": "DecisionCard",
+      "ownerFile": "src/DecisionCard.tsx"
+    },
+    {
+      "name": "fieldsToMark",
+      "ownerFile": "src/proposal.ts"
+    },
+    {
+      "name": "useDecision",
+      "ownerFile": "src/origin.tsx"
+    }
   ]
 }
