@@ -2,12 +2,13 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
+import { searchFixture } from "./search/search-fixture.test-support";
 import { ResourceListFrame } from "./ResourceListFrame";
 
 afterEach(cleanup);
 
 test("list chrome composes heading copy with the live count", () => {
-  render(<ResourceListFrame toolbar={{ pager: { total: 7, page: 1, pageSize: 20 } }}
+  render(<ResourceListFrame toolbar={{ search: searchFixture(), pager: { total: 7, page: 1, pageSize: 20 } }}
     heading={{ label: "Requests", hint: "Filed through the public form", audience: "Managers only" }}>
     <p>Rows</p>
   </ResourceListFrame>);
@@ -18,7 +19,7 @@ test("list chrome composes heading copy with the live count", () => {
 });
 
 test("retains and dims settled rows only while the new request has none", () => {
-  const toolbar = { pager: { total: 1, page: 1, pageSize: 20 } };
+  const toolbar = { search: searchFixture(), pager: { total: 1, page: 1, pageSize: 20 } };
   const rendered = render(<ResourceListFrame toolbar={toolbar} hasRows><p>Previous row</p></ResourceListFrame>);
   rendered.rerender(<ResourceListFrame toolbar={toolbar} fetching hasRows={false}><p>Next row</p></ResourceListFrame>);
   expect(screen.getByText("Previous row")).toBeTruthy();
@@ -29,7 +30,7 @@ test("retains and dims settled rows only while the new request has none", () => 
 });
 
 test("background refetch keeps current rows interactive and undimmed", () => {
-  const toolbar = { pager: { total: 1, page: 1, pageSize: 20 } };
+  const toolbar = { search: searchFixture(), pager: { total: 1, page: 1, pageSize: 20 } };
   const rendered = render(<ResourceListFrame toolbar={toolbar} hasRows><button type="button">Open row</button></ResourceListFrame>);
   rendered.rerender(<ResourceListFrame toolbar={toolbar} fetching hasRows><button type="button">Open row</button></ResourceListFrame>);
   const row = screen.getByRole("button", { name: "Open row" });
@@ -41,7 +42,7 @@ test("background refetch keeps current rows interactive and undimmed", () => {
 test.each(["resource-table-scroll", "resource-board-scroll"])(
   "%s stays a direct frame child for page and embedded layout rules",
   (scrollClass) => {
-    const toolbar = { pager: { total: 1, page: 1, pageSize: 20 } };
+    const toolbar = { search: searchFixture(), pager: { total: 1, page: 1, pageSize: 20 } };
     const rendered = render(<ResourceListFrame toolbar={toolbar} presentation="page">
       <div className={scrollClass}>Rows</div>
     </ResourceListFrame>);

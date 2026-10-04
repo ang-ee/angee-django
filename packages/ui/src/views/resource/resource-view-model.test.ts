@@ -3,7 +3,8 @@
 import { createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
-import { useResourceToolbarProps } from "./resource-toolbar-props";
+import { useResourceSearch } from "./search/use-resource-search";
+import { searchFixture } from "./search/search-fixture.test-support";
 import { favoriteFromResourceView } from "./model/favorites";
 import { useResourceViewQueryFacts } from "./surface/table-state";
 import { initialResourceSorting } from "./resource-view-codecs";
@@ -242,20 +243,19 @@ describe("resource-view model", () => {
   test("consecutive toolbar filter changes compose against the latest state", () => {
     const { result } = renderHook(() => {
       const view = useResourceView();
-      const toolbar = useResourceToolbarProps({
+      const toolbar = useResourceSearch({
         resourceView: view,
-        pager: { page: view.state.pagination.pageIndex + 1, pageSize: view.state.pagination.pageSize, total: undefined },
-        filterOptions: [
+        catalog: searchFixture({ catalog: { filters: [
           { id: "active", label: "Active", filter: { status: { exact: "ACTIVE" } } },
           { id: "manual", label: "Manual", filter: { origin: { exact: "MANUAL" } } },
-        ],
+        ] } }).catalog,
       });
       return { view, toolbar };
     }, { wrapper: viewWrapper({ page: 3, selectedIds: ["note-1"] }) });
     act(() => {
-      result.current.toolbar.onFilterToggle?.("active");
-      result.current.toolbar.onFilterToggle?.("manual");
-      result.current.toolbar.onFilterTextChange?.("review");
+      result.current.toolbar.toggleFilter("active");
+      result.current.toolbar.toggleFilter("manual");
+      result.current.toolbar.setText("review");
     });
     expect(result.current.view.state.filter).toEqual({
       status: { exact: "ACTIVE" }, origin: { exact: "MANUAL" }, title: { iContains: "review" },

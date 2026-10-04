@@ -169,7 +169,6 @@ export function useResultControls(lens: ResultLens) {
     })),
     {
       id: "direct-mail",
-      preset: true,
       group: coverage,
       label: t("inbox.directMail"),
       filter: DIRECT_MAIL_PRESET,

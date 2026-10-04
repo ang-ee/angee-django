@@ -104,44 +104,39 @@ describe("useScalarFacets", () => {
       ],
       enabled: true,
     });
-    expect(result.current.filters).toEqual([
+    expect(result.current.flatMap((facet) => facet.options)).toEqual([
       {
         id: 'status:"DRAFT"',
         label: "Draft",
-        chipLabel: "Draft",
-        filter: { status: { exact: "DRAFT" } },
+        filter: { status: { exact: "DRAFT" } }, value: "DRAFT",
       },
       {
         id: 'status:"ACTIVE"',
         label: "Active",
-        chipLabel: "Active",
-        filter: { status: { exact: "ACTIVE" } },
+        filter: { status: { exact: "ACTIVE" } }, value: "ACTIVE",
       },
       {
         // A free-text scalar value renders verbatim — only enum-typed fields
         // get their member names prettified.
         id: 'source:"api"',
         label: "api",
-        chipLabel: "api",
-        filter: { source: { exact: "api" } },
+        filter: { source: { exact: "api" } }, value: "api",
       },
     ]);
-    expect(result.current.filterFields).toEqual([
+    expect(result.current).toMatchObject([
       {
-        id: "status",
         field: "status",
         label: "Status",
-        type: "selection",
+        source: "scalar",
         options: [
           { value: "DRAFT", label: "Draft" },
           { value: "ACTIVE", label: "Active" },
         ],
       },
       {
-        id: "source",
         field: "source",
         label: "Source",
-        type: "selection",
+        source: "scalar",
         options: [{ value: "api", label: "api" }],
       },
     ]);
@@ -188,17 +183,16 @@ describe("useScalarFacets", () => {
     ], totalCount: 3 }, "parties_groups", { id: "tax_country", dimensions: [groupDimension("TAX_COUNTRY", "tax_country")] });
     dataMocks.facets.mockReturnValue(resourceFacets({ tax_country: facet.options }));
     const { result } = renderHook(() => useScalarFacets("parties.Party", [], metadata));
-    expect(result.current.filters).toEqual([
-      { id: 'tax_country:""', label: "No value", chipLabel: "No value", filter: { tax_country: { exact: "" } } },
-      { id: "tax_country:null", label: "No value", chipLabel: "No value", filter: { tax_country: { isNull: true } } },
-      { id: 'tax_country:"DE"', label: "Germany", chipLabel: "Germany", filter: { tax_country: { exact: "DE" } } },
+    expect(result.current.flatMap((facet) => facet.options)).toEqual([
+      { id: 'tax_country:""', label: "No value", filter: { tax_country: { exact: "" } }, value: "" },
+      { id: "tax_country:null", label: "No value", filter: { tax_country: { isNull: true } } },
+      { id: 'tax_country:"DE"', label: "Germany", filter: { tax_country: { exact: "DE" } }, value: "DE" },
     ]);
-    expect(result.current.filters.map((option) => ResourceQuery.from(metadata).toWhere(option.filter))).toEqual([
+    expect(result.current.flatMap((facet) => facet.options).map((option) => ResourceQuery.from(metadata).toWhere(option.filter))).toEqual([
       { tax_country: { _eq: "" } }, { tax_country: { _is_null: true } }, { tax_country: { _eq: "DE" } },
     ]);
-    expect(result.current.filterFields[0]!.options).toEqual([
-      { value: "", label: "No value" }, { value: "DE", label: "Germany" },
-    ]);
+    expect(result.current[0]?.options[1]?.value).toBeUndefined();
+    expect(result.current[0]?.source).toBe("scalar");
   });
 });
 

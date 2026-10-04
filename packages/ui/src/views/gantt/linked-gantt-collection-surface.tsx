@@ -9,8 +9,9 @@ import { useStatusTone } from "../../widgets/use-status-tone";
 import { relationValueId } from "../../widgets/types";
 import { errorFromUnknown } from "../../data/errors";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
-import { useResourceToolbarProps } from "../resource/resource-toolbar-props";
-import { useListViewToolbarInputs, type ListViewToolbarInputsProps } from "../resource/resource-view-toolbar-inputs";
+import { useResourceSearch } from "../resource/search/use-resource-search";
+import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
+import type { ResourceToolbarProps } from "../../toolbars";
 import { readPath } from "../resource/resource-view-list-body";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts } from "../resource/surface/table-state";
 import { useResourceListQuery } from "../resource/surface/resource-list-query";
@@ -26,12 +27,12 @@ interface LinkedGanttCollectionSurfaceProps<TRow extends Row> extends Pick<ListV
   "availableViews" | "onCreate" | "createLabel" | "toolbarActions" | "className" | "presentation" | "toolbarWrap" | "onRowClick" | "rowHref" | "maxGroupDepth" | "selectable"> {
   surfaceProps: UseResourceViewSurfaceProps<TRow>;
   gantt: GanttViewSpec;
-  toolbarInputs: Omit<ListViewToolbarInputsProps<TRow>, "rows" | "list">;
+  searchInput: Omit<UseSearchCatalogInput<TRow>, "rows">;
 }
 
 /** The list resource owns the lane page and view state; the linked resource supplies bars only. */
 export function LinkedGanttCollectionSurface<TRow extends Row>({
-  surfaceProps, gantt, toolbarInputs: input, availableViews, onCreate, createLabel,
+  surfaceProps, gantt, searchInput: input, availableViews, onCreate, createLabel,
   toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref, selectable,
 }: LinkedGanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
@@ -111,11 +112,16 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
     });
     return { resources, events: withGanttLaneNotes(events, detailsByLane), detailsByLane, skipped };
   }, [rows, laneIds, laneLabel, laneResource, barResource, bars.rows, bars.skipped, linkedMetadata, gantt, linked, barLabel, resolveTone]);
-  const toolbarInputs = useListViewToolbarInputs({ ...input, rows, list, serverGrouping: false });
-  const toolbar = useResourceToolbarProps({ ...toolbarInputs, resourceView, availableViews, view: "gantt",
-    groupStack: surfaceProps.groupStack ?? resourceView.state.groupStack, groupingEnabled: false,
-    favorites: resourceView.savedFavorites, createLabel, onCreate, actions: toolbarActions,
-    wrap: toolbarWrap, maxGroupDepth, pagerMaxPageSize: MAX_PAGE_SIZE });
+  const catalog = useSearchCatalog({ ...input, rows, serverGrouping: false });
+  const search = useResourceSearch({ resourceView, catalog, groupStack: surfaceProps.groupStack ?? resourceView.state.groupStack,
+    groupingEnabled: false, maxGroupDepth });
+  const toolbar: ResourceToolbarProps = {
+    search, pager: list, availableViews, view: "gantt",
+    createLabel, onCreate, actions: toolbarActions, wrap: toolbarWrap,
+    onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
+    onViewChange: (availableViews?.length ?? 2) > 1 ? resourceView.setView : undefined,
+    pagerMaxPageSize: MAX_PAGE_SIZE,
+  };
   const anchor = React.useMemo(() => calendarAnchorToDate(resourceView.state.anchor), [resourceView.state.anchor]);
   const onDateChange = React.useCallback((date: Date) => resourceView.setAnchor(calendarDateToAnchor(date)), [resourceView.setAnchor]);
   const openLane = React.useCallback((id: string) => {

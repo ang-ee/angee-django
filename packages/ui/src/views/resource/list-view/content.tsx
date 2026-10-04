@@ -15,15 +15,16 @@ import { FlatListBody, ListEmpty, groupMeasuresFromColumns, hasuraMeasuresFromGr
 import { ResourceListFrame } from "../ResourceListFrame";
 import type { BoardCardSpec, CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody } from "../board/cards";
-import { columnsWithMetadataDefaults, fieldLabel } from "../model-metadata-defaults";
+import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
 import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
-import { useResourceToolbarProps } from "../resource-toolbar-props";
-import { useListViewToolbarInputs } from "../resource-view-toolbar-inputs";
+import { useResourceSearch } from "../search/use-resource-search";
+import { useSearchCatalog } from "../search/catalog";
+import type { ResourceToolbarProps } from "../../../toolbars";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 interface ListViewContentProps<TRow extends Row> {
@@ -126,7 +127,7 @@ export function ListViewContent<TRow extends Row = Row>({
     () => groupMeasuresFromColumns(resolvedColumns),
     [resolvedColumns],
   );
-  const toolbarInputs = useListViewToolbarInputs({
+  const catalog = useSearchCatalog({
     query: source?.query,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
@@ -134,7 +135,6 @@ export function ListViewContent<TRow extends Row = Row>({
     rows: surface.rows,
     modelMetadata,
     resourceView,
-    list: surface.list,
     defaultGroup,
     defaultGroups,
     groupOptions: explicitGroupOptions,
@@ -143,9 +143,7 @@ export function ListViewContent<TRow extends Row = Row>({
     filterOptions: explicitFilterOptions,
     customFilterFields: explicitCustomFilterFields,
     textFilterField: declaredTextField,
-    groupStack: effectiveGroupStack,
   });
-  const { textFilterField } = toolbarInputs;
   const interactive = Boolean(onRowClick || rowHref);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
@@ -195,40 +193,20 @@ export function ListViewContent<TRow extends Row = Row>({
       }}
     />
   );
-  const toolbar = useResourceToolbarProps({
-    chrome,
-    maxGroupDepth,
-    wrap: toolbarWrap,
-    actions: toolbarActions,
-    utilityActions: contributedUtilities,
-    availableViews,
-    pager: toolbarInputs.pager,
-    view: resourceView.state.view,
-    group: effectiveGroupStack[0] ?? null,
-    groupStack: effectiveGroupStack,
-    groupOptions: toolbarInputs.groupOptions,
-    customGroupOptions: toolbarInputs.customGroupOptions,
-    filterOptions: toolbarInputs.filterOptions,
-    filterRow,
-    facetLabels: filterRow?.facetIds ? Object.fromEntries(filterRow.facetIds.map((field) => [
-      field,
-      fieldLabel(field, modelMetadata?.fields[field], toolbarInputs.customFilterFields.find((option) => (option.field ?? option.id) === field)?.label),
-    ])) : undefined,
-    customFilterFields: toolbarInputs.customFilterFields,
-    customFilterChips: toolbarInputs.customFilterChips,
-    favorites: resourceView.savedFavorites,
-    activeFilterIds: toolbarInputs.activeFilterIds,
-    filterText: toolbarInputs.filterText,
-    textFilterField,
+  const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
+    groupingEnabled: !renderItem && !boardGroupingPinned, maxGroupDepth });
+  const toolbar: ResourceToolbarProps = {
+    search, chrome, wrap: toolbarWrap, actions: toolbarActions,
+    utilityActions: contributedUtilities, availableViews, pager: surface.list,
+    view: resourceView.state.view, filterRow,
     createLabel: createLabel ?? createLabelForResource(resource, t, modelMetadata?.label),
-    onCreate,
-    resourceView,
-    groupingEnabled: !renderItem && !boardGroupingPinned,
+    onCreate, onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
+    onViewChange: availableViews.length > 1 ? resourceView.setView : undefined,
     pagerSubject: serverGroupedMode ? t("pager.groups") : undefined,
     pagerTotalUnit: serverGroupedMode ? "groups" : undefined,
     pagerPageSizeOptions: clientRowModel ? undefined : PAGE_SIZE_OPTIONS,
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
-  });
+  };
 
   return (
     <ResourceListFrame
