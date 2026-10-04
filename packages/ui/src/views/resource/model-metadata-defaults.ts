@@ -88,7 +88,7 @@ export function relationFieldInfoForQueryField(
   if (!target) return null;
   return relationFieldInfoForResource(
     target,
-    modelMetadataForLabel(schemaMetadata, target),
+    schemaMetadata.labels[target] ?? null,
   );
 }
 
@@ -168,13 +168,9 @@ function resolveRelationTarget(
 ): RelationFieldInfo | null {
   const targetLabel = relationModelLabelForField(field, modelMetadata);
   if (!targetLabel) return null;
-  const related = modelMetadataForLabel(schemaMetadata, targetLabel);
-  if (!related?.resource.roots.list) return null;
-  return {
-    resource: related.resource.modelLabel,
-    labelField: related.resource.recordRepresentation ?? related.resource.query.identity.field,
-    canCreate: Boolean(related.resource.roots.create),
-  };
+  // Relation metadata already carries a canonical label; schema-only targets
+  // legitimately have no resource and cannot offer picker options.
+  return relationFieldInfoForResource(targetLabel, schemaMetadata.labels[targetLabel] ?? null);
 }
 
 /**
@@ -244,11 +240,16 @@ export function columnsWithMetadataDefaults<TRow extends object>(
     // object, which cannot be selected as a leaf. The metadata owner resolves its
     // id + record-representation leaves and the scalar display path, so the query
     // selects `{ product { id name } }` and the cell reads `product.name`.
-    const relationRepresentation = metadata
+    const schema = schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA;
+    // A fully authored object-list cell owns its selection and presentation.
+    // Its schema-only target need not expose a resource representation.
+    const authoredList = column.render && column.selectionPaths?.length && metadata
+      && modelFieldForPath(column.field, metadata, schema)?.field.kind === "list";
+    const relationRepresentation = metadata && !authoredList
       ? relationRepresentationForPath(
           column.field,
           metadata,
-          schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA,
+          schema,
         )
       : null;
     const relationLabelField = column.render || relationRepresentation?.relationList

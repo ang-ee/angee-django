@@ -3,14 +3,14 @@ import { parseAsString, useQueryState } from "nuqs";
 
 import {
   TextLink,
-  ListView, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
+  ListView, useRouteHref, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 
 // The `platform.Field` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/platform/schema.py`): every composed model's fields flattened
-// into one collection, fetched + grouped client-side by ListView's client row
-// model. `model`/`addon` carry the owning context.
+// into one server-paged collection. `model`/`addon` carry the owning context;
+// the resource exposes filtering and sorting, without grouping axes.
 interface FieldResourceRow extends Record<string, unknown> {
   id: string;
   name: string;
@@ -62,15 +62,6 @@ function columns(
   ];
 }
 
-function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
-  return [
-    { id: "addon", label: t("col.addon"), group: { field: "addon" }, type: "value" },
-    { id: "model", label: t("col.model"), group: { field: "model" }, type: "value" },
-    { id: "kind", label: t("col.type"), group: { field: "kind" }, type: "value" },
-    { id: "relation_target", label: t("col.relationTarget"), group: { field: "relation_target" }, type: "value" },
-  ];
-}
-
 export function FieldsPage(): ReactElement {
   const t = usePlatformT();
   const routeHref = useRouteHref();
@@ -88,9 +79,7 @@ export function FieldsPage(): ReactElement {
     <ListView<FieldResourceRow>
       resource="platform.Field"
       columns={columns(t, routeHref)}
-      groupOptions={groupOptions(t)}
       baseFilter={Object.keys(filter).length > 0 ? filter : undefined}
-      defaultGroup={modelScope ? null : { field: "model" }}
       pageSize={100}
       emptyContent={t("empty.fields")}
     />

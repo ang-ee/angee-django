@@ -1,4 +1,6 @@
 import type { FilterClause, ResourceToolbarCustomFilterChip, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
+import type { ResourceQuery } from "@angee/metadata";
+import { dedupeBy } from "../../../lib/dedupe";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
 import { customFilterChipLabel, customFilterId, isFacetFilter, isLookup, mergeById, parseCustomFilterId } from "./labels";
@@ -109,11 +111,14 @@ export function removeCustomFilter(
   return next;
 }
 
+/** Authored ids and labels win; one executable predicate gets one choice. */
 export function mergeFilterOptions(
   explicit: readonly ResourceToolbarFilterOption[] | undefined,
   inferred: readonly ResourceToolbarFilterOption[],
+  query: ResourceQuery,
 ): readonly ResourceToolbarFilterOption[] {
-  return mergeById(explicit, inferred);
+  const options = mergeById(explicit, inferred);
+  return dedupeBy(options, (option) => JSON.stringify(query.toWhere(option.filter)));
 }
 
 export function mergeFilterFields(

@@ -28,6 +28,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient, PinnedTransport, ResponseTooLargeError
 from angee.integrate.states import (
     ConflictKeep,
@@ -39,6 +40,7 @@ from angee.integrate.states import (
     StreamPhase,
 )
 from angee.integrate.streams import (
+    BridgeSyncError,
     CursorInvalid,
     RemoteRejected,
     advance_stream,
@@ -109,6 +111,9 @@ class FakeDav:
         self.photos: dict[str, bytes] = {}
         self.private_access: list[bool] = []
         self.include_collection_response = False
+        self.has_sync_token = True
+        self.has_ctag = False
+        self.list_etags = True
         self.store(_HREF, _card())
 
     @property
@@ -194,7 +199,9 @@ class FakeDav:
         assert url == _BOOK
         collection = self._property(
             _BOOK,
-            f"<d:resourcetype><d:collection/></d:resourcetype><d:sync-token>{self.token}</d:sync-token>",
+            "<d:resourcetype><d:collection/></d:resourcetype>"
+            + (f"<d:sync-token>{self.token}</d:sync-token>" if self.has_sync_token else "")
+            + (f"<cs:getctag>{self.version}</cs:getctag>" if self.has_ctag else ""),
         )
         members = "".join(self._response(href) for href in sorted(self.cards)) if headers.get("depth") == "1" else ""
         return self._multistatus(collection + members)
@@ -205,7 +212,10 @@ class FakeDav:
                 f"<d:response><d:href>{escape(href)}</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>"
             )
         card, etag = self.cards[href]
-        props = f"<d:getetag>{escape(etag)}</d:getetag><d:getcontenttype>text/vcard</d:getcontenttype><d:resourcetype/>"
+        props = (
+            (f"<d:getetag>{escape(etag)}</d:getetag>" if self.list_etags or data else "")
+            + "<d:getcontenttype>text/vcard</d:getcontenttype><d:resourcetype/>"
+        )
         if data:
             props += f"<card:address-data>{escape(card)}</card:address-data>"
         return self._property(href, props)
@@ -220,7 +230,8 @@ class FakeDav:
     def _multistatus(self, responses: str, *, token: bool = False) -> httpx.Response:
         tail = f"<d:sync-token>{self.token}</d:sync-token>" if token else ""
         xml = (
-            '<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">'
+            '<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav" '
+            'xmlns:cs="http://calendarserver.org/ns/">'
             f"{responses}{tail}</d:multistatus>"
         )
         return httpx.Response(207, content=xml.encode())
@@ -303,6 +314,147 @@ def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica
     assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
     assert link.origin == "remote"
     assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+@pytest.mark.parametrize("ctag", [False, True])
+def test_tokenless_collection_lists_etags_for_new_changed_removed_and_unchanged_cards(
+    replica: Replica, ctag: bool,
+) -> None:
+    replica.server.has_sync_token = False
+    replica.server.has_ctag = ctag
+    person, link = replica.baseline()
+    assert link.remote_version == replica.server.cards[_HREF][1]
+    assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version) if ctag else ""}
+
+    replica.server.requests.clear()
+    assert replica.pull().count == 0
+    assert not [request for request in replica.server.requests if request[0] == "REPORT"]
+    listings = [request for request in replica.server.requests if request[2]["depth"] == "1"]
+    assert len(listings) == (0 if ctag else 1)
+
+    grace_href = f"{_BOOK}grace.vcf"
+    replica.server.store(_HREF, _card(notes="Changed"))
+    replica.server.store(grace_href, _card(uid="grace", name="Grace Hopper"))
+    replica.server.requests.clear()
+    assert replica.pull().count == 2
+    person.refresh_from_db()
+    link.refresh_from_db()
+    assert person.notes == "Changed"
+    assert link.remote_version == replica.server.cards[_HREF][1]
+    assert Person.objects.get(source_uid="grace").display_name == "Grace Hopper"
+    multigets = [body for method, _, _, body in replica.server.requests if method == "REPORT"]
+    assert len(multigets) == 1 and "sync-collection" not in multigets[0]
+    assert {item.text for item in ElementTree.fromstring(multigets[0]).findall("d:href", _NAMESPACES)} == {
+        _HREF, grace_href,
+    }
+
+    replica.server.remove(_HREF)
+    replica.server.requests.clear()
+    assert replica.pull().count == 1
+    link.refresh_from_db()
+    assert link.status == LinkStatus.TOMBSTONE
+    assert not [request for request in replica.server.requests if request[0] == "REPORT"]
+    assert Person.objects.filter(pk=person.pk).exists()  # Existing retain policy still owns local deletion.
+
+
+def test_tokenless_listing_pages_resume_without_relisting_and_commit_the_captured_ctag(replica: Replica) -> None:
+    replica.server.has_sync_token = False
+    replica.server.has_ctag = True
+    grace_href = f"{_BOOK}grace.vcf"
+    replica.server.store(grace_href, _card(uid="grace", name="Grace Hopper"))
+    captured_ctag = str(replica.server.version)
+    result = advance_stream(replica.stream, replica.backend, page_bound=1)
+    replica.stream = result.stream
+    assert not result.exhausted
+    assert replica.stream.cursor == {
+        "sync_token": "", "next_token": "", "next_ctag": captured_ctag, "more": False,
+        "pending": [{"href": grace_href, "removed": False}],
+    }
+    replica.server.store(_HREF, _card(notes="Edited during paging"))
+    replica.server.requests.clear()
+    result = advance_stream(replica.stream, replica.backend, page_bound=1)
+    replica.stream = result.stream
+    assert result.exhausted
+    assert [request[0] for request in replica.server.requests] == ["REPORT"]
+    assert replica.stream.cursor == {"sync_token": "", "ctag": captured_ctag}
+    assert replica.pull().count == 1
+    assert Person.objects.get(source_uid="ada").notes == "Edited during paging"
+    assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version)}
+
+
+def test_tokenless_collection_completes_a_bridge_sync_without_error_telemetry(replica: Replica) -> None:
+    replica.server.has_sync_token = False
+    replica.server.has_ctag = True
+    assert replica.directory.run_sync(now=timezone.now()) == 1
+    replica.directory.refresh_from_db()
+    replica.stream.refresh_from_db()
+    assert replica.directory.sync_error == replica.directory.last_error == ""
+    assert replica.directory.sync_stage == replica.directory.SyncStage.COMPLETED
+    assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version)}
+    assert Person.objects.get(source_uid="ada").display_name == "Ada Lovelace"
+
+
+def test_carddav_refusal_reaches_bridge_telemetry_with_the_failed_partition(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = CardDavError("The CardDAV address book does not expose a DAV:sync-token.")
+
+    def refuse(backend: CardDavDirectoryBackend, collection: str) -> tuple[str, str]:
+        raise cause
+
+    monkeypatch.setattr(CardDavDirectoryBackend, "_collection_state", refuse)
+    with pytest.raises(BridgeSyncError) as refused:
+        replica.directory.run_sync(now=timezone.now())
+    assert refused.value.__cause__ is cause
+    replica.directory.refresh_from_db()
+    assert replica.directory.sync_error == (
+        "contacts (/books/contacts/): The CardDAV address book does not expose a DAV:sync-token."
+    )
+    assert replica.directory.sync_progress["details"]["partition"] == "/books/contacts/"
+    assert replica.directory.sync_progress["details"]["stage"] == "pull"
+
+
+def test_collection_markers_ignore_unsupported_properties_and_preserve_successful_ctag(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    props = (
+        f'<d:response><d:href>{_BOOK}</d:href>'
+        '<d:propstat><d:prop><d:sync-token>unavailable-token</d:sync-token></d:prop>'
+        '<d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>'
+        '<d:propstat><d:prop><cs:getctag>available-ctag</cs:getctag></d:prop>'
+        '<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>'
+    )
+    monkeypatch.setattr(replica.server, "handle_request", lambda request: replica.server._multistatus(props))
+    assert replica.backend._collection_state(_BOOK) == ("", "available-ctag")
+
+
+@pytest.mark.parametrize("unavailable", ["missing_etag", "http_error", "invalid_inventory", "invalid_xml"])
+def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_error(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, unavailable: str,
+) -> None:
+    replica.server.has_sync_token = False
+    replica.server.list_etags = unavailable != "missing_etag"
+    original = replica.server.handle_request
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        if request.headers["depth"] == "1" and unavailable != "missing_etag":
+            if unavailable == "http_error":
+                return httpx.Response(403, content=b"private vendor payload")
+            return httpx.Response(
+                207, content=b"invalid XML" if unavailable == "invalid_xml" else b'<d:multistatus xmlns:d="DAV:"/>',
+            )
+        return original(request)
+
+    monkeypatch.setattr(replica.server, "handle_request", refuse)
+    with pytest.raises(CardDavError) as refused:
+        replica.pull()
+    assert isinstance(refused.value, IntegrationError)
+    assert refused.value.public_message == (
+        "The CardDAV address book (/books/contacts/) exposes neither a DAV:sync-token nor a complete ETag listing."
+    )
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == {}
+    assert not RecordLink.objects.exists()
 
 
 @pytest.mark.parametrize("reset_before_baseline", [False, True])

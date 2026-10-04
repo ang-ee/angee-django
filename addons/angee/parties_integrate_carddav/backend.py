@@ -1,7 +1,8 @@
-"""CardDAV record replicas: RFC 6578 deltas and conditional vCard writes.
+"""CardDAV record replicas: token deltas, ETag inventories and conditional writes.
 
 RFC 6764/6352 discovery creates one contacts stream per address book. Baselines
-list and multiget; later pages use DAV:sync-collection and opaque sync tokens.
+list and multiget; later pages use DAV:sync-collection when available, otherwise
+compare inventories with retained link ETags. Optional getctag skips unchanged books.
 vobject owns vCard parsing/serialization, parties owns the synchronized projection
 and ingest policy, and integrate owns bases, conflict classification and cursors.
 Every HTTP request uses the shared SSRF-pinned client and the Integration owner's
@@ -45,6 +46,7 @@ from angee.parties.backends import (
 _NS = {
     "d": "DAV:",
     "card": "urn:ietf:params:xml:ns:carddav",
+    "cs": "http://calendarserver.org/ns/",
 }
 _MULTIGET_CHUNK = 100
 _DAV_RESPONSE_CAP = 16 * 1024 * 1024
@@ -79,16 +81,18 @@ _LISTING_BODY = (
     '<d:propfind xmlns:d="DAV:"><d:prop>'
     "<d:getetag/><d:getcontenttype/><d:resourcetype/></d:prop></d:propfind>"
 )
-_TOKEN_BODY = (
-    '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:sync-token/></d:prop></d:propfind>'
+_COLLECTION_BODY = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">'
+    '<d:prop><d:sync-token/><cs:getctag/></d:prop></d:propfind>'
 )
 
 
-class CardDavError(Exception):
-    """Raised when the CardDAV server returns an unexpected response."""
+class CardDavError(IntegrationError):
+    """A backend-composed, operator-safe CardDAV refusal."""
 
 
-class CardDavResponseTooLargeError(CardDavError, IntegrationError):
+class CardDavResponseTooLargeError(CardDavError):
     """A DAV response exceeded the limit; its message is safe for operator telemetry."""
 
 
@@ -144,26 +148,39 @@ class CardDavDirectoryBackend(DirectoryBackend):
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch a bounded page; its cursor commits only alongside applied records.
 
-        Baselines capture the token before listing, so concurrent edits replay
-        on the next delta. Pending hrefs keep a large report durable across pages.
+        Baselines capture the collection marker before listing, so concurrent
+        edits replay on the next delta or inventory. A ctag cursor key, even empty,
+        marks a completed inventory. Pending hrefs keep large reports durable across pages.
         """
 
         cursor = dict(stream.cursor or {})
         token = str(cursor.get("sync_token", ""))
+        next_ctag = None
         if "pending" in cursor:
             pending = cursor["pending"]
             next_token = cursor["next_token"]
+            next_ctag = cursor.get("next_ctag")
             more = cursor.get("more", False)
         elif token:
             pending, next_token, more = self._sync_changes(stream.partition, token)
         else:
-            next_token = self._collection_token(stream.partition)
-            hrefs = self._list_vcard_hrefs(stream.partition)
-            pending = [{"href": href, "removed": False} for href in hrefs]
-            present = set(hrefs)
-            for link in self._links(stream):
+            next_token, ctag = self._collection_state(stream.partition)
+            if not next_token:
+                next_ctag = ctag
+                if ctag and cursor.get("ctag") == ctag:
+                    return StreamPage((), cursor)
+            hrefs = self._list_vcards(stream.partition, require_etags=not next_token)
+            links = self._links(stream)
+            by_href = {link.source_href: link for link in links if link.source_href}
+            pending = [
+                {"href": href, "removed": False}
+                for href, etag in hrefs.items()
+                if next_token or "ctag" not in cursor or href not in by_href
+                or by_href[href].status == LinkStatus.TOMBSTONE or by_href[href].remote_version != etag
+            ]
+            for link in links:
                 href = link.source_href
-                if link.status != LinkStatus.TOMBSTONE and href and href not in present:
+                if link.status != LinkStatus.TOMBSTONE and href and href not in hrefs:
                     pending.append({"href": href, "removed": True})
             more = False
         bound = max(1, min(page_bound, _MULTIGET_CHUNK))
@@ -180,8 +197,12 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 "pending": remaining,
                 "more": more,
             }
+            if next_ctag is not None:
+                next_cursor["next_ctag"] = next_ctag
         else:
             next_cursor = {"sync_token": next_token}
+            if next_ctag is not None:
+                next_cursor["ctag"] = next_ctag
         return StreamPage(changes, next_cursor, exhausted=not remaining and not more)
 
     def read_keys(self, stream: Any, keys: Sequence[str]) -> list[RecordChange]:
@@ -213,7 +234,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         after_href = self._href_for_key(after, bindings=occupied) if after is not None else None
         return [
             self._claim_key(by_href.get(href, href), href, occupied=occupied)
-            for href in self._list_vcard_hrefs(stream.partition)
+            for href in self._list_vcards(stream.partition)
             if after_href is None or href > after_href
         ]
 
@@ -328,7 +349,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 max_bytes=_DAV_RESPONSE_CAP,
             )
         except RedirectOriginError as error:
-            raise CardDavError(error.message) from error
+            raise CardDavError("CardDAV redirects must retain the request origin.") from error
         except ResponseTooLargeError as error:
             raise CardDavResponseTooLargeError("CardDAV response exceeds the byte limit.") from error
         if response.status_code == 412:
@@ -389,36 +410,62 @@ class CardDavDirectoryBackend(DirectoryBackend):
             )
         return sorted(books, key=lambda book: book.href)
 
-    def _collection_token(self, collection: str) -> str:
-        response = self._request("PROPFIND", collection, _TOKEN_BODY, cursor_request=True)
-        token = _text(_xml(response.content), ".//d:sync-token")
-        if not token:
-            raise CardDavError("The CardDAV address book does not expose a DAV:sync-token.")
-        return token
+    def _collection_state(self, collection: str) -> tuple[str, str]:
+        """Capture optional collection markers before listing to replay concurrent edits."""
 
-    def _list_vcard_hrefs(self, collection: str) -> list[str]:
-        """Return a complete Depth:1 inventory; refuse oversized, unsplittable listings.
+        response = self._request("PROPFIND", collection, _COLLECTION_BODY, cursor_request=True)
+        for resp in _xml(response.content).findall("d:response", _NS):
+            if urljoin(collection, _href(resp)).rstrip("/") == collection.rstrip("/"):
+                return _property_text(resp, "d:sync-token"), _property_text(resp, "cs:getctag")
+        return "", ""
+
+    def _list_vcards(self, collection: str, *, require_etags: bool = False) -> dict[str, str]:
+        """Return complete, href-ordered inventory versions; refuse incomplete listings.
 
         Baseline and reconciliation absence decisions require the entire inventory.
         A refused listing preserves their checkpoints and requires smaller books.
         """
 
+        unavailable = (
+            f"The CardDAV address book ({urlsplit(collection).path[:512]}) exposes neither a DAV:sync-token "
+            "nor a complete ETag listing."
+        )
         try:
             response = self._request("PROPFIND", collection, _LISTING_BODY, depth="1", cursor_request=True)
         except CardDavResponseTooLargeError as error:
             raise CardDavResponseTooLargeError(
                 "The complete CardDAV address-book listing exceeds the response byte limit; use smaller address books."
             ) from error
-        hrefs: set[str] = set()
-        for resp in _xml(response.content).findall("d:response", _NS):
+        except CardDavError as error:
+            if require_etags:
+                raise CardDavError(unavailable) from error
+            raise
+        hrefs: dict[str, str] = {}
+        try:
+            root = _xml(response.content)
+        except ElementTree.ParseError as error:
+            if require_etags:
+                raise CardDavError(unavailable) from error
+            raise
+        responses = root.findall("d:response", _NS)
+        if require_etags and (root.tag != "{DAV:}multistatus" or not responses):
+            raise CardDavError(unavailable)
+        for resp in responses:
+            if require_etags and not _href(resp):
+                raise CardDavError(unavailable)
             href = urljoin(collection, _href(resp))
+            if require_etags and _text(resp, "d:status") and _status(resp) != 200:
+                raise CardDavError(unavailable)
             if href.rstrip("/") == collection.rstrip("/") or resp.find(".//d:collection", _NS) is not None:
                 continue
-            if _status(resp) not in (0, 200):
+            if not require_etags and _status(resp) not in (0, 200):
                 raise CardDavError("The CardDAV server could not enumerate an address-book member.")
-            if _href(resp) and ("vcard" in _text(resp, ".//d:getcontenttype").lower() or _text(resp, ".//d:getetag")):
-                hrefs.add(href)
-        return sorted(hrefs)
+            etag = _property_text(resp, "d:getetag")
+            if require_etags and not etag:
+                raise CardDavError(unavailable)
+            if _href(resp) and ("vcard" in _text(resp, ".//d:getcontenttype").lower() or etag):
+                hrefs[href] = etag
+        return dict(sorted(hrefs.items()))
 
     def _sync_changes(self, collection: str, token: str) -> tuple[list[dict[str, Any]], str, bool]:
         body = (
@@ -641,6 +688,17 @@ def _text(element: Any, xpath: str) -> str:
 
     node = element.find(xpath, _NS)
     return (node.text or "").strip() if node is not None else ""
+
+
+def _property_text(response_el: Any, name: str) -> str:
+    """Read only successful DAV properties; unsupported properties have their own status."""
+
+    for propstat in response_el.findall("d:propstat", _NS):
+        if _status(propstat) == 200:
+            value = _text(propstat, f"d:prop/{name}")
+            if value:
+                return value
+    return ""
 
 
 def _status(response_el: Any) -> int:

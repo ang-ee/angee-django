@@ -5,6 +5,25 @@ export const STEP_RUN_MODEL = "workflows.StepRun";
 export const STEP_EVIDENCE_MODELS = ["workflows.StepAttempt", "workflows.StepArtifact"] as const;
 export const RUN_MODELS = [RUN_MODEL, STEP_RUN_MODEL, "workflows.StepWatch", ...STEP_EVIDENCE_MODELS] as const;
 
+export const WorkflowRunGraphDocument = graphql(`
+  query WorkflowRunGraph($id: String!) {
+    workflowrun_by_pk(id: $id) {
+      id
+      graph {
+        nodes {
+          key label step_label rank body_key outcomes { outcome label }
+          item_counts { status count } item_attempts
+          step_run {
+            id status waiting_kind wait_reason outcome outcome_label failure_reason
+            attempt page_index map_total map_settled created_at updated_at deadline_at wake_at
+          }
+        }
+        edges { source outcome target taken }
+      }
+    }
+  }
+`);
+
 export const TriggerGrantsDocument = graphql(`
   query TriggerGrants($id: String!) {
     trigger_by_pk(id: $id) {

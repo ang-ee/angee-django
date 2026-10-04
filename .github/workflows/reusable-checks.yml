@@ -102,7 +102,7 @@ jobs:
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
             tests/test_workflows_testing.py tests/test_testing.py \
             tests/test_workflows_io.py tests/test_workflows_contract.py tests/test_workflows_graphql.py \
-            tests/test_workflows_fix_round.py \
+            tests/test_workflows_fix_round.py tests/test_workflows_run_graph.py \
             tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
             tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
             tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \

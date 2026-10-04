@@ -14,15 +14,16 @@ test("renders named output ports and status without changing a node's kind", () 
   const base = { id: "a", kind: "node", title: "Alpha", ariaLabel: "Alpha" };
   const styles = { node: graphNodeStyle("var(--border-strong)", "neutral") };
   const view = render(<GraphView nodes={[{ ...base, ports: [{ id: "left", label: "Left" }, { id: "right", label: "Right" }] }]} edges={[]} nodeStyles={styles} status={{ a: { label: "Ready", tone: "success" } }} />, { wrapper: Provider });
-  expect(screen.getAllByRole("status")).toHaveLength(1);
-  expect(screen.getByRole("status").textContent).toBe("Alpha: Ready. ");
+  // Status lives on each node; there is no full-graph live region to re-announce.
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByTestId("rf__node-a").textContent).toContain("Ready");
   expect(screen.getByLabelText("Left").getAttribute("data-handleid")).toBe("left");
   expect(screen.getByLabelText("Right").getAttribute("data-handleid")).toBe("right");
   expect(screen.getByText("node")).toBeTruthy();
   view.rerender(<GraphView nodes={[{ ...base, ports: [{ id: "next", label: "Next" }] }]} edges={[]} nodeStyles={styles} status={{ a: { label: "Paused", tone: "warning" } }} />);
   expect(screen.queryByLabelText("Left")).toBeNull();
   expect(screen.getByLabelText("Next").getAttribute("data-handleid")).toBe("next");
-  expect(screen.getByRole("status").textContent).toBe("Alpha: Paused. ");
+  expect(screen.getByTestId("rf__node-a").textContent).toContain("Paused");
 });
 
 test("distinguishes omitted default ports from an explicitly terminal node", () => {

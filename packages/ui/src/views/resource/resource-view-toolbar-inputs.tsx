@@ -86,7 +86,7 @@ export function useListViewToolbarInputs<TRow extends Row>({
   declaredFacets, scalarFacets, textFilterField: declaredTextField, ...props
 }: ListViewToolbarInputsProps<TRow>) {
   const filters = React.useMemo(
-    () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
+    () => [...declaredFacets.filters, ...scalarFacets.filters],
     [declaredFacets.filters, scalarFacets.filters],
   );
   const fields = React.useMemo(
@@ -193,14 +193,10 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
         : [],
     [inferOptions, columns, inferredCustomFilterFields, rows],
   );
-  const explicitAndContributedFilters = React.useMemo(
-    () => mergeFilterOptions(explicitFilterOptions, contributedFilterOptions),
-    [contributedFilterOptions, explicitFilterOptions],
-  );
   const resolvedFilterOptions = React.useMemo(
     () =>
-      mergeFilterOptions(explicitAndContributedFilters, inferredFilterOptions),
-    [explicitAndContributedFilters, inferredFilterOptions],
+      mergeFilterOptions(explicitFilterOptions, [...contributedFilterOptions, ...inferredFilterOptions], resourceQuery),
+    [explicitFilterOptions, contributedFilterOptions, inferredFilterOptions, resourceQuery],
   );
   const explicitAndContributedFields = React.useMemo(
     () =>

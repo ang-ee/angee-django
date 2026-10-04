@@ -20,7 +20,6 @@ import logging
 import secrets
 from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
@@ -65,7 +64,12 @@ from angee.base.refs import (
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
-from angee.integrate.errors import INTEGRATION_FAILURE_MESSAGE, IntegrationError
+from angee.integrate.errors import (
+    INTEGRATION_FAILURE_MESSAGE,
+    IntegrationError,
+    IntegrationFailure,
+    _safe_integration_failure,
+)
 from angee.integrate.events import EventKind
 from angee.integrate.fields import DiscrepancyOpenField
 from angee.integrate.impl import IntegrationImpl
@@ -99,28 +103,6 @@ _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
 _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
-
-
-@dataclass(frozen=True, slots=True)
-class IntegrationFailure:
-    """An integration-owned, safe failure message for persisted telemetry."""
-
-    message: str
-
-
-def _safe_integration_failure(error: Exception) -> IntegrationFailure:
-    """Project one integration exception to bounded user-facing telemetry.
-
-    Only an :class:`IntegrationError` carries operator-safe text of its own;
-    every other exception projects to the generic message so vendor payloads
-    never land in persisted telemetry.
-    """
-
-    if isinstance(error, IntegrationError):
-        return IntegrationFailure(error.public_message)
-    if isinstance(error, ValidationError):
-        return IntegrationFailure("Integration configuration is invalid.")
-    return IntegrationFailure(_INTEGRATION_FAILURE_MESSAGE)
 
 
 class AccountStatus(models.TextChoices):

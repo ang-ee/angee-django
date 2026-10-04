@@ -55,19 +55,32 @@ describe("GraphView interactions", () => {
     expect(second.className).not.toContain("selected");
   });
 
-  test("renders controlled node selection with the shared selected recipe", async () => {
-    const graph = (selected: boolean) => <GraphView
+  test("selection adds a ring independently of the highlighted execution state", async () => {
+    const graph = (selected: boolean, highlighted = false) => <GraphView
       className="h-[360px] w-[520px]"
-      nodes={[{ id: "a", kind: "step", title: "A", selected }]}
+      nodes={[{ id: "a", kind: "step", title: "A", selected, highlighted }]}
       edges={[]}
       nodeStyles={{ step: { width: 160, height: 72, borderColor: "var(--border-subtle)" } }}
     />;
     const view = render(graph(true));
     const node = await screen.findByTestId("rf__node-a");
     expect(node.className).toContain("selected");
+    expect(node.style.borderColor).toBe("var(--border-subtle)");
+    expect(node.style.background).toBe("var(--surface-sheet)");
+    expect(node.style.borderWidth).toBe("1px");
+    expect(node.style.boxShadow).toBe("0 0 0 3px var(--surface-sheet), 0 0 0 5px var(--brand)");
+    expect(node.style.outline).toBe("");
+
+    view.rerender(graph(true, true));
+    await waitFor(() => expect(node.style.borderWidth).toBe("2px"));
     expect(node.style.borderColor).toBe("var(--brand)");
     expect(node.style.background).toBe("var(--brand-soft)");
+    expect(node.style.boxShadow).toBe("0 0 0 3px var(--surface-sheet), 0 0 0 5px var(--brand)");
+
+    view.rerender(graph(false, true));
+    await waitFor(() => expect(node.className).not.toContain("selected"));
     expect(node.style.borderWidth).toBe("2px");
+    expect(node.style.boxShadow).toBe("");
 
     view.rerender(graph(false));
     await waitFor(() => expect(node.className).not.toContain("selected"));
@@ -142,7 +155,7 @@ describe("GraphView interactions", () => {
     await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(2));
     fireEvent.keyDown(node, { key: " " });
     await waitFor(() => expect(onNodeClick).toHaveBeenCalledTimes(3));
-    fireEvent.keyDown(screen.getByTitle("Fit View"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Fit view" }), { key: "Enter" });
     expect(onNodeClick).toHaveBeenCalledTimes(3);
 
     expect(onNodeClick).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "draft" }), { source: "pointer" });
