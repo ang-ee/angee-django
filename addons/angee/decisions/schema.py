@@ -58,7 +58,7 @@ class DecisionType(AngeeNode):
     created_at: auto
     updated_at: auto
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
-    is_open: bool = strawberry_django.field(annotate={"_is_open": Decision.objects.open_expression()})
+    is_open: bool = strawberry_django.field(only=["verdict"])
     permissions = permissions_field(("act",))
 
 

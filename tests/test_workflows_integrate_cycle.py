@@ -349,7 +349,7 @@ def test_operator_retry_preserves_an_active_cycle_after_delivery_exhaustion(cycl
     row.refresh_from_db()
     run.refresh_from_db()
     bridge.refresh_from_db()
-    assert row.waiting_kind == "operator" and run.status == RunStatus.WAITING
+    assert row.waiting_kind == "error" and run.status == RunStatus.WAITING
     assert bridge.sync_is_dispatched and bridge.sync_run_id == run.pk
 
     ready = StepRun.objects.retry_step(row, actor=bridge.owner)

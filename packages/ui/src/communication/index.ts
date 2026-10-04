@@ -1,4 +1,5 @@
 export { Chatter, type ChatterProps } from "./Chatter";
+export { StepList, type StepListItem } from "./StepList";
 export { CHATTER_CONTAINERS } from "./chatter-containers";
 export {
   useRecordPeek,

@@ -15,6 +15,6 @@ const stackGql = fileURLToPath(
 export const gqlAlias = [
   {
     find: /^@angee\/gql\//,
-    replacement: existsSync(stackGql) ? stackGql : localGql,
+    replacement: process.env.ANGEE_WEB_GQL_ROOT ?? (existsSync(stackGql) ? stackGql : localGql),
   },
 ];

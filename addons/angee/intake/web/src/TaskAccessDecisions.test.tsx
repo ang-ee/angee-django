@@ -101,14 +101,11 @@ describe("requester access cards", () => {
     });
   });
 
-  test("a recorded approval grants no role before owner application and can be applied again", async () => {
-    const row = { ...need("COMPLETED"), requester_access_granted: false };
-    render(<TaskAccessDecisions needs={[row]} canManage />);
-    expect(screen.getByText("Approval recorded")).toBeTruthy();
-    expect(screen.getByText(/Access has not been granted yet/)).toBeTruthy();
-    expect(screen.queryByText("Already has access")).toBeNull();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Grant approved access" })); });
-    expect(mocks.decide).toHaveBeenLastCalledWith("need-1", { action: "INTAKE_APPROVE", expected_revision: 3 });
+  test("an applied approval has no second grant action", () => {
+    render(<TaskAccessDecisions needs={[need("COMPLETED")]} canManage />);
+    expect(screen.getByText("Already has access")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Grant approved access" })).toBeNull();
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Reset access"]);
   });
 
   test("denied access has a danger state and no approve or deny verb", () => {

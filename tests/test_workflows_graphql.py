@@ -19,7 +19,7 @@ from angee.workflows.runner import runner
 from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, Workflow, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data, vault_for
 from tests.workflow_steps import Value, document
 
@@ -60,8 +60,8 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     resources = {resource.model_label: resource for resource in schema.angee_resources}
     assert set(resources) == {
         "workflows.Workflow", "workflows.WorkflowVersion",
-        "workflows.WorkflowRun", "workflows.WorkflowRunEvidence",
-        "workflows.StepRun", "workflows.StepAttempt", "workflows.StepArtifact",
+        "workflows.WorkflowRun", "workflows.StepRecord",
+        "workflows.StepRun", "workflows.StepAttempt", "workflows.StepRecord",
         "workflows.Trigger", "workflows.TriggerEvent", "workflows.StepWatch",
     }
     fields = set(schema._schema.mutation_type.fields)
@@ -71,14 +71,14 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
         "insert_trigger_one", "update_trigger_by_pk", "delete_trigger_by_pk",
         "save_workflow_draft", "publish_workflow",
     }
-    for name in ("workflow", "workflowversion", "workflowrun", "workflowrunevidence",
-                 "steprun", "stepattempt", "stepartifact"):
+    for name in ("workflow", "workflowversion", "workflowrun",
+                 "steprun", "stepattempt", "steprecord"):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
     assert "draft" in schema._schema.get_type("WorkflowType").fields
     assert "layout" in schema._schema.get_type("WorkflowType").fields
     for type_name, pair, obsolete in (
         ("WorkflowRunType", {"subject_model", "subject_id"}, set()),
-        ("StepArtifactType", {"record_model", "record_id"}, {"model_label"}),
+        ("StepRecordType", {"record_model", "record_id"}, {"model_label"}),
         ("StepWatchType", {"record_model", "record_id"}, {"record_model_label", "record_public_id"}),
         ("TriggerEventType", {"record_model", "record_id"}, set()),
     ):
@@ -99,7 +99,7 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
 
         def run(self, ctx):
             """Retain the run's public identity as neutral execution evidence."""
-            ctx.artifact(ctx.run, label="Execution evidence")
+            ctx.record(ctx.run, label="Execution evidence")
             return ctx.done(ctx.input)
 
     register_step(EvidenceStep)
@@ -114,12 +114,12 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     ])
     step = system_queryset(StepRun).get(run=run)
     attempt = system_queryset(StepAttempt).get(step_run=step)
-    artifact = system_queryset(StepArtifact).get(step_run=step)
+    artifact = system_queryset(StepRecord).get(step_run=step)
     query = """{
       workflowrun { id origin run_as { id display_name } input output version { workflow { name } } }
-      steprun { id node_key run { id } attempts { id } artifacts { label } }
+      steprun { id node_key run { id } attempts { id } records { label } }
       stepattempt { id number result step_run { id } }
-      stepartifact { id label record_model record_id step_run { id } }
+      steprecord { id label record_model record_id step_run { id } }
     }"""
     visible = result_data(execute_schema(schema, query, user=owner))
     assert visible["workflowrun"][0]["input"] == {"value": 7}
@@ -127,19 +127,19 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     assert visible["workflowrun"][0]["origin"] == "MANUAL"
     assert visible["workflowrun"][0]["run_as"] == {"id": owner.sqid, "display_name": str(owner)}
     assert visible["steprun"][0]["attempts"] == [{"id": attempt.sqid}]
-    assert visible["stepartifact"][0]["record_id"] == run.sqid
-    assert visible["stepartifact"][0]["record_model"] == "workflows.WorkflowRun"
+    assert visible["steprecord"][0]["record_id"] == run.sqid
+    assert visible["steprecord"][0]["record_model"] == "workflows.WorkflowRun"
     assert result_data(execute_schema(schema, query, user=other)) == {
-        "workflowrun": [], "steprun": [], "stepattempt": [], "stepartifact": [],
+        "workflowrun": [], "steprun": [], "stepattempt": [], "steprecord": [],
     }
-    for name, record in (("workflowrun", run), ("steprun", step), ("stepattempt", attempt), ("stepartifact", artifact)):
+    for name, record in (("workflowrun", run), ("steprun", step), ("stepattempt", attempt), ("steprecord", artifact)):
         hidden = result_data(execute_schema(
             schema, f"query($id: String!) {{ {name}_by_pk(id: $id) {{ id }} }}",
             {"id": record.sqid}, user=other,
         ))
         assert hidden == {f"{name}_by_pk": None}
     with pytest.raises(PermissionDenied), transaction.atomic():
-        StepArtifact.objects.with_actor(owner).create(step_run=step, record=run, label="Forbidden insertion")
+        StepRecord.objects.with_actor(owner).create(step_run=step, record=run, label="Forbidden insertion")
 
     labels = """{
       workflow { display_name }
@@ -147,7 +147,7 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
       workflowrun { display_name }
       steprun { display_name }
       stepattempt { display_name }
-      stepartifact { display_name }
+      steprecord { display_name }
     }"""
     run_label = str(run)
     with CaptureQueriesContext(connection) as one:
@@ -157,13 +157,13 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
             "workflowrun": [{"display_name": run_label}],
             "steprun": [{"display_name": "entry"}],
             "stepattempt": [{"display_name": "Attempt 1"}],
-            "stepartifact": [{"display_name": "Execution evidence"}],
+            "steprecord": [{"display_name": "Execution evidence"}],
         }
     second = start_run(workflow, actor=owner)
     run_until(second)
     with CaptureQueriesContext(connection) as many:
         expanded = result_data(execute_schema(schema, labels, user=owner))
-    assert len(expanded["workflowrun"]) == len(expanded["stepartifact"]) == 2
+    assert len(expanded["workflowrun"]) == len(expanded["steprecord"]) == 2
     assert len(many) == len(one)
     artifact.label = ""
     assert str(artifact) == artifact.sqid
@@ -177,7 +177,7 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
         key = "private_artifact"
 
         def run(self, ctx):
-            ctx.artifact(source, label="Private source")
+            ctx.record(source, label="Private source")
             return ctx.done(ctx.input)
 
     register_step(ArtifactStep)
@@ -186,10 +186,10 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
     run = start_run(workflow, actor=owner, input={"value": 1})
     run_until(run)
     run.with_actor(owner).grant_record_access("reader", reader)
-    query = "{ stepartifact { record_model record_id } steprun { artifacts { record_model record_id } } }"
+    query = "{ steprecord { record_model record_id } steprun { records { record_model record_id } } }"
     hidden = {"record_model": None, "record_id": None}
     assert result_data(execute_schema(schema, query, user=reader)) == {
-        "stepartifact": [hidden], "steprun": [{"artifacts": [hidden]}],
+        "steprecord": [hidden], "steprun": [{"records": [hidden]}],
     }
 
 
@@ -452,7 +452,7 @@ def test_origin_enum_has_native_choice_labels(schema):
 @pytest.mark.parametrize(("step_key", "settle", "cancel", "reprocess", "retry"), [
     ("echo", False, True, False, False),
     ("echo", True, False, True, False),
-    ("reject", True, False, True, True),
+    ("reject", True, True, True, True),
     ("pause", True, True, False, False),
 ])
 def test_viewer_facts_share_state_and_permission_owners(schema, callers, step_key, settle, cancel, reprocess, retry):

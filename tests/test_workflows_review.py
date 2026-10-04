@@ -41,40 +41,26 @@ def review(execution, register_step):
         review_subject = reference
 
         def ask(self, ctx):
-            participants = people if ctx.input.get("two") else people[:1]
             return ctx.ask(
-                *(
-                    DecisionRequest(
-                        kind="question",
-                        records=(self.review_subject,),
-                        assignees=(person,),
-                        proposal=DecisionProposal(
-                            multiple=ctx.input.get("multiple", False),
-                            alternatives=[
-                                {
-                                    "key": "approve",
-                                    "label": "Approve",
-                                    "outcome": "approved",
-                                    "actions": {
-                                        public_id_of(self.review_subject): {"fields": {"name": {"set": "Applied"}}}
-                                    },
-                                },
-                                {"key": "reject", "label": "Keep current record", "outcome": "rejected"},
-                            ],
-                        ),
-                    )
-                    for person in participants
-                ),
-                state={"value": 17},
+                DecisionRequest(
+                    kind="question", records=(self.review_subject,), assignees=people,
+                    proposal=DecisionProposal(
+                        multiple=ctx.input.get("multiple", False), alternatives=[
+                            {"key": "approve", "label": "Approve", "outcome": "approved",
+                             "actions": {public_id_of(self.review_subject): {"fields": {"name": {"set": "Applied"}}}}},
+                            {"key": "reject", "label": "Keep current record", "outcome": "rejected"},
+                        ],
+                    ),
+                ), state={"value": 17},
             )
 
-        def continue_with(self, ctx, decisions, outcomes):
+        def continue_with(self, ctx, decision, outcome):
             assert not is_sudo() and ctx.actor.pk == ctx.run.run_as_id
             assert ctx.state == {"value": 17}
             if ctx.input.get("invalid"):
                 Workflow.objects.filter(pk=ctx.run.version.workflow_id).update(name="Rolled back")
                 raise ValidationError("Application unavailable.")
-            return super().continue_with(ctx, decisions, outcomes)
+            return super().continue_with(ctx, decision, outcome)
 
     register_step(Question)
     return actor, people, sent, Question
@@ -98,7 +84,7 @@ def start_review(review, *, input=None, graph=None):
 
 
 def questions(step):
-    return list(system_queryset(Decision).filter(step_run=step).order_by("pk"))
+    return [system_queryset(Decision).get(pk=system_queryset(StepRun).get(pk=step.pk).decision_id)]
 
 
 def answer(decision, person, key="approve"):
@@ -119,22 +105,8 @@ def test_ask_answer_then_apply_as_run_actor(review):
     assert run.status == "succeeded" and run.outcome == "approved"
     question.review_subject.refresh_from_db()
     assert question.review_subject.name == "Applied"
-    assert run.output == {"decisions": [public_id_of(decision)], "outcomes": ["approved"]}
+    assert run.output == {"decision": public_id_of(decision), "chosen": ["approve"]}
     assert any(name == "workflows.execute" for name, _ in sent)
-
-
-def test_wait_until_every_independent_question_is_answered(review):
-    _actor, people, _, _ = review
-    run, step = start_review(review, input={"two": True})
-    first, second = questions(step)
-    answer(first, people[0])
-    assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
-    assert runner.wake_decisions() == 0
-    answer(second, people[1], "reject")
-    run_until(run)
-    assert run.status == "succeeded" and run.outcome == "done"
-    assert run.output["outcomes"] == ["approved", "rejected"]
-    assert not system_queryset(Decision).open().exists()
 
 
 def test_multiple_choices_receive_the_set_and_route_done(review):
@@ -143,7 +115,7 @@ def test_multiple_choices_receive_the_set_and_route_done(review):
     decision = questions(step)[0]
     Decision.objects.decide(decision, actor=people[0], chosen=["reject", "approve"])
     run_until(run)
-    assert run.outcome == "done" and run.output["outcomes"] == ["approved", "rejected"]
+    assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
 
 
 def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, register_step):
@@ -161,8 +133,8 @@ def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, regis
     assert "Application unavailable" in system_queryset(StepAttempt).latest("pk").error
 
     class AvailableQuestion(question):
-        def continue_with(self, ctx, decisions, outcomes):
-            return DecisionStep.continue_with(self, ctx, decisions, outcomes)
+        def continue_with(self, ctx, decision, outcome):
+            return DecisionStep.continue_with(self, ctx, decision, outcome)
 
     register_step(AvailableQuestion)
     StepRun.objects.retry_step(step, actor=actor)
@@ -182,15 +154,20 @@ def test_sweep_recovers_missed_answer_notification(review, monkeypatch):
     assert run.status == "succeeded"
 
 
-@pytest.mark.parametrize("answered", [0, 1, 2])
-def test_cancel_keeps_independent_open_questions(review, answered):
-    actor, people, _, _ = review
-    run, step = start_review(review, input={"two": True})
-    decisions = questions(step)
-    for decision, person in zip(decisions[:answered], people, strict=False):
-        answer(decision, person)
+@pytest.mark.parametrize("answered", [False, True])
+def test_cancel_withdraws_only_the_open_question(review, answered):
+    actor, people, _, question = review
+    run, step = start_review(review)
+    if answered:
+        answer(questions(step)[0], people[0])
+    before = question.review_subject.name
     assert WorkflowRun.objects.cancel(run, actor=actor).canceled
-    assert [decision.is_open for decision in questions(step)] == [False] * answered + [True] * (2 - answered)
+    decision = questions(step)[0]
+    assert not decision.is_open
+    assert decision.verdict == (["approve"] if answered else [])
+    assert decision.answered_by_id == (people[0].pk if answered else actor.pk)
+    question.review_subject.refresh_from_db()
+    assert question.review_subject.name == before
     assert runner.wake_decisions() == 0
 
 
@@ -201,7 +178,7 @@ def test_later_step_loads_only_this_runs_decision(review, register_step):
         key = "use_answer"
 
         def run(self, ctx):
-            decision = ctx.decision(ctx.input["decisions"][0])
+            decision = ctx.decision(ctx.input["decision"])
             return ctx.done({"answered_by": public_id_of(decision.answered_by), "verdict": decision.verdict})
 
     register_step(UseAnswer)
@@ -217,32 +194,16 @@ def test_later_step_loads_only_this_runs_decision(review, register_step):
     assert run.output == {"answered_by": public_id_of(people[0]), "verdict": ["approve"]}
 
 
-def test_public_record_method_is_called_by_the_asking_owner(review):
+def test_undeclared_delete_is_rejected_at_ask(review):
     actor, people, _, question = review
-    record = vault_for(actor, name="Temporary")
-    write_relationships([RelationshipTuple(to_object_ref(record), "viewer", to_subject_ref(people[0]))])
-    decision = Decision.objects.ask(
-        DecisionRequest(
-            kind="remove_record",
-            records=(record,),
-            assignees=(people[0],),
-            proposal=DecisionProposal(
-                alternatives=[
-                    {
-                        "key": "remove",
-                        "label": "Remove record",
-                        "outcome": "removed",
-                        "actions": {public_id_of(record): {"record": {"call": "delete"}}},
-                    }
-                ]
-            ),
-        ),
-        actor=actor,
-    )
-    answer(decision, people[0], "remove")
-    assert system_queryset(type(record)).filter(pk=record.pk).exists()
-    assert apply_proposals([system_queryset(Decision).get(pk=decision.pk)], actor=actor) == {"removed"}
-    assert not system_queryset(type(record)).filter(pk=record.pk).exists()
+    with pytest.raises(ValueError, match="Undeclared decision method"):
+        Decision.objects.ask(DecisionRequest(
+            kind="remove_record", records=(question.review_subject,), assignees=people,
+            proposal=DecisionProposal(alternatives=[{
+                "key": "remove", "label": "Remove", "outcome": "removed",
+                "actions": {public_id_of(question.review_subject): {"record": {"call": "delete"}}},
+            }]),
+        ), actor=actor)
 
 
 def test_application_uses_owner_write_permission(review):
@@ -250,6 +211,6 @@ def test_application_uses_owner_write_permission(review):
     run, step = start_review(review)
     decision = answer(questions(step)[0], people[0])
     with pytest.raises(PermissionDenied):
-        apply_proposals([decision], actor=people[0])
+        apply_proposals(decision, actor=people[0])
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Applied"

@@ -35,7 +35,7 @@ export function RunsList({ baseFilter, embedded = false }: {
       { id: "children", label: t("run.children"), render: ({ recordId }) =>
         <RunsList embedded baseFilter={{ "parent_step.run": { exact: recordId } }} /> },
       { id: "evidence", label: t("run.evidence"), render: ({ recordId }) =>
-        <List resource="workflows.WorkflowRunEvidence" scope="local" presentation="embedded"
+        <List resource="workflows.StepRecord" scope="local" presentation="embedded"
           baseFilter={{ run: { exact: recordId } }} fields={["record_model"]} emptyContent={t("run.noEvidence")}>
           <Column field="record_id" header={t("run.evidence")} render={(row) =>
             typeof row.record_model === "string" && typeof row.record_id === "string"

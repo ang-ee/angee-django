@@ -13,6 +13,6 @@ app_label = "workflows"
 module = "runtime_migrations.independent_decisions"
 
 [[migrations]]
-name = "decision_links"
-app_label = "decisions"
-module = "runtime_migrations.decision_links"
+name = "current_execution"
+app_label = "workflows"
+module = "runtime_migrations.current_execution"

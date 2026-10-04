@@ -10,7 +10,7 @@ from angee.base.scoping import system_queryset
 from angee.workflows import subjects
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.testing.drivers import load_workflow, run_until
-from angee.workflows.testing.models import RunSubjectRecord, StepRun, WorkflowRun, WorkflowRunEvidence
+from angee.workflows.testing.models import RunSubjectRecord, StepRecord, StepRun, WorkflowRun
 from tests.workflow_steps import Echo, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
@@ -68,7 +68,7 @@ def test_admission_refusal_rolls_back_run_evidence_and_dispatch(execution, subje
         WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
 
     assert not system_queryset(WorkflowRun).exists()
-    assert not system_queryset(WorkflowRunEvidence).exists()
+    assert not system_queryset(StepRecord).exists()
     assert not system_queryset(StepRun).exists()
     assert sent == []
 
@@ -113,15 +113,15 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
     assert subject.settlements == [{"run": run.pk, "status": RunStatus.FAILED, "output": {}}] * 2
 
 
-def test_deleted_subject_does_not_prevent_cancel(execution, subject):
+def test_deleted_subject_stops_its_run(execution, subject):
     actor, _ = execution
     run = WorkflowRun.objects.start(workflow_for(actor), actor=actor, subject=subject)
     system_queryset(RunSubjectRecord).filter(pk=subject.pk).delete()
 
-    assert WorkflowRun.objects.cancel(run, actor=actor).canceled
-
     run.refresh_from_db()
     assert run.status == RunStatus.CANCELED
+    assert run.stopped_at is not None
+    assert not WorkflowRun.objects.cancel(run, actor=actor).canceled
 
 
 def test_deleted_subject_prevents_reopen(execution, subject):
@@ -131,7 +131,7 @@ def test_deleted_subject_prevents_reopen(execution, subject):
     step = system_queryset(StepRun).get(run=run)
     system_queryset(RunSubjectRecord).filter(pk=subject.pk).delete()
 
-    with pytest.raises(ValidationError, match="subject no longer exists"):
+    with pytest.raises(ValidationError, match="cannot be retried"):
         StepRun.objects.retry_step(step, actor=actor)
 
     run.refresh_from_db()

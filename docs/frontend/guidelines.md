@@ -571,11 +571,11 @@ shared UI copy through an addon bundle.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
-- **Human decision subjects opt into the generic tab.** Compose
-  [`decisionRecordTab()`](../../addons/angee/decisions/web/src/RecordDecisions.tsx)
-  as a `<model>#sections` child under your own id (`"<addon>.decisions"`);
-  [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
-  subject identity, while each subject addon owns successor admission.
+- **Records use one timeline pane.** Workflows contributes `RecordTimeline`
+  to `record#aside`; pages choose left or right with `useRecordTimelinePane`.
+  The same `DecisionCard` serves the inbox, record and record-set timeline.
+  Forms consume the shared field-mark bridge; marks reveal the corresponding
+  card. Lists may opt into the decisions attention column and filter.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the

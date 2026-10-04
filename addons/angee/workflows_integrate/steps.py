@@ -188,28 +188,19 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
             )
             .order_by("pk")
         )
-        requests = tuple(
-            DecisionRequest(
-                kind="review-sync-conflict",
-                records=(row,),
-                assignees=(ctx.actor,),
-                requester=None,
-                proposal=DecisionProposal.model_validate(
-                    {
-                        "alternatives": (
-                            {"key": "recheck", "label": "Recheck after resolving the conflict", "outcome": "done"},
-                        )
-                    }
-                ),
-                context=DecisionContext(references=(_reference(row.stream),)),
-            )
-            for row in conflicts.select_related("stream")
-        )
-        if requests:
-            return ctx.ask(*requests)
+        records = tuple(conflicts.select_related("stream"))
+        if records:
+            return ctx.ask(DecisionRequest(
+                kind="review-sync-conflict", records=records, assignees=(ctx.actor,), requester=None,
+                proposal=DecisionProposal.model_validate({"multiple": True, "alternatives": [
+                    {"key": public_id_of(row), "label": f"Recheck {row}", "outcome": "done"}
+                    for row in records
+                ]}),
+                context=DecisionContext(references=tuple(_reference(row.stream) for row in records)),
+            ))
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
 
-    def continue_with(self, ctx: StepContext, decisions: list[Any], outcomes: set[str]) -> Settlement:
+    def continue_with(self, ctx: StepContext, decision: Any, outcome: str) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
         if (
             apps.get_model("integrate", "SyncDiscrepancy")

@@ -14,7 +14,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
-from rebac import system_context
 
 from angee.base.impl import ImplBase, resolve_impl_class
 from angee.base.jsonschema import check_schema, validate, validator
@@ -176,7 +175,7 @@ class Fail(_Settlement):
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
         retries = step_run.retries + 1
         if attempt.retryable and step_run.requires_duplicate_acknowledgement:
-            return rows.to_waiting(kind=WaitingKind.OPERATOR, reason="possible duplicate effect", retries=retries)
+            return rows.to_waiting(kind=WaitingKind.ERROR, reason="possible duplicate effect", retries=retries)
         if attempt.retryable and retries < step_run.step.retry.max_attempts:
             return rows.to_waiting(
                 until=Now() + step_run.step.retry.delay_for(retries),
@@ -195,32 +194,32 @@ class Fail(_Settlement):
 
 @dataclass(frozen=True)
 class Ask(_Settlement):
-    """Independent questions admitted with the step's own continuation state."""
+    """One question admitted with the step's continuation state."""
 
-    requests: tuple[DecisionRequest, ...] = ()
-    decision_ids: tuple[Any, ...] = ()
+    request: DecisionRequest
+    decision_id: Any = None
     state: Any = field(default_factory=dict)
 
     def check(self, step: type[Step], *, config: Any = None) -> Ask:
-        if not self.requests:
-            raise ValidationError("Ask requires at least one independent question.")
-        requests = tuple(DecisionRequest.model_validate(request) for request in self.requests)
+        request = DecisionRequest.model_validate(self.request)
         offered = step.available_outcomes(config)
         if any(
-            alternative.outcome not in offered for request in requests for alternative in request.proposal.alternatives
+            alternative.outcome not in offered for alternative in request.proposal.alternatives
         ):
             raise ValidationError("A proposal names an outcome not declared by the asking step.")
-        return replace(self, requests=requests, state=step.serialize_state(self.state))
+        return replace(self, request=request, state=step.serialize_state(self.state))
 
     def admit(self, ctx: Any) -> Ask:
         manager = apps.get_model("decisions", "Decision").objects
-        decisions = tuple(manager.ask(request, actor=ctx.actor) for request in self.requests)
-        with system_context(reason="workflows.ask.link_decisions"):
-            manager.filter(pk__in=[decision.pk for decision in decisions]).owner_update(step_run=ctx.step_run)
-        return replace(self, decision_ids=tuple(decision.pk for decision in decisions))
+        if ctx.step_run.decision_id is not None:
+            raise ValidationError("This step has already asked its decision.")
+        decision = manager.ask(self.request, actor=ctx.actor)
+        for record in self.request.records:
+            ctx.record(record)
+        return replace(self, decision_id=decision.pk)
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state)
+        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_id=self.decision_id)
 
 
 type Settlement = Done | Wait | NextPage | Fail | Ask

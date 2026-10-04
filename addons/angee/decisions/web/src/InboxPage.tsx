@@ -1,7 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { rowValueAtPath } from "@angee/metadata";
 import type { ReactElement } from "react";
-import { Column, Field, Form, Group, List, LoadingPanel, ErrorBanner, ResourceList, useRuntimeAuth, type RecordPanelContext, type StringIdRow } from "@angee/ui";
+import { Column, Form, List, LoadingPanel, ErrorBanner, ResourceList, useRuntimeAuth, type RecordPanelContext, type StringIdRow } from "@angee/ui";
 
 import { DecisionCard } from "./DecisionCard";
 import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.console";
@@ -28,14 +27,6 @@ export function InboxPage(): ReactElement {
     <Form resource={DECISION_MODEL} readOnly
       formExtras={({ record, form }) => typeof record?.id === "string"
         ? <DecisionDetails recordId={record.id} refresh={form.reload} /> : null}>
-      <Field name="kind_label" title />
-      <Group label={t("decision.title")} columns={2}>
-        <Field name="requester.display_name" label={t("decision.requester")}
-          showWhen={(row) => Boolean(rowValueAtPath(row, "requester.display_name"))} />
-        <Field name="answered_by.display_name" label={t("decision.answeredBy")}
-          showWhen={(row) => Boolean(rowValueAtPath(row, "answered_by.display_name"))} />
-        <Field name="answered_at" label={t("decision.answeredAt")} showWhen={(row) => Boolean(row.answered_at)} />
-      </Group>
     </Form>
   </ResourceList>;
 }

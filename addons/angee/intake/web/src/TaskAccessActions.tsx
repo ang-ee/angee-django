@@ -38,12 +38,5 @@ export function TaskAccessActions({ need }: { need: CurrentAccessRow }): ReactEl
       await settle(() => reset(need.id, { confirmed: true, expected_revision: need.revision }));
     },
   }] : [];
-  if (current && !current.is_open && !need.requester_access_granted
-    && Array.isArray(need.access_verdict) && need.access_verdict.includes("intake.approve")) {
-    actions.unshift({
-      id: `access-apply-${need.id}`, label: t("access.apply"), permission: "write", placement: "toolbar",
-      run: async () => { await settle(() => decide(need.id, { action: "INTAKE_APPROVE", expected_revision: need.revision })); },
-    });
-  }
   return <RecordActionBar record={need} actions={actions} />;
 }

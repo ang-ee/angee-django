@@ -111,15 +111,15 @@ describe("compileContainers", () => {
   });
 
   test("an addon declares containers on its own node; dependents contribute; unique keys are enforced", () => {
-    const decisions = layer("decisions", { "decisions#content": { unique: "key" }, "decisions#origin": {} });
-    const parties = layer("parties", { "decisions#content": { "parties.review": { content: 1, key: "review-party" } } }, ["decisions"]);
+    const decisions = layer("example", { "example#content": { unique: "key" }, "example#origin": {} });
+    const parties = layer("parties", { "example#content": { "parties.review": { content: 1, key: "review-party" } } }, ["example"]);
     const composed = compileContainers([parties, decisions], core);
-    expect(composed.declared["decisions#content"]).toEqual({ owner: "decisions", models: false, unique: "key" });
-    expect(ids(resolveContainer(composed, "decisions#content"))).toEqual(["parties.review"]);
-    const twice = layer("other", { "decisions#content": { "other.review": { content: 2, key: "review-party" } } }, ["decisions"]);
+    expect(composed.declared["example#content"]).toEqual({ owner: "example", models: false, unique: "key" });
+    expect(ids(resolveContainer(composed, "example#content"))).toEqual(["parties.review"]);
+    const twice = layer("other", { "example#content": { "other.review": { content: 2, key: "review-party" } } }, ["example"]);
     expect(() => compileContainers([decisions, parties, twice], core)).toThrow(/share key "review-party"/);
     expect(() => compileContainers([layer("x", { "nobody#toolbar": { "x.y": { content: 1 } } })], core)).toThrow(/unknown container "nobody#toolbar"/);
-    expect(() => compileContainers([decisions, layer("stray", { "decisions#origin": { only: [] } })], core)).toThrow(/"stray" alters container "decisions#origin" of "decisions"/);
+    expect(() => compileContainers([decisions, layer("stray", { "example#origin": { only: [] } })], core)).toThrow(/"stray" alters container "example#origin" of "example"/);
   });
 
   test("an addon's own container with models: true is addressed per model, along the record's models", () => {

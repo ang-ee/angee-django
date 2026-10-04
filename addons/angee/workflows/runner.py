@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import OperationalError, connection, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
@@ -92,7 +92,8 @@ class Runner:
         step_run: Any = None,
         settlement: _AttemptRecord | None = None,
         *,
-        artifacts: list[Any] | None = None,
+        records: list[Any] | None = None,
+        notes: list[dict[str, str]] | None = None,
     ) -> None:
         """Settle, plan and publish once, keeping successful body writes on data errors.
 
@@ -109,8 +110,17 @@ class Runner:
                 if settlement is not None:
                     with transaction.atomic():
                         step_runs.settle(step_run, settlement)
-                        if not isinstance(settlement.settlement, Fail) and artifacts:
-                            step_run.artifacts.bulk_create(artifacts)
+                        if not isinstance(settlement.settlement, Fail):
+                            if records:
+                                for record in records:
+                                    record_model = type(record)
+                                    record_model.objects.get_or_create(
+                                        run_id=record.run_id, step_run_id=record.step_run_id,
+                                        content_type_id=record.content_type_id, object_id=record.object_id,
+                                        operation=record.operation, defaults={"label": record.label},
+                                    )
+                            if notes:
+                                step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
                 # A preserved IO sibling may settle after failure. Its evidence
                 # changes, but the terminal run and graph plan stay untouched.
                 if not run.is_terminal:
@@ -234,7 +244,8 @@ class Runner:
                         publish_change(run, action="update", update_fields=None)
                 if settlement is not None:
                     self.advance(
-                        run, step_run, settlement, artifacts=ctx.pending_artifacts if ctx is not None else None,
+                        run, step_run, settlement, records=ctx.pending_records if ctx is not None else None,
+                        notes=ctx.pending_notes if ctx is not None else None,
                     )
             if settlement is None:
                 assert ctx is not None
@@ -281,7 +292,7 @@ class Runner:
             try:
                 with self._fenced(ctx.step_run) as current:
                     self.advance(
-                        current.run, current, settlement, artifacts=ctx.pending_artifacts,
+                        current.run, current, settlement, records=ctx.pending_records, notes=ctx.pending_notes,
                     )
                     return True
             except Superseded:
@@ -331,15 +342,18 @@ class Runner:
         with self._fenced(step_run):
             pass
 
-    def artifact(self, step_run: Any, record: Any, *, label: str, actor: Any) -> Any:
+    def record(self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
         readable = read_scoped_queryset(type(record), actor)
         if not readable.filter(pk=record.pk).exists():
-            raise PermissionDenied("Read access to the artifact record is required.")
+            raise PermissionDenied("Read access to the step record is required.")
         target = canonical_record_target(record)
+        if operation not in {"read", "created", "changed", "deleted", "called"}:
+            raise ValidationError("Unknown step record operation.")
         with self._fenced(step_run) as current:
-            return current.artifacts.model(
-                step_run=current, content_type=target.content_type, object_id=target.object_id, label=label,
+            return current.records.model(
+                run=current.run, step_run=current, content_type=target.content_type,
+                object_id=target.object_id, label=label, operation=operation,
             )
 
     def tick(self) -> dict[str, int]:
@@ -360,7 +374,7 @@ class Runner:
         """Signal and sweep share the run-lock owner and commit-time dispatch."""
         candidates = self.step_model.objects.answered_decisions()
         if decision_id is not None:
-            candidates = candidates.filter(decisions__pk=decision_id)
+            candidates = candidates.filter(decision_id=decision_id)
         return self._each_candidate(candidates, self._wake)
 
     def wake_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> int:
@@ -403,7 +417,7 @@ class Runner:
         run.step_runs.filter(pk=step_run.pk).count_redispatch()
         if step_run.dispatches + 1 >= settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
             run.step_runs.filter(pk=step_run.pk).to_waiting(
-                kind=WaitingKind.OPERATOR, reason="Task delivery exhausted its retry allowance.",
+                kind=WaitingKind.ERROR, reason="Task delivery exhausted its retry allowance.",
             )
             self.advance(run)
 
@@ -421,7 +435,7 @@ class Runner:
         except ImproperlyConfigured as failure:
             step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
             run.step_runs.filter(pk=step_run.pk).to_waiting(
-                kind=WaitingKind.OPERATOR,
+                kind=WaitingKind.ERROR,
                 reason="The step implementation is unavailable; restore its registration before retrying.",
             )
         self.advance(run)

@@ -9,11 +9,11 @@ const proposal = { multiple: true, alternatives: [
 ] };
 
 test("marks the union of alternative fields on open decisions for this record", () => {
-  expect(fieldsToMark([{ verdict: null, proposal }, { verdict: ["rename"], proposal }], "nte_1")).toEqual(["body", "title"]);
-  expect(fieldsToMark([{ verdict: ["rename"], proposal }], "nte_1")).toEqual([]);
+  expect(fieldsToMark([{ is_open: true, proposal }, { is_open: false, proposal }], "nte_1")).toEqual(["body", "title"]);
+  expect(fieldsToMark([{ is_open: false, proposal }], "nte_1")).toEqual([]);
 });
 test("ignores malformed proposals and unrelated records", () => {
-  expect(fieldsToMark([{ verdict: null, proposal: [] }, { verdict: null, proposal }], "unknown")).toEqual([]);
+  expect(fieldsToMark([{ is_open: true, proposal: [] }, { is_open: true, proposal }], "unknown")).toEqual([]);
 });
 test("rejects empty and duplicate alternatives while preserving null sets", () => {
   expect(v.safeParse(ProposalSchema, { alternatives: [] }).success).toBe(false);

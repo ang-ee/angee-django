@@ -43,8 +43,6 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     @property
     def is_open(self) -> bool:
         """No verdict means the question is still open."""
-        if "_is_open" in self.__dict__:
-            return bool(self.__dict__["_is_open"])
         return self.verdict is None
 
     @property

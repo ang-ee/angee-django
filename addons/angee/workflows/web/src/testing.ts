@@ -1,6 +1,5 @@
 import { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
-import { decisionResourceFixture } from "@angee/decisions/testing";
 import { titleCase } from "@angee/ui";
 
 import type { Run, StepRun } from "./testing/documents.console";
@@ -17,7 +16,7 @@ const origins = [
   { value: "TRIGGER", description: "Trigger" },
 ];
 const stepStates = [{ value: "READY", description: "Ready" }, ...runStates, { value: "SKIPPED", description: "Skipped" }];
-const waitKinds = ["TIME", "RECORD", "DECISION", "MAP", "RUN", "OPERATOR"]
+const waitKinds = ["TIME", "RECORD", "DECISION", "MAP", "RUN", "ERROR"]
   .map((value) => ({ value, description: titleCase(value.toLowerCase()) }));
 const statusValues = runStates.map(({ value }) => ({ from: value, to: value.toLowerCase() }));
 
@@ -88,18 +87,6 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   } }),
 });
 
-export const runEvidenceResourceFixture = testDataResource("workflows.WorkflowRunEvidence", {
-  capabilities: ["list", "detail"],
-  roots: { list: "workflowrunevidence", detail: "workflowrunevidence_by_pk", aggregate: "workflowrunevidence_aggregate" },
-  typeNames: { filter: "workflowrunevidence_bool_exp", order: "workflowrunevidence_order_by" },
-  fields: ["id", "record_model", "record_id"].map((name) => retainedField(name)),
-  query: testResourceQuery({ fields: {
-    id: testQueryField("id"), record_model: testQueryField("record_model"), record_id: testQueryField("record_id"),
-    run: testQueryField("run", { kind: "relation", scalar: "ID",
-      filter: { field: "run", scalar: "ID", values: [], operators: ["exact"] } }),
-  } }),
-});
-
 export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   capabilities: ["list", "detail"],
   recordRepresentation: "node_label",
@@ -152,13 +139,13 @@ export const attemptResourceFixture = testDataResource("workflows.StepAttempt", 
       .map((name) => [name, testQueryField(name, { sort: { field: name } })]),
   ) }),
 });
-export const artifactResourceFixture = testDataResource("workflows.StepArtifact", {
+export const recordResourceFixture = testDataResource("workflows.StepRecord", {
   recordRepresentation: "label",
-  fields: ["id", "step_run", "label", "record_model", "record_id"].map((name) => retainedField(name)),
-  capabilities: ["list", "detail"], roots: { list: "stepartifact", detail: "stepartifact_by_pk", aggregate: "stepartifact_aggregate" },
-  typeNames: { filter: "stepartifact_bool_exp", order: "stepartifact_order_by" },
+  fields: ["id", "run", "step_run", "label", "operation", "record_model", "record_id"].map((name) => retainedField(name)),
+  capabilities: ["list", "detail"], roots: { list: "steprecord", detail: "steprecord_by_pk", aggregate: "steprecord_aggregate" },
+  typeNames: { filter: "steprecord_bool_exp", order: "steprecord_order_by" },
   query: testResourceQuery({ fields: Object.fromEntries(
-    ["id", "step_run", "label", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
+    ["id", "run", "step_run", "label", "operation", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
   ) }),
 });
 export const userResourceFixture = testDataResource("iam.User", {
@@ -174,16 +161,6 @@ export const watchResourceFixture = testDataResource("workflows.StepWatch", {
   query: testResourceQuery({ fields: Object.fromEntries(
     ["id", "step_run", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
   ) }),
-});
-
-/** The workflows-owned decision filter extends the decisions fixture's query contract. */
-export const stepDecisionResourceFixture = testDataResource("decisions.Decision", {
-  ...decisionResourceFixture,
-  query: testResourceQuery({ ...decisionResourceFixture.query, fields: {
-    ...decisionResourceFixture.query.fields,
-    "step_run": testQueryField("step_run", { kind: "relation", scalar: "ID",
-      filter: { field: "step_run", scalar: "ID", values: [], operators: ["exact"] } }),
-  } }),
 });
 
 export const runSubjectFixture = testDataResource("notes.Note", {
@@ -231,8 +208,8 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     deadline_at: null, wake_at: null, created_at: "2026-09-29T09:00:00Z", updated_at: "2026-09-29T09:01:00Z",
     attempts: [{ id: "wsa_inspect", number: 1, page_index: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
-    artifacts: [{ id: "wfa_note", label: "Retained note", record_model: "notes.Note", record_id: "nte_7" }],
-    watches: [], decisions: [],
+    records: [{ id: "wfa_note", label: "Retained note", record_model: "notes.Note", record_id: "nte_7" }],
+    watches: [], decision: null,
     ...overrides,
   };
 }

@@ -7,11 +7,13 @@ revision through the generated decision mutation. A closed card displays the
 selected alternatives, `answered_by`, and `answered_at`.
 
 The inbox uses the resource owner's list, filter and routing components.
-`RecordDecisions` reads open questions for the selected record; `DecisionsList`
-embeds a caller's readable selection. Askers contribute origin information through
-`decisions#origin`.
+The workflow owner's `RecordTimeline` embeds the same card beside a record or
+record set. Askers contribute origin information through `decisions#origin`.
 
 `fieldsToMark(decisions, recordId)` returns sorted unique field names from all
-alternatives' actions for that record, considering only verdict-null questions.
+alternatives' actions and checks for that record, using the server's `is_open`.
+`decisionFieldMarks` supplies the form bridge's unconfirmed and check marks.
+`decisionAttentionColumn()` and `openDecisionFilter` opt a list into the derived
+boolean attention badge and filter without requesting a count query.
 A free correction is a direct record edit followed by choosing an alternative
 without actions. Decisions supplies no answer input form.

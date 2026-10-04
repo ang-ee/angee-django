@@ -327,7 +327,7 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
             identity_mapping=value.identity_mapping,
             retired_identities=value.retired_identities,
         )
-        ctx.artifact(evidence, "Document extraction evidence")
+        ctx.record(evidence, "Document extraction evidence", operation="created")
         return ctx.done(
             ProcessEvidenceOutput.from_extraction(evidence),
             outcome="processed" if evidence.outcome["kind"] == ExtractionStatus.SUCCEEDED else "source_hold",
@@ -507,7 +507,7 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 ),
                 outcome="superseded",
             )
-        ctx.artifact(evidence, "Inferred extraction evidence")
+        ctx.record(evidence, "Inferred extraction evidence", operation="created")
         outcome = "correspondence_required" if evidence.awaiting_correspondence else "inferred"
         if evidence.outcome["kind"] != ExtractionStatus.SUCCEEDED and not evidence.awaiting_correspondence:
             outcome = "inference_failed"

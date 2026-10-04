@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -55,7 +55,6 @@ class ArchiveGateConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     assignee: str = ""
-    mappings: tuple[ArchiveMappingUnit, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,12 +162,12 @@ class ArchiveProbe(Step[None, ArchiveProbeOutput, None]):
                 raise TypeError(f"{extractor.__name__}.recognizes() must return bool.")
             if recognized:
                 proposals.append(_proposal(extractor))
-        ctx.artifact(subject, "Archive source")
+        ctx.record(subject, "Archive source")
         return ctx.done(ArchiveProbeOutput(proposals=proposals), outcome="recognized" if proposals else "unrecognized")
 
 
 class ArchiveGate(DecisionStep[ArchiveProbeOutput, list[ArchiveMappingUnit], ArchiveGateConfig]):
-    """Confirm configured targets; target selection belongs to workflow configuration."""
+    """Choose one readable writable target for the recognized archive."""
 
     key = "archive_gate"
     label = "Confirm archive targets"
@@ -178,22 +177,32 @@ class ArchiveGate(DecisionStep[ArchiveProbeOutput, list[ArchiveMappingUnit], Arc
         subject = _subject(ctx)
         proposals = ctx.input.proposals
         resource = _validate_proposals(proposals)
-        mappings = ctx.config.mappings
-        if resource is None or {item.extractor for item in mappings} != {item.extractor for item in proposals}:
+        if resource is None:
             return ctx.done([], outcome="unsupported")
-        for item in mappings:
-            ctx.load(apps.get_model(resource), item.target)
+        targets = list(apps.get_model(resource).objects.with_actor(ctx.actor).for_write().order_by("pk"))
+        if not targets:
+            return ctx.done([], outcome="unsupported")
+        mappings = {
+            public_id_of(target): [
+                ArchiveMappingUnit(extractor=item.extractor, target=public_id_of(target)).model_dump()
+                for item in proposals
+            ]
+            for target in targets
+        }
         assignee = ctx.load(apps.get_model("iam.User"), ctx.config.assignee) if ctx.config.assignee else ctx.actor
         return ctx.ask(
             DecisionRequest(
                 kind="map-archive",
-                records=(subject,),
+                records=(subject, *targets),
                 assignees=(assignee,),
                 requester=None,
                 proposal=DecisionProposal.model_validate(
                     {
                         "alternatives": (
-                            {"key": "import", "label": "Import into the configured targets", "outcome": "mapped"},
+                            *(
+                                {"key": public_id_of(target), "label": str(target), "outcome": "mapped"}
+                                for target in targets
+                            ),
                             {"key": "skip", "label": "Skip archive", "outcome": "skipped"},
                         )
                     }
@@ -203,22 +212,22 @@ class ArchiveGate(DecisionStep[ArchiveProbeOutput, list[ArchiveMappingUnit], Arc
                         DecisionFact(
                             pointer="/mappings",
                             label="Archive targets",
-                            value=[item.model_dump() for item in mappings],
+                            value=cast(JsonValue, mappings),
                             authority=FactAuthority.SOURCE,
                         ),
                     )
                 ),
             ),
-            state={"mappings": [item.model_dump() for item in mappings]},
+            state={"mappings": mappings},
         )
 
-    def continue_with(self, ctx: Any, decisions: list[Any], outcomes: set[str]) -> Settlement:
-        if "skipped" in outcomes:
+    def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Settlement:
+        if outcome == "skipped":
             return ctx.done([], outcome="skipped")
         resource = _validate_proposals(ctx.input.proposals)
-        mappings = [ArchiveMappingUnit.model_validate(item) for item in ctx.state["mappings"]]
+        mappings = [ArchiveMappingUnit.model_validate(item) for item in ctx.state["mappings"][decision.verdict[0]]]
         for item in mappings:
-            ctx.artifact(ctx.load(apps.get_model(resource), item.target), "Archive import target")
+            ctx.record(ctx.load(apps.get_model(resource), item.target), "Archive import target")
         return ctx.done(mappings, outcome="mapped")
 
 
@@ -242,7 +251,7 @@ class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
         ctx.heartbeat()
         ctx.begin_effect()
         result = extractor().execute(subject, target_id, ArchiveExecutionReporter(ctx))
-        ctx.artifact(target, "Imported archive target")
+        ctx.record(target, "Imported archive target")
         return ctx.done(
             ArchiveExecutionOutput(extractor=unit.extractor, target=target_id, result=result), outcome="completed"
         )

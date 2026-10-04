@@ -23,3 +23,9 @@ definition auth/user {
     relation requested_task: projects/task // rebac:field=person__needs__task
     permission view_as = requested_task->write
 }
+
+definition decisions/decision {
+    relation access_need: intake/need // rebac:field=access_needs
+    permission owner_managed = access_need->decision_managed
+    permission owner_eligible = access_need->share
+}

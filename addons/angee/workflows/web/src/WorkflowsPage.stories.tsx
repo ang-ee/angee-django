@@ -5,9 +5,8 @@ import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storyboo
 import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { WorkflowsPage } from "./WorkflowsPage";
-import { workflowsRunsTab } from "./contributions";
 import { workflowFixture, workflowVersionFixture } from "./catalogue/testing";
-import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture, stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture } from "./testing";
+import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, userResourceFixture } from "./testing";
 import { triggerFixture, triggerResourceFixture } from "./trigger-testing";
 
 export default { title: "Workflows/Catalogue", parameters: { layout: "fullscreen" }, excludeStories: ["CatalogueStory"] };
@@ -16,7 +15,6 @@ export const Workflow = { render: () => <CatalogueStory /> };
 export const Author = { render: () => <CatalogueStory writer /> };
 export const Unavailable = { render: () => <CatalogueStory unavailable /> };
 export const QueryError = { render: () => <CatalogueStory queryError /> };
-export const RecordActivity = { render: () => <CatalogueStory record /> };
 
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const documents = { console: operationDocuments };
@@ -37,8 +35,8 @@ const runtime = {
   },
 };
 
-export function CatalogueStory({ list = false, unavailable = false, queryError = false, record = false, writer = false, onRequest }: {
-  list?: boolean; unavailable?: boolean; queryError?: boolean; record?: boolean; writer?: boolean;
+export function CatalogueStory({ list = false, unavailable = false, queryError = false, writer = false, onRequest }: {
+  list?: boolean; unavailable?: boolean; queryError?: boolean; writer?: boolean;
   onRequest?: (request: v.InferOutput<typeof RequestSchema>) => void;
 }) {
   const schemas = useMemo(() => {
@@ -69,15 +67,12 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       workflowResourceFixture, workflowVersionFixture, runResourceFixture, runSubjectFixture,
-      stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
+      stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, userResourceFixture,
       triggerResourceFixture,
     ] } } } };
   }, [unavailable, queryError, onRequest, writer]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows"
     initialEntry={list ? "/workflows" : "/workflows/wfl_review"} runtime={runtime} resourceName="workflows.Workflow" resourceLabel="Workflows" operationDocuments={documents}>
-    {record ? workflowsRunsTab.content.render?.({ pathname: "/notes/nte_7", params: { id: "nte_7" },
-      route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", canonicalLabel: "notes.Note" },
-      view: { kind: "record", type: "notes/note", sqid: "nte_7" },
-    }) : <WorkflowsPage />}
+    <WorkflowsPage />
   </RoutedRuntimeFixture>;
 }

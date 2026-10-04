@@ -49,16 +49,6 @@ definition workflows/run {
     permission delete = admin->member
 }
 
-definition workflows/run_evidence {
-    relation run: workflows/run // rebac:field=run
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = admin->member
-    permission read = run->read + admin->member
-    permission write = admin->member
-    permission delete = admin->member
-}
-
 definition workflows/step_run {
     relation run: workflows/run // rebac:field=run
     relation admin: angee/role // rebac:const=admin
@@ -83,12 +73,12 @@ definition workflows/step_attempt {
     permission delete = admin->member
 }
 
-definition workflows/step_artifact {
-    relation step_run: workflows/step_run // rebac:field=step_run
+definition workflows/step_record {
+    relation run: workflows/run // rebac:field=run
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = step_run->read + admin->member
+    permission read = run->read + admin->member
     permission write = admin->member
     permission delete = admin->member
 }

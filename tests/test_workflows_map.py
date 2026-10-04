@@ -273,7 +273,7 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
     run, mapped = start_map(actor, [{"value": 0}], body=MarkedItem.key)
     run_until(run)
     item = body_rows(run).get()
-    assert item.status == "waiting" and item.waiting_kind == "operator"
+    assert item.status == "waiting" and item.waiting_kind == "error"
     with pytest.raises(ValidationError, match="duplicate"):
         StepRun.objects.retry_step(item, actor=actor)
     StepRun.objects.retry_step(item, actor=actor, accept_duplicate=True)
@@ -331,17 +331,17 @@ def test_decision_map_body_has_independent_questions_and_typed_outputs(execution
                 kind=self.key, records=(reference,), assignees=(reviewer,),
                 proposal=DecisionProposal(alternatives=[{"key": "accept", "label": "Accept", "outcome": "accepted"}]),
             ))
-        def continue_with(self, ctx, decisions, outcomes):
-            retained = ctx.decision(public_id_of(decisions[0]))
+        def continue_with(self, ctx, decision, outcome):
+            retained = ctx.decision(public_id_of(decision))
             assert retained.verdict == ["accept"] and retained.answered_by_id == reviewer.pk
             applied.append(ctx.map_index)
-            return ctx.done(ctx.input, outcome=next(iter(outcomes)))
+            return ctx.done(ctx.input, outcome=outcome)
 
     register_step(ItemReview)
     run, _ = start_map(actor, [{"value": 0}, {"value": 1}], body=ItemReview.key)
     run_until(run)
     original = list(body_rows(run))
-    decisions = [system_queryset(Decision).get(step_run=row) for row in original]
+    decisions = [system_queryset(Decision).get(requesting_steps=row) for row in original]
     assert decisions[0].pk != decisions[1].pk
     decide(decisions[1], actor=reviewer, chosen=["accept"])
     run_until(run)

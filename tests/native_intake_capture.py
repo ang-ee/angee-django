@@ -466,6 +466,9 @@ class NeedAccessDecisionTests(IntakeAccessCase):
             chosen=["intake.deny"],
         )
         self.assertFalse(is_sudo())
+        # The historical fixture predates owner application on every answer.
+        with system_context(reason="test historical untouched request"):
+            self.Need._base_manager.filter(pk=need.pk).update(updated_by_id=None)
         reports = self.Need.objects.reconcile_parties()
         self.assertTrue(next(reports)["eligible"])
         self.assertFalse(is_sudo())
@@ -536,7 +539,7 @@ class NeedAccessTests(IntakeAccessCase):
                 ],
             )
 
-    def test_decision_assigns_the_sharers_when_the_request_is_asked(self):
+    def test_decision_tracks_the_current_sharers(self):
         need = self.need()
         decision = need.access_decision
         self.assertTrue(decision.assignees.sudo(reason="test.intake.assignees").filter(pk=self.owner.pk).exists())
@@ -546,7 +549,7 @@ class NeedAccessTests(IntakeAccessCase):
         with actor_context(self.owner):
             task = need.task.with_actor(self.owner)
             task.grant_record_access("editor", self.reader)
-        self.assertFalse(decision.with_actor(self.reader).has_access("act"))
+        self.assertTrue(decision.with_actor(self.reader).has_access("act"))
         fresh = self.as_user(need, self.owner).reset_access(confirmed=True, expected_revision=need.revision)
         self.assertTrue(fresh.access_decision.with_actor(self.reader).has_access("act"))
 
@@ -777,7 +780,7 @@ class NeedAccessTests(IntakeAccessCase):
             before_followers,
         )
 
-    def test_verdict_grants_nothing_until_authorized_owner_application_succeeds(self):
+    def test_inbox_answer_requires_the_current_sharer_and_applies_atomically(self):
         need = self.need(email="", party=self.party(self.reader))
         decision = need.access_decision
         with actor_context(self.owner):
@@ -789,16 +792,21 @@ class NeedAccessTests(IntakeAccessCase):
             task = self.Task.objects.sudo(reason="test.intake.transfer_share").get(pk=task.pk)
             task.owner = self.writer
             task.save(update_fields=("owner",))
-        apps.get_model("decisions", "Decision").objects.decide(decision, actor=self.owner, chosen=["intake.approve"])
+        Decision = apps.get_model("decisions", "Decision")
+        with self.assertRaises(PermissionDenied):
+            Decision.objects.decide(decision, actor=self.owner, chosen=["intake.approve"])
         need.refresh_from_db()
-        self.assertEqual(need.access_verdict, ["intake.approve"])
+        self.assertIsNone(need.access_verdict)
         self.assertIsNone(need.admitted_user_id)
         self.assertFalse(need.task.with_actor(self.reader).has_access("read"))
         self.assertFalse(need.task.message_is_follower(user=self.reader))
-        with system_context(reason="test.intake.restore_share"):
-            task.owner = self.owner
-            task.save(update_fields=("owner",))
-        self.assertEqual(self.as_user(need, self.owner).decide_access("intake.approve").pk, self.reader.pk)
+        # A new sharer is eligible even though the original question named the old one.
+        with patch.object(self.Need, "apply_access_answer", side_effect=ValidationError("owner refused")):
+            with self.assertRaisesMessage(ValidationError, "owner refused"):
+                Decision.objects.decide(decision, actor=self.writer, chosen=["intake.approve"])
+        decision.refresh_from_db()
+        self.assertTrue(decision.is_open)
+        Decision.objects.decide(decision, actor=self.writer, chosen=["intake.approve"])
         need.refresh_from_db()
         self.assertEqual(need.admitted_user_id, self.reader.pk)
         self.assertTrue(need.task.with_actor(self.reader).has_access("read"))

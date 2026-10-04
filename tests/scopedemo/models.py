@@ -18,10 +18,33 @@ from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_re
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
+from angee.base.mixins import OwnerMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""
+
+
+class ProposalTarget(OwnerMixin, AngeeDataModel):
+    """A declared decision-method owner without an update timestamp."""
+
+    sqid_prefix = "ptg_"
+    updated_at = None
+    name = models.CharField(max_length=80)
+    parent = models.ForeignKey("scopedemo.ProposalTarget", null=True, blank=True, on_delete=models.SET_NULL)
+    locked_value = models.CharField(max_length=20, editable=False, default="fixed")
+    confirmed = models.BooleanField(default=False)
+    decision_methods = ("confirm", "requires_input")
+
+    def confirm(self):
+        self.confirmed = True
+        self.save(update_fields=["confirmed"])
+
+    def requires_input(self, value):
+        """An invalid declaration used to prove ask-time signature validation."""
+
+    class Meta:
+        rebac_resource_type = "scopedemo/proposal_target"
 
 
 class ScopeQuerySet(AngeeQuerySet[Any]):

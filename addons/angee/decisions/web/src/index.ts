@@ -5,10 +5,10 @@ import { enDecisionsMessages } from "./i18n";
 import { DECISION_MODEL } from "./documents.console";
 
 export { DECISION_MODEL } from "./documents.console";
-export { DecisionCard } from "./DecisionCard";
-export { fieldsToMark } from "./proposal";
+export { DecisionCard, type DecisionCardProps } from "./DecisionCard";
+export { fieldsToMark, decisionFieldMarks } from "./proposal";
 export { useDecision } from "./origin";
-export { DecisionsList, decisionRecordTab } from "./RecordDecisions";
+export { type Decision } from "./documents.console";
 
 export default defineBaseAddon({
   id: "decisions",
@@ -35,3 +35,5 @@ export default defineBaseAddon({
   containers: { "decisions#origin": {} },
   i18n: { decisions: enDecisionsMessages },
 });
+
+export { decisionAttentionColumn, openDecisionFilter } from "./attention";

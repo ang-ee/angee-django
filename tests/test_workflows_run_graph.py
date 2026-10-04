@@ -144,17 +144,17 @@ def test_map_graph_counts_all_items_and_attempts_at_constant_query_cost(schema, 
     assert len(set(counts)) == 1
 
 
-def test_graph_requires_a_reader_and_cannot_traverse_step_payloads(schema, execution):
+def test_graph_requires_a_reader_and_uses_actor_scoped_step_resources(schema, execution):
     actor, _ = execution
     run = start_run(load_workflow({"nodes": {"entry": {"step": "echo"}}}, actor=actor), actor=actor)
     with pytest.raises(PermissionDenied, match="requires a reader"):
         run.graph(None)
     document = GRAPH.replace("id status waiting_kind", "id input attempts { id } status waiting_kind")
     result = execute_schema(schema, document, {"id": run.sqid}, user=actor)
-    assert result.errors
-    for field in ("input", "attempts"):
-        assert any(f"Cannot query field '{field}' on type 'WorkflowRunGraphStepRun'" in error.message
-                   for error in result.errors)
+    assert result.errors is None
+    assert result.data["workflowrun_by_pk"]["graph"]["nodes"][0]["step_run"]["attempts"] == []
+    hidden = execute_schema(schema, document, {"id": run.sqid}, user=create_user("graph-outsider"))
+    assert hidden.errors is None and hidden.data["workflowrun_by_pk"] is None
 
 
 def test_graph_survives_removing_a_published_step_implementation(schema, execution, settings):

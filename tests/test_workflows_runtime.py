@@ -443,7 +443,7 @@ def test_dispatch_counter_and_exhaustion(execution, settings):
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert retained.status == RunStatus.WAITING and retained.error == ""
     waiting = system_queryset(StepRun).get(pk=row.pk)
-    assert waiting.waiting_kind == "operator" and waiting.wait_reason
+    assert waiting.waiting_kind == "error" and waiting.wait_reason
     assert len(sent) == 2
 
 
@@ -1016,7 +1016,7 @@ def test_operator_retry_resets_delivery_allowance(execution, settings):
         with system_context(reason="test exhausted delivery"):
             StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
         assert runner.redispatch() == 1
-    assert system_queryset(StepRun).get(pk=row.pk).waiting_kind == "operator"
+    assert system_queryset(StepRun).get(pk=row.pk).waiting_kind == "error"
     ready = StepRun.objects.retry_step(row, actor=actor)
     assert ready.dispatches == 0
 
@@ -1064,7 +1064,7 @@ def test_default_redelivery_exhaustion_waits_without_domain_error_routing(execut
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert (retained.status, retained.outcome, retained.output, retained.error) == (RunStatus.WAITING, "", {}, "")
     retained_step_run = system_queryset(StepRun).get(pk=step_run.pk)
-    assert retained_step_run.status == StepRunStatus.WAITING and retained_step_run.waiting_kind == "operator"
+    assert retained_step_run.status == StepRunStatus.WAITING and retained_step_run.waiting_kind == "error"
     assert "delivery exhausted" in retained_step_run.wait_reason.lower()
     assert retained_step_run.state == {}
     assert retained_step_run.outcome == ""

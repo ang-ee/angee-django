@@ -10,8 +10,10 @@ definition decisions/decision {
     permission create = admin->member
     permission waiter_read = nil
     permission read = assignee + requester + admin->member + waiter_read
-    permission eligible = (assignee - requester) & person->active_actor
-    permission act = eligible + (admin->member & person->active_actor)
+    permission owner_managed = nil
+    permission owner_eligible = nil
+    permission eligible = (((assignee - requester) - owner_managed) + owner_eligible) & person->active_actor
+    permission act = eligible + ((admin->member & person->active_actor) - owner_managed)
     permission write = admin->member
     permission delete = admin->member
 }

@@ -670,6 +670,11 @@ class ExtractionManager(EvidenceManager):
         if original is None or parent is None:
             raise ValidationError("The correction names an absent or inaccessible extraction revision.")
         self._require_correction_parent(original, parent)
+        revision_target = canonical_record_target(original)
+        if not decision.records.with_actor(actor).filter(
+            content_type=revision_target.content_type, object_id=revision_target.object_id,
+        ).exists():
+            raise ValidationError("The decision concerns another extraction revision.")
         target = original.target
         canonical = canonical_record_target(target) if target is not None else None
         if canonical is None or not decision.records.with_actor(actor).filter(

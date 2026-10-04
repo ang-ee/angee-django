@@ -45,6 +45,7 @@ import { useAppRuntime } from "../../runtime";
 import { resolveTabLabel } from "../page";
 import { SectionHeading } from "./SectionHeading";
 import { RecordRailGroup } from "./form-view-rail";
+import { usePublishActiveRecordForm } from "./record-field-marks";
 
 export { SectionHeading, type SectionHeadingProps } from "./SectionHeading";
 export { RecordRailGroup, type RecordRailField, type RecordRailGroupProps } from "./form-view-rail";
@@ -167,6 +168,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     recordPresentation = "document",
     overviewTab,
     publishBreadcrumbLabel = false,
+    hideRecordChrome = false,
     className,
   } = props;
   const {
@@ -197,6 +199,13 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     reload,
   } = surface;
   const { primary: primaryRecordActions, menu: menuRecordActions } = recordActions;
+  const formModel = surfaceChromeContext?.canonicalResource;
+  const formId = surfaceChromeContext?.recordId;
+  const focusField = recordPanelContext?.focusField;
+  const activeForm = React.useMemo(() => formModel && formId && focusField && !hideRecordChrome ? {
+    model: formModel, id: formId, focusField,
+  } : null, [formModel, formId, focusField, hideRecordChrome]);
+  usePublishActiveRecordForm(activeForm);
   const [toolbarHost, setToolbarHost] = React.useState<HTMLElement | null>(null);
   const recordChromeContext = React.useMemo(
     () => surfaceChromeContext && { ...surfaceChromeContext, toolbarHost },

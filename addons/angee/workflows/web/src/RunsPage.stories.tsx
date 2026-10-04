@@ -5,9 +5,10 @@ import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storyboo
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 
+import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runGraphFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture, stepDecisionResourceFixture } from "./testing";
+import { runFixture, runGraphFixture, runResourceFixture, recordResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
 import type { RunGraphData } from "./run-graph";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
@@ -33,7 +34,7 @@ const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.reco
 export type RunRequest = v.InferOutput<typeof RequestSchema>;
 const mappedSteps = Array.from({ length: 11 }, (_, index) => stepRunFixture({
   id: `wsr_mapped_${index}`, node_key: "mapped.body", is_mapped: true, map_index: index, rank: 0,
-  can_retry: false, attempts: [], artifacts: [],
+  can_retry: false, attempts: [], records: [],
 }));
 const documents = { console: operationDocuments };
 const runtime = {
@@ -75,7 +76,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     if (waiting) {
       current = { ...current, status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null };
       currentSteps = currentSteps.map((step) => ({
-      ...step, status: "WAITING", waiting_kind: "OPERATOR", wait_reason: "Dispatch attempts exhausted.",
+      ...step, status: "WAITING", waiting_kind: "ERROR", wait_reason: "Dispatch attempts exhausted.",
       }));
     }
     if (redacted) currentSteps = currentSteps.map((step) => ({
@@ -110,12 +111,18 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
-      if (query.includes("workflowrunevidence")) return jsonResponse({ data: {
-        workflowrunevidence: evidence, workflowrunevidence_aggregate: { aggregate: { count: evidence.length } },
+      if (query.includes("steprecord")) return jsonResponse({ data: {
+        steprecord: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records) : evidence,
+        steprecord_aggregate: { aggregate: { count: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records).length : evidence.length } },
       } });
-      if (query.includes("steprun_by_pk")) return jsonResponse({ data: { steprun_by_pk: currentSteps.find((step) => step.id === variables.id) ?? null } });
+      if (query.includes("steprun_by_pk")) {
+        const step = currentSteps.find((step) => step.id === variables.id);
+        return jsonResponse({ data: { steprun_by_pk: step ? { ...step,
+          ...(query.includes("StepDecision") ? { decision: step.decision ? decisionFixture() : null } : {}),
+        } : null } });
+      }
       if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
-      for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["stepartifact", currentSteps.flatMap((step) => step.artifacts)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
+      for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["steprecord", currentSteps.flatMap((step) => step.records)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
         if (query.includes(name)) return jsonResponse({ data: { [name]: rows, [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
       }
       if (/\bsteprun(?:\s*\(|\s*\{)/.test(query)) {
@@ -138,9 +145,9 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       return jsonResponse({ data: { workflowrun: rows, workflowrun_aggregate: { aggregate: { count: rows.length } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
-      runResourceFixture, runEvidenceResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
-      workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
-      triggerEventResourceFixture, watchResourceFixture, stepDecisionResourceFixture,
+      runResourceFixture, recordResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
+      workflowVersionFixture, attemptResourceFixture, userResourceFixture,
+      triggerEventResourceFixture, watchResourceFixture, decisionResourceFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"

@@ -45,12 +45,12 @@ Run-wide budgets remain the named gap in the [workflows README](../workflows/REA
 
 `archive_import_file` and `archive_import_drive` share one graph. Registered
 `ArchiveExtractor` implementations recognize a readable storage subject,
-the gate confirms target mappings supplied in its node configuration, and the
-workflow `map` runs one IO attempt per confirmed mapping. Extractors own their
-vendor parsing and idempotent target ingest. Each attempt reports progress
+the gate asks one question with an alternative per actor-writable candidate
+target plus skip, and the workflow `map` runs one IO attempt per confirmed
+mapping. Extractors own parsing and idempotent target ingest. Each attempt reports progress
 through `ArchiveExecutionReporter.heartbeat()`; the workflow retains source
-and target artifacts. Missing or incompatible mappings take `unsupported`; the
-card offers fixed import or skip alternatives, with no target-input answer form.
+and target step records. No compatible candidate takes `unsupported`; the
+installed resource needs no target configuration patch or answer input form.
 
 `ArchiveExtractor` owns the `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES` registry;
 its addon declares that base through `ANGEE_IMPL_REGISTRIES`.

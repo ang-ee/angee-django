@@ -29,7 +29,7 @@ export const decisionUserFixture = testDataResource("iam.User", {
 
 export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
   return {
-    id: "dcn_review", kind: "review", kind_label: "Review", revision: 3, is_open: true, permissions: ["act"],
+    id: "dcn_review", kind: "review", kind_label: "Review", revision: 3, created_at: "2026-10-03T10:00:00Z", is_open: true, permissions: ["act"],
     context: { facts: [], references: [] }, verdict: null, answered_at: null,
     records: [{ id: "dcr_7", record_model: "notes.Note", record_id: "nte_7" }],
     proposal: { multiple: false, alternatives: [
@@ -38,7 +38,7 @@ export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
       } },
       { key: "reject", label: "Keep what is on the record", outcome: "rejected" },
     ] },
-    requester: { display_name: "Requester" }, answered_by: null, ...overrides,
+    requester: { display_name: "Requester" }, assignees: [{ display_name: "Reviewer" }], answered_by: null, ...overrides,
   };
 }
 

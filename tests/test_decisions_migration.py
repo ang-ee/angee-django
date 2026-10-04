@@ -1,144 +1,90 @@
-"""Schema-only concern cutover through Django's historical state owner."""
+"""The schema cutover discards questions, including populated PostgreSQL tables."""
 
 import pytest
 from django.apps import apps
-from django.db import migrations, models
+from django.db import connection, migrations, models
 from django.db.migrations.state import ModelState, ProjectState
+from django.utils import timezone
 
-from angee.decisions.runtime_migrations import records_and_proposals as transition
-from angee.decisions.runtime_migrations import single_questions
+from angee.decisions.runtime_migrations import independent_step_questions, single_questions
+from angee.workflows.runtime_migrations import independent_decisions
+from tests.conftest import create_platform_admin
 
-
-def legacy_state():
-    state = ProjectState.from_apps(apps)
-    state.remove_model("decisions", "decisionrecord")
-    decision = state.models["decisions", "decision"]
-    decision.fields.pop("proposal")
-    decision.fields.update(
-        {
-            "subject_content_type": models.ForeignKey("contenttypes.ContentType", on_delete=models.PROTECT),
-            "subject_object_id": models.PositiveBigIntegerField(),
-            "closed_reason": models.CharField(max_length=16, null=True),
-            "superseded_by": models.ForeignKey("decisions.Decision", null=True, on_delete=models.PROTECT),
-            "supersede": models.BooleanField(default=True),
-            "invalid_attempts": models.PositiveSmallIntegerField(default=0),
-            "max_attempts": models.PositiveSmallIntegerField(default=3),
-            "expires_at": models.DateTimeField(null=True),
-        }
-    )
-    decision.options["constraints"] = [
-        constraint
-        for constraint in decision.options["constraints"]
-        if constraint.name != "decisions_resolution_consistent"
-    ] + [
-        models.CheckConstraint(condition=models.Q(id__gte=0), name=name)
-        for name in (
-            "decisions_open_subject_unique",
-            "decisions_positive_attempts",
-            "decisions_resolution_consistent",
-        )
-    ]
-    decision.options["indexes"] += [
-        models.Index(fields=["expires_at"], name="decisions_open_expiry"),
-        models.Index(fields=["subject_content_type", "subject_object_id"], name="decisions_subject"),
-    ]
-    return state
-
-
-def test_schema_cutover_applies_once_without_data_operations():
-    before = legacy_state()
-    current = ProjectState.from_apps(apps)
-    assert transition.applies(before)
-    assert not transition.applies(current)
-    assert not transition.applies(ProjectState())
-    for operation in transition.Migration.operations:
-        assert not isinstance(operation, (migrations.RunPython, migrations.RunSQL))
-        operation.state_forwards("decisions", before)
-    assert not transition.applies(before)
-    decision = before.models["decisions", "decision"]
-    expected = current.models["decisions", "decision"]
-    assert set(decision.fields) == set(expected.fields)
-    assert {constraint.name for constraint in decision.options["constraints"]} == {
-        "decisions_verdict_consistent", "decisions_resolution_consistent",
-    }
-    assert decision.options["indexes"] == expected.options["indexes"]
-    record = before.models["decisions", "decisionrecord"]
-    assert set(record.fields) == set(current.models["decisions", "decisionrecord"].fields)
-
-
-@pytest.mark.parametrize("missing", ["expires_at", "subject_content_type", "already_added_proposal"])
-def test_schema_cutover_rejects_partial_legacy_state(missing):
-    state = legacy_state()
-    if missing == "already_added_proposal":
-        state.models["decisions", "decision"].fields["proposal"] = models.JSONField(default=dict)
-    else:
-        state.models["decisions", "decision"].fields.pop(missing)
-    with pytest.raises(RuntimeError, match="legacy decisions schema is incomplete"):
-        transition.applies(state)
-
-
-@pytest.mark.parametrize("missing", ["proposal", "decisionrecord"])
-def test_schema_cutover_rejects_partial_new_state(missing):
-    state = ProjectState.from_apps(apps)
-    if missing == "proposal":
-        state.models["decisions", "decision"].fields.pop(missing)
-    else:
-        state.remove_model("decisions", missing)
-    with pytest.raises(RuntimeError, match="record cutover is incomplete"):
-        transition.applies(state)
 
 def grouped_state():
     state = ProjectState.from_apps(apps)
+    state.models["workflows", "steprun"].fields.pop("decision")
+    state.models["intake", "need"].fields.pop("access_decision")
+    state.models["extraction", "extraction"].fields.pop("correction_decision")
     decision = state.models["decisions", "decision"]
-    for name in ("answered_by", "answered_at"):
-        decision.fields.pop(name)
+    decision.fields.pop("answered_by")
+    decision.fields.pop("answered_at")
     decision.fields.update({
-        "form_schema": models.JSONField(default=dict),
-        "basis": models.JSONField(default=dict),
+        "verdict": models.CharField(max_length=32, default="pending"),
+        "form_schema": models.JSONField(default=dict), "basis": models.JSONField(default=dict),
         "errors": models.JSONField(default=list),
         "group": models.ForeignKey("decisions.DecisionGroup", on_delete=models.PROTECT),
-        "index": models.PositiveSmallIntegerField(default=0),
-        "resolution": models.JSONField(null=True),
-        "resolved_by": models.ForeignKey("iam.User", on_delete=models.PROTECT, null=True),
+        "index": models.PositiveSmallIntegerField(default=0), "resolution": models.JSONField(null=True),
+        "resolved_by": models.ForeignKey("iam.User", null=True, on_delete=models.PROTECT),
         "resolved_at": models.DateTimeField(null=True),
     })
-    decision.options["constraints"] = [
-        models.UniqueConstraint(fields=("group", "index"), name="decisions_group_index"),
-        models.CheckConstraint(condition=models.Q(id__gte=0), name="decisions_resolution_consistent"),
-    ]
+    decision.options["db_table"] = "decisions_decision"
+    decision.options["constraints"] = [models.UniqueConstraint(
+        fields=("group", "index"), name="decisions_group_index",
+    )]
+    state.models["decisions", "decisionrecord"].options["db_table"] = "decisions_decisionrecord"
     state.add_model(ModelState("decisions", "DecisionGroup", [
         ("id", models.BigAutoField(primary_key=True)),
         ("issuer", models.ForeignKey("iam.User", on_delete=models.PROTECT)),
-        ("reasked_from", models.ForeignKey("decisions.DecisionGroup", on_delete=models.PROTECT, null=True)),
+        ("reasked_from", models.ForeignKey("decisions.DecisionGroup", null=True, on_delete=models.PROTECT)),
     ]))
     state.add_model(ModelState("decisions", "DecisionEvidence", [
         ("id", models.BigAutoField(primary_key=True)),
         ("decision", models.ForeignKey("decisions.Decision", on_delete=models.CASCADE)),
         ("content_type", models.ForeignKey("contenttypes.ContentType", on_delete=models.PROTECT)),
         ("object_id", models.PositiveBigIntegerField()),
-    ], options={
-        "indexes": [models.Index(fields=("content_type", "object_id"), name="decisions_evidence_record")],
-        "constraints": [models.UniqueConstraint(fields=("decision", "content_type", "object_id"),
-                                                name="decisions_evidence_unique")],
-    }))
+    ]))
     return state
 
 
-def test_single_questions_schema_matches_models_without_converting_data():
+def reverse_linked_state():
+    """The interrupted Job A shape asks from Decision.step_run."""
+    state = ProjectState.from_apps(apps)
+    state.models["workflows", "steprun"].fields.pop("decision")
+    state.models["intake", "need"].fields.pop("access_decision")
+    state.models["extraction", "extraction"].fields.pop("correction_decision")
+    state.models["decisions", "decision"].fields["step_run"] = models.ForeignKey(
+        "workflows.StepRun", null=True, on_delete=models.PROTECT,
+    )
+    return state
+
+
+def test_reverse_link_cutover_discards_questions_before_waiters():
+    state = reverse_linked_state()
+    assert independent_step_questions.applies(state)
+    assert not independent_decisions.applies(state)
+    for operation in independent_step_questions.Migration.operations:
+        assert isinstance(operation, (migrations.DeleteModel, migrations.CreateModel))
+        operation.state_forwards("decisions", state)
+    assert not independent_step_questions.applies(state)
+    assert independent_decisions.applies(state)
+    assert not independent_decisions.applies(ProjectState.from_apps(apps))
+
+
+def test_cutover_is_schema_only_and_retires_the_complete_shape():
     state = grouped_state()
     assert single_questions.applies(state)
     for operation in single_questions.Migration.operations:
-        assert not isinstance(operation, (migrations.RunPython, migrations.RunSQL))
+        assert not isinstance(operation, (migrations.RunPython, migrations.RunSQL, migrations.AlterField))
         operation.state_forwards("decisions", state)
-    current = ProjectState.from_apps(apps).models["decisions", "decision"]
-    assert set(state.models["decisions", "decision"].fields) == set(current.fields)
-    assert state.models["decisions", "decision"].options["constraints"] == current.options["constraints"]
+    assert not single_questions.applies(state)
     assert ("decisions", "decisiongroup") not in state.models
     assert ("decisions", "decisionevidence") not in state.models
-    assert not single_questions.applies(state)
+    assert "step_run" not in state.models["decisions", "decision"].fields
+    assert state.models["decisions", "decision"].fields["verdict"].get_internal_type() == "JSONField"
 
 
-def test_single_questions_waits_for_workflow_owner_to_remove_old_link():
+def test_cutover_waits_for_incoming_owner_links():
     state = grouped_state()
     state.models["workflows", "steprun"].fields["decision_group"] = models.ForeignKey(
         "decisions.DecisionGroup", null=True, on_delete=models.PROTECT,
@@ -146,10 +92,75 @@ def test_single_questions_waits_for_workflow_owner_to_remove_old_link():
     assert not single_questions.applies(state)
     state.models["workflows", "steprun"].fields.pop("decision_group")
     assert single_questions.applies(state)
-
-
-def test_single_questions_rejects_partial_old_schema():
-    state = grouped_state()
     state.models["decisions", "decision"].fields.pop("basis")
-    with pytest.raises(RuntimeError, match="old decision schema is incomplete"):
+    with pytest.raises(RuntimeError, match="incomplete"):
         single_questions.applies(state)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="The JSON cast regression requires PostgreSQL.")
+@pytest.mark.parametrize(("shape", "populated"), [("grouped", False), ("grouped", True), ("reverse", True)])
+def test_postgresql_fresh_and_populated_question_cutover(composed_tables, shape, populated):
+    actor = create_platform_admin("cutover-owner")
+    state = grouped_state() if shape == "grouped" else reverse_linked_state()
+    with connection.cursor() as cursor:
+        cursor.execute("CREATE SCHEMA jobab_cutover")
+        cursor.execute("SET search_path TO jobab_cutover, public")
+    try:
+        if populated:
+            with connection.schema_editor() as editor:
+                for name in (("DecisionGroup", "Decision", "DecisionRecord", "DecisionEvidence")
+                             if shape == "grouped" else ("Decision", "DecisionRecord")):
+                    editor.create_model(state.apps.get_model("decisions", name))
+            old = state.apps.get_model("decisions", "Decision")
+            if shape == "grouped":
+                group = state.apps.get_model("decisions", "DecisionGroup").objects.create(issuer_id=actor.pk)
+                for index, verdict in enumerate(("pending", "completed")):
+                    old._base_manager.create(
+                        group_id=group.pk, kind="legacy", index=index, verdict=verdict, proposal={},
+                    )
+            else:
+                old._base_manager.create(kind="old-open", proposal={}, verdict=None)
+                old._base_manager.create(kind="old-answered", proposal={}, verdict=["accepted"],
+                                         answered_by_id=actor.pk, answered_at=timezone.now())
+            assert old._base_manager.count() == 2
+            operations = (single_questions if shape == "grouped" else independent_step_questions).Migration.operations
+        else:
+            for name in ("decisionrecord", "decisionevidence", "decision", "decisiongroup"):
+                state.remove_model("decisions", name)
+            operations = [operation for operation in single_questions.Migration.operations
+                          if isinstance(operation, migrations.CreateModel)]
+        for operation in operations:
+            before = state.clone()
+            operation.state_forwards("decisions", state)
+            with connection.schema_editor() as editor:
+                operation.database_forwards("decisions", editor, before, state)
+        current = state.apps.get_model("decisions", "Decision")
+        assert current._base_manager.count() == 0
+        row = current._base_manager.create(kind="current", proposal={"alternatives": []}, verdict=None)
+        current._base_manager.filter(pk=row.pk).update(
+            verdict=["accepted"], answered_by_id=actor.pk, answered_at=timezone.now(),
+        )
+        assert current._base_manager.get(pk=row.pk).verdict == ["accepted"]
+        assert "decisions_decisiongroup" not in connection.introspection.table_names()
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("SET search_path TO public")
+            cursor.execute("DROP SCHEMA jobab_cutover CASCADE")
+
+
+def test_workflow_cutover_discards_waiters_instead_of_converting_them():
+    state = grouped_state()
+    state.remove_model("workflows", "steprecord")
+    for name in ("StepArtifact", "WorkflowRunEvidence"):
+        state.add_model(ModelState("workflows", name, [("id", models.BigAutoField(primary_key=True))]))
+    state.models["workflows", "steprun"].fields["decision_group"] = models.ForeignKey(
+        "decisions.DecisionGroup", null=True, on_delete=models.PROTECT,
+    )
+    assert independent_decisions.applies(state)
+    for operation in independent_decisions.Migration.operations:
+        assert isinstance(operation, (migrations.DeleteModel, migrations.RemoveField))
+        operation.state_forwards("workflows", state)
+    assert ("workflows", "steprun") not in state.models
+    assert ("workflows", "workflowrun") not in state.models
+    assert single_questions.applies(state)

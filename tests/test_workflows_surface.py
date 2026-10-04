@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import angee.workflows as workflows
 from angee.base.evidence import DerivedFrom, EvidenceFact, EvidenceReference, FactAuthority, readable_records
+from angee.base.refs import RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
@@ -25,8 +26,8 @@ from angee.workflows.triggers import RecordChanged, RecordChangedOptIn, TriggerG
 
 EXPECTED_MODELS = {
     "workflows": (
-        "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun "
-        "WorkflowRunEvidence WorkflowVersion"
+        "StepAttempt StepRecord StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun "
+        "WorkflowVersion"
     ),
     "decisions": "Decision DecisionRecord",
     "extraction": "Extraction ExtractionLineage ExtractionPage ExtractionPart ExtractionSource",
@@ -58,8 +59,8 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": "cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
-    "workflows.WorkflowRun.queryset": "for_subject hold hold_owned retention_candidates",
-    "decisions.Decision.manager": "ask decide",
+    "workflows.WorkflowRun.queryset": "about for_subject hold hold_owned retention_candidates",
+    "decisions.Decision.manager": "ask decide withdraw",
     "decisions.Decision.queryset": (
         "attention_expression open open_expression open_for records_with_open_decisions"
     ),
@@ -75,7 +76,7 @@ EXPECTED_TYPES = {
 
 EXPECTED_RUNNER = tuple(
     f"Runner.{name}" for name in (
-        "advance", "artifact", "begin_effect", "execute", "heartbeat", "raise_if_canceled", "reap",
+        "advance", "begin_effect", "execute", "heartbeat", "raise_if_canceled", "reap", "record",
         "redispatch", "tick", "wake", "wake_decisions", "wake_records", "wake_runs",
     )
 )
@@ -177,7 +178,7 @@ def test_workflows_public_surface() -> None:
         declared = importlib.import_module(module_name).SETTINGS
         names = tuple(sorted(
             key for key in declared
-            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_DECISION_", "ANGEE_EXTRACTION_")) and "." not in key)
+            if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_EXTRACTION_")) and "." not in key)
             or (config.label in EXPECTED_SETTINGS and key == "ANGEE_IMPL_REGISTRIES:append")
         ))
         if names:
@@ -234,11 +235,11 @@ def test_trigger_principal_and_source_grant_surface() -> None:
 
 def test_evidence_owner_surface() -> None:
     """Decision, run and extraction evidence compose the base derivation and admission owners."""
-    run_evidence = apps.get_model("workflows", "WorkflowRunEvidence")
+    run_evidence = apps.get_model("workflows", "StepRecord")
     extraction_source = apps.get_model("extraction", "ExtractionSource")
     extraction = apps.get_model("extraction", "Extraction")
     decision = apps.get_model("decisions", "Decision")
-    assert issubclass(run_evidence, DerivedFrom)
+    assert issubclass(run_evidence, RecordRefMixin)
     assert issubclass(extraction_source, DerivedFrom)
     assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)

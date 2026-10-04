@@ -1,6 +1,10 @@
 // Rendered resource views over refine/metadata owners: reusable declarative
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
+export {
+  RecordFieldMarksProvider, useRecordFieldMarks, useActiveRecordForm,
+  type RecordFieldMark, type ActiveRecordForm,
+} from "./form/record-field-marks";
 
 export { SchemaPathPicker, type SchemaPathPickerProps, type SchemaPath, type SchemaPathSchema } from "./SchemaPathPicker";
 export { useFormHistory, type FormHistory } from "./form/use-form-history";

@@ -12,12 +12,12 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
-from django.db.models.functions import Coalesce, Now
+from django.db.models.functions import Coalesce, Concat, Length, Now, Substr
+from django.db.models.lookups import IsNull
 from django.utils.functional import cached_property
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.evidence import DerivedFrom
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
@@ -30,10 +30,10 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
     StepAttemptQuerySet,
+    StepRecordManager,
     StepRunManager,
     StepWatchManager,
     WorkflowManager,
-    WorkflowRunEvidenceManager,
     WorkflowRunManager,
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
@@ -67,6 +67,7 @@ class RunGraphNode:
     step_run: StepRun | None
     item_counts: tuple[StepRunStatusCount, ...]
     item_attempts: int
+    plan: str
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,24 @@ class _JSONArrayLength(models.Func):
             **extra_context,
         )
         return sql, params * 2
+
+
+class _NodeFailureRoute(models.Func):
+    """Project a frozen node's failure route without loading its graph payload."""
+
+    output_field = models.JSONField()
+
+    def as_postgresql(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
+        document, key, port = self.get_source_expressions()
+        return models.Func(document, models.Value("nodes"), key, models.Value("next"), port,
+                           function="jsonb_extract_path", output_field=models.JSONField()).as_sql(compiler, connection)
+
+    def as_sqlite(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
+        document, key, port = self.get_source_expressions()
+        path = Concat(models.Value("$.nodes."), key, models.Value(".next."), port)
+        return models.Func(document, path, function="json_extract", output_field=models.JSONField()).as_sql(
+            compiler, connection,
+        )
 
 
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
@@ -239,6 +258,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     )
     origin = StateField(choices_enum=RunOrigin, editable=False)
     finished_at = models.DateTimeField(null=True, blank=True)
+    stopped_at = models.DateTimeField(null=True, blank=True, editable=False)
     prune_after = models.DateTimeField(null=True, blank=True, editable=False)
     prune_reason = DiagnosticTextField(max_length=255, blank=True, default="", editable=False)
 
@@ -312,6 +332,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         rows = {row.node_key: row for row in steps.nodes()}
         for row in rows.values():
             row.run = self
+        plan = definition.plan(
+            rows.values(), terminal=self.stopped_at is not None or self.is_terminal and self.status != RunStatus.FAILED,
+        )
         counts: dict[str, list[StepRunStatusCount]] = {}
         attempts: dict[str, int] = {}
         for item in steps.item_counts():
@@ -320,7 +343,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
             attempts[key] = attempts.get(key, 0) + item["attempts"]
         return RunGraph(
             nodes=tuple(RunGraphNode(
-                node=node, step_run=rows.get(node.key),
+                node=node, step_run=rows.get(node.key), plan=plan.get(node.key, "not_run"),
                 item_counts=tuple(counts.get(node.body_key, ())) if node.body_key else (),
                 item_attempts=attempts.get(node.body_key, 0) if node.body_key else 0,
             ) for node in topology.nodes),
@@ -348,6 +371,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         """Cancellation owns open rows throughout the tree, even below final descendants."""
         return (
             not self.is_terminal
+            or self.status == RunStatus.FAILED and self.stopped_at is None
             or system_queryset(self.step_runs.model).filter(run=self)
             .exclude(status__in=StepRunStatus.terminal_values()).exists()
             or any(child._has_open_owned_work for child in system_queryset(type(self)).filter(
@@ -397,25 +421,6 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         ]
 
 
-class WorkflowRunEvidence(DerivedFrom):
-    """One subject or entry input record retained with its admitted run."""
-
-    runtime = True
-    sqid_prefix = "wre_"
-    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="evidence")
-    objects = WorkflowRunEvidenceManager()
-
-    class Meta:
-        """Keep each canonical evidence target once per run."""
-
-        abstract = True
-        rebac_resource_type = "workflows/run_evidence"
-        constraints = [models.UniqueConstraint(
-            fields=("run", "content_type", "object_id"), name="workflows_run_evidence_unique",
-        )]
-        indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_run_evidence_record")]
-
-
 class StepRun(AngeeDataModel):
     """One graph node's state and input, with its claim counter as the fence.
 
@@ -425,6 +430,10 @@ class StepRun(AngeeDataModel):
     runtime = True
     awaited_run = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="waiters",
+    )
+    decision = models.ForeignKey(
+        "decisions.Decision", on_delete=models.PROTECT, null=True, blank=True, editable=False,
+        related_name="requesting_steps",
     )
     sqid_prefix = "wsr_"
 
@@ -454,12 +463,45 @@ class StepRun(AngeeDataModel):
     output = models.JSONField(default=dict)
     outcome = models.CharField(max_length=NAME_MAX_LENGTH, blank=True, default="")
     state = models.JSONField(default=dict)
+    notes = models.JSONField(default=list)
 
     objects = StepRunManager()
+    hold_states = {
+        (StepRunStatus.FAILED, None): "error",
+        (StepRunStatus.WAITING, WaitingKind.ERROR): "error",
+        (StepRunStatus.WAITING, WaitingKind.DECISION): "decision",
+        (StepRunStatus.WAITING, WaitingKind.RUN): "run",
+    }
 
     def __str__(self) -> str:
         """Distinguish mapped items while preserving the authored node name."""
         return f"{self.node_key} [{self.map_index}]" if self.is_mapped else self.node_key
+
+    @property
+    def hold(self) -> str | None:
+        """The three reader-facing holds, independent of scheduler waits."""
+        if "_hold" in self.__dict__:
+            return self.__dict__["_hold"]
+        if self.run.stopped_at is not None:
+            return None
+        if self.status == StepRunStatus.FAILED and not self.run.policy_version.definition.retry_allowed(self.node_key):
+            return None
+        return self.hold_states.get((self.status, self.waiting_kind))
+
+    @classmethod
+    def hold_expression(cls) -> models.Case:
+        """Use the same hold rule in resource filters without loading step payloads."""
+        mapped = models.Q(node_key__endswith=MAP_BODY_SUFFIX)
+        key = models.Case(models.When(mapped, then=Substr("node_key", 1, Length("node_key") - len(MAP_BODY_SUFFIX))),
+                          default=models.F("node_key"), output_field=models.CharField())
+        port = models.Case(models.When(mapped, then=models.Value(Definition.failure_port("map.body"))),
+                           default=models.Value(Definition.failure_port("node")), output_field=models.CharField())
+        routed = IsNull(_NodeFailureRoute(models.F("run__version__document"), key, port), False)
+        return models.Case(models.When(run__stopped_at__isnull=False, then=models.Value(None)),
+            models.When(models.Q(status=StepRunStatus.FAILED) & routed, then=models.Value(None)), *(
+            models.When(status=status, waiting_kind=kind, then=models.Value(hold))
+            for (status, kind), hold in cls.hold_states.items()
+        ), default=None, output_field=models.CharField())
 
     @property
     def node_label(self) -> str:
@@ -554,9 +596,10 @@ class StepRun(AngeeDataModel):
         run = self.run
         definition = run.policy_version.definition
         if (
-            run.status not in {RunStatus.FAILED, RunStatus.WAITING, RunStatus.RUNNING}
+            run.stopped_at is not None
+            or run.status not in {RunStatus.FAILED, RunStatus.WAITING, RunStatus.RUNNING}
             or not (self.status == StepRunStatus.FAILED
-                    or self.status == StepRunStatus.WAITING and self.waiting_kind == WaitingKind.OPERATOR)
+                    or self.status == StepRunStatus.WAITING and self.waiting_kind == WaitingKind.ERROR)
             or self.status == StepRunStatus.FAILED and not definition.retry_allowed(self.node_key)
         ):
             return "This step cannot be retried in place."
@@ -598,13 +641,13 @@ class StepRun(AngeeDataModel):
                     models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.TIME,
                              wake_at__isnull=False, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD, wait_reason="")
-                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION, decision__isnull=False,
                                wake_at__isnull=True, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RUN,
                                awaited_run__isnull=False, wake_at__isnull=True, wait_reason="")
                     | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.MAP,
                                wake_at__isnull=True, wait_reason="")
-                    | (models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.OPERATOR,
+                    | (models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.ERROR,
                                 wake_at__isnull=True) & ~models.Q(wait_reason=""))
                     | (~models.Q(status=StepRunStatus.WAITING)
                        & models.Q(wake_at__isnull=True, wait_reason=""))
@@ -669,27 +712,38 @@ class StepAttempt(AngeeDataModel):
         ]
 
 
-class StepArtifact(RecordRefMixin, AngeeDataModel):
-    """One record retained as a step's result evidence without copying its data."""
+class StepRecord(RecordRefMixin, AngeeDataModel):
+    """One record used by a step, or supplied by its run's trigger."""
 
     runtime = True
-    sqid_prefix = "wfa_"
+    sqid_prefix = "wsrec_"
 
-    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="artifacts")
+    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="records")
+    step_run = models.ForeignKey(
+        "workflows.StepRun", on_delete=models.CASCADE, related_name="records", null=True, blank=True,
+    )
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
     object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("content_type", "object_id")
     label = models.CharField(max_length=200, blank=True, default="")
+    operation = models.CharField(max_length=7, choices=[(name, name.capitalize()) for name in
+        ("read", "created", "changed", "deleted", "called")], default="read")
+    objects = StepRecordManager()
 
     def __str__(self) -> str:
         """Use the authored evidence label, falling back to its public identity."""
         return self.label or str(self.sqid)
 
     class Meta:
-        """Django options for actor-readable execution artifacts."""
+        """Django options for actor-readable execution records."""
 
         abstract = True
-        rebac_resource_type = "workflows/step_artifact"
+        rebac_resource_type = "workflows/step_record"
+        indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_step_record_target")]
+        constraints = [models.UniqueConstraint(
+            fields=("run", "step_run", "content_type", "object_id", "operation"),
+            name="workflows_step_record_unique",
+        )]
 
 
 class StepWatch(RecordRefMixin, AngeeDataModel):
@@ -714,28 +768,6 @@ class StepWatch(RecordRefMixin, AngeeDataModel):
             fields=("step_run", "content_type", "object_id"), name="workflows_watch_record_unique",
         )]
         indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_watch_record")]
-
-
-class DecisionWorkflow(models.Model):
-    """Contribute execution query axes without coupling decisions to its waiter."""
-
-    extends: str | None = "decisions.Decision"
-    step_run = models.ForeignKey(
-        "workflows.StepRun", on_delete=models.PROTECT, null=True, blank=True, related_name="decisions",
-    )
-    hasura_filterable_fields = (
-        "step_run", "step_run__run", "step_run__run__version__workflow",
-        "step_run__run__version__workflow__key",
-    )
-    hasura_aliases = {
-        "workflow_name": "step_run__run__version__workflow__name",
-        "node_key": "step_run__node_key",
-    }
-
-    class Meta:
-        """Compose declarations onto the decision row without another table."""
-
-        abstract = True
 
 
 class Trigger(ResourceLoadMixin, AngeeDataModel):

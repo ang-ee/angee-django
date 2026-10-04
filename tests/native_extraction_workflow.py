@@ -189,7 +189,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
                 ((f"recognition_unavailable:0:{fail_page}",) if fail_page is not None else ()),
             )
             self.assertEqual(run.outcome, "source_hold" if fail_page is not None else "processed")
-            self.assertEqual(process.artifacts.count(), 1)
+            self.assertEqual(process.records.filter(operation="created").count(), 1)
 
     def test_all_pages_reach_processing_through_the_typed_map(self):
         """Successful page outputs reach the processor in execution index order."""

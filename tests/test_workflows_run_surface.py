@@ -197,25 +197,25 @@ def test_run_subject_filters_use_model_labels_and_public_ids(schema, execution):
     )
 
 
-def test_run_evidence_redacts_references_after_source_read_is_revoked(schema, execution):
+def test_run_records_redacts_references_after_source_read_is_revoked(schema, execution):
     """Run readers keep the retained edge but cannot recover a hidden target ID."""
     admin, _sent = execution
-    starter, viewer = (create_user(name) for name in ("evidence-starter", "evidence-viewer"))
+    starter, viewer = (create_user(name) for name in ("records-starter", "records-viewer"))
     workflow = load_workflow(document("entry"), actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", starter)
     source = vault_for(starter, name="Retained source")
     run = start_run(workflow, actor=starter, subject=source)
     run.with_actor(starter).grant_record_access("reader", viewer)
     query = """query($id: String!) {
-      workflowrun_by_pk(id: $id) { id subject_model subject_id evidence { id record_model record_id } }
+      workflowrun_by_pk(id: $id) { id subject_model subject_id records { id record_model record_id } }
     }"""
     own = result_data(execute_schema(schema, query, {"id": run.sqid}, user=starter))["workflowrun_by_pk"]
-    assert len(own["evidence"]) == 1
-    assert own["evidence"][0]["record_model"] == "knowledge.Vault"
-    assert own["evidence"][0]["record_id"] == source.sqid
+    assert len(own["records"]) == 1
+    assert own["records"][0]["record_model"] == "knowledge.Vault"
+    assert own["records"][0]["record_id"] == source.sqid
     assert own["subject_id"] == source.sqid
     hidden = result_data(execute_schema(schema, query, {"id": run.sqid}, user=viewer))["workflowrun_by_pk"]
-    assert hidden["evidence"] == [{"id": own["evidence"][0]["id"], "record_model": None, "record_id": None}]
+    assert hidden["records"] == [{"id": own["records"][0]["id"], "record_model": None, "record_id": None}]
     assert hidden["subject_model"] is hidden["subject_id"] is None
     assert result_data(
         execute_schema(
@@ -317,8 +317,8 @@ def test_step_decisions_exact_filter_combines_with_status(schema, execution, reg
                 )
             )
 
-        def continue_with(self, ctx, decisions, outcomes):
-            return ctx.done(outcome=next(iter(outcomes)))
+        def continue_with(self, ctx, decision, outcome):
+            return ctx.done(outcome=outcome)
 
     register_step(Question)
     workflow = load_workflow(
@@ -334,14 +334,14 @@ def test_step_decisions_exact_filter_combines_with_status(schema, execution, reg
     for run in runs:
         run_until(run)
     step = system_queryset(StepRun).get(run=runs[0])
-    decision = system_queryset(Decision).get(step_run=step)
+    decision = system_queryset(Decision).get(requesting_steps=step)
     query = """query($where: steprun_bool_exp) {
-      steprun(where: $where) { id decisions { id } }
+      steprun(where: $where) { id decision { id } }
       steprun_aggregate(where: $where) { aggregate { count } }
     }"""
-    where = {"decisions": {"_eq": decision.sqid}, "status": {"_eq": "waiting"}}
+    where = {"decision": {"_eq": decision.sqid}, "status": {"_eq": "waiting"}}
     assert result_data(execute_schema(schema, query, {"where": where}, user=starter)) == {
-        "steprun": [{"id": step.sqid, "decisions": [{"id": decision.sqid}]}],
+        "steprun": [{"id": step.sqid, "decision": {"id": decision.sqid}}],
         "steprun_aggregate": {"aggregate": {"count": 1}},
     }
     for actor, filters in ((other, where), (starter, {**where, "status": {"_eq": "ready"}})):
@@ -350,7 +350,7 @@ def test_step_decisions_exact_filter_combines_with_status(schema, execution, reg
             "steprun_aggregate": {"aggregate": {"count": 0}},
         }
     resource = next(item for item in schema.angee_resources if item.model_label == "workflows.StepRun")
-    assert resource.query.fields["decisions"].filter is not None
+    assert resource.query.fields["decision"].filter is not None
 
 
 def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execution):

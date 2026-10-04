@@ -91,9 +91,9 @@ class ReviewNotePublication(DecisionStep[NotePublicationOutput, NotePublicationO
             )
         )
 
-    def continue_with(self, ctx: Any, decisions: list[Any], outcomes: set[str]) -> Done:
+    def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Done:
         note = ctx.load(apps.get_model("notes", "Note"), ctx.input.id)
-        return ctx.done(note.publication_summary(), outcome=next(iter(outcomes)))
+        return ctx.done(note.publication_summary(), outcome=outcome)
 
 
 class CollectNoteReviews(Step[list[MapItem[NotePublicationOutput]], dict[str, int], None]):

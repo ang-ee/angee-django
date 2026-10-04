@@ -6,6 +6,8 @@
 definition intake/need {
     relation task:    projects/task    // rebac:field=task
     relation project: projects/project // rebac:field=project
+    relation person: iam/kind // rebac:const=person
+    permission decision_managed = person->active_actor
 
     permission create = task->write + project->write
     permission read   = task->read + project->read

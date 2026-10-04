@@ -12,3 +12,8 @@ module = "runtime_migrations.records_and_proposals"
 name = "single_questions"
 app_label = "decisions"
 module = "runtime_migrations.single_questions"
+
+[[migrations]]
+name = "independent_step_questions"
+app_label = "decisions"
+module = "runtime_migrations.independent_step_questions"

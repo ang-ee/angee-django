@@ -86,8 +86,6 @@ def test_registry_uses_canonical_storage_models_and_stable_keys():
         ArchiveExtractor.resolve_class("missing")
 
 
-def test_archive_targets_belong_to_gate_configuration():
+def test_archive_gate_targets_are_discovered_instead_of_static_config():
     from angee.workflows_integrate.archive_steps import ArchiveGateConfig
-    config = ArchiveGateConfig(mappings=[{"extractor": "first", "target": "drv_example"}])
-    assert config.mappings[0].target == "drv_example"
-    assert set(ArchiveGateConfig.model_fields) == {"assignee", "mappings"}
+    assert set(ArchiveGateConfig.model_fields) == {"assignee"}

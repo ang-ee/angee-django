@@ -47,6 +47,7 @@ import {
 import type { FormViewSurface, RecordToolbarContext } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
+import { RecordFieldMarkButton } from "./record-field-marks";
 
 const TITLE_TEXT_CLASS =
   "block w-full min-w-0 break-words text-28 font-semibold leading-9 text-fg";
@@ -231,6 +232,7 @@ export function FormViewRecordHeader({
           />
         </div>
       ) : null}
+      {currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null}
       <div className="min-w-0 flex-1 self-start">
         <div className="flex min-w-0 items-center gap-3">
           <div className="min-w-0 flex-1">
@@ -299,6 +301,7 @@ export function FormViewRecordHeader({
           </h1>
         )}
           </div>
+          {currentTitleField ? <RecordFieldMarkButton field={currentTitleField.name} label={currentTitleField.label} /> : null}
           {titlePlacementField && displayRecord ? <FieldDescriptorControl
             field={titlePlacementField}
             value={displayRecord[titlePlacementField.name]}
@@ -449,7 +452,8 @@ export function FormViewOverview({
       {currentBodyField ? (
         <section className="grid gap-2">
           {currentBodyField.label ? (
-            <SectionHeading as="h2" label={currentBodyField.label} />
+            <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label} />
+              <RecordFieldMarkButton field={currentBodyField.name} label={currentBodyField.label} /></div>
           ) : null}
           <Controller
             control={form.control}
@@ -780,6 +784,7 @@ function BoundFieldRow({
       <FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
+        <RecordFieldMarkButton field={field.name} label={field.label} />
       </FieldLabel>
       <div
         className={cn(

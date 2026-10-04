@@ -44,7 +44,7 @@ def _correction(original, values, reviewer, *, subject=None, binding_overrides=N
     decision = Decision.objects.ask(
         DecisionRequest(
             kind="correct-note",
-            records=(values["target"] if subject is None else subject,),
+            records=(values["target"] if subject is None else subject, original),
             assignees=(reviewer,),
             proposal=DecisionProposal(
                 alternatives=[{"key": "correct", "label": "Confirm correction", "outcome": "corrected"}]
@@ -114,6 +114,17 @@ def test_decision_correction_is_exact_reusable_and_retains_its_authority(correct
     assert source.pk == original.pk and retained_decision.pk == decision.pk
     with actor_context(values["actor"]), pytest.raises(ValidationError, match="cannot be deleted"):
         decision.with_actor(values["actor"]).delete()
+
+
+def test_correction_rejects_another_revision_of_the_same_target(correction, evidence):
+    original, values, _decision, _reviewer, revise, resolve = correction
+    resolve()
+    retain, _values = evidence
+    other = retain(request_key="another-extraction")
+    assert other.target.pk == original.target.pk
+    binding, _parent = Extraction.objects.prepare_correction_binding(other, actor=values["actor"])
+    with pytest.raises(ValidationError, match="another extraction revision"):
+        revise(binding=binding)
 
 
 def test_correction_requires_target_write_even_when_evidence_stays_readable(correction):

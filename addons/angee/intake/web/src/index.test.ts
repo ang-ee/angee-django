@@ -15,7 +15,6 @@ describe("intake addon manifest", () => {
     expect(children).toEqual({
       [`${TASK_MODEL}#access-roles`]: ["intake.requester"],
       [`${TASK_MODEL}#aside`]: ["intake.access-decisions"],
-      [`${NEED_MODEL}#sections`]: ["intake.decisions"],
       [`${TASK_MODEL}#rail`]: ["intake.people-rail"],
       [`${TASK_MODEL}#sections`]: ["intake.task-access-decisions", "intake.task-needs"],
       [`${PROJECT_MODEL}#sections`]: ["intake.project-needs"],

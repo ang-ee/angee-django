@@ -1,6 +1,6 @@
 # Decisions on records: design
 
-Design, 2026-10-04. Implemented as specified below. Companion: [workflows design](../../workflows/docs/design.md).
+Design, 2026-10-04. Implemented by decisions and the shared workflow timeline as described below. Companion: [workflows design](../../workflows/docs/design.md).
 
 ## Ontology
 
@@ -58,11 +58,18 @@ How the ontology maps to this addon.
   ```
 
   Fields are names inside the JSON. No field table, no per-field rows.
+  A model declares callable proposal methods once in its class-level
+  `decision_methods` tuple. Ask-time validation requires a declared method with
+  no required arguments, rejects `delete`, and checks optional keyword
+  `arguments`. Field values, readable foreign-key identities and editability are
+  validated when asking; multiple alternatives cannot overlap a field write.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Answering:** `Decision.objects.decide(decision, chosen keys, actor)` is the one entry, for humans and agents
   alike. It records the verdict; it applies nothing itself. The asker applies the chosen alternatives' actions
   through the records' own owners and continues along their outcome.
+  Non-workflow askers apply inside the answer transaction and propagate refusal;
+  workflow steps apply on resume and expose failure as an error hold.
 - **Gate:** `Decision.objects.open_for(record)` is the one call other owners use.
 - **Withdrawing:** the asker closes its own open decision with an empty verdict, recorded with who stopped it.
   "Open" stays one rule: no verdict yet.

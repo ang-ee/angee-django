@@ -613,7 +613,7 @@ def test_t3_t4_worker_loss_obeys_the_durable_effect_marker(execution, register_s
         waiting = row(run)
         assert waiting.status == StepRunStatus.WAITING
         if effect_idempotent is False:
-            assert waiting.waiting_kind == "operator" and waiting.wait_reason
+            assert waiting.waiting_kind == "error" and waiting.wait_reason
             assert not runner.execute(step_run.pk)
             StepRun.objects.retry_step(waiting, actor=actor, accept_duplicate=True)
         else:
@@ -652,7 +652,7 @@ def test_t4_marked_transient_failure_requires_acknowledged_redelivery(execution,
     step_run = row(run)
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(in_connection, runner.execute, step_run.pk).result(timeout=10)
-        assert row(run).waiting_kind == "operator"
+        assert row(run).waiting_kind == "error"
         assert row(run).wait_reason.lower() == "possible duplicate effect"
         assert pool.submit(in_connection, runner.wake).result(timeout=10) == 0
         with pytest.raises(ValidationError, match="duplicate"):

@@ -28,3 +28,8 @@ module = "runtime_migrations.decision_owner"
 name = "admitted_account"
 app_label = "intake"
 module = "runtime_migrations.admitted_account"
+
+[[migrations]]
+name = "retire_access_questions"
+app_label = "intake"
+module = "runtime_migrations.retire_access_questions"

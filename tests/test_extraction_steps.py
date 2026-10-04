@@ -42,7 +42,7 @@ from angee.extraction.profiles import ExtractionProfile
 from angee.workflows.definition import Definition
 from angee.workflows.maps import MapItem
 from angee.workflows.testing.drivers import load_workflow, run_until
-from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, WorkflowRun
 from angee.workflows_extraction.steps import (
     InferEvidenceStep,
     PreparePagesStep,
@@ -227,7 +227,7 @@ def test_preparation_runs_once_and_retains_native_evidence(step_evidence):
     with actor_context(actor):
         assert row.sources.count() == row.pages.count() == row.parts.count() == 1
     assert DeterministicExtraction.calls == ["prepare"]
-    assert system_queryset(StepArtifact).filter(step_run__run=run).count() == 1
+    assert system_queryset(StepRecord).filter(step_run__run=run).count() == 1
 
 
 def test_workflow_reader_cannot_obtain_document_text_from_step_rows(step_evidence):

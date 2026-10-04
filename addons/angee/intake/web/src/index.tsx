@@ -1,4 +1,3 @@
-import { decisionRecordTab } from "@angee/decisions";
 import { defineBaseAddon } from "@angee/app";
 import { holdsPermission } from "@angee/metadata";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
@@ -42,9 +41,6 @@ const intake = defineBaseAddon({
           render: (context) => <TaskAccessChatter context={context} />,
         },
       },
-    },
-    [`${NEED_MODEL}#sections`]: {
-      "intake.decisions": decisionRecordTab(),
     },
     [`${TASK_MODEL}#rail`]: {
       "intake.people-rail": { sequence: 40, content: ShareAccessRailGroup },

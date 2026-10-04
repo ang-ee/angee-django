@@ -15,6 +15,7 @@ import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
+import { RecordFieldMarkButton } from "./record-field-marks";
 
 /** What a descriptor field needs to offer (and optionally create) a related row. */
 export interface DescriptorFieldRelation {
@@ -226,6 +227,7 @@ export function LabeledDescriptorField({
           required={field.required && !readOnly}
         >
           {field.label ?? field.name}
+          <RecordFieldMarkButton field={field.name} label={field.label} />
         </FieldLabel>
       ) : null}
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>

@@ -31,7 +31,8 @@ class StepContext:
     config: Any
     actor: Any
     now: datetime
-    pending_artifacts: list[models.Model] = field(default_factory=list, init=False, repr=False)
+    pending_records: list[models.Model] = field(default_factory=list, init=False, repr=False)
+    pending_notes: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
 
     @property
     def state(self) -> Any:
@@ -124,10 +125,10 @@ class StepContext:
         """Return a permanent failure; settlement owns its routing outcome."""
         return Fail(error=message)
 
-    def ask(self, *requests: DecisionRequest, state: Any = None) -> Ask:
-        """Construct review requests; the body boundary owns validation and admission."""
+    def ask(self, request: DecisionRequest, *, state: Any = None) -> Ask:
+        """Construct one question; the body boundary owns validation and admission."""
         self._require_mode(StepMode.DATABASE)
-        return Ask(requests=requests, state=self.state if state is None else state)
+        return Ask(request=request, state=self.state if state is None else state)
 
     def decision(self, decision_ref: str) -> Any:
         """Read a prior decision asked by a step in this run."""
@@ -136,7 +137,7 @@ class StepContext:
         row = instance_from_public_id(
             model,
             decision_ref,
-            queryset=model.objects.with_actor(self.actor).filter(step_run__run=self.run),
+            queryset=model.objects.with_actor(self.actor).filter(requesting_steps__run=self.run),
         )
         if row is None:
             raise PermissionDenied("The decision is absent or inaccessible in this run.")
@@ -157,15 +158,21 @@ class StepContext:
         self._require_mode(StepMode.IO)
         runner.raise_if_canceled(self.step_run)
 
-    def artifact(self, record: models.Model, label: str = "") -> Any:
+    def record(self, record: models.Model, label: str = "", *, operation: str = "read") -> Any:
         """Stage actor-readable evidence for this attempt's successful settlement.
 
-        The returned artifact is unsaved until settlement commits. Failed or
+        The returned link is unsaved until settlement commits. Failed or
         superseded attempts discard their staged evidence.
         """
-        artifact = runner.artifact(self.step_run, record, label=label, actor=self.actor)
-        self.pending_artifacts.append(artifact)
-        return artifact
+        link = runner.record(self.step_run, record, label=label, operation=operation, actor=self.actor)
+        self.pending_records.append(link)
+        return link
+
+    def note(self, message: str, *, tone: str = "info") -> None:
+        """Retain a reader-facing note with this attempt's successful outcome."""
+        if tone not in {"info", "success", "warning", "danger"} or not message.strip():
+            raise ValidationError("A note needs a message and a supported tone.")
+        self.pending_notes.append({"tone": tone, "message": message})
 
     def start_run(
         self,

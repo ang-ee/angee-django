@@ -5,8 +5,10 @@ from queue import Queue
 from time import monotonic, sleep
 
 import pytest
-from django.db import close_old_connections, connection, connections
+from django.db import close_old_connections, connection, connections, transaction
+from django.test.utils import CaptureQueriesContext
 
+from angee.base.mixins import StaleRevisionError
 from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.workflows.runner import runner
@@ -66,14 +68,17 @@ def test_answer_races_cancel_without_lock_inversion(review, winner):
                 answer(decision, people[0])
             else:
                 assert WorkflowRun.objects.cancel(run, actor=actor).canceled
-                contender, _ = submit(pool, lambda: answer(decision, people[0]))
-                assert not contender.result(timeout=10).is_open
+                contender, pid = submit(pool, lambda: answer(decision, people[0]))
+                wait_for_lock(pid, contender)
         if winner == "answer":
             assert contender.result(timeout=10).canceled
+        else:
+            with pytest.raises(StaleRevisionError):
+                contender.result(timeout=10)
     run_until(run)
     assert run.status == "canceled"
     assert system_queryset(StepRun).get(pk=step.pk).status == "canceled"
-    assert system_queryset(Decision).get(pk=decision.pk).verdict == ["approve"]
+    assert system_queryset(Decision).get(pk=decision.pk).verdict == (["approve"] if winner == "answer" else [])
     assert runner.wake_decisions() == 0
 
 
@@ -85,6 +90,23 @@ def test_busy_run_wakes_on_the_next_sweep(review):
             future, _ = submit(pool, lambda: answer(questions(step)[0], people[0]))
             assert not future.result(timeout=10).is_open
             assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
+    assert runner.wake_decisions() == 1
+    run_until(run)
+    assert run.status == "succeeded"
+
+
+def test_answered_waiter_locks_only_the_step(review, monkeypatch):
+    """Recovery never joins or locks the decision through the step's query."""
+    _, people, _, _ = review
+    run, step = start_review(review)
+    with monkeypatch.context() as patch:
+        patch.setattr(type(runner), "wake_decisions", lambda *args, **kwargs: 0)
+        answer(questions(step)[0], people[0])
+    with transaction.atomic(), CaptureQueriesContext(connection) as captured:
+        row = system_queryset(StepRun).answered_decisions().select_for_update(no_key=True).get(pk=step.pk)
+        assert row.pk == step.pk
+    locked = [query["sql"] for query in captured if "FOR NO KEY UPDATE" in query["sql"]]
+    assert len(locked) == 1 and " JOIN " not in locked[0] and "DISTINCT" not in locked[0]
     assert runner.wake_decisions() == 1
     run_until(run)
     assert run.status == "succeeded"

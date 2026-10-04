@@ -1,6 +1,6 @@
 # Workflows on records: design
 
-Design, 2026-10-04. Not implemented yet. Companion: [decisions design](../../decisions/docs/design.md).
+Design, 2026-10-04. Implemented as described below. Companion: [decisions design](../../decisions/docs/design.md).
 
 ## Ontology
 
@@ -43,18 +43,33 @@ The timeline of the draft shows all of this, past and planned.
 
 How the ontology maps to this addon.
 
-- **Records of a step:** every step records the records it read, created, changed, deleted or called (one mechanism;
-  today `StepArtifact` and `WorkflowRunEvidence` each cover part of it). The timeline and its links come from this.
+- **Records of a step:** `StepRecord` replaces `StepArtifact` and `WorkflowRunEvidence`.
+  `ctx.record(record, operation="read", label="")` records a read, created, changed,
+  deleted or called record; `ctx.load` records reads. Admission inputs use the same
+  relation without a step. `step.records` and `WorkflowRun.objects.about(record_or_records)`
+  expose both directions. Identities obey the target's current read scope.
 - **Asking:** the existing ask-and-wait step outcome creates a decision with its concern links and resumes on the
-  answer. Step authors get one small call for it; no review-specific step classes per consumer.
+  answer. `ctx.ask(request, state=...)` asks exactly one decision per step, retained
+  by `StepRun.decision`. `DecisionStep` owns shared application and continuation;
+  askers supply alternatives. `StepRun.hold` exposes decision, run and error holds.
 - **Stopping:** one action on a run, offered in the timeline: cancel the run and withdraw its open decisions
   through the decisions owner.
+  `stopped_at` ends error holds and their future plan without rewriting a
+  previously recorded terminal failure. Retry is unavailable after stopping.
 - **Flags:** nothing in this addon. A step creates or deletes a tag assignment through the
   [tags addon](../../tags/) as it would any record.
-- **Timeline read:** one GraphQL read for a record: its runs and their ancestors, each as the run graph that
+- **Timeline read:** `record_timeline(records: [{model, id}])` accepts one record or a set: its runs and their ancestors, each as the run graph that
   already exists (`schema.py`, the run graph types), extended with the step's records and decisions.
 - **Linear order from a branching plan:** steps that ran, then the current steps, then planned steps; a planned
   step every path goes through is shown as certain, the others as one "may also" line.
+  The existing definition planner intersects mandatory descendants across normal
+  alternatives and unions parallel targets. Error recovery does not create a
+  promised normal future step. Terminal runs show no future plan.
+  `ctx.note(message, tone="info")` retains a note on the step outcome.
+- **Long-lived runs:** pruning keeps a run tree's audit while any linked decision
+  is open. Deleting a touched record stops its readable run ancestry through the
+  engine after deletion commits and withdraws open questions. No decision timer
+  or retention service is added.
 
 UI, in this addon's web fragment:
 
@@ -67,8 +82,6 @@ UI, in this addon's web fragment:
 
 Not built in the first version: timers on decisions, automatic answers, any consumer-specific timeline.
 
-## Open
-
-- A run's records: one relation replacing `StepArtifact` and `WorkflowRunEvidence`, or the two kept and read
-  together? Recommended: one.
-- Left placement needs a pane host on the left of the record layout; the first version can ship on the right.
+`RecordTimeline` receives only `record`, a `{model, id}` or array of those.
+`useRecordTimelinePane({record, side})` publishes it through the existing right
+chatter or left primary-pane host; the default contribution is `record#aside`.

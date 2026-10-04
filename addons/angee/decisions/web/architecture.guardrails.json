@@ -5,19 +5,11 @@
       "ownerFile": "src/documents.console.ts"
     },
     {
-      "name": "decisionRecordTab",
-      "ownerFile": "src/RecordDecisions.tsx"
-    },
-    {
-      "name": "DecisionsList",
-      "ownerFile": "src/RecordDecisions.tsx"
-    },
-    {
       "name": "DecisionCard",
       "ownerFile": "src/DecisionCard.tsx"
     },
     {
-      "name": "fieldsToMark",
+      "name": "decisionFieldMarks",
       "ownerFile": "src/proposal.ts"
     },
     {

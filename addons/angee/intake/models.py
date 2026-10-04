@@ -686,10 +686,40 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     def decide_access(self, action: str, expected_revision: int | None = None) -> Any:
         """Link the account and delegate the final answer to the decisions owner."""
 
-        return self._decide_access(action, expected_revision=expected_revision)
+        if action not in NeedAccessAction.values:
+            raise ValidationError({"action": "Choose approve or deny."})
+        actor = instance_actor(self)
+        if not self.with_actor(actor).has_access("write") or not self.target.with_actor(actor).has_access("share"):
+            raise PermissionDenied("Deciding request access requires need write and target share.")
+        # Both entrypoints lock the decision first, then its asking owner.
+        with actor_context(actor), transaction.atomic():
+            decision = apps.get_model("decisions", "Decision").objects.sudo(
+                reason="intake.answer.lock",
+            ).locked_get(pk=self.access_decision_id)
+            locked = type(self).objects.sudo(reason="intake.answer.need").locked_get(pk=self.pk)
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.access_decision_id != decision.pk:
+                raise ValidationError({"revision": "The access question has changed; reload it."})
+            if (not locked.with_actor(actor).has_access("write")
+                    or not locked.target.with_actor(actor).has_access("share")):
+                raise PermissionDenied("Deciding request access requires need write and target share.")
+            if not decision.is_open:
+                if decision.verdict == [action]:
+                    self.refresh_from_db()
+                    return locked.admitted_user
+                if decision.verdict == [NeedAccessAction.INTAKE_APPROVE]:
+                    raise ValidationError({"action": "Approved access is final."})
+                decision = locked._new_access_decision()
+                type(self).objects.filter(pk=locked.pk).update(access_decision=decision)
+            decision = decision.decide(actor=actor, chosen=[action], revision=decision.revision)
+        self.refresh_from_db()
+        return self.admitted_user
 
     def apply_access_answer(self, decision: Any) -> Any:
         """Consume this question only while it remains this request's current one."""
+        if not decision.verdict:
+            return None
         return self._decide_access(
             decision.verdict[0],
             decision=decision,
@@ -738,13 +768,14 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             ):
                 raise PermissionDenied("Resetting access requires need write and target share.")
             locked.require_revision(expected_revision)
-            locked.access_decision = locked._new_access_decision()
+            decision = locked._new_access_decision()
             locked.admitted_user = None
             locked.save(
                 _access_decision=True,
                 expected_revision=expected_revision,
-                update_fields=("access_decision", "admitted_user", "updated_at"),
+                update_fields=("admitted_user", "updated_at"),
             )
+            system_queryset(type(self)).filter(pk=locked.pk).update(access_decision=decision)
             apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(locked.target)
         self.refresh_from_db()
         return self
@@ -776,15 +807,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 if locked.access_decision_id != decision.pk:
                     raise ValidationError({"revision": "The access question has changed; reload it."})
                 locked.access_decision.require_revision(decision_revision)
-            verdict = [action]
-            if locked.access_verdict == verdict:
-                if action == NeedAccessAction.INTAKE_DENY:
-                    return None
-                if locked.admitted_user_id is not None:
-                    return locked.admitted_user
-                # The verdict precedes account admission; only this write grants access.
-            elif locked.access_verdict == [NeedAccessAction.INTAKE_APPROVE]:
-                raise ValidationError({"action": "Approved access is final."})
+            if decision is None or locked.access_verdict != [action]:
+                raise ValidationError({"action": "Apply the request's current answer."})
             user = None
             if action == NeedAccessAction.INTAKE_APPROVE:
                 try:
@@ -793,16 +817,6 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                     raise
                 except DomainError as error:
                     raise ValidationError({"conflict": error.code}) from error
-            if locked.access_verdict != verdict:
-                if not locked.access_decision.is_open:
-                    locked.access_decision = locked._new_access_decision()
-                decision = locked.access_decision
-                apps.get_model("decisions", "Decision").objects.decide(
-                    decision.pk,
-                    actor=actor,
-                    revision=decision.revision,
-                    chosen=[action],
-                )
             locked.admitted_user = user
             locked.save(
                 _access_decision=True,

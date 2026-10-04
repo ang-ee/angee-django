@@ -498,25 +498,15 @@ def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
     return lambda value: _public_pk(model, value)
 
 
-def _relation_axis_fields(
-    model: type[models.Model],
-    paths: Sequence[str],
-    *, include_reverse: bool = False,
-) -> dict[str, Any]:
-    """Resolve relation axes; filters also accept reverse relation membership."""
-
+def _relation_axis_fields(model: type[models.Model], paths: Sequence[str]) -> dict[str, Any]:
+    """Resolve declared to-one relation axes."""
     relations = {}
     for path in paths:
         try:
             field = require_field_for_path(model, path)
         except FieldPathError:
-            if not include_reverse or "__" in path:
-                continue
-            try:
-                field = model._meta.get_field(path)
-            except FieldDoesNotExist:
-                continue
-        if is_to_one_relation(field) or include_reverse and getattr(field, "one_to_many", False):
+            continue
+        if is_to_one_relation(field):
             relations[path] = field
     return relations
 
@@ -671,7 +661,7 @@ def _relation_filter_decoders(
     """
 
     decoders = dict(declared or {})
-    for name, field in _relation_axis_fields(model, filterable, include_reverse=True).items():
+    for name, field in _relation_axis_fields(model, filterable).items():
         related = field.related_model
         if public_data_id_field(related) is None:
             continue

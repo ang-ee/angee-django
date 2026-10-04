@@ -332,17 +332,16 @@ def test_rescan_waits_for_conflicts_without_applying_them(cycle):
     assert discrepancy.is_open
 
 
-def test_conflicts_ask_independent_questions_and_retry_with_retained_answers(cycle):
+def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
     advance_stream(stream, cycle.adapter)
     conflicts = [conflict(cycle, stream, index) for index in range(2)]
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
     row = step_row(run)
-    decisions = list(system_queryset(Decision).filter(step_run=row).order_by("pk"))
-    assert len(decisions) == 2 and row.waiting_kind == "decision"
-    for decision in decisions:
-        decide(decision, actor=cycle.bridge.owner, chosen=["recheck"])
+    decision = system_queryset(Decision).get(pk=row.decision_id)
+    assert decision.records.with_actor(cycle.bridge.owner).count() == 2 and row.waiting_kind == "decision"
+    decide(decision, actor=cycle.bridge.owner, chosen=[str(record.sqid) for record in conflicts])
     run_until(run)
     assert run.status == "failed"
     assert system_queryset(SyncDiscrepancy).unresolved().count() == 2
@@ -351,7 +350,7 @@ def test_conflicts_ask_independent_questions_and_retry_with_retained_answers(cyc
     StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
     run_until(run)
     assert run.status == "succeeded" and run.output["discrepancy_ids"] == []
-    assert system_queryset(Decision).count() == 2
+    assert system_queryset(Decision).count() == 1
 
 
 def test_unresolved_conflict_fails_without_asking_another_question(cycle):
@@ -360,8 +359,8 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     conflict(cycle, stream, 0)
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
-    decision = system_queryset(Decision).get(step_run=step_row(run))
-    decide(decision, actor=cycle.bridge.owner, chosen=["recheck"])
+    decision = system_queryset(Decision).get(pk=step_row(run).decision_id)
+    decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
     run_until(run)
     assert run.status == "failed" and system_queryset(Decision).count() == 1
     assert system_queryset(SyncDiscrepancy).unresolved().count() == 1

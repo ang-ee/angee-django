@@ -1,41 +1,28 @@
-import { useMemo } from "react";
-import type { ActionFieldName } from "@angee/gql/console/actions";
-import { DecisionsList } from "@angee/decisions";
+import { DecisionCard } from "@angee/decisions";
+import { useAuthoredQuery } from "@angee/refine";
 import {
   Action, Column, DrawerResourceList, Facet, Field, Form, Group, List, RecordReference,
-  optionToken, useActionOutcomeMutation, useAppRuntime, useRecordActionMutation, useUiT,
+  optionToken,
 } from "@angee/ui";
-import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
 
-import { RUN_MODELS, STEP_RUN_MODEL } from "./documents.console";
+import { STEP_RUN_MODEL, StepDecisionDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { formatStepPage, stepPageCodec } from "./step-page";
+import { useStepRetryActions } from "./step-retry";
 
 /** Child collections fetch one selected detail; rows never mount their own queries. */
 export function StepRuns({ runId, nodeKeys }: {
   runId: string; nodeKeys?: readonly string[];
 }) {
   const t = useWorkflowsT();
-  const { widgets } = useAppRuntime();
-  const uiT = useUiT();
-  const [retry] = useRecordActionMutation<ActionFieldName>("retry_step", {
-    dataProviderName: "console", invalidateModels: RUN_MODELS,
-  });
-  const [retryDuplicate] = useActionOutcomeMutation<ActionFieldName>("retry_step_accepting_duplicate", {
-    dataProviderName: "console", invalidateModels: RUN_MODELS,
-  });
-  const acknowledgement = useMemo(() => jsonSchemaActionArgs({
-    type: "object", properties: { acknowledge: { type: "boolean", const: true, default: false,
-      label: t("action.acknowledge"), description: t("action.duplicateDescription") } },
-    required: ["acknowledge"],
-  }, widgets, { translate: uiT }), [t, uiT, widgets]);
+  const retryActions = useStepRetryActions();
   return <DrawerResourceList resource={STEP_RUN_MODEL} hideCreate presentation="embedded"
     baseFilter={{ run: { exact: runId }, ...(nodeKeys ? { node_key: { inList: nodeKeys } } : {}) }} recordTabs={[
       { id: "attempts", label: t("step.attempts"), render: ({ recordId }) => <StepAttempts stepId={recordId} /> },
-      { id: "artifacts", label: t("step.artifacts"), render: ({ recordId }) =>
-        <List resource="workflows.StepArtifact" scope="local" presentation="embedded"
+      { id: "records", label: t("step.records"), render: ({ recordId }) =>
+        <List resource="workflows.StepRecord" scope="local" presentation="embedded"
           baseFilter={{ step_run: { exact: recordId } }} fields={["record_model", "record_id"]}>
-          <Column field="label" header={t("step.artifacts")} render={(row) =>
+          <Column field="label" header={t("step.records")} render={(row) =>
             typeof row.record_model === "string" && typeof row.record_id === "string"
               ? <RecordReference model={row.record_model} id={row.record_id} label={typeof row.label === "string" ? row.label : undefined} /> : null} />
         </List> },
@@ -47,7 +34,7 @@ export function StepRuns({ runId, nodeKeys }: {
               ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
         </List> },
       { id: "decisions", label: t("step.decisions"), render: ({ recordId }) =>
-        <DecisionsList baseFilter={{ "step_run": { exact: recordId } }} /> },
+        <StepDecision stepId={recordId} /> },
     ]}>
     <List fields={["is_mapped", "is_map"]} order={{ rank: "ASC", map_index: "ASC" }} pageSize={10} emptyContent={t("run.noSteps")}>
       <Facet field="status" />
@@ -85,15 +72,15 @@ export function StepRuns({ runId, nodeKeys }: {
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
       <Field name="state" label={t("step.checkpoint")} widget="json" />
-      <Action id="retry" label={t("action.retry_step")} placement="toolbar" primary run={retry}
-        visibleWhen={(row) => row.can_retry === true && row.requires_duplicate_acknowledgement !== true}
-        confirm={{ title: t("action.retry_step"), body: t("action.retryDescription") }} />
-      <Action id="retry-duplicate" label={t("action.retry_step_accepting_duplicate")} placement="toolbar" primary danger
-        visibleWhen={(row) => row.can_retry === true && row.requires_duplicate_acknowledgement === true}
-        args={acknowledgement}
-        submit={(_values, { record }) => typeof record?.id === "string" ? retryDuplicate(record.id) : null} />
+      {retryActions.map((action) => <Action key={action.id} {...action} />)}
     </Form>
   </DrawerResourceList>;
+}
+
+function StepDecision({ stepId }: { stepId: string }) {
+  const query = useAuthoredQuery(StepDecisionDocument, { id: stepId }, { models: [STEP_RUN_MODEL, "decisions.Decision"] });
+  const decision = query.data?.steprun_by_pk?.decision;
+  return decision ? <DecisionCard decision={decision} onAnswered={query.refetch} /> : null;
 }
 
 function StepAttempts({ stepId }: { stepId: string }) {

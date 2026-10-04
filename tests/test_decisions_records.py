@@ -4,6 +4,8 @@ import pytest
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from pydantic import ValidationError as ContractError
 from rebac import actor_context, system_context
 
@@ -72,11 +74,10 @@ def test_empty_concerns_are_rejected(records):
         admit(records, [])
 
 
-def test_null_proposed_values_are_retained_and_optional_calls_are_omitted(records):
-    _issuer, _reviewer, _outsider, vaults, _drives = records
-    proposal = {vaults[0].sqid: {"fields": {"name": {"set": None}}}}
-    stored = admit(records, [vaults[0]], proposal=proposal).proposal
-    assert stored["alternatives"][0]["actions"] == proposal
+def test_null_is_rejected_for_a_required_field(records):
+    record = records[3][0]
+    with pytest.raises(ContractError, match="cannot be null"):
+        admit(records, [record], proposal={record.sqid: {"fields": {"name": {"set": None}}}})
 
 
 def test_admission_revalidates_mutated_proposals(records):
@@ -121,7 +122,6 @@ def test_human_and_agent_answers_close_without_applying_proposals(records, kind)
     reviewer.refresh_from_db()
     proposal = {
         str(vaults[0].sqid): {"fields": {"name": {"set": "Changed"}}},
-        str(drives[0].sqid): {"record": {"call": "delete"}},
     }
     before = vaults[0].name
     decision = admit(records, [vaults[0], drives[0]], proposal=proposal)
@@ -194,17 +194,24 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     result = result_data(
         execute_schema(schema, document, {"model": model._meta.label, "id": targets[0].sqid}, user=reviewer)
     )
-    assert result["attention_records"] == [{"id": targets[0].sqid, "has_open_decisions": True}]
+    assert result["attention_records"] == [
+        {"id": record.sqid, "has_open_decisions": True} for record in (targets[0], targets[2])
+    ]
     assert {row["id"]: row["has_open_decisions"] for row in result["all_records"]} == {
-        record.sqid: record is targets[0] for record in targets
+        record.sqid: record is not targets[1] for record in targets
     }
     assert result["open_decisions"][0]["id"] == opened.sqid
     with actor_context(outsider):
         # Pinning the target actor must win over the ambient outsider.
         scoped = model.objects.with_actor(reviewer)
-        assert list(Decision.objects.records_with_open_decisions(scoped)) == [targets[0]]
+        assert list(Decision.objects.records_with_open_decisions(scoped)) == [targets[0], targets[2]]
     result = result_data(
         execute_schema(schema, document, {"model": model._meta.label, "id": targets[2].sqid}, user=reviewer)
     )
     assert result["open_decisions"] == []
     assert hidden.is_open
+    # A list that does not request attention never joins the question owner.
+    with CaptureQueriesContext(connection) as captured:
+        plain = result_data(execute_schema(schema, "{ attention_records { id } }", user=reviewer))
+    assert len(plain["attention_records"]) == 3
+    assert not any('decisions_decision' in item["sql"].lower() for item in captured)

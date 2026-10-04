@@ -129,7 +129,7 @@ def test_empty_and_duplicate_alternatives_are_rejected():
             DecisionProposal(alternatives=alternatives)
 
 
-def test_answer_signal_only_fires_after_commit(people):
+def test_answer_owner_runs_inside_the_verdict_transaction(people):
     requester, reviewer, *_ = people
     question = Decision.objects.ask(request_for(people), actor=requester)
     received = []
@@ -141,9 +141,11 @@ def test_answer_signal_only_fires_after_commit(people):
     try:
         with pytest.raises(RuntimeError), transaction.atomic():
             Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
-            assert received == []
+            assert received == [question.pk]
             raise RuntimeError("Roll back")
-        assert received == []
+        question.refresh_from_db()
+        assert question.is_open
+        received.clear()
         Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
         assert received == [question.pk]
     finally:

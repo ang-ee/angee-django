@@ -42,17 +42,6 @@ test("versions and recent runs are filtered by the open workflow using native li
   }
 });
 
-test("record activity scopes the shared run collection to canonical model and public identity", async () => {
-  const onRequest = vi.fn();
-  render(<CatalogueStory record onRequest={onRequest} />);
-  await screen.findByText("Failed");
-  const request = onRequest.mock.calls.find(([entry]) => entry.query.includes("workflowrun("))?.[0];
-  expect(request?.variables.where).toEqual({ _and: [
-    { status: { _eq: "failed" } },
-    { subject_id: { _eq: "nte_7" } }, { subject_model: { _eq: "notes.Note" } },
-  ] });
-});
-
 test("the workflow trigger tab uses its canonical scope and routes retained policies", async () => {
   const onRequest = vi.fn();
   render(<CatalogueStory onRequest={onRequest} />);

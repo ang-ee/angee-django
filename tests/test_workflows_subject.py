@@ -21,7 +21,7 @@ from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import run_until
-from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun, WorkflowRunEvidence
+from angee.workflows.testing.models import StepRecord, StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.workflow_steps import Echo, document
@@ -72,7 +72,7 @@ def test_context_preserves_concrete_mti_subject(execution, register_step):
     assert replacement.subject_content_type_id == retained.subject_content_type_id
     assert replacement.subject_model_class is MtiChild
     assert replacement.subject_object_id == subject.pk
-    assert [row.record_model_label for row in system_queryset(WorkflowRunEvidence).filter(run=replacement)] == [
+    assert [row.record_model_label for row in system_queryset(StepRecord).filter(run=replacement)] == [
         MtiParent._meta.label,
     ]
 
@@ -191,7 +191,7 @@ def test_start_requires_read_access_to_subject(execution, ambient_system):
     with system_context(reason="test.explicit_subject_actor") if ambient_system else nullcontext():
         run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
     assert run.run_as_id == actor.pk and run.subject_object_id == subject.pk
-    evidence = system_queryset(WorkflowRunEvidence).get(run=run)
+    evidence = system_queryset(StepRecord).get(run=run)
     assert (evidence.record_model_label, evidence.record_public_id) == (subject._meta.label, subject.sqid)
 
 
@@ -232,12 +232,12 @@ def test_entry_record_input_is_checked_deduplicated_and_retained(execution, regi
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=source, input=payload, request_key="input-evidence")
     assert {
         (row.record_model_label, row.record_public_id)
-        for row in system_queryset(WorkflowRunEvidence).filter(run=run)
+        for row in system_queryset(StepRecord).filter(run=run)
     } == {("knowledge.Vault", source.sqid), ("knowledge.Vault", another.sqid)}
     assert WorkflowRun.objects.start(
         workflow, actor=actor, subject=source, input=payload, request_key="input-evidence",
     ).pk == run.pk
-    assert system_queryset(WorkflowRunEvidence).filter(run=run).count() == 2
+    assert system_queryset(StepRecord).filter(run=run).count() == 2
     viewer = create_user("record-input-viewer")
     run.with_actor(actor).grant_record_access("reader", viewer)
     schema = addon_schema(workflow_schema.schemas, "console")

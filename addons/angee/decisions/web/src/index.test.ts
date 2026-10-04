@@ -2,8 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { describe, expect, test } from "vitest";
 
-import decisions, { DECISION_MODEL, DecisionsList, DecisionCard, fieldsToMark, decisionRecordTab } from "./index";
-import { DecisionsList as OwnedDecisionsList } from "./RecordDecisions";
+import decisions, { DECISION_MODEL, DecisionCard, fieldsToMark } from "./index";
 
 describe("decisions fragment", () => {
   test("satisfies the shared manifest contracts", () => expect(() => expectValidBaseAddon(decisions)).not.toThrow());
@@ -32,13 +31,10 @@ describe("decisions fragment", () => {
     expect(Object.keys(decisions.i18n ?? {})).toEqual(["decisions"]);
   });
   test("exports consumer and waiting-owner contracts without registering mandatory content", () => {
-    expect(DecisionsList).toBe(OwnedDecisionsList);
     expect(DECISION_MODEL).toBe("decisions.Decision");
     // Independent waiters contribute origin links through the declared container.
     expect(decisions.containers).toEqual({ "decisions#origin": {} });
     expect(DecisionCard).toBeTypeOf("function");
     expect(fieldsToMark([], "nte_7")).toEqual([]);
-    // A subject model's addon declares it at `<model>#sections` under its own id.
-    expect(decisionRecordTab()).toMatchObject({ sequence: 50, content: expect.anything() });
   });
 });

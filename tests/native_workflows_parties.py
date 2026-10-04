@@ -62,15 +62,15 @@ class PartyWorkflowTests(TransactionTestCase):
 
     def decisions(self, run):
         """Select retained answers through the execution relationship."""
-        return list(system_queryset(Decision).filter(step_run__run=run).order_by("pk"))
+        return list(system_queryset(Decision).filter(requesting_steps__run=run).order_by("pk"))
 
-    def answer(self, run, key="apply"):
+    def answer(self, run, key="name"):
         """Exercise the real frozen form, decision transition and workflow wakeup."""
         self.assertTrue(
             self.decisions(run),
             list(system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)),
         )
-        result = decide(self.decisions(run)[0], actor=self.reviewer, chosen=[key])
+        result = decide(self.decisions(run)[0], actor=self.reviewer, chosen=key if isinstance(key, list) else [key])
         self.assertFalse(result.is_open)
         run_until(run)
         return result
@@ -88,11 +88,13 @@ class PartyWorkflowTests(TransactionTestCase):
                 "handle": {"party_handle_id": public_id_of(link), "evidence": "Confirmed by directory owner"},
             },
         )
+        traces = system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)
+        self.assertTrue(self.decisions(run), list(traces))
         decision = self.decisions(run)[0]
         self.assertEqual(decision.kind, "review-party-identity")
         self.assertIsNone(decision.requester_id)
         self.assertEqual(decision.context["facts"][0]["value"]["name"], "Original name")
-        self.answer(run)
+        self.answer(run, ["name", "address", "handle"])
         party = system_queryset(Party).get(pk=party.pk)
         self.assertEqual(
             (run.status, run.outcome, party.display_name),
@@ -123,7 +125,18 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(run.outcome, "unchanged")
         self.assertEqual(system_queryset(Party).get(pk=party.pk).display_name, "Changed during review")
 
-    def test_reject_and_escalate_retain_reason_without_identity_write(self):
+    def test_apply_checks_the_identity_hash_frozen_when_asked(self):
+        party = self.party()
+        run = self.run_identity(party)
+        with actor_context(self.reviewer):
+            party.display_name = "Changed during review"
+            party.save(update_fields=["display_name"])
+        self.answer(run, "name")
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(system_queryset(Party).get(pk=party.pk).display_name, "Changed during review")
+        self.assertIn("identity changed", system_queryset(StepAttempt).filter(step_run__run=run).last().error)
+
+    def test_reject_and_escalate_without_identity_write(self):
         party = self.party()
         for action, outcome in (("reject", "rejected"), ("escalate", "escalated")):
             with self.subTest(action=action):

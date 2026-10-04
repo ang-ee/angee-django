@@ -11,7 +11,6 @@ from django.db.models import BooleanField, Exists, ExpressionWrapper, F, OuterRe
 from django.db.models.functions import Now
 from rebac import current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
-from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import readable_records
@@ -25,9 +24,10 @@ from angee.decisions.signals import decision_answered
 from angee.graphql.publishing import publish_change
 
 
-def _user(actor: Any) -> Any:
+def _user(actor: Any, *, active: bool = True) -> Any:
     identity = actor_user_id(to_subject_ref(actor if actor is not None else current_actor()))
-    user = system_queryset(get_user_model()).filter(pk=identity, is_active=True).first()
+    users = system_queryset(get_user_model()).filter(pk=identity)
+    user = (users.filter(is_active=True) if active else users).first()
     if user is None:
         raise PermissionDenied("An active user is required.")
     return user
@@ -46,9 +46,9 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
 
     def attention_expression(self, queryset: Any) -> Exists:
         model = canonical_record_model(queryset.model)
-        actor = relation_actor(queryset)
-        decisions = self.model.objects.with_actor(actor) if actor is not None else self.model.objects.none()
-        return Exists(decisions.open().filter(
+        # Attention belongs to the readable record, regardless of who can answer
+        # or read the question. Only the boolean crosses that permission boundary.
+        return Exists(system_queryset(self.model).open().filter(
             records__content_type__app_label=model._meta.app_label,
             records__content_type__model=model._meta.model_name,
             records__object_id=OuterRef("pk"),
@@ -59,19 +59,54 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
 
 
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
+    def withdraw(self, decision: Any, *, actor: Any) -> Any:
+        """An authorized asking owner withdraws a question in a named system context."""
+        if not is_sudo():
+            raise PermissionDenied("Withdrawal requires the authorized asking owner's system context.")
+        # Cleanup must still close a retired principal's retained questions.
+        withdrawing = _user(actor, active=False)
+        pk = decision.pk if isinstance(decision, models.Model) else decision
+        with transaction.atomic(), system_context(reason="decisions.withdraw"):
+            row = lock_if_supported(self.filter(pk=pk)).get()
+            if row.is_open:
+                self.filter(pk=pk).open().owner_update(
+                    verdict=[], answered_by=withdrawing, answered_at=Now(),
+                    revision=F("revision") + 1, updated_at=Now(),
+                )
+                row.refresh_from_db()
+                publish_change(row, action="update", update_fields=None)
+                decision_answered.send(sender=type(row), decision=row)
+        return row.with_actor(withdrawing)
+
     def ask(self, request: DecisionRequest, *, actor: Any) -> Any:
         """Admit one question after checking its participants' standing read access."""
         request = DecisionRequest.model_validate(request)
         if actor is None and not is_sudo():
             raise PermissionDenied("Actorless admission requires a named system context.")
-        asking = _user(actor) if actor is not None else None
-        assignees = tuple(_user(person) for person in request.assignees)
+        supplied = (*request.assignees, *((actor,) if actor is not None else ()), *(
+            (request.requester,) if request.requester is not DEFAULT_REQUESTER and request.requester is not None else ()
+        ))
+        ids = [actor_user_id(to_subject_ref(person)) for person in supplied]
+        users = system_queryset(get_user_model()).filter(pk__in=ids, is_active=True).in_bulk()
+        if any(identity not in users for identity in ids):
+            raise PermissionDenied("An active user is required.")
+        asking = users[actor_user_id(to_subject_ref(actor))] if actor is not None else None
+        assignees = tuple(users[actor_user_id(to_subject_ref(person))] for person in request.assignees)
         requester = asking if request.requester is DEFAULT_REQUESTER else (
-            _user(request.requester) if request.requester is not None else None
+            users[actor_user_id(to_subject_ref(request.requester))] if request.requester is not None else None
         )
+        related_records: list[Any] = []
+        try:
+            DecisionProposal.model_validate(
+                request.proposal.model_dump(mode="json"),
+                context={"records": request.records, "actor": actor, "related_records": related_records},
+            )
+        except ValueError as error:
+            raise ValidationError({"proposal": str(error)}) from error
         participants = tuple(person for person in (asking, requester, *assignees) if person is not None)
         references = (*request.context.records(), *(
-            DecisionRecordReference(model=record._meta.label, id=public_id_of(record)) for record in request.records
+            DecisionRecordReference(model=record._meta.label, id=public_id_of(record))
+            for record in (*request.records, *related_records)
         ))
         readable_records(references, participants)
         targets = {canonical_record_target(record) for record in request.records}
@@ -115,7 +150,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             row.refresh_from_db()
             publish_change(row, action="update", update_fields=None)
-            transaction.on_commit(lambda: decision_answered.send_robust(sender=type(row), decision=row))
+            decision_answered.send(sender=type(row), decision=row)
         return row.with_actor(answering)
 
 

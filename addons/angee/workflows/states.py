@@ -95,7 +95,7 @@ class WaitingKind(models.TextChoices):
     DECISION = "decision", "Decision"
     MAP = "map", "Map"
     RUN = "run", "Run"
-    OPERATOR = "operator", "Operator"
+    ERROR = "error", "Error"
 
 
 class AttemptResult(models.TextChoices):

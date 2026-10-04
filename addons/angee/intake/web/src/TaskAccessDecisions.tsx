@@ -32,7 +32,6 @@ export function TaskAccessCardSkeleton(): ReactElement {
 
 /** The pill and the sentence for each access state. */
 const STATE_COPY = {
-  awaiting: { pill: "access.state.awaiting", sentence: "access.copy.awaiting" },
   approved: { pill: "access.state.approved", sentence: "access.copy.approved" },
   denied: { pill: "access.state.denied", sentence: "access.copy.denied" },
   pending: { pill: "access.state.pending", sentence: "access.copy.pending" },
@@ -55,7 +54,7 @@ export function TaskAccessDecisions({
     const name = need.claimed_name || need.party?.display_name || t("access.requester");
     const email = need.claimed_email;
     const verdict = Array.isArray(need.access_verdict) ? need.access_verdict : null;
-    const stateKey = verdict?.includes("intake.approve") ? need.requester_access_granted ? "approved" : "awaiting"
+    const stateKey = verdict?.includes("intake.approve") ? "approved"
       : verdict?.includes("intake.deny") ? "denied"
         : need.access_decision?.is_open ? "pending" : "unavailable";
     const state = STATE_COPY[stateKey];
@@ -64,7 +63,7 @@ export function TaskAccessDecisions({
         <Avatar size="sm" initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
-        <Badge shape="pill" tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning", awaiting: "warning" })}>
+        <Badge shape="pill" tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>
           {t(state.pill)}
         </Badge>
       </CardHeader>
