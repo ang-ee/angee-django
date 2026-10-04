@@ -35,42 +35,6 @@ from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, NoReturn, cast
 from urllib.parse import urlencode
 
-from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
-from django.core import signing
-from django.core.exceptions import (
-    ObjectDoesNotExist,
-    SuspiciousFileOperation,
-    ValidationError,
-)
-from django.core.files.base import ContentFile
-from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, transaction
-from django.db.models import Q
-from django.db.models.signals import post_save
-from django.urls import reverse
-from django.utils import timezone
-from django.utils.text import get_valid_filename
-from rebac import (
-    ActorLike,
-    NoActorResolvedError,
-    ObjectRef,
-    PermissionDenied,
-    current_actor,
-    require_permission,
-    system_context,
-    to_object_ref,
-    to_subject_ref,
-)
-from rebac.actors import is_sudo
-from rebac.backends import backend as rebac_backend
-from rebac.field_backing import resolve_field_backing
-from rebac.managers import RebacManager
-from rebac.resources import model_resource_type
-from rebac.schema.introspection import permission_sources
-
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
@@ -100,6 +64,42 @@ from angee.storage.uploads import (
     CappedReader,
     detect_mime,
     sha256_stream,
+)
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core import signing
+from django.core.exceptions import (
+    ObjectDoesNotExist,
+    SuspiciousFileOperation,
+    ValidationError,
+)
+from django.core.files.base import ContentFile
+from django.core.files.base import File as DjangoFile
+from django.db import IntegrityError, models, transaction
+from django.db.models import Q
+from django.db.models.signals import post_save
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.text import get_valid_filename
+from rebac.actors import is_sudo
+from rebac.backends import backend as rebac_backend
+from rebac.field_backing import resolve_field_backing
+from rebac.managers import RebacManager
+from rebac.resources import model_resource_type
+from rebac.schema.introspection import permission_sources
+
+from rebac import (
+    ActorLike,
+    NoActorResolvedError,
+    ObjectRef,
+    PermissionDenied,
+    current_actor,
+    require_permission,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
 )
 
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
@@ -1775,6 +1775,14 @@ class FileAttachmentManager(AngeeManager):
         return self.get_queryset().filter(
             content_type=target.content_type, object_id=target.object_id, file__is_trashed=False,
         ).select_related("file")
+
+    def with_same_content(self, file: Any, record: models.Model) -> models.QuerySet[Any]:
+        """Readable edges of this record type carrying the same verified bytes."""
+        target = canonical_record_target(record)
+        return self.get_queryset().filter(
+            content_type=target.content_type, file__content_hash=file.content_hash,
+            file__upload_state=UploadState.READY, file__is_trashed=False,
+        ) if file.content_hash and file.upload_state == UploadState.READY else self.none()
 
     def has_record_arm(self, target: CanonicalRecordTarget) -> bool:
         """Read the effective REBAC schema's storage attachment capability."""

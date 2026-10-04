@@ -35,8 +35,9 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ state = "decision", side = "right", collapsed = false, duplicateRisk = false, onRequest }: {
+export function TimelineStory({ state = "decision", side = "right", collapsed = false, duplicateRisk = false, recordState, onRequest }: {
   state?: TimelineState; side?: "left" | "right"; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
+  recordState?: { label: string; tone: "success" | "neutral" };
 }) {
   const schemas = useMemo(() => {
     let current = timelineFixture(state);
@@ -57,13 +58,13 @@ export function TimelineStory({ state = "decision", side = "right", collapsed = 
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
   }, [state, duplicateRisk, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceName="notes.Note" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
-    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
+    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} recordState={recordState} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
   </RoutedRuntimeFixture>;
 }
 
-function TimelineLayout({ set, side }: { set: boolean; side: "left" | "right" }) {
+function TimelineLayout({ set, side, recordState }: { set: boolean; side: "left" | "right"; recordState?: { label: string; tone: "success" | "neutral" } }) {
   const record = useMemo(() => set ? [{ model: "notes.Note", id: "nte_7" }, { model: "notes.Note", id: "nte_8" }] : { model: "notes.Note", id: "nte_7" }, [set]);
-  useRecordTimelinePane({ record, side });
+  useRecordTimelinePane({ record, side, recordState });
   const { node } = usePrimaryPaneContent();
   const chatter = useChatter();
   return <div className="grid min-h-0 w-full bg-sheet" style={{ gridTemplateColumns: side === "left" ? "24rem minmax(0,1fr)" : "minmax(0,1fr) 24rem", height: "100vh" }}>

@@ -21,6 +21,7 @@ export const RecordTimelineDocument = graphql(`
       runs {
         id display_name status origin start_label subject_model subject_id outcome_label created_at finished_at stopped_at output can_cancel
         run_as { display_name }
+        version { workflow { display_name } }
         parent_step { id run { id } }
         trigger_event { record_model record_id changed_at trigger { display_name } }
         graph {

@@ -3,8 +3,8 @@ import { ScrollArea, useChatter, useChatterContent, usePrimaryPane } from "@ange
 import { RecordTimeline, useRecordTimelineQuery, type RecordTimelineProps } from "./RecordTimeline";
 
 /** Publish the same timeline through the console's existing pane hosts. */
-export function useRecordTimelinePane({ record, side }: RecordTimelineProps & { side: "left" | "right" }) {
-  const pane = useMemo(() => <RecordTimeline record={record} />, [record]);
+export function useRecordTimelinePane({ record, recordState, side }: RecordTimelineProps & { side: "left" | "right" }) {
+  const pane = useMemo(() => <RecordTimeline record={record} recordState={recordState} />, [record, recordState]);
   const count = useRecordTimelineAttention(record, side);
   const right = useMemo(() => side === "right" ? { tabs: [{ id: "workflows.timeline", label: "Timeline", count, children: pane }] } : null, [side, pane, count]);
   const left = useMemo(() => side === "left" ? <ScrollArea className="h-full" viewportClassName="overflow-x-hidden p-4">{pane}</ScrollArea> : null, [side, pane]);

@@ -316,7 +316,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     event.preventDefault();
     void submitForm();
   };
-  const controlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
+  const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
     <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? "bg-brand-soft" : undefined)}>
       <div className="flex min-w-max shrink-0 items-center gap-2">
         {toolbarStartNode}
@@ -361,18 +361,14 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             deleteAction={visibleDeleteAction}
             contributedActions={
               !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (
-                <RecordChromeProvider value={recordChromeContext}>
-                  <ContainerOutlet entries={menuRecordActions} />
-                </RecordChromeProvider>
+                <ContainerOutlet entries={menuRecordActions} />
               ) : undefined
             }
             blocked={actionsBlocked}
           />
         ) : null}
         {!awaitingRecord && !readOnly && recordChromeContext ? (
-          <RecordChromeProvider value={recordChromeContext}>
-            <ContainerOutlet entries={primaryRecordActions} />
-          </RecordChromeProvider>
+          <ContainerOutlet entries={primaryRecordActions} />
         ) : null}
       </div>
       <div className="min-w-2 flex-1" />
@@ -384,6 +380,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       </div>
     </ControlBand>
   );
+  const controlBand = recordChromeContext
+    ? <RecordChromeProvider value={recordChromeContext}>{rawControlBand}</RecordChromeProvider> : rawControlBand;
 
   const errorBanners = <>
     {loadError ? <ErrorBanner title={t("form.loadFailed")}

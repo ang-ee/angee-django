@@ -31,6 +31,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   review.records = [{ id: "wsrec_7", label: "Review notes", operation: "read", record_model: "notes.Note", record_id: "nte_7" }];
   const run: Run = {
     id: "wfr_review", display_name: "Record review", status: "WAITING", origin: "MANUAL", outcome_label: "",
+    version: { workflow: { display_name: "Record review" } },
     created_at: at, finished_at: null, stopped_at: null, output: {}, can_cancel: true, run_as: { display_name: "River" },
     start_label: "Started manually", subject_model: null, subject_id: null,
     parent_step: null, trigger_event: null, graph: { nodes, edges: [] },

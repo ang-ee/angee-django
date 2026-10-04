@@ -9,6 +9,15 @@ beforeAll(() => {
 });
 afterEach(() => cleanup());
 
+test("a completed run shows the current record state, workflow name, local time and run link", async () => {
+  render(<TimelineStory state="clean" recordState={{ label: "Posted", tone: "success" }} />);
+  expect(await screen.findByText("Posted")).toBeTruthy();
+  expect(screen.queryByText("Plan complete")).toBeNull();
+  expect(screen.getByRole("heading", { name: /Record review/ })).toBeTruthy();
+  expect(screen.getByText("Open run")).toBeTruthy();
+  expect(document.querySelector('time[datetime="2026-10-03T10:00:00Z"]')).toBeTruthy();
+});
+
 test.each([
   ["decision", "Waiting for decisions"], ["clean", "Plan complete"], ["error", "Stopped on an error"],
   ["run", "Waiting for another run"], ["stopped", "Withdrawn: stopped by River"],

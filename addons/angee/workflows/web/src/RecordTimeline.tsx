@@ -6,13 +6,13 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
   SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useActionResultMutation, useChatter,
-  useRecordFieldMarks, useRecordPeek, type StepListItem, type Tone,
+  useRecordFieldMarks, useRecordPeek, formatDateTime, type StepListItem, type Tone,
 } from "@angee/ui";
 import { RecordTimelineDocument, RUN_MODELS } from "./documents.console";
 import { useStepRetryActions } from "./step-retry";
 
 export interface TimelineRecord { model: string; id: string }
-export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[] }
+export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[]; recordState?: { label: string; tone: Tone } }
 export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
 export type TimelineData = TimelineSelection["records"];
 type TimelineRun = TimelineData[number]["runs"][number];
@@ -22,7 +22,7 @@ const EMPTY_TIMELINE: TimelineData = [];
 const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) => step_run ? [step_run, ...step_run.map_steps] : []);
 
 /** One input: a record or a selection. The contributing surface chooses placement. */
-export function RecordTimeline({ record }: RecordTimelineProps): ReactElement {
+export function RecordTimeline({ record, recordState }: RecordTimelineProps): ReactElement {
   const query = useRecordTimelineQuery(record);
   const [stop] = useActionResultMutation<ActionFieldName>("cancel_workflow_run", {
     dataProviderName: "console", invalidateModels: [...RUN_MODELS, "decisions.Decision"],
@@ -32,7 +32,7 @@ export function RecordTimeline({ record }: RecordTimelineProps): ReactElement {
   });
   if (query.isLoading) return <LoadingPanel />;
   if (query.error) return <ErrorBanner description="Timeline unavailable." />;
-  return <RecordTimelineView data={query.data?.record_timeline?.records ?? EMPTY_TIMELINE} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)}
+  return <RecordTimelineView data={query.data?.record_timeline?.records ?? EMPTY_TIMELINE} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} recordState={recordState}
     onAnswered={query.refetch} onStop={async (ids) => {
       for (const id of ids) await stop(id);
       await query.refetch();
@@ -48,8 +48,9 @@ export function useRecordTimelineQuery(record: RecordTimelineProps["record"]) {
 }
 
 /** Presentation over the same generated read, used by stories and interaction tests. */
-export function RecordTimelineView({ data, openCount, set = false, onAnswered, onStop, onRetry }: {
+export function RecordTimelineView({ data, openCount, set = false, recordState, onAnswered, onStop, onRetry }: {
   data: TimelineData; openCount: number; set?: boolean;
+  recordState?: RecordTimelineProps["recordState"];
   onAnswered?: () => void | Promise<unknown>;
   onStop?: (ids: readonly string[]) => void | Promise<unknown>;
   onRetry?: (id: string) => void | Promise<unknown>;
@@ -136,14 +137,18 @@ export function RecordTimelineView({ data, openCount, set = false, onAnswered, o
   const inRuns = new Set(runs.flatMap((run) => runSteps(run).flatMap((step) => step.decision ? [step.decision.id] : [])));
   return <div className="grid min-w-0 gap-4">
     <header className="grid min-w-0 gap-1.5"><div className="flex min-w-0 items-center gap-2">
-      <h2 className="min-w-0 truncate text-15 font-semibold">{single?.display_name ?? `${runs.length} workflows`}</h2>
+      <h2 className="min-w-0 truncate text-15 font-semibold">{single?.version?.workflow?.display_name ?? `${runs.length} workflows`}</h2>
       <CountBadge tone={count ? "warning" : "neutral"} value={count} title={`${count} open decision${count === 1 ? "" : "s"}`} />
-    </div>{single ? <RunStatus run={single} /> : <p className="text-13 text-fg-muted">Runs that worked on this record, oldest first.</p>}
+    </div>{single ? <div className="flex flex-wrap items-center gap-2"><RunStatus run={single} recordState={recordState} />
+      <time dateTime={single.created_at}>{formatDateTime(new Date(single.created_at))}</time>
+      {link("workflows.WorkflowRun", single.id, "Open run")}</div> : <p className="text-13 text-fg-muted">Runs that worked on this record, oldest first.</p>}
       {active.length ? <Button size="sm" variant="secondary" className="mt-1 w-fit" disabled={busy}
         onClick={() => void act(() => onStop?.(active.map(({ id }) => id)))}>Stop and do it manually</Button> : null}
     </header>
     {runs.map((run) => <section key={run.id} className="grid min-w-0 gap-3" aria-label={run.display_name}>
-      {!single ? <div className="grid gap-1 border-t border-border-subtle pt-3"><h3 className="text-13 font-semibold">{run.display_name}</h3><RunStatus run={run} /></div> : null}
+      {!single ? <div className="grid gap-1 border-t border-border-subtle pt-3"><h3 className="text-13 font-semibold">{run.version?.workflow?.display_name}</h3>
+        <RunStatus run={run} recordState={recordState} /><time dateTime={run.created_at}>{formatDateTime(new Date(run.created_at))}</time>
+        {link("workflows.WorkflowRun", run.id, "Open run")}</div> : null}
       <RunSteps run={run} recordId={entry?.record_id ?? ""} card={card} link={link} retry={retryStep} />
     </section>)}
     {entry?.decisions.filter((decision) => !inRuns.has(decision.id)).map((decision) => card(decision, entry.record_id))}
@@ -152,9 +157,10 @@ export function RecordTimelineView({ data, openCount, set = false, onAnswered, o
   </div>;
 }
 
-function RunStatus({ run }: { run: TimelineRun }) {
+function RunStatus({ run, recordState }: { run: TimelineRun; recordState?: RecordTimelineProps["recordState"] }) {
   const holds = runSteps(run).flatMap((step) => step.hold ? [step.hold] : []);
   const status = optionToken(run.status);
+  if (recordState && status === "succeeded") return <Badge tone={recordState.tone}>{recordState.label}</Badge>;
   const label = run.stopped_at || status === "canceled" ? "Stopped" : holds.includes("error") ? "Stopped on an error"
     : holds.includes("run") ? "Waiting for another run" : holds.includes("decision") ? "Waiting for decisions"
     : status === "succeeded" ? run.outcome_label || "Plan complete" : "Running";
