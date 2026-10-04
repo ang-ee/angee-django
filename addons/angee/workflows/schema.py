@@ -12,6 +12,7 @@ from rebac import system_context
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.identity import public_id_for
 from angee.base.impl import resolve_all_impl_classes
@@ -870,7 +871,7 @@ class RecordTimelineQuery:
             result.append(RecordTimelineType(
                 record_model=canonical_record_model(type(record))._meta.label,
                 record_id=PublicID(public_id_for(canonical_record_model(type(record)), target.object_id)),
-                runs=WorkflowRun.objects.with_actor(actor).about(record),
+                runs=run_type_get_queryset(WorkflowRun.objects.with_actor(actor).about(record), WorkflowRunType, info),
                 decisions=Decision.objects.with_actor(actor).open_for(record), open_decision_count=count,
             ))
         with system_context(reason="workflows.timeline.selection_attention"):

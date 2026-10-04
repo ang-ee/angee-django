@@ -1,7 +1,7 @@
 import { decisionFixture } from "@angee/decisions/testing";
 import type { TimelineData, TimelineSelection } from "./RecordTimeline";
 
-export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "set";
+export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "set" | "empty";
 type Run = TimelineData[number]["runs"][number];
 type Node = Run["graph"]["nodes"][number];
 const at = "2026-10-03T10:00:00Z";
@@ -31,12 +31,13 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   review.records = [{ id: "wsrec_7", label: "Review notes", operation: "read", record_model: "notes.Note", record_id: "nte_7" }];
   const run: Run = {
     id: "wfr_review", display_name: "Record review", status: "WAITING", origin: "MANUAL", outcome_label: "",
-    created_at: at, finished_at: null, stopped_at: null, output: {}, can_cancel: true, subject_model: "notes.Note", subject_id: "nte_7",
+    created_at: at, finished_at: null, stopped_at: null, output: {}, can_cancel: true, run_as: { display_name: "River" },
     parent_step: null, trigger_event: null, graph: { nodes, edges: [] },
   };
   if (state === "clean") {
     run.status = "SUCCEEDED"; run.can_cancel = false; run.finished_at = at;
     decision.is_open = false; decision.verdict = ["accept"]; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
+    decision.verdict_label = "Use proposed name";
     for (const node of nodes) if (node.plan !== "optional") { node.plan = "done"; if (node.step_run) { node.step_run.status = "SUCCEEDED"; node.step_run.hold = null; } }
     nodes[8] = node("finish", "Finish the plan", 8, "done"); nodes[9]!.plan = "not_run";
   } else if (state === "error" || state === "run") {
@@ -52,6 +53,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     record_model: "notes.Note", record_id: "nte_7", open_decision_count: decision.is_open && state !== "error" && state !== "run" ? 1 : 0,
     decisions: decision.is_open && state !== "error" && state !== "run" ? [decision] : [], runs: [run],
   };
+  if (state === "empty") { entry.runs = []; entry.decisions = []; entry.open_decision_count = 0; }
   if (state === "set") {
     const shared = entry.decisions[0]!;
     shared.records.push({ ...shared.records[0]!, id: "dcr_other", record_id: "nte_8" });

@@ -20,7 +20,7 @@ export const RecordTimelineDocument = graphql(`
       decisions { ...DecisionCardFields }
       runs {
         id display_name status origin outcome_label created_at finished_at stopped_at output can_cancel
-        subject_model subject_id
+        run_as { display_name }
         parent_step { id run { id } }
         trigger_event { record_model record_id changed_at trigger { display_name } }
         graph {

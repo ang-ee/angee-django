@@ -22,7 +22,7 @@ export function InboxPage(): ReactElement {
     <List resource={DECISION_MODEL} order={{ created_at: "DESC" }} emptyContent={t("inbox.empty")}>
       <Column field="kind_label" header={t("inbox.kind")} />
       <Column field="requester.display_name" header={t("inbox.requester")} />
-      <Column field="verdict" header={t("inbox.verdict")} />
+      <Column field="verdict_label" header={t("inbox.verdict")} />
     </List>
     <Form resource={DECISION_MODEL} readOnly
       formExtras={({ record, form }) => typeof record?.id === "string"

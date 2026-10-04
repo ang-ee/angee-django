@@ -5,7 +5,7 @@ import { DecisionCard, decisionFieldMarks } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Alert, Badge, Button, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
-  SegmentedControl, StepList, optionToken, useActiveRecordForm, useActionResultMutation, useChatter,
+  SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useActionResultMutation, useChatter,
   useRecordFieldMarks, useRecordPeek, type StepListItem, type Tone,
 } from "@angee/ui";
 import { RecordTimelineDocument, RUN_MODELS } from "./documents.console";
@@ -23,11 +23,7 @@ const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) =>
 
 /** One input: a record or a selection. The contributing surface chooses placement. */
 export function RecordTimeline({ record }: RecordTimelineProps): ReactElement {
-  const records = useMemo(() => Array.isArray(record) ? record : [record as TimelineRecord], [record]);
-  const query = useAuthoredQuery(RecordTimelineDocument, { records }, {
-    models: [...RUN_MODELS, "decisions.Decision", "decisions.DecisionRecord"],
-    records, relatedModels: [...RUN_MODELS, "decisions.Decision"],
-  });
+  const query = useRecordTimelineQuery(record);
   const [stop] = useActionResultMutation<ActionFieldName>("cancel_workflow_run", {
     dataProviderName: "console", invalidateModels: [...RUN_MODELS, "decisions.Decision"],
   });
@@ -41,6 +37,14 @@ export function RecordTimeline({ record }: RecordTimelineProps): ReactElement {
       for (const id of ids) await stop(id);
       await query.refetch();
     }} onRetry={async (id) => { await retry(id); await query.refetch(); }} />;
+}
+
+export function useRecordTimelineQuery(record: RecordTimelineProps["record"]) {
+  const records = useMemo(() => Array.isArray(record) ? record : [record as TimelineRecord], [record]);
+  return useAuthoredQuery(RecordTimelineDocument, { records }, {
+    models: [...RUN_MODELS, "decisions.Decision", "decisions.DecisionRecord"],
+    records, relatedModels: [...RUN_MODELS, "decisions.Decision"],
+  });
 }
 
 /** Presentation over the same generated read, used by stories and interaction tests. */
@@ -104,7 +108,7 @@ export function RecordTimelineView({ data, openCount, set = false, onAnswered, o
     }
     return <div className="grid min-w-0 gap-4">
       <header className="grid gap-2"><h2 className="text-15 font-semibold">Review <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
-        <p className="text-13 text-fg-muted">{data.length} records · {count} open decisions · {runs.filter((run) => held(run).length).length} runs waiting or stopped</p>
+        <p className="text-13 text-fg-muted">{data.length} record{data.length === 1 ? "" : "s"} · {count} open decision{count === 1 ? "" : "s"} · {runs.filter((run) => held(run).length).length} run{runs.filter((run) => held(run).length).length === 1 ? "" : "s"} waiting or stopped</p>
         <SegmentedControl<"record" | "question"> aria-label="Group by" value={grouping} onValueChange={setGrouping}
           options={[{ value: "record", label: "By record" }, { value: "question", label: "By question" }]} />
         {active.length ? <Button size="sm" variant="secondary" className="w-fit" disabled={busy}
@@ -133,7 +137,7 @@ export function RecordTimelineView({ data, openCount, set = false, onAnswered, o
   return <div className="grid min-w-0 gap-4">
     <header className="grid min-w-0 gap-1.5"><div className="flex min-w-0 items-center gap-2">
       <h2 className="min-w-0 truncate text-15 font-semibold">{single?.display_name ?? `${runs.length} workflows`}</h2>
-      <CountBadge tone={count ? "warning" : "neutral"} value={count} title={`${count} open decisions`} />
+      <CountBadge tone={count ? "warning" : "neutral"} value={count} title={`${count} open decision${count === 1 ? "" : "s"}`} />
     </div>{single ? <RunStatus run={single} /> : <p className="text-13 text-fg-muted">Runs that worked on this record, oldest first.</p>}
       {active.length ? <Button size="sm" variant="secondary" className="mt-1 w-fit" disabled={busy}
         onClick={() => void act(() => onStop?.(active.map(({ id }) => id)))}>Stop and do it manually</Button> : null}
@@ -153,7 +157,7 @@ function RunStatus({ run }: { run: TimelineRun }) {
   const status = optionToken(run.status);
   const label = run.stopped_at || status === "canceled" ? "Stopped" : holds.includes("error") ? "Stopped on an error"
     : holds.includes("run") ? "Waiting for another run" : holds.includes("decision") ? "Waiting for decisions"
-    : status === "succeeded" ? "Plan complete" : "Running";
+    : status === "succeeded" ? run.outcome_label || "Plan complete" : "Running";
   const tone: Tone = holds.includes("error") ? "danger" : holds.length ? "warning" : status === "succeeded" ? "success" : "neutral";
   return <Badge tone={tone}>{label}</Badge>;
 }
@@ -170,7 +174,8 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const current = ordered.filter((node) => node.plan === "current");
   const routine = (node: typeof ordered[number]) => !node.step_run?.decision && !node.step_run?.notes.length
     && optionToken(node.step_run?.status) === "succeeded";
-  const items: StepListItem[] = [{ id: "trigger", state: "trigger", title: run.trigger_event?.trigger?.display_name ?? `${run.origin} request`, timestamp: run.created_at,
+  const items: StepListItem[] = [{ id: "trigger", state: "trigger", title: run.trigger_event?.trigger?.display_name
+    ?? (optionToken(run.origin) === "manual" ? `Started manually by ${run.run_as?.display_name ?? "a user"}` : `${titleCase(run.origin)} started`), timestamp: run.created_at,
     children: run.trigger_event?.record_model && run.trigger_event.record_id ? link(run.trigger_event.record_model, run.trigger_event.record_id) : null }];
   const folded = !expanded && runSteps(run).some((step) => optionToken(step.status) === "waiting") && done.length > 6;
   let group: typeof ordered = [];

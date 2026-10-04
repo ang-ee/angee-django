@@ -7,6 +7,7 @@ import { useBreadcrumbLeafLabel } from "../../chrome/Breadcrumb";
 import { renderGlyph } from "../../chrome/Glyph";
 import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
+import { useLatestRef } from "../../lib/use-latest-ref";
 import { ContainerOutlet } from "../../lib/container-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
@@ -39,7 +40,7 @@ import {
   FormViewRecordHeader,
 } from "./form-view-body";
 import type { EditableLineSupplementalColumn, EditableLinesProps } from "./EditableLines";
-import { recordRepresentationValue, titleText } from "./form-view-model";
+import { recordRepresentationValue, resolveField, titleText } from "./form-view-model";
 import { useRuntimeViewAs } from "../../runtime";
 import { useAppRuntime } from "../../runtime";
 import { resolveTabLabel } from "../page";
@@ -202,9 +203,15 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const formModel = surfaceChromeContext?.canonicalResource;
   const formId = surfaceChromeContext?.recordId;
   const focusField = recordPanelContext?.focusField;
+  const labelSource = useLatestRef(surface);
+  const fieldLabel = React.useCallback((name: string) => {
+    const source = labelSource.current;
+    const field = source.formFields.find((field) => field.name === name);
+    return field ? resolveField(field, source.form.getValues()).label : undefined;
+  }, [labelSource]);
   const activeForm = React.useMemo(() => formModel && formId && focusField && !hideRecordChrome ? {
-    model: formModel, id: formId, focusField,
-  } : null, [formModel, formId, focusField, hideRecordChrome]);
+    model: formModel, id: formId, focusField, fieldLabel,
+  } : null, [formModel, formId, focusField, hideRecordChrome, fieldLabel]);
   usePublishActiveRecordForm(activeForm);
   const [toolbarHost, setToolbarHost] = React.useState<HTMLElement | null>(null);
   const recordChromeContext = React.useMemo(

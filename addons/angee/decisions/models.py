@@ -49,6 +49,16 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     def kind_label(self) -> str:
         return capfirst(self.kind.replace("_", " ").replace("-", " "))
 
+    @property
+    def verdict_label(self) -> str:
+        """Read the chosen labels from this question's frozen alternatives."""
+        if self.verdict is None:
+            return ""
+        if not self.verdict:
+            return "Withdrawn"
+        return "; ".join(alternative["label"] for alternative in self.proposal["alternatives"]
+                         if alternative["key"] in self.verdict)
+
     def __str__(self) -> str:
         return self.kind_label
 

@@ -7,9 +7,6 @@ import { useInAppNavigator } from "../../lib/in-app-link";
 import { useUiT } from "../../i18n";
 import { useResourceRecordHref } from "../../runtime";
 
-/** Django's non-field key: in-band reasons a preflight surfaces at form level. */
-const NON_FIELD_ERRORS = "__all__";
-
 export interface ActionResultRunOptions {
   /**
    * Model label whose routed collection page a returned `id` deep-links into
@@ -40,8 +37,7 @@ export type ActionResultRun = (
  *   defaulting to the ui bundle's `action.noResult`; a thrown error's message
  *   wins when it carries one);
  * - `ok=false` → a danger toast titled by the verb's `message`, with any
- *   in-band non-field reasons (`validationErrors.__all__` — the shape the
- *   backend action preflight raises) as its description;
+ *   in-band validation reasons, under any key, as its description;
  * - `ok=true` → a success toast, then — when the outcome carries the created
  *   record's `id` and `linkTo` resolves a routed resource page — navigation to
  *   that record's detail.
@@ -76,10 +72,10 @@ export function useActionResultRun(
         return undefined;
       }
       if (!outcome.ok) {
-        const reasons = outcome.validationErrors?.[NON_FIELD_ERRORS]?.join(" ");
+        const reasons = [...new Set(Object.values(outcome.validationErrors ?? {}).flat())].join("; ");
         toast.danger({
           title: outcome.message,
-          ...(reasons ? { description: reasons } : {}),
+          ...(reasons && reasons !== outcome.message ? { description: reasons } : {}),
         });
         return outcome;
       }

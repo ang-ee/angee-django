@@ -6,14 +6,16 @@ import { textRoleVariants } from "../ui/text";
 import { RelativeTime } from "./RelativeTime";
 
 export interface TimelineEntryProps
-  extends Omit<React.LiHTMLAttributes<HTMLLIElement>, "title"> {
+  extends Omit<React.HTMLAttributes<HTMLElement>, "title"> {
   title: React.ReactNode;
+  as?: "li" | "div";
   timestamp: Date | string | null | undefined;
   body?: unknown;
   emptyBody?: React.ReactNode;
 }
 
 export function TimelineEntry({
+  as: Tag = "li",
   body,
   className,
   emptyBody,
@@ -28,7 +30,7 @@ export function TimelineEntry({
     : emptyBody;
 
   return (
-    <li
+    <Tag
       className={cn(
         "rounded-6 border border-border-subtle bg-sheet-2 p-3",
         className,
@@ -45,7 +47,7 @@ export function TimelineEntry({
       <p className={cn(textRoleVariants({ role: "description" }), "mt-2 line-clamp-3")}>
         {text || resolvedEmptyBody}
       </p>
-    </li>
+    </Tag>
   );
 }
 

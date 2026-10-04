@@ -12,6 +12,7 @@ export interface ActiveRecordForm {
   model: string;
   id: string;
   focusField: (field: string) => void;
+  fieldLabel?: (field: string) => ReactNode;
 }
 interface MarkPublication {
   model: string;

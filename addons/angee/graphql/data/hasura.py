@@ -22,7 +22,6 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
-from strawberry.types.nodes import SelectedField
 from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
@@ -1037,24 +1036,6 @@ def _resource_filter_annotation(
     return expression(queryset) if callable(expression) else expression
 
 
-def _filter_field_names(value: Any) -> set[str]:
-    """Inspect native request inputs to prepare only filters the query uses."""
-    if dataclasses.is_dataclass(value):
-        value = input_to_dict(value)
-    if isinstance(value, Mapping):
-        return set(value) | set().union(*(_filter_field_names(item) for item in value.values()))
-    if isinstance(value, (list, tuple)):
-        return set().union(*(_filter_field_names(item) for item in value))
-    return set()
-
-
-def _request_filter_fields(info: strawberry.Info) -> set[str]:
-    return set().union(*(
-        _filter_field_names(selection.arguments.get("where"))
-        for selection in info.selected_fields if isinstance(selection, SelectedField)
-    ))
-
-
 def _resource_filter_projection(
     node: type, model: type[models.Model], expressions: tuple[tuple[str, Any], ...],
     source: Callable[[strawberry.Info], models.QuerySet[Any]],
@@ -1250,14 +1231,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             continue
         raise ImproperlyConfigured(f"Filter expression {key!r} shadows a model field.")
 
-    def prepare_filters(queryset: models.QuerySet[Any], requested: set[str]) -> models.QuerySet[Any]:
+    def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
             queryset = with_record_reference_access(queryset)
         queryset = with_filter_aliases(queryset)
         aliases: dict[str, models.Expression] = {}
         for name, expression in expressions.items():
-            if name in contributed_filters and name not in requested:
-                continue
             if name in model_filter_aliases:
                 continue
             if callable(expression):
@@ -1268,13 +1247,15 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                     default=models.Value(None), output_field=expression.output_field,
                 )
             aliases[name] = expression
+        # Django aliases enter SQL only when referenced. This also covers
+        # variable inputs and aggregates whose resolver is below the root field.
         return queryset.alias(**aliases) if aliases else queryset
 
     def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_read_queryset(info), _request_filter_fields(info))
+        return prepare_filters(source_read_queryset(info))
 
     def aggregate_source(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_aggregate(info), _request_filter_fields(info))
+        return prepare_filters(source_aggregate(info))
 
     model_filters = tuple(field for field in filterable if field not in expressions)
     # Native Hasura aliases cannot shadow a model field (or contain path
@@ -1407,7 +1388,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             where, id_column=id_column, id_decode=id_decode,
             field_decoders=field_id_decode, lookups=filter_lookups,
         )
-        return lambda queryset: prepare_filters(queryset, _filter_field_names(where)).filter(predicate)
+        return lambda queryset: prepare_filters(queryset).filter(predicate)
 
     return attach_hasura_resource_metadata(
         resource,

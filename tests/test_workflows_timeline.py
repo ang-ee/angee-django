@@ -5,19 +5,23 @@ from datetime import timedelta
 import pytest
 from django.core.exceptions import ValidationError
 from django.db.models.functions import Now
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.scoping import system_queryset
-from angee.workflows.reviews import AskDecision
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.workflows.reviews import AskDecision, DecisionStep
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
 from tests.conftest import execute_schema, result_data, vault_for
 from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import questions, start_review
 from tests.test_workflows_review import review as review
 from tests.test_workflows_review_graphql import schema as schema
+from tests.test_workflows_triggers import capture
+from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
+from tests.test_workflows_triggers import trigger_setup as trigger_setup
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
 
@@ -30,6 +34,48 @@ def timeline(schema, actor, records):
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
+
+
+def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trigger_setup, register_step):
+    actor, _, record, _ = trigger_setup
+
+    class Question(DecisionStep[None, None, None]):
+        key = "timeline_trigger_question"
+
+        def ask(self, ctx):
+            return ctx.ask(DecisionRequest(
+                kind="Confirm", records=(ctx.subject,), assignees=(actor,),
+                proposal=DecisionProposal(alternatives=[{"key": "keep", "label": "Keep", "outcome": "done"}]),
+            ))
+
+    register_step(Question)
+    workflow = load_workflow({"nodes": {"entry": {"step": Question.key}}},
+                             key="timeline-trigger", actor=actor, subject_model=record._meta.label)
+    with actor_context(actor):
+        trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label=record._meta.label)
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    run = WorkflowRun.objects.with_actor(actor).get(trigger_event__trigger=trigger)
+    run_until(run)
+    query = """query($records: [TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { decisions { id } runs {
+        id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
+        graph { nodes { key rank step_run { hold records { record_model record_id }
+          decision { id is_open records { record_model record_id } } } } }
+      } } }
+    }"""
+    data = result_data(execute_schema(schema, query, {"records": [
+        {"model": record._meta.label, "id": record.sqid},
+    ]}, user=actor))["record_timeline"]["records"][0]
+    result = data["runs"][0]
+    assert (result["subject_model"], result["subject_id"]) == (record._meta.label, record.sqid)
+    assert result["trigger_event"]["record_id"] == record.sqid
+    step = result["graph"]["nodes"][0]["step_run"]
+    assert step["hold"] == "decision" and step["decision"]["is_open"]
+    assert step["records"][0]["record_id"] == record.sqid
+    assert step["decision"]["records"][0]["record_id"] == record.sqid
+    assert data["decisions"] == [{"id": step["decision"]["id"]}]
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):

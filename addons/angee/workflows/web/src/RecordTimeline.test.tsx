@@ -32,6 +32,23 @@ test("answers inline with the observed revision and refreshes the stepper", asyn
   expect(screen.getByText("Chose: Use proposed name")).toBeTruthy();
 });
 
+test("only records with runs select the timeline initially", async () => {
+  const view = render(<TimelineStory state="empty" />);
+  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:chatter.comments"));
+  view.unmount();
+  render(<TimelineStory />);
+  await screen.findByText("Started manually by River");
+  expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline");
+});
+
+test("answered cards do not nest list items outside a list", async () => {
+  const { container } = render(<TimelineStory state="clean" />);
+  await screen.findByText("Chose: Use proposed name");
+  for (const item of container.querySelectorAll("li")) {
+    expect(["UL", "OL"]).toContain(item.parentElement?.tagName);
+  }
+});
+
 test("a retry with possible duplicate effects uses the shared acknowledgement form", async () => {
   const requests: TimelineRequest[] = [];
   render(<TimelineStory state="error" duplicateRisk onRequest={(request) => requests.push(request)} />);
@@ -86,7 +103,7 @@ test("one component publishes to the left host", async () => {
 
 test("selection groups open questions and held runs by record or question", async () => {
   render(<TimelineStory state="set" />);
-  await screen.findByText("2 records · 1 open decisions · 1 runs waiting or stopped");
+  await screen.findByText("2 records · 1 open decision · 1 run waiting or stopped");
   expect(screen.getAllByRole("region", { name: "Confirm the name" })).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "By question" }));
   expect(screen.getAllByRole("region", { name: "Confirm the name" })).toHaveLength(1);

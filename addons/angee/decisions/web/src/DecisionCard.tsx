@@ -5,7 +5,7 @@ import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "
 import {
   Badge, Button, Card, Checkbox, ErrorBanner, MetaGrid, RadioGroup, RecordReference,
   RelativeTime, StatusIcon, TimelineEntry, cn, radioGroupVariants,
-  actionOutcomeSubmitResult, formSubmitError, useActionOutcomeMutation, useRecordPeek,
+  actionOutcomeSubmitResult, formSubmitError, titleCase, useActionOutcomeMutation, useActiveRecordForm, useRecordPeek,
 } from "@angee/ui";
 import { DecisionContext } from "./DecisionContext";
 import { DECISION_MODELS, type Decision } from "./documents.console";
@@ -29,6 +29,10 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   const ref = useRef<HTMLElement>(null);
   const openRecord = useRecordPeek();
   const metadata = useSchemaFieldMetadata();
+  const form = useActiveRecordForm();
+  const fieldLabel = (id: string, field: string) => (form?.id === id ? form.fieldLabel?.(field) : undefined)
+    ?? modelMetadataForLabel(metadata, decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field]?.label
+    ?? titleCase(field);
   useEffect(() => {
     if (highlighted) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [highlighted]);
@@ -59,11 +63,9 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   };
   if (!open) {
     const withdrawn = verdict.success && verdict.output.length === 0;
-    const labels = proposal.success && verdict.success ? proposal.output.alternatives
-      .filter((alternative) => verdict.output.includes(alternative.key)).map(({ label }) => label).join("; ") : "";
-    return <TimelineEntry title={withdrawn ? `Withdrawn: stopped by ${decision.answered_by?.display_name ?? "an operator"}`
+    return <TimelineEntry as="div" title={withdrawn ? `Withdrawn: stopped by ${decision.answered_by?.display_name ?? "an operator"}`
       : decision.answered_by?.display_name ?? "Answered"} timestamp={decision.answered_at}
-      body={withdrawn ? decision.kind_label : `Chose: ${labels}`} className={withdrawn ? "bg-sheet-2" : "bg-sheet"} />;
+      body={withdrawn ? decision.kind_label : `Chose: ${decision.verdict_label}`} className={withdrawn ? "bg-sheet-2" : "bg-sheet"} />;
   }
   const changes = (alternative: v.InferOutput<typeof ProposalSchema>["alternatives"][number]) =>
     <span className="mt-1 grid gap-1.5">{Object.entries(alternative.actions).map(([id, actions]) =>
@@ -72,7 +74,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
         {actions.record ? <span className="text-xs text-fg-2">{actions.record.call.replaceAll("_", " ")}</span> : null}
         <MetaGrid rows={Object.entries(actions.fields).map(([field, operation]) => ({
           id: field,
-          label: modelMetadataForLabel(metadata, decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field]?.label ?? field.replaceAll("_", " "),
+          label: fieldLabel(id, field),
           value: (() => {
             const facts = modelMetadataForLabel(metadata, decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
             return facts?.relationModelLabel && typeof operation.set === "string" ? <RecordReference model={facts.relationModelLabel} id={operation.set} onOpen={() => openRecord({ model: facts.relationModelLabel!, id: operation.set as string })} />
@@ -95,10 +97,11 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
       {!compact ? <div className="mt-3 flex min-w-0 flex-wrap gap-1">{decision.records.map((record) =>
         record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
           ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div> : null}
+      {!compact ? <div className="mt-3"><DecisionContext context={decision.context} /></div> : null}
       {proposal.success ? <>
         {Object.entries(proposal.output.checks).map(([id, fields]) => fields.map((field) =>
           <div key={`${id}:${field}`} className="mt-3 rounded-6 border border-danger-line bg-danger-tint px-2.5 py-2">
-            <Badge tone="danger" density="compact">Check</Badge>{" "}{id !== selfId ? recordLink(id) : null}{" "}{modelMetadataForLabel(metadata, decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field]?.label ?? field.replaceAll("_", " ")}
+            <Badge tone="danger" density="compact">Check</Badge>{" "}{id !== selfId ? recordLink(id) : null}{" "}{fieldLabel(id, field)}
           </div>))}
         <div className="mt-3">{proposal.output.multiple ? <div role="group" aria-label="Alternatives, choose one or more" className="grid gap-1.5">
           {alternatives.map((alternative) => {
@@ -116,7 +119,6 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
               description={changes(alternative)} />)}
           </RadioGroup>}</div>
       </> : <ErrorBanner description={t("decision.invalidProposal")} />}
-      {!compact ? <div className="mt-3"><DecisionContext context={decision.context} /></div> : null}
       <p className="mt-3 text-xs text-fg-muted">May answer: {decision.assignees.map(({ display_name }) => display_name).join(", ")}</p>
       {error ? <ErrorBanner description={error} /> : null}
       <div className="mt-2 flex flex-wrap gap-1.5">

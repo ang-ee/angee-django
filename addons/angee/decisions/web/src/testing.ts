@@ -10,7 +10,7 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
   query: testResourceQuery({ fields: {
     ...Object.fromEntries(["id", "kind", "kind_label", "proposal", "records", "requester.display_name",
       "assignees", "requester", "answered_by", "answered_at", "answered_by.display_name", "revision", "permissions",
-      "context", "verdict"].map((name) => [name, testQueryField(name)])),
+      "context", "verdict", "verdict_label"].map((name) => [name, testQueryField(name)])),
     id: testQueryField("id", { filter: { field: "id", scalar: "String", values: [], operators: ["exact", "ne", "inList"] } }),
     assignees: testQueryField("assignees", { kind: "list", scalar: null, row: null }),
     created_at: testQueryField("created_at", { sort: { field: "created_at" } }),
@@ -30,7 +30,7 @@ export const decisionUserFixture = testDataResource("iam.User", {
 export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
   return {
     id: "dcn_review", kind: "review", kind_label: "Review", revision: 3, created_at: "2026-10-03T10:00:00Z", is_open: true, permissions: ["act"],
-    context: { facts: [], references: [] }, verdict: null, answered_at: null,
+    context: { facts: [], references: [] }, verdict: null, verdict_label: "", answered_at: null,
     records: [{ id: "dcr_7", record_model: "notes.Note", record_id: "nte_7" }],
     proposal: { multiple: false, alternatives: [
       { key: "accept", label: "Accept", outcome: "accepted", actions: {

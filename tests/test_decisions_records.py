@@ -129,6 +129,7 @@ def test_human_and_agent_answers_close_without_applying_proposals(records, kind)
     assert not answered.is_open
     assert answered.answered_by_id == reviewer.pk and answered.answered_at is not None
     assert answered.verdict == ["confirm"]
+    assert answered.verdict_label == "Confirm"
     vaults[0].refresh_from_db()
     assert vaults[0].name == before
     assert system_queryset(type(drives[0])).filter(pk=drives[0].pk).exists()
@@ -150,7 +151,8 @@ def test_invalid_answers_and_record_edits_leave_the_question_open(records):
 
 
 @pytest.mark.parametrize("owner", ["vault", "drive"])
-def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(records, owner):
+@pytest.mark.parametrize("variable", [False, True])
+def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(records, owner, variable):
     issuer, reviewer, outsider, vaults, drives = records
     targets = vaults if owner == "vault" else drives
     opened = admit(records, [targets[0]])
@@ -186,14 +188,21 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
         },
         "console",
     )
-    document = """query($model: String!, $id: ID!) {
-      attention_records(where: {has_open_decisions: {_eq: true}}) { id has_open_decisions }
+    where = "$where" if variable else "{has_open_decisions: {_eq: true}}"
+    declaration = ", $where: attention_records_bool_exp" if variable else ""
+    document = """query($model: String!, $id: ID! DECLARATION) {
+      attention_records(where: WHERE) { id has_open_decisions }
+      count: attention_records_aggregate(where: WHERE) { aggregate { count } }
       all_records: attention_records { id has_open_decisions }
       open_decisions(record_model: $model, record_id: $id) { id proposal records { record_model record_id } }
-    }"""
+    }""".replace("DECLARATION", declaration).replace("WHERE", where)
+    variables = {"model": model._meta.label, "id": targets[0].sqid}
+    if variable:
+        variables["where"] = {"_and": [{"has_open_decisions": {"_eq": True}}]}
     result = result_data(
-        execute_schema(schema, document, {"model": model._meta.label, "id": targets[0].sqid}, user=reviewer)
+        execute_schema(schema, document, variables, user=reviewer)
     )
+    assert result["count"]["aggregate"]["count"] == 2
     assert result["attention_records"] == [
         {"id": record.sqid, "has_open_decisions": True} for record in (targets[0], targets[2])
     ]
@@ -205,9 +214,7 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
         # Pinning the target actor must win over the ambient outsider.
         scoped = model.objects.with_actor(reviewer)
         assert list(Decision.objects.records_with_open_decisions(scoped)) == [targets[0], targets[2]]
-    result = result_data(
-        execute_schema(schema, document, {"model": model._meta.label, "id": targets[2].sqid}, user=reviewer)
-    )
+    result = result_data(execute_schema(schema, document, {**variables, "id": targets[2].sqid}, user=reviewer))
     assert result["open_decisions"] == []
     assert hidden.is_open
     # A list that does not request attention never joins the question owner.

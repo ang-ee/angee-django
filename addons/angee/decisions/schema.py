@@ -52,6 +52,7 @@ class DecisionType(AngeeNode):
     proposal: JSON
     records: list[DecisionRecordType] = actor_scoped_to_many("records")
     verdict: JSON | None
+    verdict_label: str = strawberry_django.field(only=["verdict", "proposal"])
     answered_by: UserType | None = actor_scoped_to_one("answered_by")
     answered_at: auto
     revision: auto
