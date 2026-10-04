@@ -7,7 +7,7 @@ from django.db.migrations.state import ModelState, ProjectState
 from django.utils import timezone
 
 from angee.decisions.runtime_migrations import independent_step_questions, single_questions
-from angee.workflows.runtime_migrations import independent_decisions
+from angee.workflows.runtime_migrations import current_execution, independent_decisions
 from tests.conftest import create_platform_admin
 
 
@@ -164,3 +164,24 @@ def test_workflow_cutover_discards_waiters_instead_of_converting_them():
     assert ("workflows", "steprun") not in state.models
     assert ("workflows", "workflowrun") not in state.models
     assert single_questions.applies(state)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_current_execution_ddl_resolves_constraints_after_circular_parent_field():
+    """The run/step cycle must be built before constraints reference parent_step."""
+    state = ProjectState.from_apps(apps)
+    for name in ("stepwatch", "steprecord", "stepattempt", "steprun", "workflowrun"):
+        state.remove_model("workflows", name)
+    assert current_execution.applies(state)
+    for operation in current_execution.Migration.operations:
+        operation.state_forwards("workflows", state)
+        if isinstance(operation, migrations.CreateModel):
+            model = state.apps.get_model("workflows", operation.name)
+            # Native schema-editor SQL compilation catches references to columns
+            # not yet added, which final-state-only migration tests miss.
+            with connection.schema_editor(collect_sql=True, atomic=False) as editor:
+                editor.table_sql(model)
+        elif isinstance(operation, migrations.AddConstraint):
+            model = state.apps.get_model("workflows", operation.model_name)
+            with connection.schema_editor(collect_sql=True, atomic=False) as editor:
+                operation.constraint.create_sql(model, editor)

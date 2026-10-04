@@ -27,7 +27,8 @@ from django.db.migrations.operations.models import DeleteModel
 from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
-from angee.addons import addon_manifest
+from angee.addons import addon_manifest, available_addons, resolve_app_config
+from angee.compose.history import historical_labels
 from angee.fs import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
@@ -88,8 +89,8 @@ class RuntimeMigrations:
         declared_origins: set[str] = set()
 
         declarations: list[tuple[AppConfig, Mapping[str, Any]]] = []
-        for addon in self.addons:
-            for declaration in self._declarations(addon):
+        for addon, entries in self._migration_declarations():
+            for declaration in entries:
                 origin = f"{addon.name}:{declaration['name']}"
                 if origin in declared_origins:
                     raise RuntimeError(f"duplicate addon runtime migration origin {origin}")
@@ -454,7 +455,34 @@ class RuntimeMigrations:
             for key in ("name", "app_label", "module"):
                 if not isinstance(declaration.get(key), str) or not declaration[key]:
                     raise RuntimeError(f"{addon.name}: migrations[{index}] requires string {key}")
+            if not isinstance(declaration.get("uninstalled_only", False), bool):
+                raise RuntimeError(f"{addon.name}: migrations[{index}] uninstalled_only must be a boolean")
             yield declaration
+
+    def _migration_declarations(self) -> Iterator[tuple[AppConfig, tuple[Mapping[str, Any], ...]]]:
+        """Read opted-in cutovers without enabling an uninstalled addon's capabilities."""
+
+        installed = {addon.name for addon in self.addons}
+        for addon in self.addons:
+            yield addon, tuple(
+                entry for entry in self._declarations(addon)
+                if not entry.get("uninstalled_only", False)
+            )
+        retained = set(historical_labels(self.runtime_dir))
+        directories = tuple(Path(path) for path in getattr(settings, "ANGEE_ADDON_DIRS", ()))
+        for name, (manifest, _) in available_addons(directories).items():
+            if name in installed or not any(
+                entry.get("uninstalled_only") is True and entry.get("app_label") in retained
+                for entry in manifest.migrations
+            ):
+                continue
+            addon = resolve_app_config(name, expected_name=name)
+            if addon is None:
+                raise RuntimeError(f"Cannot resolve uninstalled migration owner {name!r}")
+            yield addon, tuple(
+                entry for entry in self._declarations(addon)
+                if entry.get("uninstalled_only", False) and entry["app_label"] in retained
+            )
 
     def _validate_declaration(self, declaration: Mapping[str, Any], origin: str) -> None:
         if declaration["app_label"] not in self.labels:

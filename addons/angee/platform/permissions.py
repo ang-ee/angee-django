@@ -89,6 +89,9 @@ def _current_schema_external_ids_by_package() -> dict[str, set[str]]:
     seen_definitions: dict[str, str] = {}
     seen_caveats: dict[str, str] = {}
     for app_config in apps.get_app_configs():
+        # Removing the last permissions file retires all package-managed schema,
+        # even when the addon remains installed for its other capabilities.
+        current[app_config.name] = set()
         schema_path = resolve_schema_path(app_config)
         if schema_path is None:
             continue

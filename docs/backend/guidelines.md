@@ -890,9 +890,10 @@ and current contracts before applying a historical example to a new deployment.
   Preserve those files and generate incremental migrations after the next build;
   [`RuntimeMigrations`](../../angee/compose/migrations.py) preserves existing
   materialized bodies when their declarations are removed.
-  Stacks whose migration graph depends on `workflows_ocr` must stop at this floor:
-  the history-only app is absent from newer code. Resolving historical imports
-  alone does not validate dependency labels or establish a forward upgrade path.
+  The composer now registers retained migration-only labels even when their source
+  addon is absent, including `workflows_ocr`. This keeps dependencies loadable but
+  does not restore historical Python imports or authorize data retirement. Verify
+  those imports and the owner's declared forward cutover against the recorded graph.
 - **Never empty `runtime/*/migrations` on a stack whose database is carried forward.**
   Gitignored migrations can still be applied history; recreating their names or
   numbering can cause Django to apply existing schema again. Durable deployments

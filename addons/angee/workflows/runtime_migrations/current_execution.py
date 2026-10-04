@@ -131,36 +131,6 @@ class Migration(migrations.Migration):
                     models.CheckConstraint(
                         condition=models.Q(
                             models.Q(
-                                ("origin", "manual"),
-                                ("parent_step__isnull", True),
-                                ("reprocess_of__isnull", True),
-                                ("trigger_event__isnull", True),
-                            ),
-                            models.Q(
-                                ("origin", "workflow"),
-                                ("parent_step__isnull", False),
-                                ("reprocess_of__isnull", True),
-                                ("trigger_event__isnull", True),
-                            ),
-                            models.Q(
-                                ("origin", "reprocess"),
-                                ("parent_step__isnull", True),
-                                ("reprocess_of__isnull", False),
-                                ("trigger_event__isnull", True),
-                            ),
-                            models.Q(
-                                ("origin", "trigger"),
-                                ("parent_step__isnull", True),
-                                ("reprocess_of__isnull", True),
-                                ("trigger_event__isnull", False),
-                            ),
-                            _connector="OR",
-                        ),
-                        name="workflows_run_origin_cause",
-                    ),
-                    models.CheckConstraint(
-                        condition=models.Q(
-                            models.Q(
                                 ("finished_at__isnull", False), ("status__in", ("succeeded", "failed", "canceled"))
                             ),
                             models.Q(("finished_at__isnull", True), ("status__in", ("running", "waiting"))),
@@ -555,6 +525,39 @@ class Migration(migrations.Migration):
                 on_delete=django.db.models.deletion.PROTECT,
                 related_name="child_runs",
                 to="workflows.steprun",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="workflowrun",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(
+                        ("origin", "manual"),
+                        ("parent_step__isnull", True),
+                        ("reprocess_of__isnull", True),
+                        ("trigger_event__isnull", True),
+                    ),
+                    models.Q(
+                        ("origin", "workflow"),
+                        ("parent_step__isnull", False),
+                        ("reprocess_of__isnull", True),
+                        ("trigger_event__isnull", True),
+                    ),
+                    models.Q(
+                        ("origin", "reprocess"),
+                        ("parent_step__isnull", True),
+                        ("reprocess_of__isnull", False),
+                        ("trigger_event__isnull", True),
+                    ),
+                    models.Q(
+                        ("origin", "trigger"),
+                        ("parent_step__isnull", True),
+                        ("reprocess_of__isnull", True),
+                        ("trigger_event__isnull", False),
+                    ),
+                    _connector="OR",
+                ),
+                name="workflows_run_origin_cause",
             ),
         ),
     ]

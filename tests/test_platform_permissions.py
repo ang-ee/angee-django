@@ -244,8 +244,8 @@ def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
     from angee.platform.permissions import reconcile_permission_schema
 
     orphan = _managed("ghost.addon", "ghost/thing")  # no such app in the composed set
-    kept_package = apps.get_app_config("contenttypes").name  # a composed app
-    kept = _managed(kept_package, "ghost/kept")
+    kept_package = apps.get_app_config("messaging").name
+    kept = _managed(kept_package, "messaging/message")
 
     assert reconcile_permission_schema() == 1
 
@@ -253,6 +253,23 @@ def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
     assert not PackageManagedRecord.objects.filter(package="ghost.addon").exists()
     assert SchemaDefinition.objects.filter(pk=kept.pk).exists()
     assert PackageManagedRecord.objects.filter(package=kept_package).exists()
+
+
+def test_reconcile_prunes_schema_when_installed_package_has_no_permissions_file(db) -> None:
+    """Retiring the last declaration cannot leave removed types blocking checks."""
+    from django.apps import apps
+    from rebac.models import PackageManagedRecord, SchemaDefinition
+
+    from angee.platform.permissions import reconcile_permission_schema
+
+    package = apps.get_app_config("contenttypes").name
+    stale = _managed(package, "retired/review")
+    unmanaged = SchemaDefinition.objects.create(resource_type="manual/policy")
+
+    assert reconcile_permission_schema() == 1
+    assert not SchemaDefinition.objects.filter(pk=stale.pk).exists()
+    assert not PackageManagedRecord.objects.filter(package=package).exists()
+    assert SchemaDefinition.objects.filter(pk=unmanaged.pk).exists()
 
 
 @schema_changes()

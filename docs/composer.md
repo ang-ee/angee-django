@@ -249,6 +249,19 @@ released history when code moves. See the [backend migration
 rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
 database or changing historical source compatibility.
 
+A destructive retirement owned by an addon that has left the composition can
+declare `uninstalled_only = true`. The migration owner reads these declarations
+from available addon manifests only when the addon is uninstalled and the target
+label has retained runtime migration files. It resolves the source AppConfig
+without installing its models, dependencies, autoconfig, permissions or resources.
+The same pure state guards and append-only materialization rules apply. Declarations
+without this explicit opt-in are never materialized for uninstalled addons;
+declarations with it are never materialized while their addon is installed. Once
+materialized, Django owns their execution as retained history. Keep the composition
+fixed through build and migrate; reinstalling a retired addon requires a reviewed
+forward migration path. Incoming relations must be retired by their own owners
+before the table retirement becomes applicable.
+
 Normal app boot and `emit_if_stale()` never materialize migrations.
 `angee build --check` validates existing history and reports applicable pending
 origins without writing migration files. Django setup still repairs generated
@@ -338,9 +351,12 @@ to hold their history. An absent addon does not establish that its migrations ar
 disposable: the [migration policy](backend/guidelines.md#migrations-and-runtime)
 requires preserving files and investigating the recorded graph before recovery.
 During app population, [`Runtime`](../angee/compose/runtime.py) binds migration
-modules for current composed labels and preserves project-owned bindings. Django
-loads migrations for installed apps, so retained histories for uninstalled labels
-are not imported during build.
+modules for current composed labels and retained historical labels, preserving
+project-owned bindings. The settings composer registers absent historical labels
+with model-free Django AppConfigs so Django can load the complete dependency graph.
+Their stale generated models and former addon capabilities remain disabled.
+Retaining a label does not itself authorize discarding its data; a declared owner
+cutover specifies that disposition.
 
 ## Addon Declarations
 

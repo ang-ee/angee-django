@@ -10,3 +10,9 @@ dependencies = ["jsonpointer>=3.1", "pypdfium2>=4.30", "pillow>=11.0"]
 name = "retire_correction_questions"
 app_label = "extraction"
 module = "runtime_migrations.retire_correction_questions"
+
+[[migrations]]
+name = "retire_uninstalled_evidence"
+app_label = "extraction"
+module = "runtime_migrations.retire_uninstalled_evidence"
+uninstalled_only = true
