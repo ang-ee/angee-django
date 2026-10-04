@@ -638,3 +638,13 @@
 @keyframes skeleton-shimmer {
   to { transform: translateX(100%); }
 }
+
+/* AgentCard — running-state indicator bar sliding across the card top edge. */
+@theme {
+  --animate-agent-slide: agent-slide 1.8s ease-in-out infinite;
+}
+@keyframes agent-slide {
+  0%   { transform: translateX(-100%); opacity: 0.7; }
+  50%  { opacity: 1; }
+  100% { transform: translateX(350%); opacity: 0.7; }
+}
