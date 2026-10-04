@@ -921,7 +921,11 @@ kind is offered is the container's, so layers narrow kinds per model with
 An owner reads its container with `useContainer(address, { models, row, impls,
 extra })`: the children in order, narrowed for the current app, route and
 perspective, with variants applied and `permission` checked when a `row` is
-given. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
+given. Render-time extras with a `sequence` interleave with composed children;
+unpositioned extras trail in input order, preserving page chatter tab order.
+An extra's `before`/`after` may anchor on a composed child id. `only`/`except`
+reach extras by id; `hide` alters declared children, so hiding an extra id fails
+composition. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
 children in order, `containerContents` returns them as keyed nodes for a
 parser, and `containerHasContent` lets the host omit an empty wrapper.
 `useDrawers(edge)` reads one drawer edge; `resolveContainer` is the same
