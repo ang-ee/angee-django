@@ -1,48 +1,9 @@
 import type { FilterClause, ResourceToolbarCustomFilterChip, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
 import type { ResourceQuery } from "@angee/metadata";
 import { dedupeBy } from "../../../lib/dedupe";
-import { DEFAULT_TEXT_FILTER_FIELD, Filter, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
 import { customFilterChipLabel, customFilterId, isFacetFilter, isLookup, mergeById, parseCustomFilterId } from "./labels";
-export function activeFilterIdsFor(
-  filter: ResourceViewFilter,
-  options: readonly ResourceToolbarFilterOption[],
-): readonly string[] {
-  const value = Filter.from(filter);
-  return options.flatMap((option) => {
-    const facet = Filter.facetFromFilter(option.filter);
-    if (!facet) return value.hasPreset(option.filter) ? [option.id] : [];
-    return value.facetValues(facet).includes(facet.value) ? [option.id] : [];
-  });
-}
-
-export function nextFacetFilter(
-  filter: ResourceViewFilter,
-  options: readonly ResourceToolbarFilterOption[],
-  id: string,
-): ResourceViewFilter {
-  const option = options.find((candidate) => candidate.id === id);
-  const facet = option ? Filter.facetFromFilter(option.filter) : null;
-  if (!option) return filter;
-  if (!facet) return Filter.from(filter).togglePreset(option.filter);
-  return Filter.from(filter).toggleFacet(facet);
-}
-
-export function textFilterValue(
-  filter: ResourceViewFilter,
-  field: string | null = DEFAULT_TEXT_FILTER_FIELD,
-): string {
-  return field ? Filter.from(filter).textTerm(field) : "";
-}
-
-export function nextTextFilter(
-  filter: ResourceViewFilter,
-  value: string,
-  field: string | null = DEFAULT_TEXT_FILTER_FIELD,
-): ResourceViewFilter {
-  return field ? Filter.from(filter).withTextTerm(value, field) : filter;
-}
-
 export function customFilterChipsFor(
   filter: ResourceViewFilter,
   filterOptions: readonly ResourceToolbarFilterOption[],

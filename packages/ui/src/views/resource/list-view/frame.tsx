@@ -11,7 +11,7 @@ import { useUiT } from "../../../i18n";
 import { useValueStable } from "../../../lib/use-value-stable";
 import { modelChain, useAppRuntime, useContainer, useResourceRecordMatchFields, type ResourceViewKindContent } from "../../../runtime";
 import { withResourceViewScope, useResourceViewMaybe, type ResourceViewContextValue } from "../resource-view-context";
-import { Filter, isBuiltInResourceViewKind } from "../resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, Filter, isBuiltInResourceViewKind } from "../resource-view-model";
 import { ResourceViewKindsProvider, useOfferedResourceViewKinds, useResourceViewKindContent } from "../resource-view-kinds";
 import { ContributedViewSurface } from "./contributed-view-surface";
 import { GanttCollectionSurface } from "../../gantt/gantt-collection-surface";
@@ -24,7 +24,7 @@ import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
-import { defaultGroupForView } from "../resource-view-toolbar-inputs";
+import { defaultGroupForView } from "../search/group-defaults";
 import { useResourceViewGroupState } from "../resource-view-group-state";
 import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
@@ -178,7 +178,7 @@ function ListViewBody<TRow extends Row = Row>({
   resource,
   source,
   availableViews: declaredViews,
-  textFilterField,
+  textFilterField: declaredTextField,
   maxGroupDepth,
   toolbarWrap,
   tableLayout,
@@ -245,6 +245,7 @@ function ListViewBody<TRow extends Row = Row>({
     : emptyContent ?? t("list.empty");
   const discoveredMetadata = useModelMetadata(source ? "" : resource);
   const modelMetadata = source ? null : discoveredMetadata;
+  const textFilterField = declaredTextField === undefined && !modelMetadata ? DEFAULT_TEXT_FILTER_FIELD : declaredTextField;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
   const queryFields = useValueStable([...(fields ?? []), ...recordMatchFields, ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : [])]);
   // The Calendar kind is offered only where the page declares occurrence sources;
@@ -433,6 +434,13 @@ function ListViewBody<TRow extends Row = Row>({
       chrome={chrome}
     />
   );
+  const searchInput = {
+    columns: resolvedColumns, modelMetadata, resourceView,
+    query: source?.query, inferOptions: !source,
+    defaultGroup, defaultGroups, textFilterField, groupOptions: explicitGroupOptions,
+    declaredFacets, scalarFacets, filterOptions: explicitFilterOptions,
+    customFilterFields: explicitCustomFilterFields,
+  };
   if (resourceView.state.view === "gantt") {
     if (!ganttAvailable || !gantt || (!resolvedLaneSource && !gantt.linked)) {
       return <ErrorBanner description={t("gantt.requiresSource")} />;
@@ -442,12 +450,7 @@ function ListViewBody<TRow extends Row = Row>({
       presentation={presentation} className={className} onCreate={onCreate} createLabel={createLabel}
       onRowClick={onRowClick} rowHref={rowHref} toolbarActions={toolbarActions} toolbarWrap={toolbarWrap}
       maxGroupDepth={maxGroupDepth} selectable={selectable}
-      toolbarInputs={{
-        columns: resolvedColumns, modelMetadata, resourceView, groupStack: effectiveGroupStack,
-        defaultGroup, defaultGroups, textFilterField, groupOptions: explicitGroupOptions,
-        declaredFacets, scalarFacets, filterOptions: explicitFilterOptions,
-        customFilterFields: explicitCustomFilterFields,
-      }}
+      searchInput={searchInput}
     />;
     return (
       <GanttCollectionSurface
@@ -465,15 +468,7 @@ function ListViewBody<TRow extends Row = Row>({
         toolbarActions={toolbarActions}
         toolbarWrap={toolbarWrap}
         maxGroupDepth={maxGroupDepth}
-        toolbarInputs={{
-          columns: resolvedColumns, modelMetadata, resourceView,
-          groupStack: effectiveGroupStack, defaultGroup, defaultGroups,
-          textFilterField,
-          groupOptions: explicitGroupOptions,
-          declaredFacets, scalarFacets,
-          filterOptions: explicitFilterOptions,
-          customFilterFields: explicitCustomFilterFields,
-        }}
+        searchInput={searchInput}
       />
     );
   }
@@ -482,6 +477,7 @@ function ListViewBody<TRow extends Row = Row>({
     if (!Body) return <ErrorBanner description={t("list.unknownView", { view: resourceView.state.view })} />;
     return (
       <ContributedViewSurface
+        searchInput={searchInput}
         resource={resource}
         resourceView={resourceView}
         body={Body}

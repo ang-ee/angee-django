@@ -1,10 +1,13 @@
 import * as React from "react";
+import type { Row } from "@angee/metadata";
 
 import type { PagerState } from "../../../ui/pager";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type ResourceViewKind } from "../resource-view-model";
 import { ResourceListFrame } from "../ResourceListFrame";
-import { useResourceToolbarProps } from "../resource-toolbar-props";
+import { useResourceSearch } from "../search/use-resource-search";
+import { useSearchCatalog, type UseSearchCatalogInput } from "../search/catalog";
+import type { ResourceToolbarProps } from "../../../toolbars";
 
 // A contributed view kind (`<model>#views`, G-18) at the `ListView` seam: the
 // shared toolbar, gated by the kind's declared capabilities, over the kind's own
@@ -13,7 +16,8 @@ import { useResourceToolbarProps } from "../resource-toolbar-props";
 /** The kind owns its own paging, so the shared pager stays empty. */
 const CONTRIBUTED_PAGER: PagerState = { total: 0, page: 1, pageSize: DEFAULT_RESOURCE_VIEW_PAGE_SIZE };
 
-export interface ContributedViewSurfaceProps {
+export interface ContributedViewSurfaceProps<TRow extends Row> {
+  searchInput: Omit<UseSearchCatalogInput<TRow>, "rows">;
   resource: string;
   resourceView: ResourceViewContextValue;
   body: React.ComponentType<{ resource: string }>;
@@ -24,7 +28,8 @@ export interface ContributedViewSurfaceProps {
   className?: string;
 }
 
-export function ContributedViewSurface({
+export function ContributedViewSurface<TRow extends Row>({
+  searchInput,
   resource,
   resourceView,
   body: Body,
@@ -33,16 +38,20 @@ export function ContributedViewSurface({
   onCreate,
   toolbarActions,
   className,
-}: ContributedViewSurfaceProps): React.ReactElement {
-  const toolbar = useResourceToolbarProps({
-    resourceView,
+}: ContributedViewSurfaceProps<TRow>): React.ReactElement {
+  const catalog = useSearchCatalog({ ...searchInput, resourceView, rows: [] });
+  const search = useResourceSearch({ resourceView, catalog, groupingEnabled: false });
+  const toolbar: ResourceToolbarProps = {
+    search,
+    onViewChange: availableViews.length > 1 ? resourceView.setView : undefined,
+    onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     view: resourceView.state.view,
     pager: CONTRIBUTED_PAGER,
     actions: toolbarActions,
     availableViews,
     createLabel,
     onCreate,
-  });
+  };
   return (
     <ResourceListFrame className={className} toolbar={toolbar}>
       <Body resource={resource} />

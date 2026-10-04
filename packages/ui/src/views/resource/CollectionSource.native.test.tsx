@@ -207,7 +207,6 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
         ]}
         onRowClick={open}
         availableViews={["list"]}
-        textFilterField="title"
         customFilterFields={[]}
         groupOptions={[]}
       />
@@ -252,7 +251,9 @@ test("an authored server page uses native list paging without a model-resource q
   act(() => f.view.setPage(2));
   await screen.findByText("Activity all page 2");
   expect(f.requests.at(-1)).toMatchObject({ page: 2, pageSize: 25 });
-  act(() => f.view.setFilter({ title: { iContains: "document" } }));
+  const search = screen.getByRole("searchbox", { name: "Filter records" });
+  fireEvent.change(search, { target: { value: "document" } });
+  fireEvent.blur(search);
   await waitFor(() =>
     expect(f.requests.at(-1)).toMatchObject({
       page: 1,

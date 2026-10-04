@@ -10,8 +10,9 @@ import { TreeView } from "./TreeView";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
 import { useResourceView } from "../resource/resource-view-context";
 import { useResourceViewSurface } from "../resource/resource-view-surface";
-import { useResourceViewToolbarInputs } from "../resource/resource-view-toolbar-inputs";
-import { useResourceToolbarProps } from "../resource/resource-toolbar-props";
+import { useSearchCatalog } from "../resource/search/catalog";
+import { useResourceSearch } from "../resource/search/use-resource-search";
+import type { ResourceToolbarProps } from "../../toolbars";
 import {
   useCollectionQueryBatch,
   type CollectionSource,
@@ -112,29 +113,24 @@ export function CollectionTreeView<TRow extends Row>(
     ],
     [surface.rows, children, props.parent],
   );
-  const toolbarInputs = useResourceViewToolbarInputs({
+  const catalog = useSearchCatalog({
     query: props.source.query,
     inferOptions: false,
     modelMetadata: null,
     columns: props.columns,
     rows: surface.rows,
     resourceView: view,
-    list: surface.list,
     groupOptions: [],
     filterOptions: props.filterOptions,
     customFilterFields: props.customFilterFields,
     textFilterField: props.textFilterField,
   });
-  const toolbar = useResourceToolbarProps({
-    ...toolbarInputs,
-    resourceView: view,
-    textFilterField: props.textFilterField,
-    groupingEnabled: false,
-    view: "list",
-    availableViews: ["list"],
-    actions: props.toolbarActions,
-    wrap: props.toolbarWrap,
-  });
+  const search = useResourceSearch({ resourceView: view, catalog, groupingEnabled: false });
+  const toolbar: ResourceToolbarProps = {
+    search, pager: surface.list, view: "list", availableViews: ["list"],
+    onPageChange: view.setPage, onPageSizeChange: view.setPageSize,
+    actions: props.toolbarActions, wrap: props.toolbarWrap,
+  };
   return (
     <ResourceListFrame
       toolbar={toolbar}

@@ -8,7 +8,8 @@ import { afterEach, expect, test } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 import { ResourceToolbar, ResourceViewSwitcher } from "../../toolbars/ResourceToolbar";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
-import { useResourceToolbarProps } from "./resource-toolbar-props";
+import { useResourceSearch } from "./search/use-resource-search";
+import { useSearchCatalog } from "./search/catalog";
 import { RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY } from "./resource-view-favorites";
 import { favoriteFromResourceView, resourceViewPresetDefaults, validateResourceViewPreset, type ResourceViewPreset } from "./model/favorites";
 import { useResourceViewQueryFacts, useResourceViewTableState } from "./surface/table-state";
@@ -44,9 +45,10 @@ function fixture(entry = "/", presetIds: readonly string[] = [archived.id], tool
     facts = useResourceViewQueryFacts({ resourceView: view, columns, modelMetadata: model });
     table = useResourceViewTableState({ resourceView: view, columns, modelMetadata: model,
       groupStack: view.state.groupStack });
-    const controls = useResourceToolbarProps({ resourceView: view,
-      pager: { total: 1, page: 1, pageSize: 20 }, view: view.state.view,
-      favorites: view.savedFavorites, filterRow: {} });
+    const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
+    const search = useResourceSearch({ resourceView: view, catalog });
+    const controls = { search, pager: { total: 1, page: 1, pageSize: 20 }, view: view.state.view,
+      availableViews: ["list", "board"] as const, onViewChange: view.setView, filterRow: {} };
     if (toolbar) return <ResourceToolbar {...controls} />;
     return <ResourceViewSwitcher view={view.state.view} favorites={view.savedFavorites}
       onFavoriteSelect={view.applyFavorite} onViewChange={view.setView} />;
@@ -180,13 +182,11 @@ test("a shipped preset quick filter toggles off its fixed scope in a local widge
   let view!: ResourceViewContextValue;
   function Widget() {
     view = useResourceView();
-    const toolbar = useResourceToolbarProps({
-      resourceView: view,
-      pager: { total: 1, page: 1, pageSize: 10 },
-      view: "list",
-      favorites: view.savedFavorites,
-      filterRow: { quickFilterIds: [archived.id] },
-    });
+    const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
+    const search = useResourceSearch({ resourceView: view, catalog });
+    const toolbar = { search, pager: { total: 1, page: 1, pageSize: 10 },
+      view: "list" as const, filterRow: { quickFilterIds: [archived.id] } };
+
     return <ResourceToolbar {...toolbar} />;
   }
   render(<ModelMetadataProvider metadata={metadata}>

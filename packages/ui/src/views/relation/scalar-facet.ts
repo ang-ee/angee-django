@@ -1,12 +1,14 @@
 import * as React from "react";
+import type { SearchFacet } from "../resource/search/types";
 import {
   useAngeeFacets,
 } from "@angee/refine";
 import type {
   FacetRequestSpec,
   ResourceFacetOption,
-  } from "@angee/refine";
+} from "@angee/refine";
 import {
+  Filter,
   ResourceQuery,
   type ModelFieldMetadata,
 } from "@angee/metadata";
@@ -14,10 +16,6 @@ import type {
   ModelMetadata,
 } from "@angee/metadata";
 
-import type {
-  FilterClauseField,
-  ResourceToolbarFilterOption,
-} from "../../toolbars";
 import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
 import { useUiT } from "../../i18n";
 import type { UiTranslate } from "../../i18n";
@@ -29,17 +27,7 @@ import type { ColumnDescriptor } from "../page";
 import { useGroupOperation } from "../resource/resource-operations";
 
 const SCALAR_FACET_OPTION_LIMIT = 200;
-const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];
-const EMPTY_FILTER_FIELDS: readonly FilterClauseField[] = [];
-const EMPTY_SCALAR_FACETS: ScalarFacets = {
-  filters: EMPTY_FILTER_OPTIONS,
-  filterFields: EMPTY_FILTER_FIELDS,
-};
-
-export interface ScalarFacets {
-  filters: readonly ResourceToolbarFilterOption[];
-  filterFields: readonly FilterClauseField[];
-}
+export type ScalarFacets = readonly SearchFacet[];
 
 export interface ScalarFacetDeclaration {
   id: string;
@@ -74,70 +62,20 @@ export function useScalarFacets<TRow extends object>(
     facets: facetSpecs,
     enabled: resource !== null && facetSpecs.length > 0,
   });
-  const filters = React.useMemo<readonly ResourceToolbarFilterOption[]>(
-    () =>
-      facets.flatMap((facet) => {
-        const result = facetQuery.facets[facet.id];
-        return (result?.options ?? []).map((option) =>
-          scalarFilterOption(facet, option, metadata, t("list.emptyValue"), t),
-        );
+  return React.useMemo(() => facets.map((facet): SearchFacet => {
+    const axis = ResourceQuery.from(metadata!).axis(facet.field);
+    return {
+      field: facet.field, label: facet.label, source: "scalar",
+      options: (facetQuery.facets[facet.id]?.options ?? []).flatMap((option) => {
+        const filter = axis.drill({ key: option.key });
+        if (!filter) return [];
+        const value = Filter.facetFromFilter(filter)?.value;
+        return [{ id: axis.bucketId({ key: option.key }),
+          label: scalarFacetOptionLabel(facet, option, metadata, t("list.emptyValue"), t),
+          filter, ...(value === undefined ? {} : { value }) }];
       }),
-    [facetQuery.facets, facets, metadata, t],
-  );
-  const filterFields = React.useMemo<readonly FilterClauseField[]>(
-    () =>
-      facets.flatMap((facet) => {
-        const result = facetQuery.facets[facet.id];
-        if (!result || result.options.length === 0) return [];
-        return [{
-          id: facet.field,
-          field: facet.field,
-          label: facet.label,
-          type: "selection",
-          options: result.options.flatMap((option) => {
-            const filter = ResourceQuery.from(metadata!).axis(facet.field).drill({ key: option.key });
-            const comparisons = filter?.[facet.field];
-            if (!comparisons || typeof comparisons !== "object" || !("exact" in comparisons)
-              || typeof comparisons.exact !== "string") return [];
-            return [{
-              value: comparisons.exact,
-              label: scalarFacetOptionLabel(
-                facet,
-                option,
-                metadata,
-                t("list.emptyValue"),
-                t,
-              ),
-            }];
-          }),
-        }];
-      }),
-    [facetQuery.facets, facets, metadata, t],
-  );
-
-  return React.useMemo(
-    () =>
-      facets.length > 0
-        ? { filters, filterFields }
-        : EMPTY_SCALAR_FACETS,
-    [facets.length, filterFields, filters],
-  );
-}
-
-function scalarFilterOption(
-  facet: ScalarFacetDeclaration,
-  option: ResourceFacetOption,
-  metadata: ModelMetadata | null,
-  emptyValueLabel: string,
-  t: UiTranslate,
-): ResourceToolbarFilterOption {
-  const label = scalarFacetOptionLabel(facet, option, metadata, emptyValueLabel, t);
-  return {
-    id: ResourceQuery.from(metadata!).axis(facet.field).bucketId({ key: option.key }),
-    label,
-    chipLabel: label,
-    filter: ResourceQuery.from(metadata!).axis(facet.field).drill({ key: option.key })!,
-  };
+    };
+  }), [facets, facetQuery.facets, metadata, t]);
 }
 
 function scalarFacetOptionLabel(

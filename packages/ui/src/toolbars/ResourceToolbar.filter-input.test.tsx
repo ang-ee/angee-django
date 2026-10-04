@@ -3,13 +3,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ResourceToolbar } from "./ResourceToolbar";
+import { searchFixture } from "../views/resource/search/search-fixture.test-support";
 import type { FilterClauseField } from "./FilterClauseEditor";
 
 afterEach(cleanup);
 
 async function editor(field: FilterClauseField) {
   const add = vi.fn();
-  render(<ResourceToolbar pager={{ total: 0, page: 1, pageSize: 20 }} customFilterFields={[field]} onCustomFilterAdd={add} onFilterTextChange={vi.fn()} />);
+  render(<ResourceToolbar pager={{ total: 0, page: 1, pageSize: 20 }} search={searchFixture({ catalog: { fields: [field] }, addClause: add })} />);
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));
   fireEvent.click(await screen.findByRole("button", { name: "Add custom filter" }));
   return add;

@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { ResourceSearch, SearchFacet } from "../views/resource/search/types";
 import type { ReactElement, ReactNode } from "react";
 import { useDebouncedText } from "../lib/use-debounced-text";
 import { useContainerQuery } from "../lib/use-container-query";
@@ -50,67 +51,27 @@ export interface ResourceToolbarChrome {
 }
 
 export interface ResourceToolbarProps {
+  search: ResourceSearch;
   pager: PagerState;
   chrome?: ResourceToolbarChrome;
-  maxGroupDepth?: number;
   view?: ResourceViewKind;
-  group?: ResourceViewGroup | null;
-  groupStack?: readonly ResourceViewGroup[];
-  /** Curated grouping shortcuts shown directly in the Group by menu. */
-  groupOptions?: readonly ResourceToolbarGroupOption[];
-  /** Complete supported grouping catalog for the custom group editor. Falls
-   * back to `groupOptions` for standalone callers that omit it. */
-  customGroupOptions?: readonly ResourceToolbarGroupOption[];
-  filterOptions?: readonly ResourceToolbarFilterOption[];
-  customFilterFields?: readonly FilterClauseField[];
-  customFilterChips?: readonly ResourceToolbarCustomFilterChip[];
-  favorites?: readonly ResourceViewFavorite[];
   /** Present filter-option or shipped-preset ids and facets in a compact row. */
   filterRow?: { quickFilterIds?: readonly string[]; facetIds?: readonly string[] };
-  facetLabels?: Readonly<Record<string, ReactNode>>;
-  activeFilterIds?: readonly string[];
-  activeFavoriteIds?: readonly string[];
-  filterText?: string;
   createLabel?: ReactNode;
   onCreate?: () => void;
-  /** Extra controls rendered in the toolbar's leading slot, beside the filter. */
   actions?: ReactNode;
-  /** Cross-resource utilities rendered after the query controls and before the
-   * pager. Global collection actions such as Share compose here. */
   utilityActions?: ReactNode;
-  /** View-contributed controls (period nav + mode switch + title) for the active
-   * kind — the calendar contributes these; list/board contribute none. */
   viewControls?: ResourceToolbarViewControls;
-  /** The kinds the switcher offers — derived from the page's declared kinds
-   * (defaults to list + board). */
   availableViews?: readonly ResourceViewKind[];
-  /** Trailing control rendered on the right (e.g. a List/Grid layout switcher). */
   viewSwitcher?: ReactNode;
-  onFilterTextChange?: (value: string) => void;
-  onFilterToggle?: (id: string) => void;
-  onFacetChange?: (field: string, optionId: string | null) => void;
-  onClearGroup?: () => void;
-  onGroupStackChange?: (groups: readonly ResourceViewGroup[]) => void;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
   pagerPageSizeOptions?: readonly number[];
   pagerMaxPageSize?: number;
   onViewChange?: (view: ResourceViewKind) => void;
-  onCustomFilterAdd?: (filter: FilterClause) => void;
-  onCustomFilterRemove?: (id: string) => void;
-  onFavoriteSave?: (label: string) => void;
-  onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
-  onFavoriteToggle?: (favorite: ResourceViewFavorite) => void;
-  onFavoriteRename?: (id: string, label: string) => void;
-  onFavoritePin?: (id: string, pinned: boolean) => void;
-  /** Clear filter, sorting and grouping state together. */
-  onQueryReset?: () => void;
-  /** Explicit baseline comparison; standalone toolbars infer this from active controls. */
-  queryDirty?: boolean;
   pagerSubject?: string;
   pagerTotalUnit?: string;
   className?: string;
-  /** Allow controls to wrap when the containing pane is narrow. */
   wrap?: boolean;
 }
 
@@ -118,8 +79,6 @@ export interface ResourceToolbarFilterOption {
   id: string;
   label: ReactNode;
   chipLabel?: ReactNode;
-  /** Compound preset; its individual value chips describe the active predicates. */
-  preset?: boolean;
   filter: ResourceViewFilter;
   group?: string;
 }
@@ -174,89 +133,53 @@ const PRIMARY_GROUP_GRANULARITIES = new Set<ResourceViewGroupGranularity>([
 ]);
 
 export function ResourceToolbar({
-  pager,
-  chrome,
-  maxGroupDepth,
-  view,
-  group,
-  groupStack,
-  groupOptions,
-  customGroupOptions,
-  filterOptions = [],
-  customFilterFields = [],
-  customFilterChips = [],
-  favorites = [],
-  filterRow,
-  facetLabels,
-  activeFilterIds = [],
-  activeFavoriteIds = [],
-  filterText = "",
-  createLabel,
-  onCreate,
-  actions,
-  utilityActions,
-  viewControls,
-  availableViews,
-  viewSwitcher,
-  onFilterToggle,
-  onFacetChange,
-  onFilterTextChange,
-  onClearGroup,
-  onGroupStackChange: changeGroupStack,
-  onPageChange,
-  onPageSizeChange,
-  pagerPageSizeOptions,
-  pagerMaxPageSize,
-  onViewChange,
-  onCustomFilterAdd,
-  onCustomFilterRemove,
-  onFavoriteSave,
-  onFavoriteSelect,
-  onFavoriteToggle,
-  onFavoriteRename,
-  onFavoritePin,
-  onQueryReset,
-  queryDirty,
-  pagerSubject,
-  pagerTotalUnit,
-  className,
-  wrap = false,
+  search, pager, chrome, view, filterRow, createLabel, onCreate, actions,
+  utilityActions, viewControls, availableViews, viewSwitcher, onPageChange,
+  onPageSizeChange, pagerPageSizeOptions, pagerMaxPageSize, onViewChange,
+  pagerSubject, pagerTotalUnit, className, wrap = false,
 }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
-  const onGroupStackChange = React.useMemo(
-    () =>
-      changeGroupStack
-        ? (groups: readonly ResourceViewGroup[]) =>
-            changeGroupStack(
-              maxGroupDepth === undefined
-                ? groups
-                : groups.slice(-Math.max(1, maxGroupDepth)),
-            )
-        : undefined,
-    [changeGroupStack, maxGroupDepth],
-  );
+  const { catalog, active } = search;
+  // Adapt the shared catalog and active projection to the existing controls.
+  const filterOptions: readonly ResourceToolbarFilterOption[] = [
+    ...catalog.filters,
+    ...catalog.facets.flatMap((facet) => facet.options.map((option) => ({ ...option, chipLabel: option.label }))),
+  ];
+  const customFilterFields = catalog.fields;
+  const customFilterChips = active.flatMap((item) => item.kind === "clause"
+    ? [{ id: item.id.slice("clause:".length), label: item.label }] : []);
+  const favorites = catalog.favorites;
+  const activeFilterIds = active.flatMap((item) => item.kind === "filter" ? [item.id.slice("filter:".length)]
+    : item.kind === "facet" ? item.options.map((option) => option.id) : []);
+  const activeFavoriteIds = active.flatMap((item) => item.kind === "favorite" ? [item.id.slice("favorite:".length)] : []);
+  const filterText = active.flatMap((item) => item.kind === "text" && item.field === catalog.text[0]?.field ? [item.value] : [])[0] ?? "";
+  const onFilterToggle = (id: string) => {
+    const facet = catalog.facets.find((candidate) => candidate.options.some((option) => option.id === id));
+    if (facet) search.toggleFacetOption(facet.field, id);
+    else search.toggleFilter(id);
+  };
+  const onFacetChange = (field: string, id: string | null) => search.setFacet(field, id ? [id] : []);
+  const onFilterTextChange = catalog.text.length ? search.setText : undefined;
+  const onGroupStackChange = search.groupingEnabled ? search.setGroupStack : undefined;
+  const onClearGroup = search.groupingEnabled ? () => search.setGroupStack([]) : undefined;
+  const onCustomFilterAdd = search.addClause;
+  const onCustomFilterRemove = (id: string) => search.clear(`clause:${id}` as Parameters<ResourceSearch["clear"]>[0]);
+  const onFavoriteSave = search.saveFavorite;
+  const onFavoriteSelect = (favorite: ResourceViewFavorite) => search.applyFavorite(favorite.id);
+  const onFavoriteToggle = (favorite: ResourceViewFavorite) => search.toggleFavorite(favorite.id);
+  const onFavoriteRename = search.renameFavorite;
+  const onFavoritePin = search.pinFavorite;
+  const onQueryReset = search.clearQuery;
   const resolvedCreateLabel = createLabel ?? t("resourceToolbar.create");
   // The active kind's applicability gates the data controls: the calendar shows
   // none of filter/pager/group-by; a surface that names no kind keeps them all.
   const capabilities = resourceViewKindCapabilities(view, useResourceViewKindContent(view)?.capabilities);
-  const groupControls =
-    capabilities.grouping &&
-    (groupOptions !== undefined ||
-      customGroupOptions !== undefined ||
-      groupStack !== undefined ||
-      group !== undefined ||
-      onGroupStackChange !== undefined ||
-      onClearGroup !== undefined);
-  const toolbarGroupOptions = groupOptions ?? [];
-  const toolbarCustomGroupOptions = customGroupOptions ?? toolbarGroupOptions;
-  const groups = groupControls ? groupStack ?? (group ? [group] : []) : [];
-  const activeFilters = filterOptions.filter(
-    (option) => activeFilterIds.includes(option.id) && !option.preset,
-  );
-  const clearable = queryDirty ?? (
-    activeFilterIds.length > 0 || activeFavoriteIds.length > 0
-    || customFilterChips.length > 0 || Boolean(filterText) || groups.length > 0
-  );
+  const groupControls = capabilities.grouping && search.groupingEnabled;
+  const toolbarGroupOptions = catalog.curatedGroups;
+  const toolbarCustomGroupOptions = catalog.groups;
+  const groups = groupControls ? search.groupStack : [];
+  const activeFilters = filterOptions.filter((option) => activeFilterIds.includes(option.id));
+  const clearable = search.queryDirty;
   return (
     <section
       aria-label={t("resourceToolbar.controls")}
@@ -286,9 +209,8 @@ export function ResourceToolbar({
               favorites={favorites}
               quickFilterIds={filterRow.quickFilterIds ?? []}
               facetIds={filterRow.facetIds ?? []}
-              facetLabels={facetLabels}
+              facets={catalog.facets}
               filterOptions={filterOptions}
-              customFilterFields={customFilterFields}
               activeFilterIds={activeFilterIds}
               activeFavoriteIds={activeFavoriteIds}
               queryDirty={clearable}
@@ -418,16 +340,15 @@ function ResourceViewControls({
 }
 
 function FilterRow({
-  favorites, quickFilterIds, facetIds, facetLabels, filterOptions, customFilterFields,
+  favorites, quickFilterIds, facetIds, facets, filterOptions,
   activeFilterIds, activeFavoriteIds, queryDirty,
   onFilterToggle, onFacetChange, onFavoriteToggle, onQueryReset,
 }: {
   favorites: readonly ResourceViewFavorite[];
   quickFilterIds: readonly string[];
   facetIds: readonly string[];
-  facetLabels?: Readonly<Record<string, ReactNode>>;
+  facets: readonly SearchFacet[];
   filterOptions: readonly ResourceToolbarFilterOption[];
-  customFilterFields: readonly FilterClauseField[];
   activeFilterIds: readonly string[];
   activeFavoriteIds: readonly string[];
   queryDirty: boolean;
@@ -454,11 +375,11 @@ function FilterRow({
       active={option.active} aria-pressed={option.active}
       onClick={option.onClick}>{option.label}</Button>)}
     {facetIds.map((field) => {
-      const choices = filterOptions.filter((option) => option.id.startsWith(`${field}:`));
-      const descriptor = customFilterFields.find((option) => (option.field ?? option.id) === field);
+      const facet = facets.find((option) => option.field === field);
+      const choices = facet?.options ?? [];
       const selected = choices.find((choice) => activeFilterIds.includes(choice.id));
       if (choices.length === 0) return null;
-      const label = facetLabels?.[field] ?? descriptor?.label ?? titleCase(field);
+      const label = facet?.label ?? titleCase(field);
       return <Select key={field} size="sm" aria-label={labelText(label) ?? titleCase(field)}
         value={selected?.id ?? ""} placeholder={label}
         options={[{ value: "", label }, ...choices.map((choice) => ({ value: choice.id, label: choice.label }))]}

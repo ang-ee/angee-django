@@ -15,7 +15,7 @@ import {
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
-import type { ResourceViewGroup } from "./resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewGroup } from "./resource-view-model";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
 import { ResourceQueryError } from "./ResourceQueryError";
@@ -35,10 +35,9 @@ import type {
   ResourceTableHeaderVisibility,
   ResourceTableLayout,
 } from "./resource-view-types";
-import { useResourceToolbarProps } from "./resource-toolbar-props";
-import {
-  useResourceViewToolbarInputs,
-} from "./resource-view-toolbar-inputs";
+import { useResourceSearch } from "./search/use-resource-search";
+import { useSearchCatalog } from "./search/catalog";
+import type { ResourceToolbarProps } from "../../toolbars";
 import { useResourceViewGroupState } from "./resource-view-group-state";
 import {
   useRowActionsSurface,
@@ -191,18 +190,17 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     error,
     onListStateChange,
   });
-  const toolbarInputs = useResourceViewToolbarInputs({
+  const catalog = useSearchCatalog({
     columns,
     query,
     rows: surface.sourceRows,
     modelMetadata: null,
     resourceView,
-    list: surface.list,
     defaultGroup,
     groupOptions,
     filterOptions: explicitFilterOptions,
     customFilterFields: explicitCustomFilterFields,
-    groupStack: effectiveGroupStack,
+    textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
@@ -216,29 +214,14 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
         },
       }
     : emptyContent ?? t("list.empty");
-  const toolbar = useResourceToolbarProps({
-    actions: toolbarActions,
+  const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack });
+  const toolbar: ResourceToolbarProps = {
+    search, actions: toolbarActions, pager: surface.list,
     viewSwitcher: gallery ? (
-      <ResourceViewSwitcher<RowLayout>
-        mode="layout"
-        view={layout}
-        onViewChange={setLayout}
-      />
+      <ResourceViewSwitcher<RowLayout> mode="layout" view={layout} onViewChange={setLayout} />
     ) : undefined,
-    pager: toolbarInputs.pager,
-    group: effectiveGroupStack[0] ?? null,
-    groupStack: effectiveGroupStack,
-    groupOptions: toolbarInputs.groupOptions,
-    customGroupOptions: toolbarInputs.customGroupOptions,
-    groupingEnabled: toolbarInputs.groupingEnabled,
-    filterOptions: toolbarInputs.filterOptions,
-    customFilterFields: toolbarInputs.customFilterFields,
-    customFilterChips: toolbarInputs.customFilterChips,
-    favorites: resourceView.savedFavorites,
-    activeFilterIds: toolbarInputs.activeFilterIds,
-    filterText: toolbarInputs.filterText,
-    resourceView,
-  });
+    onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
+  };
 
   return (
     <ResourceListFrame

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { searchFixture } from "../views/resource/search/search-fixture.test-support";
 
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
@@ -268,8 +269,8 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
     }, [props.onListStateChange]);
     return <><div>Standard list</div><button type="button" onClick={rowVerb}>Open record</button><ResourceToolbar
       pager={{ total: 17, page: 1, pageSize: 20 }} view="list" availableViews={["list", "board"]}
-      filterOptions={[{ id: "open", label: "Open", filter: { status: "open" } }]}
-      onViewChange={() => {}} onFilterTextChange={() => {}} chrome={props.chrome}
+      search={searchFixture({ catalog: { filters: [{ id: "open", label: "Open", filter: { status: "open" } }] } })}
+      onViewChange={() => {}} chrome={props.chrome}
     /></>;
   }
   const hosted: WidgetSpec = { ...spec, kind: "resourceView", data: { shape: "resourceView", preset: "desk.open" },

@@ -27,7 +27,9 @@ import {
 } from "../resource/resource-view-model";
 import type { CalendarViewSpec } from "../resource/resource-view-types";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
-import { useResourceToolbarProps } from "../resource/resource-toolbar-props";
+import { useResourceSearch } from "../resource/search/use-resource-search";
+import { useSearchCatalog } from "../resource/search/catalog";
+import type { ResourceToolbarProps } from "../../toolbars";
 
 // The windowed-collection surface at the `ListView` seam — a component boundary
 // beside the client/grouped/server bodies, so the calendar's window-keyed fetch
@@ -108,8 +110,12 @@ export function CalendarCollectionSurface({
     [mode, anchor, t, resourceView.setMode, resourceView.setAnchor],
   );
 
-  const toolbar = useResourceToolbarProps({
-    resourceView,
+  const catalog = useSearchCatalog({ resourceView, columns: [], rows: [], modelMetadata: null, inferOptions: false, textFilterField: null });
+  const search = useResourceSearch({ resourceView, catalog, groupingEnabled: false });
+  const toolbar: ResourceToolbarProps = {
+    search,
+    onViewChange: availableViews.length > 1 ? resourceView.setView : undefined,
+    onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     view: "calendar",
     pager: CALENDAR_PAGER,
     actions: toolbarActions,
@@ -117,7 +123,7 @@ export function CalendarCollectionSurface({
     availableViews,
     createLabel,
     onCreate,
-  });
+  };
 
   return (
     <CalendarWindowSources sources={calendar.sources} range={fetchWindow} enabled={settled}>
