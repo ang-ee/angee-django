@@ -999,6 +999,10 @@ def test_direct_inference_builds_one_structured_multimodal_envelope(
         assert payload["response_format"]["type"] == "json_schema"
         assert payload["response_format"]["json_schema"]["name"] == "inference_output"
         assert payload["response_format"]["json_schema"]["schema"] == output_schema
+        instructions = payload["messages"][0]["content"]
+        assert payload["messages"][0]["role"] == "system"
+        shown = json.JSONDecoder().raw_decode(instructions[instructions.index("{"):])[0]
+        assert {key: shown[key] for key in output_schema} == output_schema
     else:
         assert payload["tools"][0]["type"] == "function"
         assert payload["tools"][0]["function"]["name"] == "inference_output"
@@ -1188,3 +1192,32 @@ def test_model_requires_read_and_exact_approved_deployment(composed_tables, sett
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [{**identity, "endpoint": "http://localhost:9999/v1"}]}
     with pytest.raises(PermissionDenied, match="not approved"):
         model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_usable_models_filter_access_policy_capability_and_order_defaults(composed_tables, settings):
+    provider = _provider("usable-ollama", backend_class="ollama")
+    private = _provider("private-ollama", backend_class="ollama")
+    with system_context(reason="test.agents.usable.seed"):
+        ordinary = InferenceModel.objects.create(provider=provider, name="ordinary")
+        default = InferenceModel.objects.create(provider=provider, name="default", is_default=True)
+        unapproved = InferenceModel.objects.create(provider=provider, name="unapproved", is_default=True)
+        retired = InferenceModel.objects.create(provider=provider, name="retired", status=InferenceModelStatus.RETIRED)
+        embedding = InferenceModel.objects.create(
+            provider=provider, name="embedding", model_use=InferenceModelUse.EMBEDDING,
+        )
+        hidden = InferenceModel.objects.create(provider=private, name="hidden", is_default=True)
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {
+        "mapping": [row.deployment_identity() for row in (ordinary, default, retired, embedding, hidden)],
+    }
+    assert InferenceModel.objects.usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT}) == (
+        default, ordinary,
+    )
+    assert InferenceModel.objects.usable(provider.owner, "recognition", uses={InferenceModelUse.CHAT}) == ()
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
+    assert InferenceModel.objects.usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT}) == (
+        default, unapproved, ordinary,
+    )
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": ["malformed"]}
+    with pytest.raises(ValueError, match="policy is invalid"):
+        InferenceModel.objects.usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
