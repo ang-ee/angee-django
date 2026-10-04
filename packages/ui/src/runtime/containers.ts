@@ -252,7 +252,9 @@ export interface ResolveContainerOptions {
   impls?: readonly string[];
   /**
    * Children a page adds at render time (a page's published chatter tabs). They
-   * follow the composed ones and get the same narrowing.
+   * interleave with composed children by `sequence`; without a position they
+   * trail in input order. `before`/`after` may anchor on composed ids. They get
+   * the same `only`/`except` narrowing; `hide` alters composed children only.
    */
   extra?: readonly ComposedContainerChild[];
   /**
@@ -277,9 +279,11 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
 
 /**
  * The children of a container as one page renders them: the kind-level address
- * and each model's address merged and positioned (ties in id order), then every
- * layer's narrowing whose condition holds, applied in dependency order, with
- * variants standing in for their originals on matching rows and the row's
+ * and each model's address merged with render-time extras and positioned by
+ * sequence. Ties keep composed children in id order, then extras in input order;
+ * unpositioned extras trail, and `before`/`after` may anchor on composed ids.
+ * Then every layer's narrowing whose condition holds applies in dependency
+ * order, with variants standing in for their originals on matching rows and the row's
  * permission last. Narrowing by a variant's own id drops that variant (its
  * original returns); narrowing by an original's id carries its variants along.
  * A deployment `only` that holds forces: its narrowing replaces the addons'.
@@ -299,10 +303,7 @@ export function resolveContainer<TContent = unknown>(
   const addresses = declared.models ? [address, ...models.map((model) => `${model}#${name}`)] : [address];
   // One id on a model and on its MTI parent (one addon's, as ids are namespaced): the model's own stands.
   const byId = new Map(addresses.flatMap((at) => composed.children[at] ?? []).map((child) => [child.id, child]));
-  const merged = [
-    ...positionSiblings(orderById([...byId.values()]), `Children of "${address}"`),
-    ...extra,
-  ];
+  const merged = positionSiblings([...orderById([...byId.values()]), ...extra], `Children of "${address}"`);
   const rules = addresses.flatMap((at) => composed.rules[at] ?? [])
     .filter((rule) => matches(rule.when, scope))
     .map((rule, index) => ({ rule, index }))
