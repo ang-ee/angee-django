@@ -27,6 +27,7 @@ export * from "./ui/button";
 export * from "./ui/spinner";
 export * from "./ui/skeleton";
 export * from "./ui/field";
+export * from "./ui/FloatingField";
 export * from "./ui/form";
 export * from "./ui/inline-text-action";
 export * from "./ui/label";
