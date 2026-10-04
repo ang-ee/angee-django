@@ -39,7 +39,7 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
 from angee.base.identity import public_id_for
-from angee.base.mixins import HierarchyQuerySet
+from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import read_scoped_queryset
@@ -150,6 +150,20 @@ class CircleManager(AngeeManager.from_queryset(CircleQuerySet)):  # type: ignore
 
 class HandleQuerySet(AngeeQuerySet):
     """Handle read scopes over the Angee base."""
+
+    def confirmed(self, platform: str, value: str) -> Self:
+        """Return matching handles with a confirmed, nonempty party link.
+
+        Value comparison follows the platform's persisted normalization rule.
+        Existing filters and actor scope are preserved.
+        """
+
+        return self.filter(
+            platform=platform,
+            normalized_value=self.model.normalize_value(platform, value),
+            party_link_confirmed=True,
+            party__isnull=False,
+        )
 
     def with_sender_name(self) -> Self:
         """Select each readable handle's confirmed, readable party/envelope name.
@@ -1260,6 +1274,30 @@ class PartyQuerySet(AngeeQuerySet):
         """
 
         return self.filter(merged_into__isnull=True)
+
+    def named(self, name: str) -> Self:
+        """Return canonical candidates with an exact display or legal name.
+
+        Comparison ignores case and collapses surrounding and internal whitespace
+        on both sides. Several parties may match. Compositions with ArchiveQuerySet
+        also exclude archived rows; existing filters and actor scope are preserved.
+        """
+
+        words = name.split()
+        if not words:
+            return self.none()
+        pattern = r"^\s*" + r"\s+".join(re.escape(word) for word in words) + r"\s*$"
+        candidates = self.canonical()
+        if isinstance(candidates, ArchiveQuerySet):
+            candidates = candidates.unarchived()
+        organizations = apps.get_model("parties", "Organization").objects.filter(legal_name__iregex=pattern)
+        actor = self.actor() or current_actor()
+        if actor is not None:
+            organizations = organizations.with_actor(actor)
+        legal_name_ids = organizations.scoped_for_aggregate().values("pk")
+        return candidates.filter(
+            Q(display_name__iregex=pattern) | Q(pk__in=Subquery(legal_name_ids)),
+        )
 
     def with_circle_names(self) -> Self:
         """Prefetch actor-visible circle names for generic chip rendering.
