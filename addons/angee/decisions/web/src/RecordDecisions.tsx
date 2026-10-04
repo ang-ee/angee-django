@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { useDecisionsT } from "./i18n";
 import { DECISION_MODEL } from "./documents.console";
 
-/** The subject's decisions use the shared embedded list owner. */
+/** Readable decisions for a subject or step run compose the shared embedded list. */
 export function DecisionsList({ baseFilter }: { baseFilter: ResourceFilter<string> }): ReactElement {
   const t = useDecisionsT();
   return <ListView resource={DECISION_MODEL} presentation="embedded" scope="local"

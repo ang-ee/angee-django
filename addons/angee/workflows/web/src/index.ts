@@ -6,6 +6,7 @@ import { decisionRunOrigin, workflowsRunsTab } from "./contributions";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
+import { WORKFLOW_STATUS_TONES } from "./status-tones";
 
 export { WORKFLOW_STUDIO_TAB_ID } from "./catalogue/resources";
 
@@ -31,6 +32,7 @@ export default defineBaseAddon({
     "record#aside": { "workflows.runs": workflowsRunsTab },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },
+  statusTones: WORKFLOW_STATUS_TONES,
 
   widgets: { "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition } },
   i18n: { workflows: enWorkflowsMessages },

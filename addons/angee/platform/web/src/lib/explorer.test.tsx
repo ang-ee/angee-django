@@ -66,7 +66,7 @@ describe("platform explorer selectors", () => {
       "iam.user",
       "operator.task",
     ]);
-    expect(graph.nodes[0]?.highlighted).toBe(true);
+    expect(graph.nodes[0]?.selected).toBe(true);
     expect(graph.edges.map((edge) => edge.id)).toEqual(["operator.task:owner"]);
   });
 

@@ -277,9 +277,9 @@ describe("GraphView", () => {
     const initialLayouts = dagreMock.layouts;
     rendered.rerender(<GraphView
       nodes={nodes.map((node) => node.id === "draft" ? { ...node, title: "Draft renamed" } : node)}
-      edges={edges.map((edge) => ({ ...edge, label: "renamed outcome" }))}
+      edges={edges.map((edge) => ({ ...edge, kind: "taken", label: "renamed outcome" }))}
       nodeStyles={{ ...nodeStyles }}
-      edgeStyles={{ success: { stroke: "purple" } }}
+      edgeStyles={{ taken: { stroke: "var(--brand)", strokeWidth: 2 } }}
     />);
     expect(dagreMock.layouts).toBe(initialLayouts);
     const renderedNodes = reactFlowMock.lastProps?.nodes as Array<{ data: { node: { title: string } } }>;
@@ -306,9 +306,30 @@ describe("GraphView", () => {
     expect(flowNode.ariaLabel).toBe("Draft operation, entry step");
     expect(flowNode.style.width).toBe(nodeStyles.handler.width);
     expect(flowEdge.ariaLabel).toBe("Draft succeeds to itself");
+    expect(currentProps().ariaLabelConfig).toMatchObject({
+      "node.a11yDescription.default": "Press Enter or Space to select a node, or Escape to cancel.",
+      "minimap.ariaLabel": "Graph overview",
+    });
+    expect(screen.queryByRole("status")).toBeNull();
     const label = render(flowNode.data.label);
     expect(label.getByText("Operation")).toBeTruthy();
     expect(label.getByText("handler").tagName).toBe("CODE");
+  });
+
+  test("equivalent live status and port values preserve cached nodes and layout", () => {
+    const node = { ...nodes[0]!, ports: [{ id: "done", label: "Done" }], detail: "1 Succeeded" };
+    const view = render(<GraphView nodes={[node]} edges={[]} nodeStyles={nodeStyles}
+      status={{ [node.id]: { label: "1/1", tone: "success" } }} />);
+    const before = (currentProps().nodes as Node[])[0];
+    const layouts = dagreMock.layouts;
+    view.rerender(<GraphView nodes={[{ ...node, ports: [{ id: "done", label: "Done" }] }]}
+      edges={[]} nodeStyles={nodeStyles} status={{ [node.id]: { label: "1/1", tone: "success" } }} />);
+    expect((currentProps().nodes as Node[])[0]).toBe(before);
+    expect(dagreMock.layouts).toBe(layouts);
+    view.rerender(<GraphView nodes={[node]} edges={[]} nodeStyles={nodeStyles}
+      status={{ [node.id]: { label: "2/2", tone: "warning" } }} />);
+    expect((currentProps().nodes as Node[])[0]).not.toBe(before);
+    expect(dagreMock.layouts).toBe(layouts);
   });
 
   test("keeps the canvas read-only by default", () => {

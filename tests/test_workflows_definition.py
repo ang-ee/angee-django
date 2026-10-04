@@ -108,6 +108,39 @@ def test_linear_entry_and_next_node():
     assert planned(definition, [row("start"), row("finish", "ready")]) == []
 
 
+def test_topology_retains_removed_steps_and_unfrozen_outcome_keys():
+    """An operator can inspect old publications after an implementation disappears."""
+    definition = graph({"old_step": {"step": "removed", "next": {"no_longer_available": "finish"}},
+                        "finish": {}})
+    node = definition.topology().nodes[0]
+    assert node.label == "Old step"
+    assert node.step_label == "removed"
+    assert node.outcomes == {"no_longer_available": "no_longer_available"}
+
+
+def test_topology_projects_frozen_labels_all_routed_ports_and_map_identity():
+    """Old publications without outcome labels still have a port for every edge."""
+    definition = graph({
+        "start": {"label": "Frozen entry", "outcome_labels": {"done": "Frozen success"},
+                  "next": {"alternate": ["right", "left"], "done": "items"}},
+        "left": {}, "right": {},
+        "items": {"step": "map", "body": {"step": "echo"}},
+    })
+    topology = definition.topology()
+    nodes = {node.key: node for node in topology.nodes}
+    assert nodes["start"].label == "Frozen entry"
+    assert nodes["start"].step_label == Echo.display_label()
+    assert nodes["start"].outcomes == {"alternate": "Alternate", "done": "Frozen success"}
+    assert nodes["items"].body_key == "items.body"
+    assert nodes["left"].body_key is None
+    assert [node.rank for node in topology.nodes] == list(range(4))
+    assert [(edge.source, edge.outcome, edge.target) for edge in topology.edges] == [
+        ("start", "alternate", "left"), ("start", "alternate", "right"), ("start", "done", "items"),
+    ]
+    assert definition.edge_live(row("start", outcome="alternate"), {"alternate"})
+    assert not definition.edge_live(row("start", status="skipped", outcome="alternate"), {"alternate"})
+
+
 def test_branching_creates_live_and_skipped_rows():
     """Branching creates live and skipped rows."""
     definition = graph({"choose": {"next": {"done": "left", "alternate": "right"}}, "left": {}, "right": {}})
