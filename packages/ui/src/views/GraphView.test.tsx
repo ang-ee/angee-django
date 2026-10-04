@@ -148,28 +148,12 @@ test("MiniMap is opt-in and uses native pan and zoom navigation", () => {
   const props = reactFlowMock.miniMapProps as { nodeColor: (node: Node) => string; nodeStrokeColor: (node: Node) => string };
   expect(props.nodeColor(node)).toBe(node.style?.borderColor);
   expect(props.nodeStrokeColor(node)).toBe(node.style?.borderColor);
-});
-
-test("measured tall branches no longer overlap and unchanged dimensions or status do not relayout", () => {
-  const branches = [{ id: "entry", kind: "handler", title: "Entry" },
-    { id: "context", kind: "handler", title: "Context review" },
-    { id: "classification", kind: "handler", title: "Classification review" },
-    { id: "bank", kind: "handler", title: "Bank review" }];
-  const links = branches.slice(1).map((node) => ({ id: node.id, source: "entry", target: node.id, kind: "next" }));
-  const props = { nodes: branches, edges: links, nodeStyles, layout: { rankdir: "LR" as const } };
-  const view = render(<GraphView {...props} />);
-  const dimensions = branches.map((node, index) => ({ type: "dimensions" as const, id: node.id,
-    dimensions: { width: 244, height: index === 0 ? 110 : 290 } }));
-  act(() => (currentProps() as ReactFlowProps).onNodesChange?.(dimensions));
-  const positioned = (currentProps().nodes as Node[]).slice(1).sort((a, b) => a.position.y - b.position.y);
-  for (let index = 1; index < positioned.length; index += 1) {
-    expect(positioned[index]!.position.y).toBeGreaterThanOrEqual(positioned[index - 1]!.position.y + 290 + 34);
-  }
-  const layouts = dagreMock.layouts;
-  act(() => (currentProps() as ReactFlowProps).onNodesChange?.(dimensions));
-  view.rerender(<GraphView {...props} nodes={branches.map((node) => ({ ...node, kind: "gate" }))}
-    status={{ context: { label: "Canceled", tone: "warning" } }} />);
-  expect(dagreMock.layouts).toBe(layouts);
+  const withoutStyle = { id: "plain", data: {}, position: { x: 0, y: 0 } };
+  expect(props.nodeColor(withoutStyle)).toBe("var(--border-strong)");
+  expect(props.nodeStrokeColor(withoutStyle)).toBe("var(--border-strong)");
+  view.rerender(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} miniMap status={{ draft: { label: "Ready" } }} />);
+  expect(reactFlowMock.miniMapProps?.nodeColor).toBe(props.nodeColor);
+  expect(reactFlowMock.miniMapProps?.nodeStrokeColor).toBe(props.nodeStrokeColor);
 });
 
 test("initial fit waits for native measurement and does not depend on edges", () => {
@@ -276,7 +260,7 @@ const nodeStyles = {
   },
   gate: {
     width: 160,
-    height: 72,
+    height: 96,
     borderColor: "var(--border-subtle)",
   },
 } as const;
@@ -445,14 +429,15 @@ describe("GraphView", () => {
     ]);
   });
 
-  test("uses persisted node positions before dagre layout positions", () => {
-    render(
+  test("positioned graphs preserve native edges and never run automatic layout", () => {
+    const positioned = [
+      { ...nodes[0], position: { x: 120, y: 80 } },
+      { ...nodes[1], position: { x: 360, y: 140 } },
+    ];
+    const view = render(
       <GraphView
-        nodes={[
-          { ...nodes[0], position: { x: 120, y: 80 } },
-          { ...nodes[1], position: { x: 360, y: 140 } },
-        ]}
-        edges={edges}
+        nodes={positioned}
+        edges={[...edges, { ...edges[0], id: "self", target: "draft" }]}
         nodeStyles={nodeStyles}
       />,
     );
@@ -465,6 +450,14 @@ describe("GraphView", () => {
       ["draft", { x: 120, y: 80 }],
       ["review", { x: 360, y: 140 }],
     ]);
+    expect((currentProps().edges as Array<{ id: string }>).map((edge) => edge.id)).toEqual(["draft-review", "self"]);
+    act(() => (currentProps() as ReactFlowProps).onNodesChange?.(positioned.map((node) => ({
+      type: "dimensions", id: node.id, dimensions: { width: 244, height: 290 },
+    }))));
+    view.rerender(<GraphView nodes={positioned} edges={edges} nodeStyles={nodeStyles} layout={{ rankdir: "LR" }} />);
+    expect(dagreMock.layouts).toBe(0);
+    view.rerender(<GraphView nodes={[positioned[0]!, nodes[1]]} edges={edges} nodeStyles={nodeStyles} />);
+    expect(dagreMock.layouts).toBe(1);
   });
 
   test("adapts editable canvas callbacks to graph records", () => {

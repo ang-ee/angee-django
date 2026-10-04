@@ -3,7 +3,7 @@ import { createAngeeI18nInstance, statusTone, type Tone, type UiTranslate } from
 import { enWorkflowsMessages } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES } from "./run-graph";
 import { mappedRunGraphFixture, runGraphFixture, stepRunFixture, stepRunResourceFixture } from "./testing";
-import { WORKFLOW_GRAPH_STATUS_TONES, WORKFLOW_STATUS_TONES } from "./status-tones";
+import { WORKFLOW_STEP_STATUS_TONES, WORKFLOW_STATUS_TONES } from "./status-tones";
 import { formatStepPage } from "./step-page";
 
 const i18n = createAngeeI18nInstance({ workflows: enWorkflowsMessages });
@@ -26,10 +26,9 @@ test("map summaries use full counts and attempts, with separate selection and cu
   expect(node.ariaLabel).toContain("Review items");
   expect(node.ariaLabel).toContain("Waiting");
   expect(node.ariaLabel).toContain(String(node.detail));
-  for (const value of options.statusOptions) {
-    const kind = value.value.toLowerCase();
-    expect(projection.nodeStyles[kind]?.badgeTone).toBe(options.resolveTone(kind, WORKFLOW_GRAPH_STATUS_TONES));
-  }
+  expect(Object.fromEntries(Object.entries(projection.nodeStyles).map(([kind, style]) => [kind, style.badgeTone])))
+    .toEqual({ unreached: "neutral", ready: "success", running: "success", waiting: "warning",
+      succeeded: "success", failed: "danger", canceled: "warning", skipped: "info" });
 });
 
 test("unreached nodes and empty maps remain visible without inventing a step row", () => {
@@ -65,6 +64,13 @@ test("paging, failure and waits project summary evidence without reading payload
   expect(waiting.nodes[0]?.detail).toBe("Waiting for a change.");
 });
 
+test.each(["READY", "RUNNING", "WAITING"] as const)("a current %s node keeps page progress", (status) => {
+  const projection = projectRunGraph(runGraphFixture(stepRunFixture({ status, page_index: 3,
+    failure_reason: null, waiting_kind: null, outcome_label: "" })), undefined, options);
+  expect(projection.nodes[0]?.detail).toBe("Page 4");
+  expect(projection.nodes[0]?.highlighted).toBe(true);
+});
+
 test.each(["FAILED", "CANCELED", "SUCCEEDED", "SKIPPED"] as const)("a %s paged node shows its status without page progress", (status) => {
   const projection = projectRunGraph(runGraphFixture(stepRunFixture({ status, page_index: 576,
     failure_reason: null, waiting_kind: null, outcome_label: "" })), undefined, options);
@@ -89,6 +95,21 @@ test("unreached, skipped and canceled nodes have distinct muted borders", () => 
   expect(styles.skipped?.badgeTone).toBe("info");
   expect(styles.canceled?.badgeTone).toBe("warning");
   expect(new Set([styles.unreached?.borderColor, styles.skipped?.borderColor, styles.canceled?.borderColor]).size).toBe(3);
+});
+
+test.each([["CANCELED", "warning"], ["SKIPPED", "info"]] as const)(
+  "%s has the same step tone for native enum badges and graph tokens", (status, tone) => {
+    expect(options.resolveTone(status, WORKFLOW_STEP_STATUS_TONES)).toBe(tone);
+    const projection = projectRunGraph(runGraphFixture(stepRunFixture({ status })), undefined, options);
+    expect(projection.status.inspect?.tone).toBe(tone);
+    expect(projection.nodeStyles[projection.nodes[0]!.kind]?.badgeTone).toBe(tone);
+  },
+);
+
+test("failed nodes anchor before a lower ranked canceled node", () => {
+  const graph = runGraphFixture(stepRunFixture({ status: "CANCELED" }));
+  graph.nodes[1] = { ...graph.nodes[1]!, step_run: { ...graph.nodes[0]!.step_run!, status: "FAILED" } };
+  expect(projectRunGraph(graph, undefined, options).anchorNodeId).toBe("finish");
 });
 
 test("the lowest ranked current node anchors the graph before any failed node", () => {

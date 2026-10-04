@@ -3,7 +3,8 @@ import type { Tone } from "@angee/ui";
 /** A declared node without an execution row is neutral, rather than waiting. */
 export const WORKFLOW_STATUS_TONES = { unreached: "neutral" } satisfies Record<string, Tone>;
 
-/** Graph-local overrides use the native resolver; shared status words cannot be claimed globally. */
-export const WORKFLOW_GRAPH_STATUS_TONES = {
-  ...WORKFLOW_STATUS_TONES, skipped: "info", canceled: "warning",
-} satisfies Record<string, Tone>;
+/** Step overrides cover graph tokens and native enum values for exact-case tone lookup. */
+export const WORKFLOW_STEP_STATUS_TONES: Record<string, Tone> = Object.fromEntries(
+  Object.entries({ skipped: "info", canceled: "warning" } satisfies Record<string, Tone>)
+    .flatMap(([value, tone]) => [[value, tone] as const, [value.toUpperCase(), tone] as const]),
+);

@@ -303,15 +303,11 @@ class Definition(BaseModel):
             ) from error
 
     def node_label(self, key: str) -> str:
-        """Use reader labels, naming map groups by key instead of the generic Map label.
-
-        Older publications froze Map's implementation label as the node label;
-        treat that generic label like an absent label for both graphs and rows.
-        """
+        """Respect authored labels; unlabeled map groups use their key's title."""
         node = self.node(key)
-        map_group = isinstance(node, Node) and node.body is not None
-        if node.label and not (map_group and node.label == Map.label):
+        if node.label:
             return node.label
+        map_group = isinstance(node, Node) and node.body is not None
         try:
             label = None if map_group else node.implementation.__dict__.get("label")
         except ImproperlyConfigured:

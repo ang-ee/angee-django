@@ -11,6 +11,7 @@ import { useWorkflowsT } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
 import { StepRuns } from "./StepRuns";
 import { formatStepPage } from "./step-page";
+import { WORKFLOW_STEP_STATUS_TONES } from "./status-tones";
 
 export const RUN_GRAPH_INSPECTOR_TAB = "run-graph-inspector";
 
@@ -82,7 +83,7 @@ function RunNodeInspector({ runId, node, detail }: {
     <MetaSection title={node.label}>
       <MetaGrid rows={[
         [t("run.graphKey"), node.key], [t("run.graphStep"), node.step_label],
-        [t("run.status"), <Badge tone={resolveTone(row?.status ?? "unreached")}>
+        [t("run.status"), <Badge tone={resolveTone(row?.status ?? "unreached", WORKFLOW_STEP_STATUS_TONES)}>
           {row ? optionLabel(statuses, row.status) : t("run.graphPending")}</Badge>],
         ...(detail ? [[t("run.graphProgress"), detail] as const] : []),
         ...(row ? [[t("step.attempts"), row.attempt], [t("step.page"), formatStepPage(row.page_index, t)],

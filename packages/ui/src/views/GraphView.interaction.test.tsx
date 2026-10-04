@@ -72,14 +72,14 @@ describe("GraphView interactions", () => {
     expect(node.style.outline).toBe("");
 
     view.rerender(graph(true, true));
-    await waitFor(() => expect(node.style.borderWidth).toBe("2px"));
-    expect(node.style.borderColor).toBe("var(--brand)");
+    await waitFor(() => expect(node.style.borderColor).toBe("var(--brand)"));
+    expect(node.style.borderWidth).toBe("1px");
     expect(node.style.background).toBe("var(--brand-soft)");
     expect(node.style.boxShadow).toBe("0 0 0 3px var(--surface-sheet), 0 0 0 5px var(--brand)");
 
     view.rerender(graph(false, true));
     await waitFor(() => expect(node.className).not.toContain("selected"));
-    expect(node.style.borderWidth).toBe("2px");
+    expect(node.style.borderWidth).toBe("1px");
     expect(node.style.boxShadow).toBe("");
 
     view.rerender(graph(false));
