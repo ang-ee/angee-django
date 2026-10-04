@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { baseIcons } from "@angee/ui";
+import { RecordIssues, baseIcons } from "@angee/ui";
 
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
@@ -396,6 +396,10 @@ describe("React architecture guardrails", () => {
 
   test("framework critical exports exist in their declared owners", () => {
     expect(invalidCriticalExports(FRAMEWORK_CRITICAL_EXPORTS)).toEqual([]);
+  });
+
+  test("RecordIssues is available through the public UI entry", () => {
+    expect(RecordIssues).toBeTypeOf("function");
   });
 
   test(
