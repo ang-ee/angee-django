@@ -657,21 +657,39 @@ function ShowcaseSection({
 
 // ─── CSS var builder ──────────────────────────────────────────────────────────
 
-/** Map ThemeStudioState fields to CSS custom properties.
- *  Only emits vars for fields that differ from "theme" (the no-op value). */
+/**
+ * Build CSS custom-property overrides for the preview container.
+ *
+ * Root cause of the reactivity problem:
+ * Tailwind 4 compiles `rounded-6` as `border-radius: var(--radius-6)` where
+ * `--radius-6` is a Tailwind @theme var that lives on :root only and is NOT
+ * inherited via the normal CSS cascade. Setting `--r-6` on a child div is not
+ * enough — we must ALSO set the corresponding Tailwind bridge vars
+ * (`--radius-2` … `--radius-12`) and spacing bridge vars (`--spacing-btn-sm`
+ * etc.) directly on the preview container so that all `rounded-*`, `h-btn-*`,
+ * and `h-input-*` utilities pick up the new values inside the preview area.
+ *
+ * The bridge mapping is defined in packages/ui/src/styles/index.css @theme:
+ *   --radius-6 = var(--r-6)       → emit --radius-6
+ *   --spacing-btn-sm = var(--control-h-sm) → emit --spacing-btn-sm, etc.
+ *   --font-sans = var(--font-family-sans)  → emit --font-sans
+ */
 function buildThemeVars(state: ThemeStudioState): Record<string, string> {
   const vars: Record<string, string> = {};
 
-  // Colors — minimal, just set the primary brand / accent which are single-var
-  // overrides. Full palette computation (light/dark ramps) lives in runtime.mjs;
-  // here we just do direct overrides so the preview is immediately responsive.
-  if (state.brand   !== THEME_STUDIO_DEFAULTS.brand)   vars["--brand"] = state.brand;
-  if (state.accent  !== THEME_STUDIO_DEFAULTS.accent)  vars["--accent"] = state.accent;
+  // ── Colors ─────────────────────────────────────────────────────────────────
+  // Direct single-token overrides. Full palette ramp computation lives in
+  // runtime.mjs; these are the most-visible single-var tokens that give
+  // immediate feedback in the preview.
+  if (state.brand   !== THEME_STUDIO_DEFAULTS.brand)   vars["--brand"]         = state.brand;
+  if (state.accent  !== THEME_STUDIO_DEFAULTS.accent)  vars["--accent"]        = state.accent;
   if (state.canvas  !== THEME_STUDIO_DEFAULTS.canvas)  vars["--surface-canvas"] = state.canvas;
   if (state.surface !== THEME_STUDIO_DEFAULTS.surface) vars["--surface-sheet"] = state.surface;
 
-  // Radius — map to CSS vars following RADIUS_TOKENS from runtime.mjs.
-  const RADIUS_MAP: Record<string, string[]> = {
+  // ── Radius ─────────────────────────────────────────────────────────────────
+  // Emit BOTH Angee token vars (--r-N) AND the Tailwind @theme bridge vars
+  // (--radius-N) so rounded-* utilities respond inside the preview container.
+  const RADIUS_MAP: Record<string, [string, string, string, string, string, string]> = {
     square:   ["0px",  "0px",  "0px",  "0px",  "0px",  "0px"],
     compact:  ["1px",  "2px",  "4px",  "6px",  "8px",  "10px"],
     standard: ["2px",  "4px",  "6px",  "8px",  "10px", "12px"],
@@ -679,34 +697,53 @@ function buildThemeVars(state: ThemeStudioState): Record<string, string> {
     round:    ["6px",  "8px",  "12px", "16px", "20px", "24px"],
   };
   if (state.radius !== "theme") {
-    const vals = RADIUS_MAP[state.radius];
-    if (vals && vals.length === 6) {
-      vars["--r-2"]  = vals[0]!;
-      vars["--r-4"]  = vals[1]!;
-      vars["--r-6"]  = vals[2]!;
-      vars["--r-8"]  = vals[3]!;
-      vars["--r-10"] = vals[4]!;
-      vars["--r-12"] = vals[5]!;
+    const v = RADIUS_MAP[state.radius];
+    if (v) {
+      // Angee semantic tokens (used by runtime.mjs theme apply)
+      vars["--r-2"]  = v[0]; vars["--r-4"]  = v[1]; vars["--r-6"]  = v[2];
+      vars["--r-8"]  = v[3]; vars["--r-10"] = v[4]; vars["--r-12"] = v[5];
+      // Tailwind @theme bridge vars (used by rounded-* utilities in CSS output)
+      vars["--radius-2"]  = v[0]; vars["--radius-4"]  = v[1]; vars["--radius-6"]  = v[2];
+      vars["--radius-8"]  = v[3]; vars["--radius-10"] = v[4]; vars["--radius-12"] = v[5];
+      // Default --radius also used by some components
+      vars["--radius"] = v[2];
     }
   }
 
-  // Density — map to CSS vars following DENSITY_TOKENS from runtime.mjs.
-  const DENSITY_MAP: Record<string, string[]> = {
+  // ── Density ────────────────────────────────────────────────────────────────
+  // Same dual-emit pattern: Angee tokens + Tailwind spacing bridge vars.
+  // Bridge vars from index.css @theme:
+  //   --spacing-btn-sm  = var(--control-h-sm)
+  //   --spacing-btn-md  = var(--control-h-md)
+  //   --spacing-btn-lg  = var(--control-h-lg)
+  //   --spacing-icon-btn-md = var(--control-h-md)
+  //   --spacing-icon-btn-lg = var(--control-h-lg)
+  //   --spacing-input-h   = var(--control-h-md)
+  //   --spacing-input-h-lg = var(--control-h-lg)
+  const DENSITY_MAP: Record<string, [string, string, string]> = {
     compact:     ["24px", "28px", "34px"],
     balanced:    ["26px", "32px", "38px"],
     comfortable: ["28px", "34px", "40px"],
     spacious:    ["30px", "38px", "44px"],
   };
   if (state.density !== "theme") {
-    const vals = DENSITY_MAP[state.density];
-    if (vals && vals.length === 3) {
-      vars["--control-h-sm"] = vals[0]!;
-      vars["--control-h-md"] = vals[1]!;
-      vars["--control-h-lg"] = vals[2]!;
+    const v = DENSITY_MAP[state.density];
+    if (v) {
+      // Angee semantic tokens
+      vars["--control-h-sm"] = v[0]; vars["--control-h-md"] = v[1]; vars["--control-h-lg"] = v[2];
+      // Tailwind spacing bridge vars
+      vars["--spacing-btn-sm"]      = v[0];
+      vars["--spacing-btn-md"]      = v[1];
+      vars["--spacing-btn-lg"]      = v[2];
+      vars["--spacing-icon-btn-md"] = v[1];
+      vars["--spacing-icon-btn-lg"] = v[2];
+      vars["--spacing-input-h"]     = v[1];
+      vars["--spacing-input-h-lg"]  = v[2];
     }
   }
 
-  // Font
+  // ── Font ───────────────────────────────────────────────────────────────────
+  // Emit both the Angee token AND the Tailwind bridge var (--font-sans).
   const FONT_MAP: Record<string, string> = {
     system:     'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     inter:      'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -717,7 +754,8 @@ function buildThemeVars(state: ThemeStudioState): Record<string, string> {
   };
   const fontVal = FONT_MAP[state.font];
   if (state.font !== "theme" && fontVal) {
-    vars["--font-family-sans"] = fontVal;
+    vars["--font-family-sans"] = fontVal;  // Angee token
+    vars["--font-sans"]        = fontVal;  // Tailwind bridge var → font-sans utility
   }
 
   return vars;
