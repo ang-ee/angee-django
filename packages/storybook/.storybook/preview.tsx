@@ -44,6 +44,57 @@ import { titleCase } from "@angee/ui/lib/titleCase";
 import "../src/storybook.css";
 import "@angee/theme-aurora/styles";
 
+// ─── ThemeStudio Apply — module-level CSS-var applicator ─────────────────────
+// Runs once when this preview module loads. Reads persisted overrides from
+// localStorage immediately (before any React renders) and re-applies them
+// every time the root :root style is mutated by AppearanceProvider.
+// This is intentionally outside React so it works across all story navigations.
+
+const THEME_OVERRIDES_KEY = "angee:storybook-theme-overrides";
+
+function readStoredOverrides(): Record<string, string> | null {
+  try {
+    const raw = localStorage.getItem(THEME_OVERRIDES_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as Record<string, string>;
+  } catch { return null; }
+}
+
+function applyOverrides(overrides: Record<string, string>) {
+  const root = document.documentElement;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (root.style.getPropertyValue(key) !== value) {
+      root.style.setProperty(key, value);
+    }
+  }
+  // --density-zoom is a non-custom CSS property encoded as a var by ThemeStudio.
+  // Apply it as `zoom` on document.body so every story scales uniformly.
+  const zoom = overrides["--density-zoom"];
+  if (zoom !== undefined) {
+    document.body.style.zoom = zoom;
+  }
+}
+
+// Apply once on module load (covers initial page paint).
+const _initialOverrides = readStoredOverrides();
+if (_initialOverrides) applyOverrides(_initialOverrides);
+
+// Re-apply whenever AppearanceProvider rewrites :root style.
+// Guard flag prevents infinite loops.
+let _observerGuard = false;
+const _rootObserver = new MutationObserver(() => {
+  if (_observerGuard) return;
+  const overrides = readStoredOverrides();
+  if (!overrides) return;
+  _observerGuard = true;
+  applyOverrides(overrides);
+  _observerGuard = false;
+});
+_rootObserver.observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["style"],
+});
+
 const previewThemes = [
   defineThemeContribution({ definition: stockThemes[0] }),
   defineThemeContribution({ definition: angeeThemes[0] }),
@@ -170,6 +221,20 @@ function StoryProviders({ Story, context }: { Story: StoryRenderer; context: Sto
     }
     function StoryRoot() {
       const { globals } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+
+      // When globals.themeOverrides is updated (Apply button), persist it to
+      // localStorage so the module-level MutationObserver picks it up instantly.
+      useLayoutEffect(() => {
+        const overrides = globals.themeOverrides;
+        if (overrides && typeof overrides === "object" && Object.keys(overrides as object).length > 0) {
+          try {
+            localStorage.setItem(THEME_OVERRIDES_KEY, JSON.stringify(overrides));
+            applyOverrides(overrides as Record<string, string>);
+          } catch { /* quota */ }
+        }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [globals.themeOverrides]);
+
       return (
         <AppRuntimeProvider runtime={previewRuntime}>
           <AppearanceProvider host={{
@@ -202,8 +267,12 @@ function StoryProviders({ Story, context }: { Story: StoryRenderer; context: Sto
     // reconstructing the router when args or toolbar globals change.
   }, [initialRoute, resourceKey, routeKey, store]);
 
+  // `layout: "fullscreen"` stories (e.g. ThemeStudio) need zero padding so
+  // their own chrome can extend edge-to-edge inside the preview iframe.
+  const isFullscreen = context.parameters.layout === "fullscreen";
+
   return (
-    <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
+    <div className={isFullscreen ? "min-h-screen bg-canvas font-sans text-fg" : "min-h-screen bg-canvas p-6 font-sans text-fg"}>
       <RouterProvider router={router} />
     </div>
   );
@@ -251,6 +320,13 @@ const preview: Preview = {
         ],
         dynamicTitle: true,
       },
+    },
+    // ThemeStudio Apply button writes CSS-var overrides here. No toolbar UI —
+    // this is a programmatic channel used exclusively by ThemeStudio.
+    themeOverrides: {
+      name: "Theme overrides",
+      description: "CSS custom-property overrides applied by ThemeStudio Apply",
+      defaultValue: {},
     },
   },
   parameters: {

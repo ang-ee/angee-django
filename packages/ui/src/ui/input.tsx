@@ -13,7 +13,11 @@ import {
 
 export const inputVariants = tv({
   extend: widgetControlSurfaceVariants,
-  base: "w-full text-fg placeholder:text-fg-subtle",
+  // py-0 resets the browser's asymmetric user-agent padding-block on <input>
+  // (e.g. Chrome/macOS adds ~1px top / 2px bottom) that shifts the placeholder
+  // and typed text above vertical centre. leading-none prevents line-height from
+  // adding extra space above the text baseline inside a fixed-height element.
+  base: "w-full py-0 leading-none text-fg placeholder:text-fg-subtle",
   variants: {
     size: {
       sm: "h-btn-sm px-2 text-xs",
@@ -40,7 +44,7 @@ export const searchInputVariants = tv({
       `inline-flex w-full min-w-0 items-center overflow-hidden rounded-6 border text-fg ${WIDGET_CONTROL_DATA_READONLY_CLASS}`,
     icon: "pointer-events-none shrink-0 text-fg-muted",
     input:
-      "min-w-0 flex-1 border-0 bg-transparent text-fg outline-none placeholder:text-fg-muted disabled:cursor-not-allowed",
+      "min-w-0 flex-1 border-0 bg-transparent py-0 leading-none text-fg outline-none placeholder:text-fg-muted disabled:cursor-not-allowed",
     clear:
       "grid shrink-0 place-content-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-50",
     clearIcon: "shrink-0",

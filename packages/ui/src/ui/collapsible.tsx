@@ -21,7 +21,15 @@ export const collapsibleVariants = tv({
     )}`,
     icon:
       "flex size-4 shrink-0 -rotate-90 items-center justify-center text-fg-muted transition-transform group-data-[panel-open]:rotate-0 [&_.glyph]:size-3.5",
-    panel: cn(textRoleVariants({ role: "description" }), "overflow-hidden leading-relaxed"),
+    // Slide-and-fade animation driven by --dur-ui / --ease-ui tokens.
+    // Base UI sets data-[starting-style] on enter and data-[ending-style] on exit.
+    panel: cn(
+      textRoleVariants({ role: "description" }),
+      "overflow-hidden leading-relaxed",
+      "[transition:height_var(--dur-ui,180ms)_var(--ease-ui,ease),opacity_var(--dur-ui,180ms)_var(--ease-ui,ease)]",
+      "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
+      "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
+    ),
   },
   variants: {
     variant: {

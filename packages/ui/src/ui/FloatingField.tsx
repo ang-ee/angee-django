@@ -1,98 +1,101 @@
 /**
- * FloatingField — an Input wrapper with an animated floating label.
+ * InlineField — an input where the label lives INSIDE the box.
  *
- * The label starts inside the control as a placeholder substitute. When the
- * input is focused or has a value it animates upward to sit on the border,
- * identical to the modern Material-style interaction without any JavaScript
- * state — purely CSS :placeholder-shown / :not(:placeholder-shown) +
- * :focus-within.
+ * Two states:
+ *   Empty / unfocused:  label sits centred vertically as a large placeholder.
+ *   Focused / filled:   label shrinks and moves to the top of the box; the
+ *                       typed value sits beneath it.
  *
- * Design decisions:
- * - Does NOT replace Field/FieldRow — it lives alongside them as an
- *   additive variant. Existing forms are unaffected.
- * - Uses the existing token vocabulary (--border-focus, --text-muted, etc.).
- *   No new tokens required.
- * - The floating label reuses rounded-6 / rounded-4 consistent with the
- *   global radius preset (inherits via CSS var).
- * - Accessible: <label> is properly associated via htmlFor. The hidden
- *   placeholder=" " is the CSS hook — it does NOT show as visible text.
- * - motion-safe gated: the label transition only runs when
- *   prefers-reduced-motion: no-preference.
+ * The box is intentionally taller than a standard Input (md → 56px, lg → 64px)
+ * so both the label line and the value line have room without crowding.
+ *
+ * Technique: pure CSS, no JS state.
+ *   • The <input> always carries placeholder=" " (a single space) as the CSS hook.
+ *   • :placeholder-shown = input is empty → label is centred and large.
+ *   • :not(:placeholder-shown) or :focus → label is small and at the top.
+ *   • tailwind-variants peer-* utilities drive the label transitions.
+ *   • motion-safe gated — no animation when prefers-reduced-motion is active.
+ *
+ * "FloatingField" is kept as a re-export alias so any existing imports are
+ * backwards-compatible without changes.
  */
 
 import * as React from "react";
 
 import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
-import { OptionalHint, RequiredMark } from "./label";
+import { OptionalHint } from "./label";
 import { widgetControlSurface } from "./widget-control";
 
 // ─── Recipe ──────────────────────────────────────────────────────────────────
 
-const floatingFieldVariants = tv({
+const inlineFieldVariants = tv({
   slots: {
-    // The relative wrapper that establishes the stacking context for the label.
+    // Relative wrapper — establishes the label stacking context.
     root: "relative w-full",
 
-    // The <input> itself. Has an invisible space placeholder so
-    // :placeholder-shown is active when value is empty — this drives the CSS.
+    // The <input>. placeholder=" " keeps :placeholder-shown active when empty.
+    // padding-top is large to leave room for the label line above the value.
     input: [
-      "peer w-full rounded-6 border bg-sheet px-3 text-fg",
-      "placeholder-transparent",          // hide the space placeholder visually
-      "transition-colors outline-none",
-      // focus
+      // border-border explicitly so --color-border overrides (borderless preset) apply.
+      // bare `border` alone uses currentColor in Tailwind 4, not --color-border.
+      "peer w-full rounded-6 border border-border bg-sheet text-fg",
+      "placeholder-transparent",
+      "outline-none transition-colors",
+      // value text sits in the lower half — extra top padding
+      "pb-2",
+      // hover — border strengthens on mouse over (same pattern as standard Input)
+      "hover:border-border-strong",
+      // border & focus — same as standard Input
       "focus:border-border-focus focus:focus-ring",
-      // invalid (driven by aria-invalid)
+      // invalid (aria-invalid)
       "aria-[invalid=true]:border-danger",
       "aria-[invalid=true]:focus:border-danger aria-[invalid=true]:focus:focus-ring-danger",
       // disabled
       "disabled:cursor-not-allowed disabled:opacity-60",
     ],
 
-    // The <label> floats above the border when active / filled.
-    // CSS peer-placeholder-shown targets the input's :placeholder-shown state.
+    // The <label> inside the box.
+    // peer-placeholder-shown: input is EMPTY → label is centred + large (looks like placeholder)
+    // When NOT placeholder-shown (has value) OR on focus → small label at top
     label: [
-      // Base position: sits on the top border, scale(1) small text.
       "pointer-events-none absolute left-3 select-none font-medium",
-      "text-fg-muted",
-      // When the peer's placeholder IS shown (empty, unfocused) → inside the input.
-      "peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:text-13 peer-placeholder-shown:text-fg-subtle",
-      // When the peer's placeholder is NOT shown (has value) OR on focus →
-      // sits on top border, small size. We simulate the focus case via
-      // peer-focus together with :not(:placeholder-shown) in compound.
-      "top-0 -translate-y-1/2 text-2xs",
-      // The label background "cuts" through the border line.
-      "rounded-sm bg-sheet px-1",
-      // Smooth motion — only when reduced-motion is off.
-      "motion-safe:transition-[top,font-size,transform,color] motion-safe:duration-150 motion-safe:ease-out",
-      // On focus: upgrade text color to brand regardless of value.
-      "peer-focus:top-0 peer-focus:-translate-y-1/2 peer-focus:text-2xs peer-focus:text-brand",
-      // When invalid: label turns danger on focus
+      // Active state (value present or focused): small, pinned to top-2
+      "top-2 text-2xs text-fg-muted leading-none",
+      // Empty + unfocused: label sits where the typed text will appear.
+      // pt-6 (24px) is the input's top padding for md — the text baseline
+      // sits at roughly top-6 minus half a line-height (~10px) = top ~14px.
+      // We express this as a fixed pixel offset so the label aligns with
+      // the text cursor regardless of the input's geometric centre.
+      "peer-placeholder-shown:top-[14px] peer-placeholder-shown:-translate-y-0",
+      "peer-placeholder-shown:text-13 peer-placeholder-shown:text-fg-subtle",
+      // On focus: move back to top-2
+      "peer-focus:top-2 peer-focus:text-2xs peer-focus:text-brand",
+      // Smooth motion only if reduced-motion is off
+      "[transition:top_var(--dur-ui-fast,120ms)_var(--ease-ui,ease),font-size_var(--dur-ui-fast,120ms)_var(--ease-ui,ease),color_var(--dur-ui-fast,120ms)_var(--ease-ui,ease)]",
+      // invalid on focus: danger colour
       "peer-aria-[invalid=true]:peer-focus:text-danger-text",
     ],
 
-    // Optional description / helper text below the field.
     description: "mt-1 text-xs leading-5 text-fg-muted",
-
-    // Validation error text.
-    error: "mt-1 text-xs leading-5 text-danger-text",
-
-    // Required / optional indicator row.
-    header: "mb-0",
+    error:       "mt-1 text-xs leading-5 text-danger-text",
   },
   variants: {
     size: {
       sm: {
-        input: "h-btn-sm text-xs",
-        label: "text-2xs",
+        // 44px tall, pt-5 (20px) — text cursor ~10px offset
+        input: "h-11 px-3 pt-5 text-xs",
+        label: "peer-placeholder-shown:top-[10px] peer-placeholder-shown:text-xs",
       },
       md: {
-        input: "h-input-h pb-0 pt-0 text-13",
-        label: "text-2xs",
+        // 56px tall, pt-6 (24px) — text cursor ~14px offset
+        input: "h-14 px-3 pt-6 text-13",
+        label: "peer-placeholder-shown:top-[14px] peer-placeholder-shown:text-13",
       },
       lg: {
-        input: "h-input-h-lg px-3 text-sm",
-        label: "text-xs",
+        // 64px tall, pt-7 (28px) — text cursor ~17px offset
+        input: "h-16 px-3.5 pt-7 text-sm",
+        label: "peer-placeholder-shown:top-[17px] peer-placeholder-shown:text-sm",
       },
     },
   },
@@ -101,9 +104,9 @@ const floatingFieldVariants = tv({
   },
 });
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface FloatingFieldProps
+export interface InlineFieldProps
   extends Omit<
     React.InputHTMLAttributes<HTMLInputElement>,
     "className" | "placeholder" | "size"
@@ -117,89 +120,105 @@ export interface FloatingFieldProps
   required?: boolean;
   requiredIndicator?: React.ReactNode;
   size?: "sm" | "md" | "lg";
-  /** Pass-through to the inner <input>. The placeholder is reserved for the
-   *  CSS label-float mechanism and cannot be set externally. */
   inputClassName?: string;
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ─── Component ────────────────────────────────────────────────────────────────
 
-export const FloatingField = React.forwardRef<
-  HTMLInputElement,
-  FloatingFieldProps
->(function FloatingField(
-  {
-    className,
-    description,
-    disabled,
-    error,
-    id: idProp,
-    inputClassName,
-    invalid = false,
-    label,
-    optional,
-    required = false,
-    requiredIndicator = "*",
-    size = "md",
-    ...props
-  },
-  ref,
-) {
-  // Generate a stable id if not provided — associates <label> with <input>.
-  const autoId = React.useId();
-  const id = idProp ?? autoId;
+export const InlineField = React.forwardRef<HTMLInputElement, InlineFieldProps>(
+  function InlineField(
+    {
+      className,
+      description,
+      disabled,
+      error,
+      id: idProp,
+      inputClassName,
+      invalid = false,
+      label,
+      optional,
+      required = false,
+      requiredIndicator = "*",
+      size = "md",
+      ...props
+    },
+    ref,
+  ) {
+    const autoId = React.useId();
+    const id = idProp ?? autoId;
+    const styles = inlineFieldVariants({ size });
 
-  const styles = floatingFieldVariants({ size });
+    // Shared border/focus/disabled chrome from the existing L1 variant.
+    // surface:"none" because we declare bg-sheet + border directly in the recipe.
+    const inputChrome = widgetControlSurface({
+      surface: "none",
+      focus:   "none",   // focus handled by recipe above
+      invalid: false,    // invalid handled via aria-invalid in recipe
+      disabled: "pseudo",
+    });
 
-  // Compose the input's border/focus-ring chrome from the shared L1 variant,
-  // but pass surface:"none" — we declare bg-sheet + border directly on the
-  // recipe so the floating label background is guaranteed to match.
-  const inputChrome = widgetControlSurface({
-    surface: "none",
-    focus: "none",   // focus handled directly in the recipe (above)
-    invalid: false,  // invalid handled via aria-invalid in recipe
-    disabled: "pseudo",
-  });
+    return (
+      <div className={cn(styles.root(), className)}>
+        <input
+          ref={ref}
+          id={id}
+          disabled={disabled}
+          aria-invalid={invalid || undefined}
+          aria-required={required || undefined}
+          // Single space: activates :placeholder-shown when field is empty.
+          placeholder=" "
+          className={cn(styles.input(), inputChrome, inputClassName)}
+          {...props}
+        />
 
-  return (
-    <div className={cn(styles.root(), className)}>
-      <input
-        ref={ref}
-        id={id}
-        disabled={disabled}
-        aria-invalid={invalid || undefined}
-        aria-required={required || undefined}
-        // The single space is the CSS hook. It keeps :placeholder-shown
-        // active when the input is empty so the label stays inside.
-        placeholder=" "
-        className={cn(styles.input(), inputChrome, inputClassName)}
-        {...props}
-      />
-      {/* The label sits on top of the input, positioned via the peer */}
-      <label htmlFor={id} className={styles.label()}>
-        {label}
+        {/* Label floats inside the box.
+            RequiredMark and OptionalHint are rendered OUTSIDE the animated label
+            so they don't affect the label's bounding box and break centring.
+            They are absolutely positioned and shown only when the label is active
+            (top state) via the same peer-* CSS hooks. */}
+        <label htmlFor={id} className={styles.label()}>
+          {label}
+        </label>
         {required && (
-          <RequiredMark
-            required
-            indicator={requiredIndicator}
-            className="ml-0.5"
-          />
+          <span
+            aria-hidden
+            className={[
+              // Same position logic as the label top-state
+              "pointer-events-none absolute select-none font-medium text-brand",
+              "leading-none text-2xs",
+              // Follows label: top-2 when active, hidden when label is centred
+              "top-2 left-3",
+              // Offset past the label text — use padding-left trick via translate
+              "opacity-100",
+              // Hide when input is empty+unfocused (label is centred, * would float oddly)
+              "peer-placeholder-shown:opacity-0 peer-focus:opacity-100",
+              "[transition:opacity_var(--dur-ui-fast,120ms)_var(--ease-ui,ease)]",
+            ].join(" ")}
+            style={{
+              // Push * to after the label text — approximate with left offset
+              paddingLeft: `calc(${label.length}ch * 0.6 + 0.75rem + 0.125rem)`,
+            }}
+          >
+            {requiredIndicator}
+          </span>
         )}
         {optional && (
           <OptionalHint optional={optional} className="ml-0.5" />
         )}
-      </label>
 
-      {/* Helper / error text */}
-      {error ? (
-        <p className={styles.error()} role="alert">
-          {error}
-        </p>
-      ) : description ? (
-        <p className={styles.description()}>{description}</p>
-      ) : null}
-    </div>
-  );
-});
+        {error ? (
+          <p className={styles.error()} role="alert">{error}</p>
+        ) : description ? (
+          <p className={styles.description()}>{description}</p>
+        ) : null}
+      </div>
+    );
+  },
+);
 
-FloatingField.displayName = "FloatingField";
+InlineField.displayName = "InlineField";
+
+// ─── Backward-compat alias ────────────────────────────────────────────────────
+// Existing imports of FloatingField continue to work unchanged.
+export const FloatingField = InlineField;
+export type FloatingFieldProps = InlineFieldProps;

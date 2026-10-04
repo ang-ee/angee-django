@@ -29,8 +29,9 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
 import { Chip } from "../ui/chip";
-import { FloatingField } from "../ui/FloatingField";
+import { InlineField } from "../ui/FloatingField";
 import { Input, SearchInput } from "../ui/input";
+import { Command } from "../ui/command";
 import { Switch } from "../ui/switch";
 import {
   BORDER_PRESET_LABELS,
@@ -43,107 +44,262 @@ import {
   FONT_PRESETS,
   INPUT_LABEL_STYLE_LABELS,
   INPUT_LABEL_STYLES,
+  MOTION_PRESET_LABELS,
+  MOTION_PRESETS,
   RADIUS_LABELS,
   RADIUS_PRESETS,
   THEME_STUDIO_DEFAULTS,
   buildPreviewOverrides,
   type BorderPreset,
   type InputLabelStyle,
+  type MotionPreset,
   type ThemeStudioState,
 } from "./theme-studio-presets";
+import {
+  GOOGLE_FONTS,
+  GOOGLE_FONTS_COUNT,
+  CATEGORY_LABELS,
+} from "./google-fonts-list";
+
+// ─── Google Font loader ───────────────────────────────────────────────────────
+
+/** Injects a Google Fonts <link> into document.head when fontName changes.
+ *  Idempotent — re-runs only when fontName changes, never duplicates tags. */
+function useGoogleFont(fontName: string | null): void {
+  React.useEffect(() => {
+    if (!fontName) return;
+    const id = `gf-${fontName.replace(/\s+/g, "-").toLowerCase()}`;
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontName)}:wght@400;500;600;700&display=swap`;
+    document.head.appendChild(link);
+  }, [fontName]);
+}
+
+// ─── localStorage persistence ─────────────────────────────────────────────────
+
+const STORAGE_KEY = "angee:theme-studio";
+
+function loadState(): ThemeStudioState {
+  try {
+    const raw = typeof window !== "undefined"
+      ? window.localStorage.getItem(STORAGE_KEY)
+      : null;
+    if (!raw) return THEME_STUDIO_DEFAULTS;
+    const parsed = JSON.parse(raw);
+    // Merge with defaults to handle new fields added after the user saved.
+    return { ...THEME_STUDIO_DEFAULTS, ...parsed };
+  } catch {
+    return THEME_STUDIO_DEFAULTS;
+  }
+}
+
+function saveState(state: ThemeStudioState): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // localStorage unavailable (private browsing quota, etc.) — silent.
+  }
+}
 
 // ─── Top-level component ──────────────────────────────────────────────────────
 
-export function ThemeStudio(): React.ReactElement {
-  const [state, setState] = React.useState<ThemeStudioState>(THEME_STUDIO_DEFAULTS);
+/**
+ * Called by the Apply button with the merged CSS-var overrides computed from
+ * the current ThemeStudio state. The host (Storybook story) is responsible for
+ * distributing those overrides to all other stories via whatever mechanism it
+ * owns — e.g. Storybook globals. ThemeStudio itself has no dependency on
+ * Storybook APIs.
+ */
+export interface ThemeStudioProps {
+  onApply?: (cssVars: Record<string, string>) => void;
+}
+
+export function ThemeStudio({ onApply }: ThemeStudioProps = {}): React.ReactElement {
+  const [state, setState] = React.useState<ThemeStudioState>(loadState);
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
 
   const update = React.useCallback(
     (patch: Partial<ThemeStudioState>) =>
-      setState((prev) => ({ ...prev, ...patch })),
+      setState((prev) => {
+        const next = { ...prev, ...patch };
+        saveState(next);
+        return next;
+      }),
     [],
   );
+
+  // Load Google Font into document.head whenever it changes
+  useGoogleFont(state.googleFont);
 
   const previewVars = buildPreviewOverrides(state);
 
   // Build ThemeCustomization-level overrides as CSS vars for the preview.
   const themeVars = buildThemeVars(state);
-  const allVars = { ...themeVars, ...previewVars } as React.CSSProperties;
+
+  // Font: must be applied as a direct inline `fontFamily` because Tailwind 4
+  // compiles `font-sans` as `font-family: var(--font-sans)` where `--font-sans`
+  // is a @theme var on :root that doesn't inherit through child div inline styles.
+  const fontFamilyOverride: React.CSSProperties = {};
+  if (themeVars["--font-sans"]) {
+    fontFamilyOverride.fontFamily = themeVars["--font-sans"] as string;
+  }
+
+  // Density zoom: scales ALL spacing (gap, padding, margin, font-size, shadow…)
+  // uniformly via the CSS `zoom` property. This is the only reliable way to
+  // scale Tailwind's hardcoded px utilities without recompiling the stylesheet.
+  // --control-h-* tokens are still emitted for theme-export fidelity, but zoom
+  // is what the user actually sees in the preview.
+  // Read zoom from the --density-zoom var emitted by buildThemeVars so it stays
+  // DRY — one source of truth for the zoom value.
+  const zoomOverride: React.CSSProperties = {};
+  const zoomFromVars = themeVars["--density-zoom"];
+  if (zoomFromVars) {
+    const z = parseFloat(zoomFromVars);
+    if (!isNaN(z) && z !== 1) zoomOverride.zoom = z;
+  }
+
+  const allVars = {
+    ...themeVars,
+    ...previewVars,
+    ...fontFamilyOverride,
+    ...zoomOverride,
+  } as React.CSSProperties;
+
+  // Storybook sidebar colors — fixed light palette, immune to whatever
+  // colorScheme the preview canvas is set to. All values are absolute hex/rgba
+  // so no CSS-var cascade from the preview can bleed in.
+  const SB_BG      = "#f0f1f3"; // light warm grey — almost white, like Figma/Storybook Controls
+  const SB_TEXT    = "#1a1d23"; // near-black text for contrast on light bg
+  const SB_MUTED   = "#6b7280"; // muted grey for labels/secondary text
+  const SB_BORDER  = "rgba(0,0,0,0.08)";
+  const SB_HOVER   = "rgba(0,0,0,0.06)";
+  // Active chip: strong enough fill so the dark text reads cleanly on light bg.
+  const SB_ACTIVE  = "#1a1d23"; // near-black fill — text will be #f0f1f3 (inverse)
+  const SB_ACTIVE_TEXT = "#f0f1f3"; // inverse of SB_TEXT for active chip label
 
   return (
+    // No margin/padding on the outer wrapper — fills the Storybook iframe edge-to-edge.
     <div
-      className="flex h-screen overflow-hidden bg-canvas font-sans text-fg"
-      data-color-scheme={state.colorScheme}
+      className="flex overflow-hidden font-sans"
+      style={{ height: "100vh", width: "100vw", margin: 0, padding: 0 }}
     >
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
       {sidebarOpen && (
-        <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-sheet">
-          <SidebarHeader state={state} update={update} onClose={() => setSidebarOpen(false)} />
-          <div className="flex-1 space-y-0 divide-y divide-border-subtle">
-            <SidebarSection title="Colors">
-              <ColorSection state={state} update={update} />
+        <aside
+          className="flex w-72 shrink-0 flex-col overflow-y-auto"
+          style={{
+            background: SB_BG,
+            color: SB_TEXT,
+            borderRight: `1px solid ${SB_BORDER}`,
+            // Explicitly light colorScheme so native widgets (scrollbar, color
+            // picker) render in light mode. This must match the light SB_BG
+            // palette and must NOT be "dark" — that was causing a mismatch
+            // between the native-widget rendering and the actual light colours.
+            // The sidebar has no data-color-scheme attribute so it is NOT in
+            // the Angee appearance cascade; all its colours are absolute inline
+            // styles and therefore immune to preview CSS-var changes.
+            colorScheme: "light",
+          }}
+        >
+          <SidebarHeader
+            onClose={() => setSidebarOpen(false)}
+            sbText={SB_TEXT}
+            sbMuted={SB_MUTED}
+            sbBorder={SB_BORDER}
+            sbHover={SB_HOVER}
+          />
+          <div className="flex-1 overflow-y-auto">
+            <SidebarSection title="Colors" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <ColorSection state={state} update={update} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbText={SB_TEXT} sbMuted={SB_MUTED} />
             </SidebarSection>
-            <SidebarSection title="Typography">
-              <ChipPicker
-                label="Font family"
-                options={["theme", ...FONT_PRESETS]}
-                labels={FONT_LABELS}
-                value={state.font}
-                onChange={(v) => update({ font: v as ThemeStudioState["font"] })}
-              />
+            <SidebarSection title="Typography" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <FontPicker state={state} update={update} sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbActive={SB_ACTIVE} sbActiveText={SB_ACTIVE_TEXT} />
             </SidebarSection>
-            <SidebarSection title="Shape">
-              <ChipPicker
-                label="Border radius"
+            <SidebarSection title="Shape" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <SbChipPicker
                 options={["theme", ...RADIUS_PRESETS]}
                 labels={RADIUS_LABELS}
                 value={state.radius}
                 onChange={(v) => update({ radius: v as ThemeStudioState["radius"] })}
+                sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbActive={SB_ACTIVE} sbActiveText={SB_ACTIVE_TEXT}
               />
             </SidebarSection>
-            <SidebarSection title="Density">
-              <ChipPicker
-                label="Control size"
+            <SidebarSection title="Density" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <SbChipPicker
                 options={["theme", ...DENSITY_PRESETS]}
                 labels={DENSITY_LABELS}
                 value={state.density}
                 onChange={(v) => update({ density: v as ThemeStudioState["density"] })}
+                sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbActive={SB_ACTIVE} sbActiveText={SB_ACTIVE_TEXT}
               />
             </SidebarSection>
-            <SidebarSection title="Elevation">
-              <ElevationPicker state={state} update={update} />
+            <SidebarSection title="Elevation" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <SbChipPicker
+                options={["theme", ...ELEVATION_PRESETS]}
+                labels={ELEVATION_LABELS}
+                value={state.elevation}
+                onChange={(v) => update({ elevation: v as ThemeStudioState["elevation"] })}
+                sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbActive={SB_ACTIVE} sbActiveText={SB_ACTIVE_TEXT}
+              />
             </SidebarSection>
-            <SidebarSection title="Borders">
-              <ChipPicker
-                label="Border weight"
+            <SidebarSection title="Borders" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <SbChipPicker
                 options={[...BORDER_PRESETS]}
                 labels={BORDER_PRESET_LABELS}
                 value={state.borders}
                 onChange={(v) => update({ borders: v as BorderPreset })}
+                sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbActive={SB_ACTIVE} sbActiveText={SB_ACTIVE_TEXT}
               />
             </SidebarSection>
-            <SidebarSection title="Inputs">
-              <ChipPicker
-                label="Label style"
+            <SidebarSection title="Inputs" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <SbChipPicker
                 options={[...INPUT_LABEL_STYLES]}
                 labels={INPUT_LABEL_STYLE_LABELS}
                 value={state.inputLabelStyle}
                 onChange={(v) => update({ inputLabelStyle: v as InputLabelStyle })}
+                sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER} sbHover={SB_HOVER} sbActive={SB_ACTIVE} sbActiveText={SB_ACTIVE_TEXT}
+              />
+            </SidebarSection>
+            <SidebarSection title="Motion" sbText={SB_TEXT} sbMuted={SB_MUTED} sbBorder={SB_BORDER}>
+              <MotionSection
+                state={state}
+                update={update}
+                sbText={SB_TEXT}
+                sbMuted={SB_MUTED}
+                sbBorder={SB_BORDER}
+                sbHover={SB_HOVER}
+                sbActive={SB_ACTIVE}
+                sbActiveText={SB_ACTIVE_TEXT}
               />
             </SidebarSection>
           </div>
-          <SidebarFooter state={state} update={update} />
+          <SidebarFooter
+            state={state}
+            update={update}
+            themeVars={themeVars}
+            previewVars={previewVars}
+            onApply={onApply}
+            sbText={SB_TEXT}
+            sbBorder={SB_BORDER}
+            sbHover={SB_HOVER}
+            sbActive={SB_ACTIVE}
+            sbActiveText={SB_ACTIVE_TEXT}
+          />
         </aside>
       )}
 
       {/* ── Preview canvas ───────────────────────────────────────────────── */}
-      <div className="relative min-w-0 flex-1 overflow-y-auto">
+      <div className="relative min-w-0 flex-1 overflow-y-auto bg-canvas">
         {/* Sidebar toggle when closed */}
         {!sidebarOpen && (
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-4 top-4 z-10 flex h-8 items-center gap-1.5 rounded-6 border border-border bg-sheet px-3 text-13 font-medium text-fg shadow-xs hover:bg-inset cursor-pointer transition-colors"
+            style={{ background: SB_BG, color: SB_TEXT, borderColor: SB_BORDER }}
+            className="absolute left-0 top-0 z-10 flex h-8 items-center gap-1.5 border-b border-r px-3 text-13 font-medium cursor-pointer transition-colors hover:opacity-80"
           >
             <PanelIcon />
             Theme Studio
@@ -163,45 +319,50 @@ export function ThemeStudio(): React.ReactElement {
   );
 }
 
+// ─── Sidebar theme tokens (Storybook-native dark palette) ─────────────────────
+// These are passed as props so every sidebar sub-component uses inline styles
+// and is immune to whatever CSS vars the user has applied to the preview.
+interface SbTheme {
+  sbBg: string;
+  sbText: string;
+  sbMuted: string;
+  sbBorder: string;
+  sbHover: string;
+}
+
 // ─── Sidebar sections ─────────────────────────────────────────────────────────
 
 function SidebarHeader({
-  state,
-  update,
   onClose,
+  sbText,
+  sbMuted,
+  sbBorder,
+  sbHover,
 }: {
-  state: ThemeStudioState;
-  update: (patch: Partial<ThemeStudioState>) => void;
   onClose: () => void;
-}): React.ReactElement {
+} & Pick<SbTheme, "sbText" | "sbMuted" | "sbBorder" | "sbHover">): React.ReactElement {
   return (
-    <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+    <div
+      className="flex shrink-0 items-center justify-between px-4 py-3"
+      style={{ borderBottom: `1px solid ${sbBorder}` }}
+    >
       <div>
-        <p className="text-13 font-semibold text-fg">Theme Studio</p>
-        <p className="text-2xs text-fg-muted">@angee/ui design system</p>
+        <p className="text-13 font-semibold" style={{ color: sbText }}>
+          Theme Studio
+        </p>
+        <p className="text-2xs" style={{ color: sbMuted }}>
+          @angee/ui component library
+        </p>
       </div>
-      <div className="flex items-center gap-1">
-        {/* Light/Dark toggle */}
-        <button
-          type="button"
-          aria-label="Toggle color scheme"
-          onClick={() =>
-            update({ colorScheme: state.colorScheme === "light" ? "dark" : "light" })
-          }
-          className="grid size-7 place-content-center rounded-6 border border-border text-fg-muted hover:bg-inset hover:text-fg cursor-pointer transition-colors"
-          title={`Switch to ${state.colorScheme === "light" ? "dark" : "light"} mode`}
-        >
-          {state.colorScheme === "light" ? <MoonIcon /> : <SunIcon />}
-        </button>
-        <button
-          type="button"
-          aria-label="Close sidebar"
-          onClick={onClose}
-          className="grid size-7 place-content-center rounded-6 border border-border text-fg-muted hover:bg-inset hover:text-fg cursor-pointer transition-colors"
-        >
-          <CloseIcon />
-        </button>
-      </div>
+      <SbIconButton
+        aria-label="Close sidebar"
+        onClick={onClose}
+        sbBorder={sbBorder}
+        sbHover={sbHover}
+        sbText={sbMuted}
+      >
+        <CloseIcon />
+      </SbIconButton>
     </div>
   );
 }
@@ -209,16 +370,27 @@ function SidebarHeader({
 function SidebarSection({
   title,
   children,
+  sbText,
+  sbMuted,
+  sbBorder,
 }: {
   title: string;
   children: React.ReactNode;
-}): React.ReactElement {
+} & Pick<SbTheme, "sbText" | "sbMuted" | "sbBorder">): React.ReactElement {
   return (
-    <div className="px-4 py-4">
-      <p className="mb-3 text-2xs font-semibold uppercase tracking-wide text-fg-muted">
+    <div
+      className="px-4 py-3"
+      style={{ borderBottom: `1px solid ${sbBorder}` }}
+    >
+      <p
+        className="mb-2.5 text-2xs font-semibold uppercase tracking-widest"
+        style={{ color: sbMuted, letterSpacing: "0.08em" }}
+      >
         {title}
       </p>
-      {children}
+      <div style={{ color: sbText }}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -226,21 +398,86 @@ function SidebarSection({
 function SidebarFooter({
   state,
   update,
+  themeVars,
+  previewVars,
+  onApply,
+  sbText,
+  sbBorder,
+  sbHover,
+  sbActive,
+  sbActiveText,
 }: {
   state: ThemeStudioState;
   update: (patch: Partial<ThemeStudioState>) => void;
-}): React.ReactElement {
+  /** CSS vars that buildThemeVars() produced for the current state. */
+  themeVars: Record<string, string>;
+  /** CSS vars that buildPreviewOverrides() produced for the current state. */
+  previewVars: Record<string, string>;
+  onApply?: (cssVars: Record<string, string>) => void;
+} & Pick<SbTheme, "sbText" | "sbBorder" | "sbHover"> & { sbActive: string; sbActiveText: string }): React.ReactElement {
+  const [applied, setApplied] = React.useState(false);
+
+  function handleApply() {
+    const overrides: Record<string, string> = { ...themeVars, ...previewVars };
+    onApply?.(overrides);
+    // Flash "Applied ✓" feedback for 1.5 s then restore.
+    setApplied(true);
+    setTimeout(() => setApplied(false), 1500);
+  }
+
   return (
-    <div className="border-t border-border-subtle px-4 py-3">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="w-full"
+    <div
+      className="shrink-0 space-y-1 px-4 py-3"
+      style={{ borderTop: `1px solid ${sbBorder}` }}
+    >
+      {/* Primary action: apply current settings to all stories */}
+      <button
+        type="button"
+        className="w-full rounded py-1.5 text-2xs font-semibold cursor-pointer transition-colors text-center"
+        style={{
+          background: applied ? sbActive : sbActive,
+          color: applied ? sbActiveText : sbActiveText,
+          opacity: applied ? 0.75 : 1,
+        }}
+        onClick={handleApply}
+      >
+        {applied ? "Applied ✓" : "Apply to all stories"}
+      </button>
+
+      {/* Secondary action: reset */}
+      <button
+        type="button"
+        className="w-full rounded py-1.5 text-2xs font-medium cursor-pointer transition-colors text-center"
+        style={{ color: sbText, background: "transparent" }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = sbHover; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
         onClick={() => update(THEME_STUDIO_DEFAULTS)}
       >
         Reset to defaults
-      </Button>
+      </button>
     </div>
+  );
+}
+
+/** Small icon button styled for the dark Storybook sidebar. */
+function SbIconButton({
+  children,
+  sbBorder,
+  sbHover,
+  sbText,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & Pick<SbTheme, "sbBorder" | "sbHover" | "sbText">): React.ReactElement {
+  return (
+    <button
+      type="button"
+      className="grid size-7 cursor-pointer place-content-center rounded transition-colors"
+      style={{ color: sbText, border: `1px solid ${sbBorder}`, background: "transparent" }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = sbHover; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+      {...props}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -249,10 +486,14 @@ function SidebarFooter({
 function ColorSection({
   state,
   update,
+  sbBorder,
+  sbHover,
+  sbText,
+  sbMuted,
 }: {
   state: ThemeStudioState;
   update: (patch: Partial<ThemeStudioState>) => void;
-}): React.ReactElement {
+} & Pick<SbTheme, "sbBorder" | "sbHover" | "sbText" | "sbMuted">): React.ReactElement {
   const colorFields: Array<{
     key: keyof Pick<
       ThemeStudioState,
@@ -272,13 +513,17 @@ function ColorSection({
     { key: "info",    label: "Info" },
   ];
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-2 gap-1.5">
       {colorFields.map(({ key, label }) => (
         <ColorSwatch
           key={key}
           label={label}
           value={state[key] as string}
           onChange={(v) => update({ [key]: v })}
+          sbBorder={sbBorder}
+          sbHover={sbHover}
+          sbText={sbText}
+          sbMuted={sbMuted}
         />
       ))}
     </div>
@@ -289,96 +534,336 @@ function ColorSwatch({
   label,
   value,
   onChange,
+  sbBorder,
+  sbHover,
+  sbText,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
-}): React.ReactElement {
+} & Pick<SbTheme, "sbBorder" | "sbHover" | "sbText" | "sbMuted">): React.ReactElement {
   return (
-    <label className="flex cursor-pointer items-center gap-2 rounded-6 border border-border bg-canvas px-2 py-1.5 hover:bg-inset transition-colors">
+    <label
+      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors"
+      style={{ border: `1px solid ${sbBorder}`, background: "transparent" }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLLabelElement).style.background = sbHover; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.background = "transparent"; }}
+    >
       <input
         type="color"
         value={value}
         onChange={(e) => onChange(e.currentTarget.value)}
         className="size-5 shrink-0 cursor-pointer rounded border-0 p-0"
       />
-      <span className="min-w-0 truncate text-2xs font-medium text-fg">{label}</span>
+      <span className="min-w-0 truncate text-2xs font-medium" style={{ color: sbText }}>{label}</span>
     </label>
   );
 }
 
-// ─── Chip picker ──────────────────────────────────────────────────────────────
+// ─── SbChipPicker — chip picker styled for dark Storybook sidebar ─────────────
 
-function ChipPicker({
-  label,
+function SbChipPicker({
   options,
   labels,
   value,
   onChange,
+  sbText,
+  sbMuted,
+  sbBorder,
+  sbHover,
+  sbActive,
+  sbActiveText,
 }: {
-  label: string;
   options: readonly string[];
   labels: Record<string, string>;
   value: string;
   onChange: (v: string) => void;
-}): React.ReactElement {
+} & Pick<SbTheme, "sbText" | "sbMuted" | "sbBorder" | "sbHover"> & { sbActive: string; sbActiveText: string }): React.ReactElement {
   return (
-    <div className="space-y-2">
-      <p className="text-2xs text-fg-muted">{label}</p>
-      <div className="flex flex-wrap gap-1">
-        {options.map((opt) => (
+    <div className="flex flex-wrap gap-1">
+      {options.map((opt) => {
+        const isActive = value === opt;
+        return (
           <button
             key={opt}
             type="button"
             onClick={() => onChange(opt)}
-            className={cn(
-              "h-6 rounded-full border px-2.5 text-2xs font-medium cursor-pointer transition-colors",
-              value === opt
-                ? "border-brand bg-brand-soft text-brand-soft-text"
-                : "border-border bg-sheet text-fg-muted hover:border-border-strong hover:text-fg",
-            )}
+            className="h-6 rounded-full px-2.5 text-2xs font-medium cursor-pointer transition-colors"
+            style={{
+              // Active: dark fill + inverse text — high contrast on light sidebar.
+              // Inactive: transparent background with muted border.
+              border: `1px solid ${isActive ? "transparent" : sbBorder}`,
+              background: isActive ? sbActive : "transparent",
+              color: isActive ? sbActiveText : sbText,
+            }}
+            onMouseEnter={(e) => {
+              if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = sbHover;
+            }}
+            onMouseLeave={(e) => {
+              if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+            }}
           >
             {labels[opt] ?? opt}
           </button>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-// ─── Elevation picker ─────────────────────────────────────────────────────────
+// ─── Motion section ───────────────────────────────────────────────────────────
 
-function ElevationPicker({
+function MotionSection({
   state,
   update,
+  sbText,
+  sbMuted,
+  sbBorder,
+  sbHover,
+  sbActive,
+  sbActiveText,
 }: {
   state: ThemeStudioState;
   update: (patch: Partial<ThemeStudioState>) => void;
-}): React.ReactElement {
+} & Pick<SbTheme, "sbText" | "sbMuted" | "sbBorder" | "sbHover"> & { sbActive: string; sbActiveText: string }): React.ReactElement {
+  // Speed multiplier: 0.25 → 3× in 0.25 steps
+  const SPEED_MIN = 0;
+  const SPEED_MAX = 3;
+
+  // Display label for current speed
+  const speedLabel = state.motionPreset === "none"
+    ? "—"
+    : `${state.motionSpeed.toFixed(2).replace(/\.?0+$/, "")}×`;
+
   return (
-    <div className="space-y-2">
-      <p className="text-2xs text-fg-muted">Shadow depth</p>
-      <div className="grid grid-cols-2 gap-1.5">
-        {(["theme", ...ELEVATION_PRESETS] as const).map((opt) => (
-          <button
-            key={opt}
-            type="button"
-            onClick={() => update({ elevation: opt as ThemeStudioState["elevation"] })}
-            className={cn(
-              "h-10 rounded-6 border px-3 text-2xs font-medium cursor-pointer transition-all",
-              state.elevation === opt
-                ? "border-brand bg-brand-soft text-brand-soft-text"
-                : "border-border bg-sheet text-fg-muted hover:text-fg",
-              // Show a sample shadow on the button itself
-              opt === "flat"     && "shadow-none",
-              opt === "subtle"   && "shadow-xs",
-              opt === "soft"     && "shadow-sm",
-              opt === "dramatic" && "shadow-md",
-            )}
+    <div className="space-y-3">
+      {/* Preset chips */}
+      <SbChipPicker
+        options={[...MOTION_PRESETS]}
+        labels={MOTION_PRESET_LABELS}
+        value={state.motionPreset}
+        onChange={(v) => {
+          const preset = v as MotionPreset;
+          // When switching to none, reset speed to 0; otherwise restore 1
+          update({
+            motionPreset: preset,
+            motionSpeed: preset === "none" ? 0 : 1,
+          });
+        }}
+        sbText={sbText} sbMuted={sbMuted} sbBorder={sbBorder}
+        sbHover={sbHover} sbActive={sbActive} sbActiveText={sbActiveText}
+      />
+
+      {/* Speed slider — hidden when preset is "none" */}
+      {state.motionPreset !== "none" && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <p className="text-2xs" style={{ color: sbMuted }}>Speed</p>
+            <span className="text-2xs font-medium tabular-nums" style={{ color: sbText }}>
+              {speedLabel}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={SPEED_MIN}
+            max={SPEED_MAX}
+            step={0.05}
+            value={state.motionSpeed}
+            onChange={(e) => update({ motionSpeed: parseFloat(e.currentTarget.value) })}
+            className="w-full cursor-pointer appearance-none rounded-full"
+            style={{
+              height: "4px",
+              accentColor: sbActive,
+              background: `linear-gradient(to right, ${sbActive} ${((state.motionSpeed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)) * 100}%, ${sbBorder} 0%)`,
+            }}
+          />
+          <div className="flex justify-between">
+            <span className="text-2xs" style={{ color: sbMuted }}>Instant</span>
+            <span className="text-2xs" style={{ color: sbMuted }}>3×</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Font picker ──────────────────────────────────────────────────────────────
+// Uses the Command component (cmdk-based) which has built-in search +
+// virtualized list — perfect for 400+ fonts.
+
+/**
+ * Injects a minimal Google Fonts stylesheet for a batch of font families.
+ * Uses the `text=` parameter so only the glyphs needed to render each
+ * font's own name are downloaded — typically < 2 KB per font.
+ */
+function usePreviewFonts(families: readonly string[]): void {
+  React.useEffect(() => {
+    if (!families.length) return;
+    // Batch up to 50 fonts per request to stay within URL length limits.
+    const BATCH = 50;
+    for (let i = 0; i < families.length; i += BATCH) {
+      const batch = families.slice(i, i + BATCH);
+      const id = `gf-preview-${i}`;
+      if (document.getElementById(id)) continue;
+
+      // Build a combined text parameter containing all unique characters
+      // needed to render every family name in this batch.
+      const chars = [...new Set(batch.join("").split(""))].join("");
+      const familyParams = batch
+        .map((f) => `family=${encodeURIComponent(f)}`)
+        .join("&");
+      const href = `https://fonts.googleapis.com/css2?${familyParams}&text=${encodeURIComponent(chars)}&display=swap`;
+
+      const link = document.createElement("link");
+      link.id = id;
+      link.rel = "stylesheet";
+      link.href = href;
+      document.head.appendChild(link);
+    }
+  // Only run once — families list is derived from a static constant.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
+function FontPicker({
+  state,
+  update,
+  sbText,
+  sbMuted,
+  sbBorder,
+  sbHover,
+  sbActive,
+  sbActiveText,
+}: {
+  state: ThemeStudioState;
+  update: (patch: Partial<ThemeStudioState>) => void;
+} & Pick<SbTheme, "sbText" | "sbMuted" | "sbBorder" | "sbHover"> & { sbActive: string; sbActiveText: string }): React.ReactElement {
+  const isGoogleActive = state.googleFont !== null;
+
+  // Load preview stylesheets for all font names (minimal text= subset).
+  const allFamilies = React.useMemo(
+    () => GOOGLE_FONTS.map((f) => f.family),
+    [],
+  );
+  usePreviewFonts(allFamilies);
+
+  // Group fonts by category for Command.Group
+  const byCategory = React.useMemo(() => {
+    const map = new Map<string, typeof GOOGLE_FONTS[number][]>();
+    for (const font of GOOGLE_FONTS) {
+      const cat = CATEGORY_LABELS[font.category];
+      const list = map.get(cat) ?? [];
+      list.push(font);
+      map.set(cat, list);
+    }
+    return map;
+  }, []);
+
+  const categoryOrder = ["Sans Serif", "Serif", "Display", "Monospace", "Handwriting"];
+
+  return (
+    <div className="space-y-3">
+      {/* System presets — quick chips */}
+      <div className="space-y-1.5">
+        <p className="text-2xs" style={{ color: sbMuted }}>Built-in presets</p>
+        <div className="flex flex-wrap gap-1">
+          {(["theme", ...FONT_PRESETS] as const).map((opt) => {
+            const isActive = !isGoogleActive && state.font === opt;
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => update({ font: opt as ThemeStudioState["font"], googleFont: null })}
+                className="h-6 rounded-full px-2.5 text-2xs font-medium cursor-pointer transition-colors"
+                style={{
+                  // Same active treatment as SbChipPicker: dark fill + inverse text.
+                  border: `1px solid ${isActive ? "transparent" : sbBorder}`,
+                  background: isActive ? sbActive : "transparent",
+                  color: isActive ? sbActiveText : sbText,
+                }}
+                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = sbHover; }}
+                onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              >
+                {FONT_LABELS[opt] ?? opt}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Google Fonts — Command with built-in search */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <p className="text-2xs" style={{ color: sbMuted }}>
+            Google Fonts
+            <span className="ml-1" style={{ color: sbMuted, opacity: 0.6 }}>({GOOGLE_FONTS_COUNT})</span>
+          </p>
+          {isGoogleActive && (
+            <button
+              type="button"
+              onClick={() => update({ googleFont: null })}
+              className="text-2xs cursor-pointer transition-colors"
+              style={{ color: sbMuted }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = sbText; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = sbMuted; }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Active font badge — rendered in the selected font */}
+        {isGoogleActive && (
+          <div
+            className="flex h-7 items-center rounded px-2"
+            style={{ border: `1px solid ${sbBorder}`, background: sbActive }}
           >
-            {ELEVATION_LABELS[opt]}
-          </button>
-        ))}
+            <span
+              className="truncate text-2xs font-medium"
+              style={{ fontFamily: `"${state.googleFont}", sans-serif`, color: sbActiveText }}
+            >
+              {state.googleFont}
+            </span>
+          </div>
+        )}
+
+        {/* Command — search + scrollable grouped list */}
+        <div
+          className="overflow-hidden rounded"
+          style={{ border: `1px solid ${sbBorder}`, background: "#ffffff" }}
+        >
+          <Command label="Google Fonts picker">
+            <Command.Search>
+              <Command.Input placeholder={`Search ${GOOGLE_FONTS_COUNT} fonts…`} />
+            </Command.Search>
+            <Command.List>
+              <Command.Empty>No fonts found.</Command.Empty>
+              {categoryOrder.map((cat) => {
+                const fonts = byCategory.get(cat);
+                if (!fonts?.length) return null;
+                return (
+                  <Command.Group key={cat} heading={cat}>
+                    {fonts.map((font) => (
+                      <Command.Item
+                        key={font.family}
+                        value={font.family}
+                        onSelect={(v) => update({ googleFont: v, font: "theme" })}
+                        className={cn(
+                          state.googleFont === font.family &&
+                            "bg-brand-soft text-brand-soft-text",
+                        )}
+                      >
+                        <span style={{ fontFamily: `"${font.family}", sans-serif` }}>
+                          {font.family}
+                        </span>
+                      </Command.Item>
+                    ))}
+                  </Command.Group>
+                );
+              })}
+            </Command.List>
+          </Command>
+        </div>
       </div>
     </div>
   );
@@ -387,7 +872,7 @@ function ElevationPicker({
 // ─── Component showcase ───────────────────────────────────────────────────────
 
 function ComponentShowcase({ state }: { state: ThemeStudioState }): React.ReactElement {
-  const useFloating = state.inputLabelStyle === "floating";
+  const useInline = state.inputLabelStyle === "inline";
 
   return (
     <div className="mx-auto max-w-5xl space-y-10">
@@ -471,12 +956,12 @@ function ComponentShowcase({ state }: { state: ThemeStudioState }): React.ReactE
       {/* Inputs */}
       <ShowcaseSection title="Inputs">
         <div className="grid gap-4 sm:grid-cols-2">
-          {useFloating ? (
+          {useInline ? (
             <>
-              <FloatingField label="Full name" type="text" />
-              <FloatingField label="Email address" type="email" />
-              <FloatingField label="Required field" type="text" required description="Enter a value to continue." />
-              <FloatingField label="Invalid value" type="email" defaultValue="bad-email" invalid error="Invalid email format." />
+              <InlineField label="Full name" type="text" />
+              <InlineField label="Email address" type="email" />
+              <InlineField label="Required field" type="text" required description="Enter a value to continue." />
+              <InlineField label="Invalid value" type="email" defaultValue="bad-email" invalid error="Invalid email format." />
             </>
           ) : (
             <>
@@ -488,21 +973,11 @@ function ComponentShowcase({ state }: { state: ThemeStudioState }): React.ReactE
                 <label className="text-13 font-medium text-fg">Email address</label>
                 <Input type="email" placeholder="ada@example.com" />
               </div>
-              <div className="col-span-full">
-                <SearchInput placeholder="Search components…" />
-              </div>
             </>
           )}
-          {!useFloating && (
-            <div className="col-span-full">
-              <SearchInput placeholder="Search components…" />
-            </div>
-          )}
-          {useFloating && (
-            <div className="col-span-full">
-              <SearchInput placeholder="Search components…" />
-            </div>
-          )}
+          <div className="col-span-full">
+            <SearchInput placeholder="Search components…" />
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-4">
           <label className="flex cursor-pointer items-center gap-2 text-13 text-fg">
@@ -695,6 +1170,7 @@ function buildThemeVars(state: ThemeStudioState): Record<string, string> {
     standard: ["2px",  "4px",  "6px",  "8px",  "10px", "12px"],
     soft:     ["4px",  "6px",  "8px",  "10px", "12px", "14px"],
     round:    ["6px",  "8px",  "12px", "16px", "20px", "24px"],
+    pill:     ["999px","999px","999px","999px","999px","999px"],
   };
   if (state.radius !== "theme") {
     const v = RADIUS_MAP[state.radius];
@@ -711,38 +1187,45 @@ function buildThemeVars(state: ThemeStudioState): Record<string, string> {
   }
 
   // ── Density ────────────────────────────────────────────────────────────────
-  // Same dual-emit pattern: Angee tokens + Tailwind spacing bridge vars.
-  // Bridge vars from index.css @theme:
-  //   --spacing-btn-sm  = var(--control-h-sm)
-  //   --spacing-btn-md  = var(--control-h-md)
-  //   --spacing-btn-lg  = var(--control-h-lg)
-  //   --spacing-icon-btn-md = var(--control-h-md)
-  //   --spacing-icon-btn-lg = var(--control-h-lg)
-  //   --spacing-input-h   = var(--control-h-md)
-  //   --spacing-input-h-lg = var(--control-h-lg)
-  const DENSITY_MAP: Record<string, [string, string, string]> = {
-    compact:     ["24px", "28px", "34px"],
-    balanced:    ["26px", "32px", "38px"],
-    comfortable: ["28px", "34px", "40px"],
-    spacious:    ["30px", "38px", "44px"],
+  // The preview uses CSS `zoom` (see ThemeStudio component) to scale ALL
+  // spacing uniformly. Here we only emit the Angee semantic control-height
+  // tokens so that when this theme configuration is exported/applied via
+  // AppearanceProvider, the real component heights reflect the density choice.
+  //
+  // Zoom-relative values: the Compact preset zooms to 0.72× so a "30px" button
+  // at zoom 0.72 renders as ~22px — matching the design intent without
+  // needing to recompile Tailwind utilities.
+  const DENSITY_CONTROL_H: Record<string, [string, string, string]> = {
+    compact:     ["24px", "28px", "32px"],
+    balanced:    ["26px", "30px", "36px"],
+    comfortable: ["30px", "36px", "44px"],
+    spacious:    ["34px", "42px", "52px"],
+  };
+  const ZOOM_MAP: Record<string, number> = {
+    compact:     0.72,
+    balanced:    0.88,
+    comfortable: 1.00,
+    spacious:    1.32,
   };
   if (state.density !== "theme") {
-    const v = DENSITY_MAP[state.density];
+    const v = DENSITY_CONTROL_H[state.density];
     if (v) {
-      // Angee semantic tokens
-      vars["--control-h-sm"] = v[0]; vars["--control-h-md"] = v[1]; vars["--control-h-lg"] = v[2];
-      // Tailwind spacing bridge vars
-      vars["--spacing-btn-sm"]      = v[0];
-      vars["--spacing-btn-md"]      = v[1];
-      vars["--spacing-btn-lg"]      = v[2];
-      vars["--spacing-icon-btn-md"] = v[1];
-      vars["--spacing-icon-btn-lg"] = v[2];
-      vars["--spacing-input-h"]     = v[1];
-      vars["--spacing-input-h-lg"]  = v[2];
+      vars["--control-h-sm"] = v[0]!;
+      vars["--control-h-md"] = v[1]!;
+      vars["--control-h-lg"] = v[2]!;
     }
+    const z = ZOOM_MAP[state.density];
+    if (z !== undefined) {
+      // Encode zoom as a CSS var so Apply can carry it to other stories.
+      // preview.tsx reads --density-zoom and applies it as zoom on the story wrapper.
+      vars["--density-zoom"] = String(z);
+    }
+  } else {
+    vars["--density-zoom"] = "1";
   }
 
   // ── Font ───────────────────────────────────────────────────────────────────
+  // Google Font takes priority over the preset selector.
   // Emit both the Angee token AND the Tailwind bridge var (--font-sans).
   const FONT_MAP: Record<string, string> = {
     system:     'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -752,8 +1235,16 @@ function buildThemeVars(state: ThemeStudioState): Record<string, string> {
     editorial:  'Georgia, "Times New Roman", serif',
     mono:       '"JetBrains Mono", "SFMono-Regular", Consolas, monospace',
   };
-  const fontVal = FONT_MAP[state.font];
-  if (state.font !== "theme" && fontVal) {
+
+  let fontVal: string | undefined;
+  if (state.googleFont) {
+    // Google Font — wrap in quotes + system fallback
+    fontVal = `"${state.googleFont}", system-ui, -apple-system, sans-serif`;
+  } else {
+    fontVal = FONT_MAP[state.font];
+  }
+
+  if (fontVal) {
     vars["--font-family-sans"] = fontVal;  // Angee token
     vars["--font-sans"]        = fontVal;  // Tailwind bridge var → font-sans utility
   }
@@ -763,28 +1254,6 @@ function buildThemeVars(state: ThemeStudioState): Record<string, string> {
 
 // ─── Minimal inline SVG icons (no dependency on icon registry) ───────────────
 
-function MoonIcon(): React.ReactElement {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-}
-function SunIcon(): React.ReactElement {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="5" />
-      <line x1="12" y1="1" x2="12" y2="3" />
-      <line x1="12" y1="21" x2="12" y2="23" />
-      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-      <line x1="1" y1="12" x2="3" y2="12" />
-      <line x1="21" y1="12" x2="23" y2="12" />
-      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-    </svg>
-  );
-}
 function CloseIcon(): React.ReactElement {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

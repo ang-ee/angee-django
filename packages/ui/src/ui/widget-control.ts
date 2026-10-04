@@ -31,7 +31,9 @@ export const WIDGET_CONTROL_DATA_READONLY_CLASS =
  * dimming mechanism (native `:disabled` pseudo vs base-ui `data-[disabled]`).
  */
 export const interactiveSurfaceVariants = tv({
-  base: "outline-none transition-colors",
+  // cursor-pointer is the correct default for every interactive element.
+  // Disabled variants override it with cursor-not-allowed via compound specificity.
+  base: "cursor-pointer outline-none transition-colors",
   variants: {
     focus: {
       self: "focus:focus-ring",
