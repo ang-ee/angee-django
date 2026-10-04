@@ -22,6 +22,23 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 const { Provider } = createUiTestProviders();
 afterEach(cleanup);
 
+test("native measured outcome lists leave room for every branch", async () => {
+  const nodes = ["entry", "context", "classification", "bank"].map((id) => ({ id, kind: "node", title: id,
+    ports: [{ id: "done", label: "Done" }] }));
+  const edges = nodes.slice(1).map((node) => ({ id: node.id, source: "entry", sourceHandle: "done", target: node.id, kind: "next" }));
+  render(<GraphView nodes={nodes} edges={edges} layout={{ rankdir: "LR" }}
+    nodeStyles={{ node: { width: 244, height: 100, borderColor: "gray" } }} />, { wrapper: Provider });
+  act(() => capture.props?.onNodesChange?.(nodes.map((node) => ({ type: "dimensions" as const,
+    id: node.id, dimensions: { width: 244, height: node.id === "entry" ? 110 : 290 } }))));
+  await waitFor(() => {
+    const branches = capture.instance!.getNodes().filter((node) => node.id !== "entry").sort((a, b) => a.position.y - b.position.y);
+    expect(branches).toHaveLength(3);
+    for (let index = 1; index < branches.length; index += 1) {
+      expect(branches[index]!.position.y).toBeGreaterThanOrEqual(branches[index - 1]!.position.y + 290 + 34);
+    }
+  });
+});
+
 test("native measured anchored viewport is readable and the Fit control still fits a long graph", async () => {
   const nodes = Array.from({ length: 13 }, (_, index) => ({ id: `node-${index}`, kind: "node", title: `Item ${index}` }));
   const edges = nodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: nodes[index]!.id, target: node.id, kind: "next" }));

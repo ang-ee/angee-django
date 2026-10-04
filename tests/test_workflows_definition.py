@@ -141,6 +141,18 @@ def test_topology_projects_frozen_labels_all_routed_ports_and_map_identity():
     assert not definition.edge_live(row("start", status="skipped", outcome="alternate"), {"alternate"})
 
 
+@pytest.mark.parametrize("label,expected", [("", "Review items"), ("Map", "Review items"),
+                                           ("Review invoices", "Review invoices")])
+def test_map_labels_share_meaningful_names_with_topology_and_publication(label, expected):
+    """Generic historic map labels use the node key; authored reader labels survive."""
+    definition = graph({"review_items": {"step": "map", "label": label, "body": {"step": "echo"}}})
+    assert definition.node_label("review_items") == expected
+    node = definition.topology().nodes[0]
+    assert node.label == expected
+    assert node.step_label == "Map"
+    assert definition.published_document()["nodes"]["review_items"]["label"] == expected
+
+
 def test_branching_creates_live_and_skipped_rows():
     """Branching creates live and skipped rows."""
     definition = graph({"choose": {"next": {"done": "left", "alternate": "right"}}, "left": {}, "right": {}})

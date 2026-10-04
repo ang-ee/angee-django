@@ -303,12 +303,17 @@ class Definition(BaseModel):
             ) from error
 
     def node_label(self, key: str) -> str:
-        """Use the frozen label, an explicit step label, or the authored node key."""
+        """Use reader labels, naming map groups by key instead of the generic Map label.
+
+        Older publications froze Map's implementation label as the node label;
+        treat that generic label like an absent label for both graphs and rows.
+        """
         node = self.node(key)
-        if node.label:
+        map_group = isinstance(node, Node) and node.body is not None
+        if node.label and not (map_group and node.label == Map.label):
             return node.label
         try:
-            label = node.implementation.__dict__.get("label")
+            label = None if map_group else node.implementation.__dict__.get("label")
         except ImproperlyConfigured:
             label = None
         return label or key.replace("_", " ").capitalize()

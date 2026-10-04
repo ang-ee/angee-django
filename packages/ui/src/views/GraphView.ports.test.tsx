@@ -10,6 +10,17 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
+test("node headers omit a repeated type label and constrain distinct labels", () => {
+  const styles = { node: graphNodeStyle("gray", "neutral", { width: 100 }) };
+  const view = render(<GraphView nodes={[{ id: "a", kind: "node", title: "Review source", kindLabel: "Review source" }]}
+    edges={[]} nodeStyles={styles} />, { wrapper: Provider });
+  expect(screen.getAllByText("Review source")).toHaveLength(1);
+  view.rerender(<GraphView nodes={[{ id: "a", kind: "node", title: "Review source", kindLabel: "Review a much longer type" }]}
+    edges={[]} nodeStyles={styles} />);
+  expect(screen.getByText("Review source").className).toContain("min-w-0");
+  expect(screen.getByText("Review a much longer type").className).toContain("truncate");
+});
+
 test("renders named output ports and status without changing a node's kind", () => {
   const base = { id: "a", kind: "node", title: "Alpha", ariaLabel: "Alpha" };
   const styles = { node: graphNodeStyle("var(--border-strong)", "neutral") };

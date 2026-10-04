@@ -66,7 +66,7 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
     {errorPanel}
     <GraphView nodes={projected.nodes} edges={projected.edges} nodeStyles={projected.nodeStyles}
       edgeStyles={RUN_GRAPH_EDGE_STYLES} status={projected.status} layout={{ rankdir: "LR" }} miniMap
-      initialView={{ anchorNodeId: projected.anchorNodeId }}
+      initialView={projected.anchorNodeId ? { anchorNodeId: projected.anchorNodeId } : undefined}
       ariaLabel={t("run.graph")} className="min-h-0 flex-1" onNodeClick={selectNode} />
   </div>;
 }

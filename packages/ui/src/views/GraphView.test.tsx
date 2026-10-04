@@ -2,7 +2,7 @@
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { type ReactNode } from "react";
-import type { Node } from "@xyflow/react";
+import type { Node, ReactFlowProps } from "@xyflow/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GraphView, graphNodeStyle } from "./GraphView";
@@ -144,6 +144,32 @@ test("MiniMap is opt-in and uses native pan and zoom navigation", () => {
   view.rerender(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} miniMap />);
   expect(screen.getByTestId("mini-map")).toBeTruthy();
   expect(reactFlowMock.miniMapProps).toMatchObject({ pannable: true, zoomable: true });
+  const node = (currentProps().nodes as Node[])[0]!;
+  const props = reactFlowMock.miniMapProps as { nodeColor: (node: Node) => string; nodeStrokeColor: (node: Node) => string };
+  expect(props.nodeColor(node)).toBe(node.style?.borderColor);
+  expect(props.nodeStrokeColor(node)).toBe(node.style?.borderColor);
+});
+
+test("measured tall branches no longer overlap and unchanged dimensions or status do not relayout", () => {
+  const branches = [{ id: "entry", kind: "handler", title: "Entry" },
+    { id: "context", kind: "handler", title: "Context review" },
+    { id: "classification", kind: "handler", title: "Classification review" },
+    { id: "bank", kind: "handler", title: "Bank review" }];
+  const links = branches.slice(1).map((node) => ({ id: node.id, source: "entry", target: node.id, kind: "next" }));
+  const props = { nodes: branches, edges: links, nodeStyles, layout: { rankdir: "LR" as const } };
+  const view = render(<GraphView {...props} />);
+  const dimensions = branches.map((node, index) => ({ type: "dimensions" as const, id: node.id,
+    dimensions: { width: 244, height: index === 0 ? 110 : 290 } }));
+  act(() => (currentProps() as ReactFlowProps).onNodesChange?.(dimensions));
+  const positioned = (currentProps().nodes as Node[]).slice(1).sort((a, b) => a.position.y - b.position.y);
+  for (let index = 1; index < positioned.length; index += 1) {
+    expect(positioned[index]!.position.y).toBeGreaterThanOrEqual(positioned[index - 1]!.position.y + 290 + 34);
+  }
+  const layouts = dagreMock.layouts;
+  act(() => (currentProps() as ReactFlowProps).onNodesChange?.(dimensions));
+  view.rerender(<GraphView {...props} nodes={branches.map((node) => ({ ...node, kind: "gate" }))}
+    status={{ context: { label: "Canceled", tone: "warning" } }} />);
+  expect(dagreMock.layouts).toBe(layouts);
 });
 
 test("initial fit waits for native measurement and does not depend on edges", () => {

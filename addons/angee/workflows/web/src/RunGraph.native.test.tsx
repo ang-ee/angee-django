@@ -63,7 +63,9 @@ test("retained tabs preserve the canvas and selection while withdrawing their in
 test("a map inspector shows complete progress and filters the node and its items", async () => {
   const requests: RunRequest[] = [];
   render(<RunGraphStory graph={mappedRunGraphFixture()} onRequest={(request) => requests.push(request)} />);
-  expect(await screen.findByText("119/122")).toBeTruthy();
+  const node = await screen.findByTestId("rf__node-reviews");
+  expect(node.textContent).toContain("Waiting");
+  expect(node.textContent).toContain("119/122");
   fireEvent.click(await screen.findByTestId("rf__node-reviews"));
   await waitFor(() => expect(requests.some(({ query }) => /\bsteprun\s*\(/.test(query))).toBe(true));
   // `_and` is commutative; the shared filter owner decides clause order.
