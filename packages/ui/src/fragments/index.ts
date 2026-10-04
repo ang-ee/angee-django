@@ -68,6 +68,7 @@ export {
 } from "./RecordHeader";
 export { RelativeTime, type RelativeTimeProps } from "./RelativeTime";
 export { RailPanel, type RailPanelProps } from "./RailPanel";
+export { RecordIssues, type RecordIssue, type RecordIssuesProps } from "./RecordIssues";
 export {
   SettingsSection,
   SettingsShell,
