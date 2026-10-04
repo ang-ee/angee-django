@@ -39,6 +39,20 @@ from tests.test_storage import drive as drive
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
+@pytest.mark.parametrize("excess", [0, 1])
+def test_ingest_bytes_bounds_source_filename_and_keeps_extension(drive: Any, excess: int) -> None:
+    """Server-side intake bounds source labels without changing content identity."""
+
+    limit = File._meta.get_field("filename").max_length
+    name = "é" * (limit - 4 + excess) + ".png"
+    row = File.objects.ingest_bytes(PNG_BYTES, filename=name, drive_id=str(drive.sqid), owner_id=drive.alice.pk)
+    row.refresh_from_db()
+    assert row.filename == "é" * (limit - 4) + ".png"
+    assert row.content_hash == PNG_SHA256
+    assert row.upload_state == UploadState.READY
+    assert row.read_verified(max_bytes=len(PNG_BYTES), expected_digest=PNG_SHA256) == PNG_BYTES
+
+
 @pytest.fixture
 def overwriting_drive(drive: Any, settings: Any) -> Any:
     settings.ANGEE_STORAGE_BACKEND_CLASSES = {

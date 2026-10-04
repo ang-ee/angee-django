@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test.utils import isolate_apps
 from rebac import system_context
 
@@ -17,6 +18,49 @@ from angee.parties.mixins import LinkSource
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_handle_upsert_bounds_source_display_text(composed_tables: None, refresh: bool) -> None:
+    """Create and refresh share the model-declared display-name and label limits."""
+
+    del composed_tables
+    with system_context(reason="test bounded handle text"):
+        prior = Handle.objects.upsert(platform="email", value="bounded@example.test") if refresh else None
+        fields = {name: "é" * (Handle._meta.get_field(name).max_length + 1) for name in ("display_name", "label")}
+        handle = Handle.objects.upsert(platform="email", value="bounded@example.test", **fields)
+        handle.refresh_from_db()
+    if prior is not None:
+        assert handle.pk == prior.pk
+    for name, value in fields.items():
+        assert getattr(handle, name) == value[: Handle._meta.get_field(name).max_length]
+
+
+@pytest.mark.parametrize("field", ["value", "external_id"])
+def test_handle_upsert_refuses_oversized_identifiers(composed_tables: None, field: str) -> None:
+    """Unlandable identities raise field validation instead of changing their key."""
+
+    del composed_tables
+    fields = {"value": "bounded@example.test", "external_id": "stable-id"}
+    fields[field] = "x" * (Handle._meta.get_field(field).max_length + 1)
+    with system_context(reason="test invalid handle identifiers"):
+        with pytest.raises(ValidationError) as refused:
+            Handle.objects.upsert(platform="email", **fields)
+    assert list(refused.value.error_dict) == [field]
+    assert refused.value.error_dict[field][0].code == "max_length"
+    assert not Handle._base_manager.exists()
+
+
+def test_handle_upsert_refuses_normalization_that_exceeds_its_field(composed_tables: None) -> None:
+    """Unicode case normalization may expand an otherwise column-sized identity."""
+
+    del composed_tables
+    value = "İ" * Handle._meta.get_field("value").max_length
+    with system_context(reason="test invalid normalized handle"):
+        with pytest.raises(ValidationError) as refused:
+            Handle.objects.upsert(platform="other", value=value)
+    assert list(refused.value.error_dict) == ["normalized_value"]
+    assert not Handle._base_manager.exists()
 
 
 @pytest.fixture

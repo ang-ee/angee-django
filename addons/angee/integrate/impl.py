@@ -103,11 +103,19 @@ class BridgeImpl(IntegrationImpl):
         """Read every requested identity exactly once, including missing-key tombstones."""
         raise AdapterContractError("This adapter does not support identity reads.")
 
+    def record_key(self, record: Any) -> str:
+        """Return an operator-safe event identity for quarantine diagnostics.
+
+        Replica identity is already declared by RecordChange. Event adapters
+        expose their domain key here without serializing the record payload.
+        """
+        return ""
+
     def apply_record(self, stream: Any, record: Any) -> ApplyResult:
         """Apply one record using database work only; return its applied evidence.
 
         The driver owns primary link promotion. Record-local refusals raise
-        SemanticError or ValidationError; infrastructure failures propagate.
+        SemanticError, ValidationError or DataError; infrastructure failures propagate.
         """
         raise AdapterContractError("Stream adapters must apply individual records.")
 

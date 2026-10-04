@@ -59,7 +59,7 @@ from angee.integrate.models import IntegrationLifecycle, IntegrationManager, Int
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
-from angee.storage.uploads import attachment_extension, fallback_attachment_name
+from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
@@ -302,7 +302,7 @@ def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
         separators=(",", ":"),
     ).encode("utf-8")
     if len(encoded) > _MESSAGE_METADATA_MAX_BYTES:
-        raise ValueError(f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes")
+        raise ValidationError({"metadata": f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes"})
     return cast(dict[str, Any], metadata)
 
 
@@ -3359,7 +3359,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
             ),
-            "preview": strip_null_bytes(_preview(parsed.body)),
+            "preview": strip_null_bytes(_preview(parsed.body))[: self.model._meta.get_field("preview").max_length],
             "sent_at": parsed.sent_at,
             "received_at": parsed.received_at,
             "metadata": metadata,
@@ -3673,7 +3673,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
 
 class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]
-    """Owns message-scoped navigation over the recursive body-part rows.
+    """Owns bounded part creation and message-scoped navigation over body-part rows.
 
     Tree reads use the base manager: callers must authorize the parent Message,
     including record-scoped chatter projections. Each operation loads that
@@ -3682,6 +3682,24 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
     Incomplete caches fall back to that single joined read. Prefetch the relation with
     those joins for repeated queries without SQL; no separate tree cache is kept.
     """
+
+    def create(self, **fields: Any) -> Any:
+        """Bound source text and discard malformed Content-IDs before writing.
+
+        A truncated Content-ID would reference a different part. Keep the part
+        but clear that identifier when it cannot fit its declared column.
+        """
+
+        if "name" in fields:
+            fields["name"] = truncate_filename(
+                strip_null_bytes(fields["name"] or ""), self.model._meta.get_field("name").max_length,
+            )
+        if "type" in fields:
+            fields["type"] = strip_null_bytes(fields["type"] or "")[: self.model._meta.get_field("type").max_length]
+        if "cid" in fields:
+            cid = strip_null_bytes(fields["cid"] or "")
+            fields["cid"] = cid if len(cid) <= self.model._meta.get_field("cid").max_length else ""
+        return super().create(**fields)
 
     def reading_order_for_message(self, message: Message) -> list[Part]:
         """Return ``message`` parts flattened in depth-first reading order.

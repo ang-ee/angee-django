@@ -63,8 +63,9 @@ record savepoints; it and the visibility hooks perform database work only.
 
 The driver extracts outside a transaction, then commits each page's database
 effects, discrepancies and cursor together. Each record has a savepoint. A
-declared semantic refusal quarantines that record; infrastructure failures roll
-back the page and propagate. `finish_page` composes domain batch relationships
+declared semantic refusal, field validation failure or record-level `DataError`
+quarantines that record; infrastructure failures roll back the page and propagate.
+`finish_page` composes domain batch relationships
 after successful rows are visible, before the cursor commits; messaging uses its
 existing quotation owner here. External writes occur before their database
 reflection and use the remote version precondition. If the process loses the

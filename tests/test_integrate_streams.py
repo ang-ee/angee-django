@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 import pytest
 from django.db import (
     DatabaseError,
+    DataError,
     OperationalError,
     close_old_connections,
     connection,
@@ -57,8 +58,8 @@ from angee.integrate.streams import (
     sync_bridge,
 )
 from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
-from angee.messaging.backends import ParsedMessage
-from angee.messaging.testing.models import Channel
+from angee.messaging.backends import ChannelBackend, ParsedMessage, ParsedPart
+from angee.messaging.testing.models import Channel, Message
 from tests.conftest import make_integration
 
 
@@ -836,6 +837,93 @@ def test_semantic_failure_quarantines_one_row_and_continues_page(stream_bridge: 
     assert (discrepancy.source_hash, discrepancy.status) == ("", DiscrepancyStatus.OPEN)
 
 
+@pytest.mark.parametrize("replica", [False, True])
+@pytest.mark.parametrize("stage", ["apply", "settle"])
+def test_data_error_quarantines_record_after_savepoint_rollback(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, replica: bool, stage: str,
+) -> None:
+    """A residual database data refusal rolls back one row and commits the page."""
+
+    class DataAdapter(MemoryAdapter):
+        def record_key(self, record: Any) -> str:
+            return record
+
+        def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+            result = super().apply_record(stream, record)
+            if result.bound_target.key == "poison" and stage == "apply":
+                # Match a PostgreSQL statement failure's broken savepoint state
+                # while exercising the SQLite-only, isolated test database.
+                transaction.set_rollback(True)
+                raise DataError("private record payload and database details")
+            return result
+
+        def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
+            assert [outcome.bound_target.key for outcome in outcomes] == ["first", "last"]
+
+    if stage == "settle":
+        resolve_applied = stream_driver._resolve_applied
+
+        def fail_settlement(stream: Any, record: Any) -> None:
+            key = record.external_key if isinstance(record, RecordChange) else record
+            if key == "poison":
+                transaction.set_rollback(True)
+                raise DataError("private record payload and database details")
+            resolve_applied(stream, record)
+
+        monkeypatch.setattr(stream_driver, "_resolve_applied", fail_settlement)
+
+    stream = SyncStream.objects.current(
+        stream_bridge, "records", "inbox",
+        kind=StreamKind.RECORD_REPLICA if replica else StreamKind.EVENT_FEED,
+    )
+    records = tuple(RecordChange(key, {"name": key}, key) if replica else key for key in ("first", "poison", "last"))
+    result = advance_stream(stream, DataAdapter(pages=[StreamPage(records, {"offset": 3})]))
+
+    assert result.count == 2
+    assert set(AppliedRecord.objects.values_list("key", flat=True)) == {"first", "last"}
+    stream.refresh_from_db()
+    assert stream.cursor == {"offset": 3}
+    discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+    assert discrepancy.code == "invalid_record_data"
+    assert discrepancy.details == {
+        "stream": "records", "partition": "inbox", "external_key": "poison", "fields": ["unknown"],
+        "message": "Database rejected invalid or oversized record data.",
+    }
+    assert discrepancy.is_open
+    if replica:
+        link = RecordLink.objects.get(stream=stream, external_key="poison")
+        assert discrepancy.link_id == link.pk
+        assert link.status == LinkStatus.DISCREPANT
+        assert not RecordRevision.objects.filter(link=link).exists()
+    else:
+        assert not RecordLink.objects.filter(stream=stream).exists()
+
+
+def test_message_metadata_refusal_quarantines_record_and_continues_page(stream_bridge: Channel) -> None:
+    """The existing metadata budget is a field refusal, never a poison-page error."""
+
+    class MessageAdapter(ChannelBackend):
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            return StreamPage((
+                ParsedMessage("first", "email", body=ParsedPart(text="First")),
+                ParsedMessage("poison", "email", metadata={"tags": ["x" * (512 * 1024)]}),
+                ParsedMessage("last", "email", body=ParsedPart(text="Last")),
+            ), {"offset": 3})
+
+    stream = SyncStream.objects.current(stream_bridge, "messages", "inbox")
+    result = advance_stream(stream, MessageAdapter(stream_bridge))
+
+    assert result.count == 2
+    assert set(Message._base_manager.values_list("external_id", flat=True)) == {"first", "last"}
+    stream.refresh_from_db()
+    assert stream.cursor == {"offset": 3}
+    discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+    assert discrepancy.code == "invalid_record"
+    assert discrepancy.details["external_key"] == "poison"
+    assert discrepancy.details["fields"] == ["metadata"]
+    assert "tags" not in discrepancy.details
+
+
 @pytest.mark.parametrize("status", [DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY])
 @pytest.mark.parametrize("tombstone", [False, True])
 def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
@@ -1428,6 +1516,34 @@ def test_partition_error_names_all_failures_in_order_and_bounds_the_total_messag
     failures.append(PartitionFailure(StreamDefinition("contacts", "c"), "pull", IntegrationError("x" * 5000)))
     assert len(BridgeSyncError(failures).public_message) == 4096
     assert BridgeSyncError(failures).public_message.endswith("…")
+
+
+def test_partition_data_error_persists_safe_stream_partition_and_reason(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Data errors outside record savepoints retain actionable, safe telemetry."""
+
+    class DataAdapter(MemoryAdapter):
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+            return (StreamDefinition("messages", "INBOX"),)
+
+        def finish_page(self, stream: Any, page: StreamPage, outcomes: Any) -> None:
+            raise DataError("secret database payload")
+
+    monkeypatch.setattr(Channel, "backend", property(lambda row: DataAdapter(pages=[StreamPage(("one",), {})])))
+    with pytest.raises(BridgeSyncError) as refused:
+        stream_bridge.run_sync(now=timezone.now())
+
+    expected = "messages (INBOX): Database rejected invalid or oversized record data."
+    assert refused.value.public_message == expected
+    stream_bridge.refresh_from_db()
+    assert stream_bridge.sync_error == stream_bridge.last_error == expected
+    assert stream_bridge.sync_progress["details"]["failures"] == [{
+        "stream": "messages", "partition": "INBOX", "stage": "pull",
+        "message": "Database rejected invalid or oversized record data.",
+    }]
+    assert not AppliedRecord.objects.exists()
+    assert SyncStream.objects.current_for_bridge(stream_bridge, "messages").get().cursor == {}
 
 
 def test_bridge_reports_and_logs_each_failed_partition(stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
