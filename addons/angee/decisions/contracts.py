@@ -22,10 +22,13 @@ class DecisionRecordReference(EvidenceReference):
 
 class DecisionFact(EvidenceFact):
     evidence: tuple[DecisionRecordReference, ...] = ()
+    widget: str | None = None
+    row: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class DecisionContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    reason: str = ""
     facts: tuple[DecisionFact, ...] = ()
     references: tuple[DecisionRecordReference, ...] = ()
 

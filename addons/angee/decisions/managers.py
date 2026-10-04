@@ -21,7 +21,7 @@ from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import lock_if_supported, system_queryset
 from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_answered
-from angee.graphql.publishing import publish_change
+from angee.graphql.publishing import mute_changes, publish_change
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:
@@ -111,11 +111,13 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         readable_records(references, participants)
         targets = {canonical_record_target(record) for record in request.records}
         with transaction.atomic(), system_context(reason="decisions.ask"):
-            decision = self.create(
-                kind=request.kind, requester=requester,
-                proposal=request.proposal.model_dump(mode="json"),
-                context=request.context.model_dump(mode="json"),
-            )
+            # Capture admission only after its immutable concern links exist.
+            with mute_changes():
+                decision = self.create(
+                    kind=request.kind, requester=requester,
+                    proposal=request.proposal.model_dump(mode="json"),
+                    context=request.context.model_dump(mode="json"),
+                )
             decision.assignees.set(assignees)
             link = apps.get_model("decisions", "DecisionRecord")
             link.objects.bulk_create([
@@ -124,6 +126,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             ])
             if not any(decision.with_actor(person).has_access("act") for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
+            publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision
 
     def decide(

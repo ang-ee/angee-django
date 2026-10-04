@@ -4,7 +4,7 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { DecisionCard, decisionFieldMarks } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Alert, Badge, Button, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
+  Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
   SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useActionResultMutation, useChatter,
   useRecordFieldMarks, useRecordPeek, type StepListItem, type Tone,
 } from "@angee/ui";
@@ -70,8 +70,8 @@ export function RecordTimelineView({ data, openCount, set = false, onAnswered, o
     marks: decisionFieldMarks(entry.decisions, entry.record_id), reveal,
   })), [data, reveal]);
   useRecordFieldMarks(publications);
-  const link = (model: string, id: string, label?: string) => <RecordReference model={model} id={id} label={label}
-    onOpen={() => openRecord({ model, id, label })} />;
+  const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label}
+    onOpen={() => openRecord({ model, id, label })} /></Chip>;
   const card = (decision: TimelineData[number]["decisions"][number], id: string, compact = false, records?: readonly string[]) =>
     <DecisionCard key={decision.id} decision={decision} selfId={id} highlighted={highlighted === decision.id}
       compact={compact} inStep={records ? { records } : undefined} onAnswered={onAnswered}
@@ -175,14 +175,16 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const routine = (node: typeof ordered[number]) => !node.step_run?.decision && !node.step_run?.notes.length
     && optionToken(node.step_run?.status) === "succeeded";
   const items: StepListItem[] = [{ id: "trigger", state: "trigger", title: run.trigger_event?.trigger?.display_name
-    ?? (optionToken(run.origin) === "manual" ? `Started manually by ${run.run_as?.display_name ?? "a user"}` : `${titleCase(run.origin)} started`), timestamp: run.created_at,
-    children: run.trigger_event?.record_model && run.trigger_event.record_id ? link(run.trigger_event.record_model, run.trigger_event.record_id) : null }];
+    ?? (optionToken(run.origin) === "manual" ? `${run.start_label ?? "Started manually"} by ${run.run_as?.display_name ?? "a user"}` : `${titleCase(run.origin)} started`), timestamp: run.created_at,
+    children: run.trigger_event?.record_model && run.trigger_event.record_id ? link(run.trigger_event.record_model, run.trigger_event.record_id)
+      : run.subject_model && run.subject_id ? link(run.subject_model, run.subject_id) : null }];
   const folded = !expanded && runSteps(run).some((step) => optionToken(step.status) === "waiting") && done.length > 6;
   let group: typeof ordered = [];
-  const details = (step: TimelineStep | MappedStep | null) => {
-    const records = step?.records ?? [];
+  const details = (step: TimelineStep | MappedStep | null, title?: string | null) => {
+    const records = [...new Map((step?.records ?? []).map((record) => [`${record.record_model}:${record.record_id}`, record])).values()];
+    const notes = step?.notes.filter((note) => note.message !== title) ?? [];
     return <>
-      {step?.notes.length ? <RecordIssues items={step.notes.map((note, index) => ({ id: String(index), ...note, tone: note.tone as "info" | "success" | "warning" | "danger" }))} /> : null}
+      {notes.length ? <RecordIssues items={notes.map((note, index) => ({ id: String(index), ...note, tone: note.tone as "info" | "success" | "warning" | "danger" }))} /> : null}
       {records.length ? <div className="flex min-w-0 flex-wrap gap-1">{records.map((record) => record.record_model && record.record_id ? <span key={record.id}>{link(record.record_model, record.record_id, record.label || undefined)}</span> : null)}</div> : null}
       {step?.child_runs.map((child) => <div key={child.id}>{link("workflows.WorkflowRun", child.id, child.display_name)}</div>)}
       {step?.hold === "run" && step.awaited_run ? <p className="text-13 font-medium text-warning-text">Waiting for {link("workflows.WorkflowRun", step.awaited_run.id, step.awaited_run.display_name)}</p> : null}
@@ -198,9 +200,12 @@ function RunSteps({ run, recordId, card, link, retry }: {
   };
   const append = (node: typeof ordered[number]) => {
     const step = node.step_run;
-    items.push({ id: node.key, state: optionToken(step?.status) === "canceled" ? "stopped" : node.plan === "current" ? "current" : "done", title: node.label,
-      outcome: step?.outcome_label, timestamp: step?.updated_at, tone: step?.hold === "error" ? "danger" : "success",
-      children: details(step) });
+    const outcome = step?.outcome_label && step.outcome_label !== titleCase(step.outcome) ? step.outcome_label : null;
+    const title = optionToken(step?.status) === "succeeded"
+      ? step?.notes.find((note) => ["info", "success"].includes(note.tone))?.message || outcome || node.label : node.label;
+    items.push({ id: node.key, state: optionToken(step?.status) === "canceled" ? "stopped" : node.plan === "current" ? "current" : "done", title,
+      timestamp: step?.updated_at, tone: step?.hold === "error" ? "danger" : "success",
+      children: details(step, title) });
     for (const mapped of step?.map_steps ?? []) {
       const status = optionToken(mapped.status);
       items.push({ id: mapped.id, state: mapped.hold || ["running", "waiting"].includes(status) ? "current"

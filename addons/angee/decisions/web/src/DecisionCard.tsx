@@ -7,7 +7,7 @@ import {
   RelativeTime, StatusIcon, TimelineEntry, cn, radioGroupVariants,
   actionOutcomeSubmitResult, formSubmitError, titleCase, useActionOutcomeMutation, useActiveRecordForm, useRecordPeek,
 } from "@angee/ui";
-import { DecisionContext } from "./DecisionContext";
+import { DecisionContext, DecisionContextSchema } from "./DecisionContext";
 import { DECISION_MODELS, type Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
 import { ProposalSchema } from "./proposal";
@@ -45,6 +45,8 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
     dataProviderName: "console", invalidateModels: DECISION_MODELS,
   });
   const proposal = v.safeParse(ProposalSchema, decision.proposal);
+  const context = v.safeParse(DecisionContextSchema, decision.context);
+  const references = context.success ? [...context.output.references, ...context.output.facts.flatMap((fact) => fact.evidence)] : [];
   const canAnswer = open && holdsPermission(decision, "act");
   const submit = async () => {
     setBusy(true); setError(undefined);
@@ -58,7 +60,8 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   };
   const recordLink = (id: string) => {
     const record = decision.records.find((record) => record.record_id === id);
-    return record?.record_model && record.record_id ? <RecordReference model={record.record_model} id={record.record_id}
+    const label = references.find((reference) => reference.id === id)?.label || undefined;
+    return record?.record_model && record.record_id ? <RecordReference model={record.record_model} id={record.record_id} label={label}
       onOpen={() => openRecord({ model: record.record_model!, id: record.record_id! })} /> : null;
   };
   if (!open) {
@@ -94,10 +97,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
             {decision.requester ? `Asked by ${decision.requester.display_name}` : null}{" · "}<RelativeTime value={decision.created_at} /></div> : null}
         </div>
       </div>
-      {!compact ? <div className="mt-3 flex min-w-0 flex-wrap gap-1">{decision.records.map((record) =>
-        record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
-          ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div> : null}
-      {!compact ? <div className="mt-3"><DecisionContext context={decision.context} /></div> : null}
+      <DecisionContext context={decision.context} reasonOnly />
       {proposal.success ? <>
         {Object.entries(proposal.output.checks).map(([id, fields]) => fields.map((field) =>
           <div key={`${id}:${field}`} className="mt-3 rounded-6 border border-danger-line bg-danger-tint px-2.5 py-2">
@@ -119,12 +119,17 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
               description={changes(alternative)} />)}
           </RadioGroup>}</div>
       </> : <ErrorBanner description={t("decision.invalidProposal")} />}
-      <p className="mt-3 text-xs text-fg-muted">May answer: {decision.assignees.map(({ display_name }) => display_name).join(", ")}</p>
       {error ? <ErrorBanner description={error} /> : null}
       <div className="mt-2 flex flex-wrap gap-1.5">
         {canAnswer && proposal.success ? <Button size="sm" variant="primary" disabled={busy || !chosen.length} onClick={() => void submit()}>{t("decision.submit")}</Button> : null}
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>Edit on form</Button> : null}
       </div>
+      <p className="mt-2 text-xs text-fg-muted">May answer: {decision.assignees.map(({ display_name }) => display_name).join(", ")}</p>
+      {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
+        <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
+          ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>
+        <DecisionContext context={decision.context} representedRecords={decision.records.flatMap((record) => record.record_id ? [record.record_id] : [])} />
+      </div> : null}
     </section>
   </Card></DecisionProvider>;
 }

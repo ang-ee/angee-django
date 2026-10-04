@@ -36,7 +36,13 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
 function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange): boolean {
   if (!change.id) return authoredQueryReadsAnyModel(meta, [change.model]);
   return authoredQueryReadsChange(meta, change.model, change.id)
-    || (change.relatedRecords ?? []).some((record) => authoredQueryReadsChange(meta, record.model, record.id));
+    || authoredQueryReadsAnyModel(meta, [change.model]) && (change.relatedRecords ?? []).some((record) => {
+      const records = recordValue(meta)?.angeeRecords;
+      return Array.isArray(records) && records.some((value) => {
+        const interest = recordValue(value);
+        return interest?.model === record.model && interest?.id === record.id;
+      });
+    });
 }
 
 /** Refetch every active authored read registered against one of the moved models. */

@@ -576,6 +576,9 @@ shared UI copy through an addon bundle.
   The same `DecisionCard` serves the inbox, record and record-set timeline.
   Forms consume the shared field-mark bridge; marks reveal the corresponding
   card. Lists may opt into the decisions attention column and filter.
+  Eager attention selects the timeline for records with runs and opens it for
+  waiting decisions; the tab count uses the same read. Run, step and question
+  change feeds retain concern identities for scoped invalidation, without polling.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the

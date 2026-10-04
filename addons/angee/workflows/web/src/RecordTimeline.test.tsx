@@ -34,11 +34,19 @@ test("answers inline with the observed revision and refreshes the stepper", asyn
 
 test("only records with runs select the timeline initially", async () => {
   const view = render(<TimelineStory state="empty" />);
-  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:chatter.comments"));
+  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:messaging.comments"));
   view.unmount();
   render(<TimelineStory />);
   await screen.findByText("Started manually by River");
   expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline");
+});
+
+test("a first visit opens a collapsed pane only when a decision is waiting", async () => {
+  const view = render(<TimelineStory collapsed />);
+  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline"));
+  view.unmount();
+  render(<TimelineStory collapsed state="clean" />);
+  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("true:workflows.timeline"));
 });
 
 test("answered cards do not nest list items outside a list", async () => {

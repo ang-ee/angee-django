@@ -38,7 +38,7 @@ export function TimelineEntry({
       {...props}
     >
       <div className="flex min-w-0 items-start justify-between gap-2">
-        <p className="truncate text-13 font-semibold text-fg">{title}</p>
+        <p className="min-w-0 text-13 font-semibold text-fg [overflow-wrap:anywhere]">{title}</p>
         <RelativeTime
           value={timestamp}
           className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}

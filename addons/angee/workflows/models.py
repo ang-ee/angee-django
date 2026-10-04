@@ -24,6 +24,7 @@ from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.service_users import sync_service_user
 from angee.resources.mixins import ResourceLoadMixin
@@ -264,6 +265,13 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
 
     objects = WorkflowRunManager()
 
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """Invalidate the records this execution has worked on."""
+        with system_context(reason="workflows.change_concerns"):
+            records = tuple(system_queryset(self.records.model).filter(run_id=self.pk))
+            return tuple(dict.fromkeys(reference for link in records
+                                       for reference in ChangeRelatedRecord.for_record(link.record_ref)))
+
     def __str__(self) -> str:
         """Identify an execution by its workflow and start time."""
         if self.version_id is None:
@@ -304,6 +312,11 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     def is_terminal(self) -> bool:
         """Whether this run has finished its lifecycle."""
         return self.status in RunStatus.terminal_values()
+
+    @property
+    def start_label(self) -> str:
+        """Use the subject owner's start verb, with the ordinary manual fallback."""
+        return getattr(self.subject_model_class, "workflow_start_label", "Started manually")
 
     @property
     def failure_reason(self) -> str | None:
@@ -466,6 +479,16 @@ class StepRun(AngeeDataModel):
     notes = models.JSONField(default=list)
 
     objects = StepRunManager()
+
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """A step changes both its run graph and that run's record timelines."""
+        with system_context(reason="workflows.step_change_concerns"):
+            run = system_queryset(self._meta.get_field("run").related_model).get(pk=self.run_id)
+            records = [ChangeRelatedRecord(run._meta.label, str(run.sqid)), *run.change_related_records()]
+            if self.decision_id:
+                decision = self._meta.get_field("decision").related_model
+                records.append(ChangeRelatedRecord(decision._meta.label, decision.public_id_from_pk(self.decision_id)))
+            return tuple(records)
     hold_states = {
         (StepRunStatus.FAILED, None): "error",
         (StepRunStatus.WAITING, WaitingKind.ERROR): "error",

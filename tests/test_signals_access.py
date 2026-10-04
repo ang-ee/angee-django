@@ -127,6 +127,40 @@ def test_connect_publishers_is_idempotent() -> None:
     assert _receiver_count(post_save, "angee-changes-auth.Group-save") == 1
 
 
+@pytest.mark.django_db(transaction=True)
+def test_parent_save_publishes_existing_child_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Canonical writes reach the child channel without broadcasting nonexistent siblings."""
+    with isolate_apps():
+        class Parent(models.Model):
+            name = models.CharField(max_length=50)
+
+            class Meta:
+                app_label = "change_views"
+
+        class Child(Parent):
+            class Meta:
+                app_label = "change_views"
+
+        sent = []
+        monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append((model, payload)))
+        with model_tables((Parent, Child)):
+            publishing.connect_publishers(Child, readable_fields=("name",))
+            try:
+                child = Child.objects.create(name="Before")
+                sent.clear()
+                parent = Parent.objects.get(pk=child.pk)
+                parent.name = "After"
+                parent.save(update_fields=("name",))
+                assert len(sent) == 1
+                assert sent[0][0] is Child
+                assert sent[0][1].changed_values == {"name": "After"}
+                sent.clear()
+                Parent.objects.create(name="No child")
+                assert sent == []
+            finally:
+                publishing.disconnect_publishers(Child)
+
+
 def test_publish_uses_public_id_and_changed_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

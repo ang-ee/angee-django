@@ -212,12 +212,12 @@ export function RecordActionBar({
         {formDialog}
       </> : <>
         {toolbarActions.map((action, index) => (
-          <Button key={action.id} type="button" size="sm"
+          <React.Fragment key={action.id}><Button type="button" size="sm"
             variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
             disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
             {action.icon ? <Glyph name={action.icon} /> : null}
             {action.label}
-          </Button>
+          </Button>{action.disabled && action.disabledReason ? <span className="text-xs text-fg-muted">{action.disabledReason}</span> : null}</React.Fragment>
         ))}
         {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
           {deleteTrigger}

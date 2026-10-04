@@ -10,6 +10,7 @@ import { WORKFLOW_STATUS_TONES } from "./status-tones";
 
 export { RecordTimeline, type RecordTimelineProps, type TimelineRecord } from "./RecordTimeline";
 export { useRecordTimelinePane } from "./timeline-pane";
+export { useRecordTimelineQuery } from "./RecordTimeline";
 export { WORKFLOW_STUDIO_TAB_ID } from "./catalogue/resources";
 
 export { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";

@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
+import { defaultWidgets } from "@angee/ui";
 
 import { DecisionContext } from "./DecisionContext";
 
@@ -21,7 +22,7 @@ describe("decision context", () => {
     }} /></ShellPageTestProviders>);
     expect(await screen.findByText("7")).toBeTruthy();
     expect(screen.getByText("Count")).toBeTruthy();
-    expect(screen.getByText("Source")).toBeTruthy();
+    expect(screen.getByTitle("Source")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Facts", level: 2 })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Evidence", level: 3 })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "References", level: 2 })).toBeTruthy();
@@ -34,6 +35,17 @@ describe("decision context", () => {
   test("renders nothing for empty context", () => {
     const { container } = render(<ShellPageTestProviders><DecisionContext context={{}} /></ShellPageTestProviders>);
     expect(container.textContent).toBe("");
+  });
+
+  test("omits empty address components and reads formatted facts through registered widgets", () => {
+    render(<ShellPageTestProviders runtime={{ widgets: defaultWidgets }}><DecisionContext context={{ facts: [
+      { pointer: "/address", label: "Address", authority: "source", value: { street: "Oak Street", po_box: null, city: "" } },
+      { pointer: "/date", label: "Date", authority: "source", value: "2026-10-04", widget: "date" },
+    ] }} /></ShellPageTestProviders>);
+    expect(screen.getByText("Oak Street")).toBeTruthy();
+    expect(screen.queryByText("Po Box")).toBeNull();
+    expect(screen.queryByText("City")).toBeNull();
+    expect(screen.queryByText("2026-10-04")).toBeNull();
   });
 
   test("shows structured facts as readable fields without a JSON code block", () => {

@@ -120,6 +120,7 @@ class WorkflowRunType(RecordReferenceNode):
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
     origin: RunOrigin
+    start_label: str = strawberry_django.field(only=["subject_object_id", "subject_content_type_id", "version_id"])
     @strawberry_django.field(only=["input", "version_id"])
     def input(self, info: strawberry.Info) -> JSON:
         """Keep non-reference input while checking marked sources at read time."""
@@ -882,7 +883,7 @@ schemas = {
     "console": {
         "query": [WorkflowStudioQuery, RecordTimelineQuery, *(resource.query for resource in _RESOURCES)],
         "mutation": [WorkflowStudioMutation, WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
-        "subscription": [changes(WorkflowRun, field="workflowRunChanged")],
+        "subscription": [changes(WorkflowRun, field="workflowRunChanged"), changes(StepRun, field="stepRunChanged")],
         "types": [
             RunOrigin,
             WorkflowType,

@@ -45,7 +45,10 @@ Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the
 alternative that keeps its current values.
 
-`DecisionContext` supplies typed facts and evidence references for the card.
+`DecisionContext` supplies a short reason, typed facts and evidence references for the card.
+The question and answer controls precede compact supporting facts. Facts may
+declare a registered read widget and its sibling row context, so formatting
+stays with the app's widgets rather than the decision renderer.
 Facts describe evidence; proposed fields live only in alternatives' actions.
 The models are `Decision` and `DecisionRecord`.
 

@@ -15,6 +15,7 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordA
 from angee.decisions.testing.models import Decision
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
+from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
 
 
@@ -72,6 +73,22 @@ def test_concerns_form_one_relation_per_record_and_gate_each(records, count):
 def test_empty_concerns_are_rejected(records):
     with pytest.raises(ContractError):
         admit(records, [])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
+    events = []
+    monkeypatch.setattr("angee.graphql.publishing._send_change", lambda model, payload: events.append(payload))
+    connect_publishers(Decision)
+    try:
+        decision = admit(records, records[3][:2])
+    finally:
+        disconnect_publishers(Decision)
+    assert len(events) == 1
+    assert events[0].id == decision.sqid
+    assert {(ref.model, ref.id) for ref in events[0].related_records} == {
+        (record._meta.label, record.sqid) for record in records[3][:2]
+    }
 
 
 def test_null_is_rejected_for_a_required_field(records):

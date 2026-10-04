@@ -183,6 +183,8 @@ export interface ActionProps extends ActionBinding {
   permission?: string;
   icon?: string;
   disabled?: boolean;
+  /** Explain a record action's disabled state beside its toolbar button. */
+  disabledReason?: ReactNode;
   danger?: boolean;
   /** Promote a frequent record verb out of the default Actions menu. */
   placement?: "menu" | "toolbar";

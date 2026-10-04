@@ -1224,6 +1224,7 @@ class File(OwnerMixin, AngeeDataModel):
     ``delete()`` soft-trashes; :meth:`purge` is the real delete.
     """
 
+    workflow_start_label = "Uploaded"
     runtime = True
     rebac_grantable = {"viewer": "share"}
     owner_container = "drive"

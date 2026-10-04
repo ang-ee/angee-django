@@ -5,11 +5,14 @@ from typing import Any
 from django.conf import settings
 from django.db import models
 from django.utils.text import capfirst
+from rebac import system_context
 
 from angee.base.evidence import DerivedFrom
 from angee.base.mixins import AppendOnlyModel, OptimisticLockMixin
 from angee.base.models import AngeeDataModel
+from angee.base.scoping import system_queryset
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
+from angee.graphql.events import ChangeRelatedRecord
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
@@ -30,6 +33,13 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     )
     answered_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionManager()
+
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """Publish the question's retained concern identities with its verdict."""
+        with system_context(reason="decisions.change_concerns"):
+            links = system_queryset(self.records.model).filter(decision_id=self.pk)
+            return tuple(dict.fromkeys(reference for link in links
+                                       for reference in ChangeRelatedRecord.for_record(link.record_ref)))
 
     class Meta:
         abstract = True

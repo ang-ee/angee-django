@@ -95,14 +95,14 @@ def connect_publishers(
     dispatch_uid = f"angee-changes-{model._meta.label}"
     save_receiver = partial(
         _on_save,
+        published_model=model,
         readable_fields=(readable_fields if callable(readable_fields) else frozenset(readable_fields)),
     )
-    post_save.connect(
-        save_receiver,
-        sender=model,
-        dispatch_uid=f"{dispatch_uid}-save",
-        weak=False,
-    )
+    for sender in (model, *model._meta.get_parent_list()):
+        # Django sends only the saved class's signal, including parent writes.
+        post_save.connect(save_receiver, sender=sender, weak=False,
+                          dispatch_uid=f"{dispatch_uid}-save" if sender is model
+                          else f"{dispatch_uid}-save-{sender._meta.label}")
     post_delete.connect(
         _on_delete,
         sender=model,
@@ -120,6 +120,10 @@ def disconnect_publishers(model: type[models.Model]) -> bool:
 
     dispatch_uid = f"angee-changes-{model._meta.label}"
     disconnected = post_save.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-save")
+    for parent in model._meta.get_parent_list():
+        disconnected = post_save.disconnect(
+            sender=parent, dispatch_uid=f"{dispatch_uid}-save-{parent._meta.label}",
+        ) or disconnected
     disconnected = post_delete.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-delete") or disconnected
     return disconnected
 
@@ -163,6 +167,7 @@ def _on_save(
     update_fields: Iterable[str] | None = None,
     raw: bool = False,
     readable_fields: ReadableFields = (),
+    published_model: type[models.Model] | None = None,
     **kwargs: Any,
 ) -> None:
     """Publish a create or update event after the transaction commits."""
@@ -170,6 +175,11 @@ def _on_save(
     del sender, kwargs
     if raw:
         return
+    if published_model is not None and type(instance) is not published_model:
+        instance = published_model._base_manager.filter(pk=instance.pk).first()
+        if instance is None:
+            return
+        created = False
     publish_change(
         instance,
         action="create" if created else "update",

@@ -35,8 +35,8 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ state = "decision", side = "right", duplicateRisk = false, onRequest }: {
-  state?: TimelineState; side?: "left" | "right"; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
+export function TimelineStory({ state = "decision", side = "right", collapsed = false, duplicateRisk = false, onRequest }: {
+  state?: TimelineState; side?: "left" | "right"; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
 }) {
   const schemas = useMemo(() => {
     let current = timelineFixture(state);
@@ -57,7 +57,7 @@ export function TimelineStory({ state = "decision", side = "right", duplicateRis
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
   }, [state, duplicateRisk, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceName="notes.Note" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
-    <RecordFieldMarksProvider><ChatterProvider><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
+    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
   </RoutedRuntimeFixture>;
 }
 

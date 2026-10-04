@@ -878,6 +878,7 @@ class StepRunQuerySet(AngeeQuerySet):
             attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
+        publish_change(step_run, action="update", update_fields=None)
 
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,

@@ -8,13 +8,15 @@ from typing import Any, cast
 from uuid import uuid4
 
 import strawberry
+from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_id_of
+from angee.base.identity import public_id_for, public_id_of
+from angee.base.refs import RecordRef, concrete_child_models
 from angee.base.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]
@@ -27,6 +29,21 @@ class ChangeRelatedRecord:
 
     model: str
     id: str
+
+    @classmethod
+    def for_record(cls, record: RecordRef) -> tuple[ChangeRelatedRecord, ...]:
+        """Include existing inherited views of a canonical concern identity."""
+        model = apps.get_model(record.model_label)
+        result = [cls(record.model_label, record.public_id)]
+
+        def children(parent: type[models.Model]) -> None:
+            for child in concrete_child_models(parent):
+                if child._base_manager.filter(pk=record.object_id).exists():
+                    result.append(cls(child._meta.label, public_id_for(child, record.object_id)))
+                    children(child)
+
+        children(model)
+        return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,11 +203,11 @@ def _changed_values(
     changed_fields: tuple[str, ...],
     readable_fields: frozenset[str],
 ) -> dict[str, Any]:
-    """Return projected, JSON-safe local-field values without relation fetches."""
+    """Return projected concrete-field values, including inherited columns, without relation fetches."""
 
     values: dict[str, Any] = {}
     for name in changed_fields:
-        field = _concrete_local_field(instance, name)
+        field = _concrete_field(instance, name)
         if field is None or not ({name, field.name, field.attname} & readable_fields):
             continue
         values[name] = json_safe(getattr(instance, field.attname, None))
@@ -227,19 +244,19 @@ def _change_related_records(instance: models.Model) -> tuple[ChangeRelatedRecord
     return records
 
 
-def _concrete_local_field(
+def _concrete_field(
     instance: models.Model,
     name: str,
 ) -> models.Field[Any, Any] | None:
-    """Return the concrete local field addressed by ``name`` or its attname."""
+    """Return a concrete field on this row addressed by ``name`` or its attname."""
 
     try:
         field = instance._meta.get_field(name)
     except FieldDoesNotExist:
-        field = next((item for item in instance._meta.local_fields if item.attname == name), None)
+        field = next((item for item in instance._meta.concrete_fields if item.attname == name), None)
     if not isinstance(field, models.Field) or not field.concrete:
         return None
-    if field not in instance._meta.local_fields:
+    if field not in instance._meta.concrete_fields:
         return None
     return field
 

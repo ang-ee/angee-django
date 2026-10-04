@@ -60,7 +60,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     run_until(run)
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { records { decisions { id } runs {
-        id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
+        id start_label subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
         graph { nodes { key rank step_run { hold records { record_model record_id }
           decision { id is_open records { record_model record_id } } } } }
       } } }
@@ -69,6 +69,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
         {"model": record._meta.label, "id": record.sqid},
     ]}, user=actor))["record_timeline"]["records"][0]
     result = data["runs"][0]
+    assert result["start_label"] == "Started manually"
     assert (result["subject_model"], result["subject_id"]) == (record._meta.label, record.sqid)
     assert result["trigger_event"]["record_id"] == record.sqid
     step = result["graph"]["nodes"][0]["step_run"]
@@ -76,6 +77,14 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert step["records"][0]["record_id"] == record.sqid
     assert step["decision"]["records"][0]["record_id"] == record.sqid
     assert data["decisions"] == [{"id": step["decision"]["id"]}]
+    from angee.graphql.events import ChangeRelatedRecord
+
+    concern = ChangeRelatedRecord(record._meta.label, record.sqid)
+    with system_context(reason="tests.timeline.change_concerns"):
+        stored = WorkflowRun.objects.get(sqid=run.sqid)
+        assert concern in stored.change_related_records()
+        assert concern in stored.step_runs.get(node_key="entry").change_related_records()
+        assert concern in stored.step_runs.get(node_key="entry").decision.change_related_records()
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):

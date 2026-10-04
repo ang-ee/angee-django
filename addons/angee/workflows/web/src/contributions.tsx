@@ -1,12 +1,13 @@
 import { useDecision } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
-import { type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ErrorBanner, MetaSection, TextLink, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 
 import { DecisionWaitingRunsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
 import { RecordTimeline } from "./RecordTimeline";
+import { useRecordTimelineAttention } from "./timeline-pane";
 
 export function DecisionRunOrigin() {
   const { decision } = useDecision();
@@ -32,6 +33,10 @@ export const recordTimelineTab: ContainerChild<ChatterTabContent> = {
   sequence: 40,
   content: {
     icon: "versions", label: "Timeline",
+    useCount: ({ view, route }) => {
+      const record = useMemo(() => ({ model: route!.canonicalLabel!, id: view.sqid! }), [route?.canonicalLabel, view.sqid]);
+      return useRecordTimelineAttention(record);
+    },
     when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel)
       && !route?.canonicalLabel?.startsWith("workflows."),
     render: ({ view, route }) => view.sqid && route?.canonicalLabel
