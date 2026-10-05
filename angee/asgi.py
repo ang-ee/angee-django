@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import AsyncExitStack
+from functools import partial
 from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
@@ -82,8 +84,52 @@ def _run_boot_hooks() -> None:
             hook()
 
 
+WEB_STATEMENT_TIMEOUT_UID = "angee.asgi.web_statement_timeout"
+
+
+def _web_statement_timeout_ms() -> int:
+    """Read ``ANGEE_WEB_STATEMENT_TIMEOUT`` once, at boot, in milliseconds.
+
+    The setting is seconds; 0 disables the bound. Anything that is not zero or a
+    positive finite number fails at boot instead of on every connection.
+    """
+
+    from django.conf import settings
+    from django.core.exceptions import ImproperlyConfigured
+
+    raw = settings.ANGEE_WEB_STATEMENT_TIMEOUT
+    try:
+        seconds = float(raw)
+    except TypeError, ValueError:
+        raise ImproperlyConfigured(f"ANGEE_WEB_STATEMENT_TIMEOUT must be a number of seconds, not {raw!r}.") from None
+    if seconds < 0 or not math.isfinite(seconds):
+        raise ImproperlyConfigured(
+            f"ANGEE_WEB_STATEMENT_TIMEOUT must be zero or a positive number of seconds, not {raw!r}."
+        )
+    return 0 if seconds == 0 else max(1, round(seconds * 1000))
+
+
+def _bound_web_statements(*, connection: Any, timeout_ms: int, **_signal: Any) -> None:
+    """Bound each PostgreSQL statement a web-process connection runs.
+
+    The bound caps every statement a request, subscription or mounted app
+    issues; it applies per statement, not per request. Only
+    :func:`_application` connects this receiver: Celery workers, migrations,
+    imports and other management commands never import this entrypoint and keep
+    the server's own timeout.
+    """
+
+    if connection.vendor != "postgresql":
+        return
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT set_config('statement_timeout', %s, false)", [str(timeout_ms)])
+
+
 def _application() -> Any:
     """Build the ASGI application after settings and apps are ready.
+
+    Every database connection the process opens afterwards bounds its
+    statements through :func:`_bound_web_statements`.
 
     With no WebSocket or HTTP-mount contributions the bare Django app is returned
     (the common, non-MCP case). Otherwise a :class:`~channels.routing.ProtocolTypeRouter`
@@ -101,8 +147,16 @@ def _application() -> Any:
     # Deferred: importing ``django.core.asgi`` at module collection time pulls on
     # Django internals before pytest-django owns setup.
     from django.core.asgi import get_asgi_application
+    from django.db.backends.signals import connection_created
 
+    timeout_ms = _web_statement_timeout_ms()
     django_asgi_app = get_asgi_application()
+    if timeout_ms:
+        connection_created.connect(
+            partial(_bound_web_statements, timeout_ms=timeout_ms),
+            weak=False,
+            dispatch_uid=WEB_STATEMENT_TIMEOUT_UID,
+        )
     _run_boot_hooks()
     websocket_patterns = _websocket_urlpatterns()
     http_mounts = _http_mounts()

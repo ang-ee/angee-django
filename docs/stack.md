@@ -189,6 +189,14 @@ setting remains authoritative. The framework template's Playwright image must
 match the `@angee/e2e` version in `pnpm-lock.yaml`, enforced by the stack
 template test.
 
+Web processes bound each PostgreSQL statement to `ANGEE_WEB_STATEMENT_TIMEOUT`
+seconds (default 60, `0` disables), so a query outlives its request by at most
+that long; [`angee.asgi`](../angee/asgi.py) applies it to every connection the
+serving process opens, in development and production. Celery workers,
+migrations, imports, the operator's jobs and other management commands never
+load that entrypoint and keep the server's own timeout. Change it in project
+settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
+
 ## Frontend
 
 | Pick | Owns | Angee adds |

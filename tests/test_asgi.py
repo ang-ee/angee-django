@@ -19,6 +19,7 @@ import pytest
 import strawberry
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth.models import AnonymousUser
+from django.db.backends.signals import connection_created
 from django.urls import path
 
 from angee import asgi
@@ -101,6 +102,59 @@ def test_run_boot_hooks_dispatches_addon_asgi_contributions(monkeypatch: Any) ->
     _run_boot_hooks()
 
     assert calls == ["boot"]
+
+
+def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, settings: Any) -> None:
+    """Web-process PostgreSQL connections carry the timeout; workers and commands keep the server's."""
+
+    statements: list[tuple[str, list[str]]] = []
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: list[str]) -> None:
+            statements.append((sql, params))
+
+    def open_connection(vendor: str = "postgresql") -> None:
+        connection_created.send(sender=None, connection=SimpleNamespace(vendor=vendor, cursor=Cursor))
+
+    monkeypatch.setattr(asgi, "_run_boot_hooks", lambda: None)
+    monkeypatch.setattr(asgi, "_websocket_urlpatterns", list)
+    monkeypatch.setattr(asgi, "_http_mounts", list)
+    open_connection()  # a Celery worker or management command never builds the web app
+    assert statements == []
+    try:
+        asgi._application()
+        open_connection()
+        open_connection("sqlite")
+    finally:
+        connection_created.disconnect(dispatch_uid=asgi.WEB_STATEMENT_TIMEOUT_UID)
+    assert statements == [("SELECT set_config('statement_timeout', %s, false)", ["60000"])]
+
+    statements.clear()
+    settings.ANGEE_WEB_STATEMENT_TIMEOUT = "0"  # a deployment disabling the bound
+    try:
+        asgi._application()
+        open_connection()
+    finally:
+        connection_created.disconnect(dispatch_uid=asgi.WEB_STATEMENT_TIMEOUT_UID)
+    assert statements == []
+
+
+@pytest.mark.parametrize("value", ["60s", "-5", "nan", None])
+def test_an_invalid_web_statement_timeout_fails_at_boot(monkeypatch: Any, settings: Any, value: object) -> None:
+    """A malformed or negative timeout stops the web app from starting, not every request."""
+
+    from django.core.exceptions import ImproperlyConfigured
+
+    monkeypatch.setattr(asgi, "_run_boot_hooks", lambda: None)
+    settings.ANGEE_WEB_STATEMENT_TIMEOUT = value
+    with pytest.raises(ImproperlyConfigured, match="ANGEE_WEB_STATEMENT_TIMEOUT"):
+        asgi._application()
 
 
 def _mount(events: list[str], *, fail: bool = False) -> Any:
