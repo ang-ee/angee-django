@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { ResourceSearch, SearchFacet } from "../views/resource/search/types";
+import { GroupStackPanel, GroupLevelLabel, groupLevelLabel } from "../views/resource/search/GroupStackPanel";
 import type { ReactElement, ReactNode } from "react";
 import { useDebouncedText } from "../lib/use-debounced-text";
 import { useContainerQuery } from "../lib/use-container-query";
@@ -33,10 +34,8 @@ import type {
   ResourceViewKind,
 } from "../views/resource/resource-view-model";
 import {
-  resourceViewGroupsEqual,
   resourceViewKindCapabilities,
 } from "../views/resource/resource-view-model";
-import { groupFieldLabel } from "../views/resource/resource-view-list-body";
 import { useResourceViewKindContent, useResourceViewKinds } from "../views/resource/resource-view-kinds";
 import { labelText } from "../views/resource/resource-view-utils";
 import {
@@ -124,13 +123,6 @@ export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKi
 }
 
 const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
-const PRIMARY_GROUP_GRANULARITIES = new Set<ResourceViewGroupGranularity>([
-  "year",
-  "quarter",
-  "month",
-  "week",
-  "day",
-]);
 
 export function ResourceToolbar({
   search, pager, chrome, view, filterRow, createLabel, onCreate, actions,
@@ -160,8 +152,6 @@ export function ResourceToolbar({
   };
   const onFacetChange = (field: string, id: string | null) => search.setFacet(field, id ? [id] : []);
   const onFilterTextChange = catalog.text.length ? search.setText : undefined;
-  const onGroupStackChange = search.groupingEnabled ? search.setGroupStack : undefined;
-  const onClearGroup = search.groupingEnabled ? () => search.setGroupStack([]) : undefined;
   const onCustomFilterAdd = search.addClause;
   const onCustomFilterRemove = (id: string) => search.clear(`clause:${id}` as Parameters<ResourceSearch["clear"]>[0]);
   const onFavoriteSave = search.saveFavorite;
@@ -175,9 +165,6 @@ export function ResourceToolbar({
   // none of filter/pager/group-by; a surface that names no kind keeps them all.
   const capabilities = resourceViewKindCapabilities(view, useResourceViewKindContent(view)?.capabilities);
   const groupControls = capabilities.grouping && search.groupingEnabled;
-  const toolbarGroupOptions = catalog.curatedGroups;
-  const toolbarCustomGroupOptions = catalog.groups;
-  const groups = groupControls ? search.groupStack : [];
   const activeFilters = filterOptions.filter((option) => activeFilterIds.includes(option.id));
   const clearable = search.queryDirty;
   return (
@@ -221,6 +208,8 @@ export function ResourceToolbar({
             />
           ) : null}
           <FilterPicker
+            search={search}
+            groupingEnabled={groupControls}
             compact={Boolean(filterRow)}
             activeFilters={activeFilters}
             activeFilterIds={activeFilterIds}
@@ -239,13 +228,7 @@ export function ResourceToolbar({
             onFavoritePin={onFavoritePin}
           />
           {groupControls ? (
-            <GroupByControl
-              groups={groups}
-              groupOptions={toolbarGroupOptions}
-              customGroupOptions={toolbarCustomGroupOptions}
-              onGroupStackChange={onGroupStackChange}
-              onClearGroup={onClearGroup}
-            />
+            <GroupByControl search={search} />
           ) : null}
         </div>
       ) : null}
@@ -390,42 +373,26 @@ function FilterRow({
   </div>;
 }
 
-function GroupByControl({ groups, groupOptions, customGroupOptions, onGroupStackChange, onClearGroup }: {
-  groups: readonly ResourceViewGroup[];
-  groupOptions: readonly ResourceToolbarGroupOption[];
-  customGroupOptions: readonly ResourceToolbarGroupOption[];
-  onGroupStackChange?: (groups: readonly ResourceViewGroup[]) => void;
-  onClearGroup?: () => void;
-}): ReactElement {
+function GroupByControl({ search }: { search: ResourceSearch }): ReactElement {
   const t = useUiT();
-  const [customOpen, setCustomOpen] = React.useState(false);
-  const [customId, setCustomId] = React.useState("");
-  const [granularity, setGranularity] = React.useState<ResourceViewGroupGranularity>("day");
-  const selected = customGroupOptions.find((option) => option.id === customId) ?? customGroupOptions[0];
+  const levels = search.active.filter((item) => item.kind === "group");
   return <PopoverRoot><PopoverTrigger className="inline-flex h-8 items-center gap-1 rounded-6 px-2 text-xs text-fg-muted outline-none hover:bg-inset focus-visible:focus-ring"
     aria-label={t("resourceToolbar.groupBy")}>
     <Glyph name="sliders-horizontal" className="size-3.5" />
-    {groups.length > 0
-      ? t("resourceToolbar.groupByActive", { groups: groups.map((group) => resourceViewGroupLabel(group, [...groupOptions, ...customGroupOptions])).join(", ") })
+    {levels.length > 0
+      ? t("resourceToolbar.groupByActive", { groups: levels.map((item) => groupLevelLabel(item, t)).join(" › ") })
       : t("resourceToolbar.groupBy")}
     <Glyph name="chevron-down" className="size-3" />
-  </PopoverTrigger><PopoverPortal><PopoverPositioner sideOffset={6} align="start"><PopoverContent className="grid w-60 gap-1 p-2">
-    {groupOptions.map((option) => <GroupOptionButton key={option.id} option={option} groups={groups}
-      onGroupStackChange={onGroupStackChange} />)}
-    {groups.length > 0 ? <PickerButton onClick={() => onClearGroup ? onClearGroup() : onGroupStackChange?.([])}>{t("resourceToolbar.clearGroup")}</PickerButton> : null}
-    <PickerButton active={customOpen} onClick={() => setCustomOpen((open) => !open)}>
-      <Glyph name="plus" className="size-3" />{t("resourceToolbar.addCustomGroup")}</PickerButton>
-    {customOpen ? <CustomGroupEditor options={customGroupOptions} option={selected} optionId={selected?.id ?? ""}
-      granularity={groupGranularity(selected, granularity)} onOption={setCustomId} onGranularity={setGranularity}
-      onAdd={() => { if (selected && onGroupStackChange) {
-        const group = selected.type === "date" ? { ...selected.group, granularity: groupGranularity(selected, granularity) } : selected.group;
-        if (!groups.some((entry) => resourceViewGroupsEqual(entry, group))) onGroupStackChange([...groups, group]);
-        setCustomOpen(false);
-      } }} /> : null}
-  </PopoverContent></PopoverPositioner></PopoverPortal></PopoverRoot>;
+  </PopoverTrigger><PopoverPortal><PopoverPositioner sideOffset={6} align="start">
+    <PopoverContent className="grid max-h-[min(36rem,calc(100dvh-5rem))] w-72 max-w-[calc(100vw-1rem)] overflow-y-auto p-2">
+      <GroupStackPanel search={search} />
+    </PopoverContent>
+  </PopoverPositioner></PopoverPortal></PopoverRoot>;
 }
 
 function FilterPicker({
+  search,
+  groupingEnabled,
   compact,
   filterOptions,
   customFilterFields,
@@ -443,6 +410,8 @@ function FilterPicker({
   onFavoriteRename,
   onFavoritePin,
 }: {
+  search: ResourceSearch;
+  groupingEnabled: boolean;
   compact: boolean;
   filterOptions: readonly ResourceToolbarFilterOption[];
   customFilterFields: readonly FilterClauseField[];
@@ -461,6 +430,11 @@ function FilterPicker({
   onFavoritePin?: (id: string, pinned: boolean) => void;
 }): ReactElement {
   const t = useUiT();
+  const groupItems = groupingEnabled ? search.active.filter((item) => item.kind === "group") : [];
+  const groupChips = groupItems.map((item) => <FacetChip key={item.id}
+    label={t(item.index === 0 ? "resourceToolbar.groupBy" : "search.then")}
+    value={<GroupLevelLabel item={item} />}
+    removeLabel={groupLevelLabel(item, t)} onRemove={() => search.removeGroup(item.index)} />);
   const [pickerHostRef, roomyPicker] = useContainerQuery(640);
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const defaultFavoriteLabel = t("resourceToolbar.savedSearch");
@@ -532,6 +506,7 @@ function FilterPicker({
         )}
       >
         {!compact ? <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" /> : null}
+        {!compact ? groupChips : null}
         {!compact ? activeFilters.slice(0, roomyPicker ? undefined : 1).map((option) => (
           <FacetChip
             key={option.id}
@@ -587,8 +562,9 @@ function FilterPicker({
               title={t("resourceToolbar.filters")}
             >
               {compact ? searchInput : null}
-              {activeFilters.length > 0 || customFilterChips.length > 0 ? (
+              {groupItems.length > 0 || activeFilters.length > 0 || customFilterChips.length > 0 ? (
                 <div className="mb-2 flex min-w-0 flex-wrap gap-1 border-b border-border-subtle pb-2">
+                  {groupChips}
                   {activeFilters.map((option) => (
                     <RemovableChip
                       key={option.id}
@@ -803,162 +779,6 @@ function PickerButton({
   );
 }
 
-function CustomGroupEditor({
-  options,
-  option,
-  optionId,
-  granularity,
-  onOption,
-  onGranularity,
-  onAdd,
-}: {
-  options: readonly ResourceToolbarGroupOption[];
-  option: ResourceToolbarGroupOption | undefined;
-  optionId: string;
-  granularity: ResourceViewGroupGranularity;
-  onOption: (id: string) => void;
-  onGranularity: (granularity: ResourceViewGroupGranularity) => void;
-  onAdd: () => void;
-}): ReactElement {
-  const t = useUiT();
-  const granularities = option?.granularities ?? [];
-  return (
-    <div className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs">
-      {options.length === 0 ? (
-        <PickerMuted>{t("resourceToolbar.noGroupFields")}</PickerMuted>
-      ) : (
-        <>
-          <Select
-            size="sm"
-            value={optionId}
-            aria-label={t("resourceToolbar.groupField")}
-            options={options.map((item) => ({
-              value: item.id,
-              label: item.label,
-            }))}
-            onValueChange={onOption}
-          />
-          {option?.type === "date" ? (
-            <Select
-              size="sm"
-              value={granularity}
-              aria-label={t("resourceToolbar.groupGranularity")}
-              options={granularities.map((item) => ({
-                value: item,
-                label: titleCase(item),
-              }))}
-              onValueChange={(next) =>
-                onGranularity(next as ResourceViewGroupGranularity)}
-            />
-          ) : null}
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="justify-center"
-            onClick={onAdd}
-          >
-            {t("resourceToolbar.add")}
-          </Button>
-        </>
-      )}
-    </div>
-  );
-}
-
-function GroupOptionButton({
-  option,
-  groups,
-  onGroupStackChange,
-}: {
-  option: ResourceToolbarGroupOption;
-  groups: readonly ResourceViewGroup[];
-  onGroupStackChange?: (groups: readonly ResourceViewGroup[]) => void;
-}): ReactElement {
-  const t = useUiT();
-  const [advancedOpen, setAdvancedOpen] = React.useState(false);
-  const active = groups.some((group) => group.field === option.group.field);
-  const granularities = option.granularities ?? [];
-  const primaryGranularities = granularities.filter((granularity) =>
-    PRIMARY_GROUP_GRANULARITIES.has(granularity),
-  );
-  const advancedGranularities = granularities.filter((granularity) =>
-    !PRIMARY_GROUP_GRANULARITIES.has(granularity),
-  );
-  const visibleGranularities = advancedOpen
-    ? granularities
-    : primaryGranularities;
-  const selectedGranularities = new Set(
-    groups
-      .filter((group) => group.field === option.group.field && group.granularity)
-      .map((group) => group.granularity!),
-  );
-
-  return (
-    <div className={cn("rounded-6", active && "bg-brand-soft")}>
-      <PickerButton
-        active={active}
-        onClick={() => {
-          if (!onGroupStackChange) return;
-          if (active) {
-            onGroupStackChange(
-              groups.filter((group) => group.field !== option.group.field),
-            );
-          } else {
-            onGroupStackChange([...groups, option.group]);
-          }
-        }}
-      >
-        {option.type === "date" ? (
-          <Glyph name="calendar" className="size-3 text-fg-muted" />
-        ) : null}
-        <span className="min-w-0 flex-1 truncate">{option.label}</span>
-      </PickerButton>
-      {option.type === "date" ? (
-        <div className="flex flex-wrap gap-0.5 px-2 pb-1">
-          {visibleGranularities.map((granularity) => (
-            <button
-              key={granularity}
-              type="button"
-              className={cn(
-                "h-5 rounded-6 px-1.5 text-2xs font-medium outline-none focus-visible:focus-ring",
-                selectedGranularities.has(granularity)
-                  ? "bg-brand text-on-brand"
-                  : "text-fg-muted hover:bg-sheet",
-              )}
-              onClick={() => {
-                const nextGroup = { ...option.group, granularity };
-                const selected = groups.some((group) =>
-                  resourceViewGroupsEqual(group, nextGroup));
-                onGroupStackChange?.(
-                  selected
-                    ? groups.filter((group) =>
-                      !resourceViewGroupsEqual(group, nextGroup))
-                    : [...groups, nextGroup],
-                );
-              }}
-            >
-              {titleCase(granularity)}
-            </button>
-          ))}
-          {advancedGranularities.length > 0 ? (
-            <button
-              type="button"
-              className="h-5 rounded-6 px-1.5 text-2xs font-medium text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring"
-              aria-expanded={advancedOpen}
-              onClick={() => setAdvancedOpen((open) => !open)}
-            >
-              {t(advancedOpen
-                ? "resourceToolbar.basicGranularity"
-                : "resourceToolbar.advancedGranularity")}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function PickerDivider(): ReactElement {
   return <div className="my-1 border-t border-border-subtle" />;
 }
@@ -1037,29 +857,4 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
       ))}
     </div>
   );
-}
-
-function resourceViewGroupLabel(
-  group: ResourceViewGroup,
-  options: readonly ResourceToolbarGroupOption[],
-): string {
-  const declared = options.find((option) => option.group.field === group.field)
-    ?.label;
-  const field =
-    typeof declared === "string" ? declared : groupFieldLabel(group.field);
-  return group.granularity
-    ? `${field} · ${titleCase(group.granularity)}`
-    : field;
-}
-
-function groupGranularity(
-  option: ResourceToolbarGroupOption | undefined,
-  selected: ResourceViewGroupGranularity,
-): ResourceViewGroupGranularity {
-  const supported = option?.granularities ?? [];
-  if (supported.includes(selected)) return selected;
-  const declared = option?.group.granularity;
-  return declared && supported.includes(declared)
-    ? declared
-    : supported[0] ?? "day";
 }

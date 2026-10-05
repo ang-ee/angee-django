@@ -892,7 +892,7 @@ describe("ResourceList", () => {
       screen.getByRole("button", { name: "Group by" }),
     );
 
-    expect(await screen.findByRole("button", { name: "Add custom group" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "More axes…" })).toBeTruthy();
   });
 
   test("ListView hides declared chrome while retaining its filter", async () => {
@@ -1894,6 +1894,37 @@ describe("ResourceList", () => {
     );
   });
 
+  test("group levels reorder in the URL, survive reload and remove independently", async () => {
+    const onUrlUpdate = vi.fn();
+    const list = <ResourceList resource="notes.Note"
+      columns={[...columns, { field: "updatedAt", header: "Updated At" }]} formFields={formFields} />;
+    const result = render(<TestUrlState searchParams="?group=status&then=updatedAt:month"
+      onUrlUpdate={onUrlUpdate}>{list}</TestUrlState>);
+    fireEvent.click(await screen.findByRole("button", { name: "Group by" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Move up Updated At · Month" }));
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
+      expect(latest?.searchParams.get("then")).toBe("status");
+    });
+    expect(document.activeElement).toBe(screen.getByRole("listitem", { name: "Updated At · Month" }));
+    const savedSearch = onUrlUpdate.mock.calls.at(-1)?.[0].search;
+    result.unmount();
+    render(<TestUrlState searchParams={savedSearch} onUrlUpdate={onUrlUpdate}>{list}</TestUrlState>);
+    fireEvent.click(await screen.findByRole("button", { name: "Group by" }));
+    const levels = within(await screen.findByRole("list", { name: "Levels" }));
+    expect(levels.getAllByRole("listitem").map((level) => level.getAttribute("aria-label")))
+      .toEqual(["Updated At · Month", "Status"]);
+    fireEvent.click(levels.getByRole("button", { name: "Remove Status" }));
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
+      expect(latest?.searchParams.get("then")).toBeNull();
+    });
+    expect(levels.getAllByRole("listitem").map((level) => level.getAttribute("aria-label")))
+      .toEqual(["Updated At · Month"]);
+  });
+
   test("renders grouped lists expanded by default and collapses on toggle", async () => {
     const onSelect = vi.fn();
 
@@ -2279,7 +2310,7 @@ describe("ResourceList", () => {
         name: "Group by",
       }),
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Month" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add Updated At · Month" }));
 
     await waitFor(() =>
       expect(
@@ -2359,17 +2390,10 @@ describe("ResourceList", () => {
         name: "Group by",
       }),
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Day" }));
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Remove Updated At · Day" }))
-        .toBeNull(),
-    );
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Group by",
-      }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Month" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Granularity for Updated At · Day" }));
+    const month = await screen.findByRole("option", { name: "Month" });
+    fireEvent.pointerDown(month, { pointerType: "mouse" });
+    fireEvent.click(month);
 
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
