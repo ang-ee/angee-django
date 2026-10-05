@@ -126,12 +126,12 @@ export function OperatorTransportProvider({
   const [committedState, setCommittedState] = useState<OperatorConnectionState>({ kind: "loading" });
   useEffect(() => {
     const token = state.kind === "ready" ? state.connection.token : null;
-    operatorToken.set(token);
+    // Child effects can start requests before this effect runs. Retain the old
+    // bearer until its replacement is installed, then publish the new state.
+    if (operatorToken.get() !== token) operatorToken.set(token);
     setCommittedState(state);
-    return () => {
-      if (operatorToken.get() === token) operatorToken.set(null);
-    };
   }, [state]);
+  useEffect(() => () => operatorToken.set(null), []);
   const endpoint = committedState.kind === "ready" ? committedState.connection.endpoint : null;
   const token = committedState.kind === "ready" ? committedState.connection.token : null;
   // The daemon graphql-ws client for live subscriptions. Rebuilt on token
