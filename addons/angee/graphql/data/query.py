@@ -95,6 +95,8 @@ class ResourceQueryProjection:
     default_sort: tuple[DataDefaultSortMetadata, ...] = ()
     row_model: str = "server"
     filter_operators: tuple[str, ...] = ()
+    non_null_filter_fields: tuple[str, ...] = ()
+    """Declared filter expressions that never yield NULL, so ``isNull`` cannot match."""
     model: type[models.Model] | None = None
     identity_policies: dict[str, str] | None = None
 
@@ -106,9 +108,11 @@ class ResourceQueryProjection:
             canonical = self.canonical(name)
             descriptor = fields.get(canonical, self.field(canonical))
             comparison = self.comparison(name) if name in self.filter_fields else None
-            operators = self.operators(comparison)
+            non_null = name in self.non_null_filter_fields
+            operators = tuple(op for op in self.operators(comparison) if not (non_null and op == "isNull"))
             fields[canonical] = replace(
                 descriptor,
+                nullable=descriptor.nullable and not non_null,
                 filter=self.filter(name, comparison, operators)
                 if comparison is not None and operators
                 else descriptor.filter,

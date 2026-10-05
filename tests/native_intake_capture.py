@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, get_named_type, parse, validate
@@ -39,6 +39,12 @@ class HasuraFilterDeclarationTests(TransactionTestCase):
             for name in names:
                 with self.subTest(model=model, filter=name):
                     self.assertIsNotNone(resources[model].query.fields[name].filter)
+        task = resources["projects.Task"].query.fields
+        # The viewer predicate is total; a task without requests has no requester name.
+        self.assertFalse(task["requested_by_viewer"].nullable)
+        self.assertNotIn("isNull", task["requested_by_viewer"].filter.operators)
+        self.assertTrue(task["requester_name"].nullable)
+        self.assertIn("isNull", task["requester_name"].filter.operators)
 
 
 class ChannelIntakeCaptureTests(TransactionTestCase):
@@ -247,13 +253,16 @@ class IntakeAccessCase(TransactionTestCase):
             self.queue = apps.get_model("work", "Queue").objects.personal_for(self.owner, provision=True)
 
     def need(self, *, email="new@example.com", party=None, name=""):
-        with system_context(reason="test request setup"):
+        # Like its production callers, the triage factory locks rank rows inside a transaction.
+        with system_context(reason="test request setup"), transaction.atomic():
             task = self.Need.objects._create_triage_task(queue=self.queue, title="Request", note="")
             task.owner = self.owner
             task.assignee = self.writer
             task.save()
             task.grant_record_access("reader", self.reader)
-            return self.Need.objects.create(task=task, party=party, claimed_email=email, claimed_name=name, body="Request")
+            return self.Need.objects.create(
+                task=task, party=party, claimed_email=email, claimed_name=name, body="Request",
+            )
 
     def as_user(self, need, user=None):
         return self.Need.objects.as_user(user or self.admin).get(pk=need.pk)
@@ -584,6 +593,9 @@ class NeedAccessTests(IntakeAccessCase):
         hidden = self.need(party=self.party(self.reader))
         with system_context(reason="test later requester"):
             later = self.Need.objects.create(task=first.task, party=self.party(self.writer), body="Later request")
+            # A project request has no task; it must not leave NULL in the viewer's task set.
+            project = apps.get_model("projects", "Project").objects.create(title="Requested project", owner=self.owner)
+            self.Need.objects.create(project=project, party=self.party(self.reader), body="Project request")
             first.task.assignee = None
             first.task.save(update_fields=("assignee",))
             first.task.revoke_record_access("reader", self.reader)

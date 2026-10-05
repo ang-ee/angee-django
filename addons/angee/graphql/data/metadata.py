@@ -72,6 +72,7 @@ class DataResourcePolicy:
     group_by_fields: tuple[str, ...] | None = None
     query_axes: tuple[data_contract.DataQueryAxis, ...] | None = None
     filter_operators: tuple[str, ...] | None = None
+    non_null_filter_fields: tuple[str, ...] | None = None
     aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
     revision_fields: tuple[str, ...] | None = None
@@ -245,6 +246,7 @@ def finalize_data_resources(
             group_by_fields=_single_sequence(model_label, contributions, "group_by_fields"),
             query_axes=_single_sequence(model_label, contributions, "query_axes"),
             filter_operators=_single_sequence(model_label, contributions, "filter_operators"),
+            non_null_filter_fields=_single_sequence(model_label, contributions, "non_null_filter_fields"),
             aggregate_measures=_single_sequence(model_label, contributions, "aggregate_measures"),
             default_measures=_single_sequence(model_label, contributions, "default_measures"),
             create_argument_names=native_resource.insert_argument_names if native_resource is not None else (),
@@ -407,6 +409,7 @@ def _finalize_data_resource(
     group_by_fields: tuple[str, ...] = (),
     query_axes: tuple[data_contract.DataQueryAxis, ...] = (),
     filter_operators: tuple[str, ...] = (),
+    non_null_filter_fields: tuple[str, ...] = (),
     aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_sort: tuple[data_contract.DataDefaultSortMetadata, ...] = (),
@@ -573,6 +576,9 @@ def _finalize_data_resource(
         default_sort=default_sort,
         row_model=row_model,
         filter_operators=filter_operators,
+        non_null_filter_fields=final_input_policy_fields(
+            graphql_schema, type_names.filter, accepted=non_null_filter_fields,
+        ),
         model=model,
         identity_policies=identity_policies,
     ).build()
