@@ -22,6 +22,7 @@ const sdkMocks = vi.hoisted(() => ({
     dataProviderName?: string;
     filters?: readonly unknown[];
     sorters?: readonly unknown[];
+    pagination?: unknown;
     meta?: { fields?: unknown };
   } | null,
   rows: [
@@ -39,6 +40,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       dataProviderName?: string;
       filters?: readonly unknown[];
       sorters?: readonly unknown[];
+      pagination?: unknown;
       meta?: { fields?: unknown };
     }) => {
       sdkMocks.useListOptions = options ?? null;
@@ -75,6 +77,7 @@ describe("useRelationOptions", () => {
 
     expect(sdkMocks.useListOptions?.resource).toBe("reviewers");
     expect(sdkMocks.useListOptions?.dataProviderName).toBe("console");
+    expect(sdkMocks.useListOptions?.pagination).toEqual({ mode: "server", currentPage: 1, pageSize: 200 });
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "display_name"]);
     expect(screen.getByText("rev_1: Acme")).toBeTruthy();
   });
@@ -108,9 +111,10 @@ describe("useRelationOptions", () => {
   });
 
   test("searches a declared text field when the computed label is not filterable", () => {
+    sdkMocks.rows = [{ id: "rev_1", display_name: "Site owner" }];
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={reviewerRelation} searchText="admin" />
+        <RelationOptionsProbe relation={reviewerRelation} searchText="  admin  " />
       </ModelMetadataProvider>,
     );
 
@@ -122,6 +126,7 @@ describe("useRelationOptions", () => {
         ],
       },
     ]);
+    expect(screen.getByText("rev_1: Site owner")).toBeTruthy();
   });
 
   test("falls back to the searchable record representation", () => {
@@ -141,7 +146,11 @@ describe("useRelationOptions", () => {
     ]);
   });
 
-  test("honors an explicit empty search-field override", () => {
+  test("matches loaded labels when search fields are explicitly empty", () => {
+    sdkMocks.rows = [
+      { id: "cur_1", display_name: "USD — US Dollar" },
+      { id: "cur_2", display_name: "EUR — Euro" },
+    ];
     render(
       <ModelMetadataProvider metadata={metadata}>
         <RelationOptionsProbe
@@ -153,6 +162,9 @@ describe("useRelationOptions", () => {
     );
 
     expect(sdkMocks.useListOptions?.filters).toEqual([]);
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "cur_1: USD — US Dollar",
+    ]);
   });
 
   test("searches every resource-authored record field while retaining its computed label", () => {
@@ -178,19 +190,54 @@ describe("useRelationOptions", () => {
     expect(screen.getByText("cur_1: USD — US Dollar")).toBeTruthy();
   });
 
-  test("does not manufacture a search filter when the computed label has no text comparison", () => {
+  test("matches loaded labels when the target has no executable text search", () => {
     sdkMocks.rows = [
-      { id: "svc_1", display_name: "Automation" },
+      { id: "svc_admin", display_name: "Automation" },
+      { id: "svc_2", display_name: "Admin service" },
+      { id: "svc_3", display_name: "System ADMIN" },
     ];
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={unsearchableRelation} searchText="admin" />
+        <RelationOptionsProbe relation={unsearchableRelation} searchText="  AdMiN  " />
       </ModelMetadataProvider>,
     );
 
     expect(sdkMocks.useListOptions?.filters).toEqual([]);
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "display_name"]);
-    expect(screen.getByText("svc_1: Automation")).toBeTruthy();
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "svc_2: Admin service",
+      "svc_3: System ADMIN",
+    ]);
+  });
+
+  test("returns no options when no loaded label matches", () => {
+    sdkMocks.rows = [{ id: "svc_1", display_name: "Automation" }];
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe relation={unsearchableRelation} searchText="zzzzqq" />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.filters).toEqual([]);
+    expect(screen.queryAllByRole("listitem")).toEqual([]);
+  });
+
+  test.each([undefined, "", "  "])("keeps the loaded page unchanged for empty search text (%s)", (searchText) => {
+    sdkMocks.rows = [
+      { id: "svc_1", display_name: "Automation" },
+      { id: "svc_2", display_name: "Admin service" },
+    ];
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe relation={unsearchableRelation} searchText={searchText} />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.filters).toEqual([]);
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "svc_1: Automation",
+      "svc_2: Admin service",
+    ]);
   });
 });
 
