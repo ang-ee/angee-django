@@ -22,7 +22,10 @@ export function buildGroupOptions<TRow extends Row>(
     const axis = query.axis(name);
     const declaration = query.axes[name]!;
     const initial = defaults.find(({ field }) => field === name);
-    const granularities = declaration.extractions.map(({ name }) => name);
+    // A group must be openable. A server extraction with no drill (a number part such as
+    // year_number or day_of_week) has no matching filter, so it is not offered as a choice.
+    const granularities = declaration.extractions
+      .filter((extraction) => !declaration.server || extraction.drill).map(({ name }) => name);
     const date = declaration.kind === "date" || granularities.length > 0;
     return {
       id: name,
@@ -30,9 +33,7 @@ export function buildGroupOptions<TRow extends Row>(
         ?? resourceFieldGroupLabel(name, metadata?.fields[name]),
       group: initial ?? { ...axis.spec, ...(date && granularities.includes("day") ? { granularity: "day" } : {}) },
       type: date ? "date" as const : "value" as const,
-      ...(date ? { granularities, ...(declaration.server ? {
-        granularityDrills: declaration.extractions.filter((extraction) => extraction.drill).map((extraction) => extraction.name),
-      } : {}) } : {}),
+      ...(date ? { granularities } : {}),
     };
   });
 }

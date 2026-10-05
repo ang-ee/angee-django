@@ -41,7 +41,10 @@ const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
   kind: "date", server: { input: field.toUpperCase(), key: field },
-  extractions: DATE_EXTRACTIONS.map((name) => ({ name, input: name.toUpperCase(), key: `${field}_${name}` })),
+  // Truncations declare a range drill, as the server does: their groups can be opened.
+  extractions: DATE_EXTRACTIONS.map((name) => ({ name, input: name.toUpperCase(), key: `${field}_${name}`, rangeKey: "range", drill: {
+    kind: "range" as const, field, valueKey: `${field}_${name}`, rangeKey: "range", valueMap: [], nullMode: "isNull" as const,
+  } })),
 });
 const NOTE_METADATA = canonicalModel({
   title: { name: "title", kind: "scalar", scalar: "String" },
@@ -256,7 +259,6 @@ describe("resource metadata defaults", () => {
         group: { field: "updatedAt", granularity: "day" },
         type: "date",
         granularities: DATE_EXTRACTIONS,
-        granularityDrills: [],
       },
       {
         id: "createdAt",
@@ -264,7 +266,6 @@ describe("resource metadata defaults", () => {
         group: { field: "createdAt", granularity: "day" },
         type: "date",
         granularities: DATE_EXTRACTIONS,
-        granularityDrills: [],
       },
     ]);
   });
