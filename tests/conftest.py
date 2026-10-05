@@ -806,10 +806,17 @@ def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:
     return make_addon(schemas=schemas)
 
 
-def addon_schema(schemas: dict[str, Any], name: str) -> Any:
-    """Build one addon-only GraphQL schema from its raw ``schemas`` mapping."""
+def addon_schema(schemas: dict[str, Any], name: str, *composed: dict[str, Any]) -> Any:
+    """Build one addon-only GraphQL schema from its raw ``schemas`` mapping.
 
-    parts = {key: tuple(schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS}
+    ``composed`` mappings (another addon's ``schemas``, e.g. the shared record
+    verbs) contribute their same-named bucket parts after the addon's own.
+    """
+
+    parts = {
+        key: tuple(part for source in (schemas, *composed) for part in source.get(name, {}).get(key, ()))
+        for key in SCHEMA_PART_KEYS
+    }
     return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
 
 
