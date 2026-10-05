@@ -40,7 +40,9 @@ export function useFileActions(
   const metadata = useModelMetadata(FILE_MODEL);
   const resource = metadata?.resource ?? null;
   const deleteWithPreview = useDeleteWithPreview(resource);
-  const [restoreFile] = useAuthoredMutation(StorageRestoreFile);
+  const [restoreFile] = useAuthoredMutation(StorageRestoreFile, {
+    errorFrom: (data) => data?.restore_record.ok === false ? data.restore_record.message : null,
+  });
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,

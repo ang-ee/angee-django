@@ -82,6 +82,8 @@ from angee.base.mixins import (
     ItemOwnershipMixin,
     OwnerMixin,
     OwnerQuerySet,
+    TrashMixin,
+    TrashQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
@@ -625,18 +627,8 @@ class MimeType(AngeeDataModel):
         return self.mime_type
 
 
-class FileQuerySet(OwnerQuerySet["File"], AngeeQuerySet["File"]):
-    """REBAC-scoped reads for file rows."""
-
-    def live(self) -> FileQuerySet:
-        """Return rows that are not soft-deleted."""
-
-        return cast(FileQuerySet, self.filter(is_trashed=False))
-
-    def trashed(self) -> FileQuerySet:
-        """Return soft-deleted rows — the Trash smart folder's backing query."""
-
-        return cast(FileQuerySet, self.filter(is_trashed=True))
+class FileQuerySet(TrashQuerySet["File"], OwnerQuerySet["File"], AngeeQuerySet["File"]):
+    """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
     def stale_drafts(self, cutoff: datetime) -> FileQuerySet:
         """Return unfinished DRAFT/FAILED rows reserved before ``cutoff``."""
@@ -978,9 +970,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 "mime_type": mime,
                 "storage_path": path,
                 "upload_state": UploadState.READY,
-                "is_trashed": False,
-                "trashed_at": None,
-                "trashed_by": None,
+                **self.model.UNTRASHED_VALUES,
             }
             if metadata_patch:
                 values["metadata"] = self._merged_metadata(row.metadata, metadata_patch)
@@ -1019,21 +1009,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
 
         present = {str(path) for path in present_paths}
         with system_context(reason="storage.file.trash_missing_external"):
-            rows = self.filter(drive=drive, is_trashed=False).values_list("pk", "storage_path")
+            rows = self.filter(drive=drive).untrashed().values_list("pk", "storage_path")
             missing = [pk for pk, storage_path in rows.iterator(chunk_size=2000) if str(storage_path) not in present]
             if not missing:
                 return 0
-            now = timezone.now()
-            return (
-                self
-                .filter(pk__in=missing)
-                .update(
-                    is_trashed=True,
-                    trashed_at=now,
-                    trashed_by_id=actor_user_id(current_actor()),
-                    updated_at=now,
-                )
-            )
+            return int(self.filter(pk__in=missing).trash())
 
     def _cached_mime_row(self, mime_type: str, *, cache: dict[str, Any | None] | None) -> Any | None:
         """Resolve one MIME taxonomy row, caching distinct values for a sync run."""
@@ -1220,11 +1200,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             locked.grant_record_access("viewer", user)
 
 
-class File(OwnerMixin, AngeeDataModel):
+class File(TrashMixin, OwnerMixin, AngeeDataModel):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.
-    ``delete()`` soft-trashes; :meth:`purge` is the real delete.
+    ``delete()`` moves the file to the trash; :meth:`purge` is the real delete.
     """
 
     runtime = True
@@ -1268,16 +1248,6 @@ class File(OwnerMixin, AngeeDataModel):
     upload_state = StateField(
         choices_enum=UploadState,
         default=UploadState.DRAFT,
-        editable=False,
-    )
-    is_trashed = models.BooleanField(default=False, db_index=True, editable=False)
-    trashed_at = models.DateTimeField(null=True, blank=True, editable=False)
-    trashed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="+",
         editable=False,
     )
 
@@ -1645,7 +1615,7 @@ class File(OwnerMixin, AngeeDataModel):
         raise exceptions.UploadConflict("identical bytes already exist")
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
-        """Soft-delete into the Trash smart folder; backend bytes stay.
+        """Move into the Trash smart folder; backend bytes stay.
 
         :meth:`purge` (or the ``storage_prune`` command after the trash TTL)
         does the real delete. The soft path persists through ``save()``, so
@@ -1658,21 +1628,8 @@ class File(OwnerMixin, AngeeDataModel):
             return (0, {})
         if not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label} {self.public_id}")
-        self.is_trashed = True
-        self.trashed_at = timezone.now()
-        self.trashed_by_id = actor_user_id(current_actor())
-        self.save(using=using, update_fields=["is_trashed", "trashed_at", "trashed_by", "updated_at"])
+        self.trash(using=using)
         return (1, {self._meta.label: 1})
-
-    def restore(self) -> None:
-        """Reverse a previous soft-delete."""
-
-        if not self.is_trashed:
-            return
-        self.is_trashed = False
-        self.trashed_at = None
-        self.trashed_by = None
-        self.save(update_fields=["is_trashed", "trashed_at", "trashed_by", "updated_at"])
 
     def purge(self) -> None:
         """Really delete: remove the row, then the backend object.
