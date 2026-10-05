@@ -585,6 +585,13 @@ shared UI copy through an addon bundle.
   carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
   and record-verb children declare a projected `permission` when their verbs
   require one; unavailable verbs are omitted.
+- **Trash composes the shared owner.** A resource whose metadata marks a field
+  `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
+  `useTrashActions` for record forms, `useTrashRowActions` for lists, and
+  `RemovedRecords` (or `RemovedDisclosure` + `RemovedItem` over rows a surface
+  already holds) for its "Removed (n)" list. Each offers its control by the
+  row's projected `delete`. A domain verb with its own transport, such as record
+  chatter moderation, still asks through `useTrashPrompt`.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
