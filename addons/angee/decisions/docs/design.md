@@ -79,8 +79,11 @@ How the ontology maps to this addon.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Readers:**
-  Decision content is readable only by its assignees, requester and administrators;
-  operating the asking run grants no decision read access.
+  Assignees, requesters, administrators and operators of the asking step can read
+  the decision; execution read access alone grants no decision read access.
+  `context` and `proposal` currently share that row visibility. Restricting them
+  to assignees, requesters and administrators requires native field permissions,
+  nullable GraphQL fields and redaction of the proposal-derived `verdict_label`.
 - **Answering:** `Decision.objects.decide(decision, chosen keys, actor)` is the one entry, for humans and agents
   alike, with optional `values={record_id: {field: value}}`. It records those values once in `verdict_values`
   alongside the verdict; it applies nothing itself. The asker applies `choose` from the stored value exactly
