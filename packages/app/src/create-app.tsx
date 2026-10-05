@@ -137,6 +137,7 @@ import {
   createAddonRouteNodes,
   createLayoutRoutes,
   layoutNamesForRoutes,
+  layoutAuthGuard,
   loadRouteIdentity,
 } from "./route-tree";
 
@@ -574,13 +575,15 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   const rootRoute = createRootRoute({ component: RootOutlet });
 
+  // A signed-out visit to "/" signs in first only when the page it lands on requires it.
+  const homeRequiresSignIn = Object.keys(layoutAuthGuard(homeRoute?.layout ?? "console", input.layouts, refineAuthProvider, queryClient, loginPath)).length > 0;
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
     beforeLoad: async () => {
       const identity = await loadRouteIdentity(refineAuthProvider, queryClient);
       // Signed out: sign in and come back here, so the landing rule runs with this person's preferences.
-      if (identity === null && (input.layouts?.console?.requireAuth ?? true)) throw redirect({ to: loginPath, search: { next: "/" } });
+      if (identity === null && homeRequiresSignIn) throw redirect({ to: loginPath, search: { next: "/" } });
       // Location options rather than `href`: a preload follows a redirect only
       // through them, and would otherwise preload `/` again without end.
       throw redirect({

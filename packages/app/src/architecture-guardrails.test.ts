@@ -151,6 +151,12 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
 const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
   {
     namespace: "ui",
+    owner: "@angee/ui StepListItem state",
+    prefix: "stepList.",
+    values: ["current", "done", "optional", "planned", "stopped", "trigger"],
+  },
+  {
+    namespace: "ui",
     owner: "@angee/ui FilterClauseOperator",
     prefix: "search.operator.",
     values: [...FILTER_OPERATORS, "isNotNull"],

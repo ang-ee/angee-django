@@ -51,7 +51,8 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     review.status = "CANCELED"; review.hold = null; nodes[7]!.plan = "done"; nodes[8]!.plan = nodes[9]!.plan = "not_run";
     decision.is_open = false; decision.verdict = []; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
   }
-  if (state === "unknown") { run.status = "FUTURE_STATE"; review.status = "FUTURE_STATE"; }
+  // A status the client does not know: the generated enums cannot name it, so the fixture widens the type.
+  if (state === "unknown") { (run as { status: string }).status = "FUTURE_STATE"; (review as { status: string }).status = "FUTURE_STATE"; }
   const entry: TimelineData[number] = {
     record_model: "notes.Note", record_id: "nte_7",
     decisions: decision.is_open && state !== "error" && state !== "run" ? [decision] : [], runs: [run],
