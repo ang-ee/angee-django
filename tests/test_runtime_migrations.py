@@ -12,13 +12,15 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
+from django.apps.registry import Apps
 from django.core.management.base import CommandError
 from django.db import connection, connections, migrations, models
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.backends.dummy.base import DatabaseWrapper as DummyDatabaseWrapper
 from django.db.backends.sqlite3.base import DatabaseWrapper
 from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.questioner import MigrationQuestioner
@@ -27,7 +29,8 @@ from django.db.migrations.writer import MigrationWriter
 from django.db.models.functions import Lower
 
 from angee.base.fields import StateField
-from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
+from angee.compose.history import HistoricalRuntimeConfig
+from angee.compose.migrations import DropGuardAutodetector, RetiredTableOperation, RuntimeMigrations
 from angee.storage.models import Folder
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -1116,6 +1119,130 @@ def isolated_upgrade_database():
     """Replay real constraint names without colliding with the source test apps."""
     with _default_database(":memory:"):
         yield
+
+
+@pytest.fixture
+def retired_social_history(tmp_path, monkeypatch, settings):
+    """Pre-July Feed/Post history, adopted into posts without creating tables."""
+
+    runtime = tmp_path / f"runtime_{tmp_path.name}"
+    _write_module(runtime / "__init__.py")
+    for label in ("social", "posts"):
+        _write_module(runtime / label / "__init__.py")
+        _write_module(runtime / label / "migrations" / "__init__.py")
+        _write_module(runtime / label / "models.py", 'raise AssertionError("stale models imported")\n')
+        initial = migrations.Migration("0001_initial", label)
+        operations = [
+            migrations.CreateModel("Feed", [
+                ("id", models.AutoField(primary_key=True)),
+                ("slug", models.CharField(max_length=30)),
+            ]),
+            migrations.CreateModel("Post", [
+                ("id", models.AutoField(primary_key=True)),
+                ("title", models.CharField(max_length=30)),
+                ("feed", models.ForeignKey(f"{label}.Feed", models.SET_NULL, null=True)),
+                ("feeds", models.ManyToManyField(f"{label}.Feed")),
+            ], options={
+                "unique_together": {("feed", "title")},
+                "indexes": [models.Index(fields=["title"], name=f"{label}_title")],
+                "constraints": [models.CheckConstraint(condition=~models.Q(title=""), name=f"{label}_title_set")],
+            }),
+        ]
+        if label == "posts":
+            initial.dependencies = [("social", "0001_initial")]
+            operations = [migrations.SeparateDatabaseAndState(state_operations=operations)]
+        initial.operations = operations
+        _write_module(runtime / label / "migrations" / "0001_initial.py", MigrationWriter(initial).as_string())
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = Apps([HistoricalRuntimeConfig(runtime, runtime.name, label) for label in ("social", "posts")])
+    monkeypatch.setattr("django.db.migrations.loader.apps", registry)
+    monkeypatch.setattr("angee.compose.migrations.apps", registry)
+    settings.MIGRATION_MODULES = {label: f"{runtime.name}.{label}.migrations" for label in ("social", "posts")}
+    importlib.invalidate_caches()
+    return runtime, registry
+
+
+@pytest.mark.parametrize("tables,faked", [
+    ("absent", False), ("renamed", False), ("partial", False), ("through-absent", False), ("present", False),
+    ("absent", True), ("renamed", True),
+])
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_retired_label_skips_missing_tables_and_preserves_recorded_retirement(retired_social_history, tables, faked):
+    runtime, _ = retired_social_history
+    executor = MigrationExecutor(connection)
+    executor.migrate([("posts", "0001_initial")])
+    before = executor.loader.project_state()
+    feed = before.apps.get_model("social", "Feed")
+    post = before.apps.get_model("social", "Post")
+    through = post._meta.get_field("feeds").remote_field.through
+    if tables == "renamed":
+        row = feed._base_manager.create(slug="retained")
+        article = post._base_manager.create(title="retained", feed=row)
+        article.feeds.add(row)
+    with connection.schema_editor() as editor:
+        if tables == "absent":
+            editor.delete_model(post)
+            editor.delete_model(feed)
+        elif tables == "partial":
+            editor.delete_model(feed)
+        elif tables == "through-absent":
+            editor.delete_model(through)
+        elif tables == "renamed":
+            for model in (feed, post, through):
+                table = model._meta.db_table
+                editor.alter_db_table(model, table, table.replace("social_", "posts_", 1))
+
+    current = before.clone()
+    current.remove_model("social", "post")
+    current.remove_model("social", "feed")
+    (retirement,) = DropGuardAutodetector(before, current).changes(graph=executor.loader.graph)["social"]
+    assert retirement.name.startswith("0002_")
+    assert all(isinstance(operation, RetiredTableOperation) for operation in retirement.operations)
+    assert any(isinstance(operation.operation, migrations.RemoveField) for operation in retirement.operations)
+    assert any(isinstance(operation.operation, migrations.DeleteModel) for operation in retirement.operations)
+    if faked:
+        # The previously emitted, unguarded 0002 was recorded by the operator.
+        retirement.operations = [operation.operation for operation in retirement.operations]
+    path = runtime / "social" / "migrations" / f"{retirement.name}.py"
+    _write_module(path, MigrationWriter(retirement).as_string())
+    importlib.invalidate_caches()
+    files = {path: path.read_bytes() for path in runtime.rglob("*.py")}
+
+    executor = MigrationExecutor(connection)
+    target = [("social", retirement.name), ("posts", "0001_initial")]
+    executor.migrate(target, fake=faked)
+    executor = MigrationExecutor(connection)
+    assert executor.migration_plan(target) == []
+    assert ("social", retirement.name) in executor.recorder.applied_migrations()
+    after = executor.loader.project_state()
+    assert not any(label == "social" for label, _ in after.models)
+    assert DropGuardAutodetector(after, current).changes(graph=executor.loader.graph) == {}
+    assert RuntimeMigrations((), runtime_dir=runtime, labels=("social", "posts")).materialize(apps=current.apps) == ()
+    assert files == {path: path.read_bytes() for path in runtime.rglob("*.py")}
+    remaining = set(connection.introspection.table_names())
+    assert not any(table.startswith("social_") for table in remaining)
+    if tables == "renamed":
+        for table in ("posts_feed", "posts_post", "posts_post_feeds"):
+            assert table in remaining
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) FROM {connection.ops.quote_name(table)}")
+                assert cursor.fetchone() == (1,)
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_current_label_retains_native_table_operations(retired_social_history, monkeypatch):
+    _, registry = retired_social_history
+    config = registry.get_app_config("social")
+    monkeypatch.setitem(registry.app_configs, "social", AppConfig(config.name, config.module))
+    loader = MigrationLoader(None)
+    before = loader.project_state()
+    current = before.clone()
+    current.remove_model("social", "post")
+    current.remove_model("social", "feed")
+    (retirement,) = DropGuardAutodetector(before, current).changes(graph=loader.graph)["social"]
+    assert not any(isinstance(operation, RetiredTableOperation) for operation in retirement.operations)
 
 
 @pytest.mark.parametrize("label,schema_nullable", [
