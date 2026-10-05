@@ -45,7 +45,6 @@ export interface GroupedRenderParams {
   modelMetadata: ModelMetadata | null;
   emptyGroupMessage: string;
   emptySubgroupsMessage: string;
-  emptyValueLabel: string;
   emptyRelationLabel: (field: string) => string;
   allRecordsLabel: string;
   t: UiTranslate;
@@ -102,7 +101,6 @@ export function buildGroupedRenderModel<TRow extends Row>(
     modelMetadata,
     emptyGroupMessage,
     emptySubgroupsMessage,
-    emptyValueLabel,
     emptyRelationLabel,
     allRecordsLabel,
     t,
@@ -285,7 +283,6 @@ export function buildGroupedRenderModel<TRow extends Row>(
         axisGroup,
         modelMetadata,
         allRecordsLabel,
-        emptyValueLabel,
         t,
         emptyRelationLabel,
         resourceQuery,
@@ -321,7 +318,6 @@ function bucketLabel(
   group: ResourceViewGroup | undefined,
   metadata: ModelMetadata | null,
   allRecordsLabel: string,
-  emptyValueLabel: string,
   t: UiTranslate,
   emptyRelationLabel: (field: string) => string,
   query: ResourceQuery,
@@ -331,7 +327,6 @@ function bucketLabel(
     bucket,
     [group],
     metadata,
-    emptyValueLabel,
     t,
     emptyRelationLabel,
     query,

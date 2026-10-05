@@ -550,8 +550,11 @@ function facetResult(
         facet.valueKey ??
         facet.dimensions[0]?.key ??
         facet.dimensions[0]?.input;
-      const value = valueKey ? stringValue(key[valueKey]) : null;
-      if (value === null && (!valueKey || key[valueKey] !== null)) return [];
+      const raw = valueKey ? key[valueKey] : undefined;
+      // An empty string is a real bucket (a blank text value); only a missing
+      // key is not a bucket.
+      const value = raw === "" ? "" : stringValue(raw);
+      if (value === null && raw !== null) return [];
       const labelKey = facet.labelKey ?? valueKey;
       const label = (labelKey ? stringValue(key[labelKey]) : value) ?? value ?? "";
       return [{ value, label, count: bucket.count, key }];

@@ -146,6 +146,23 @@ test("the same relation projection labels flat grouped headers", async () => {
   expect(screen.getAllByRole("columnheader")).toHaveLength(6);
 });
 
+test.each(["list", "board"] as const)("null and empty text render distinct %s headers", async (view) => {
+  const f = fixture({ view, groups: [{ field: "channel_vendor_name" }], data: [
+    { id: "1", title: "Missing", channel_vendor_name: null },
+    { id: "2", title: "Blank text", channel_vendor_name: "" },
+    { id: "3", title: "Also blank", channel_vendor_name: "" },
+  ] });
+  await waitFor(() => expect(f.surface.groupedRows).toHaveLength(2));
+  expect(f.surface.groupedRows.map(({ label, rows }) => ({ label, count: rows.length }))).toEqual([
+    { label: "No value", count: 1 }, { label: "Blank", count: 2 },
+  ]);
+  for (const [label, count] of [["No value", 1], ["Blank", 2]] as const) {
+    expect(screen.getByRole(view === "board" ? "region" : "button", {
+      name: view === "board" ? label : `${label} ${count}`,
+    })).toBeTruthy();
+  }
+});
+
 test("distinct relation identities keep separate lanes when names match, while null remains empty", async () => {
   const f = fixture({ data: [
     { id: "1", title: "First", channel: { id: "first", display_name: "Shared name" } },

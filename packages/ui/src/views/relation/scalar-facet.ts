@@ -5,7 +5,6 @@ import {
 } from "@angee/refine";
 import type {
   FacetRequestSpec,
-  ResourceFacetOption,
 } from "@angee/refine";
 import {
   Filter,
@@ -18,7 +17,6 @@ import type {
 
 import type { ResourceViewFilter, ResourceViewGroup } from "../resource/resource-view-model";
 import { useUiT } from "../../i18n";
-import type { UiTranslate } from "../../i18n";
 import {
   groupLabel,
 } from "../resource/resource-view-list-body";
@@ -71,22 +69,11 @@ export function useScalarFacets<TRow extends object>(
         if (!filter) return [];
         const value = Filter.facetFromFilter(filter)?.value;
         return [{ id: axis.bucketId({ key: option.key }),
-          label: scalarFacetOptionLabel(facet, option, metadata, t("list.emptyValue"), t),
+          label: groupLabel(axis.bucketLabel({ key: option.key }), facet.group, metadata, t),
           filter, ...(value === undefined ? {} : { value }) }];
       }),
     };
   }), [facets, facetQuery.facets, metadata, t]);
-}
-
-function scalarFacetOptionLabel(
-  facet: ScalarFacetDeclaration,
-  option: ResourceFacetOption,
-  metadata: ModelMetadata | null,
-  emptyValueLabel: string,
-  t: UiTranslate,
-): React.ReactNode {
-  const value = ResourceQuery.from(metadata!).axis(facet.field).bucketLabel({ key: option.key });
-  return groupLabel(value, facet.group, metadata, emptyValueLabel, t);
 }
 
 export function scalarFacetDeclarations<TRow extends object>(

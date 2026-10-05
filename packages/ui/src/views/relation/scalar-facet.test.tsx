@@ -8,6 +8,9 @@ import { testDataResource } from "@angee/metadata/testing";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { scalarFacetDeclarations, useScalarFacets } from "./scalar-facet";
+import { createResourceViewState } from "../resource/resource-view-model";
+import { activeItems } from "../resource/search/active";
+import { searchFixture } from "../resource/search/search-fixture.test-support";
 
 const dataMocks = vi.hoisted(() => {
   const groupsDocument = { kind: "groups-document" };
@@ -163,36 +166,46 @@ describe("useScalarFacets", () => {
     ]);
   });
 
-  test("shows separate blank and null country facets with exact drill filters", () => {
+  test.each(["choice", "text"])("shows distinct blank and null %s facets and active chips with exact drill filters", (kind) => {
     const contract = ResourceQuery.forRows({ fields: {
-      tax_country: { kind: "enum", values: [{ value: "" }, { value: "DE", description: "Germany" }] },
+      tax_country: kind === "choice"
+        ? { kind: "enum", values: [{ value: "" }, { value: "DE", description: "Germany" }] }
+        : { scalar: "String" },
     } }).contract;
+    const blankKey = kind === "choice" ? "BLANK" : "";
+    const valueMap = kind === "choice" ? [{ from: blankKey, to: "" }] : [];
     contract.fields.tax_country!.filter = { field: "tax_country", scalar: "String", values: [], operators: ["exact", "isNull"] };
-    contract.axes.tax_country!.server = { input: "TAX_COUNTRY", key: "tax_country", valueMap: [{ from: "BLANK", to: "" }] };
+    contract.axes.tax_country!.server = { input: "TAX_COUNTRY", key: "tax_country", valueMap };
     contract.axes.tax_country!.drill = { kind: "value", field: "tax_country", valueKey: "tax_country", nullMode: "isNull",
-      valueMap: [{ from: "BLANK", to: "" }] };
+      valueMap };
     const metadata = schemaFieldMetadataFromDataResources([testDataResource("parties.Party", {
       query: contract,
-      fields: [{ name: "tax_country", kind: "enum", values: contract.fields.tax_country!.values,
+      fields: [{ name: "tax_country", kind: kind === "choice" ? "enum" : "scalar", scalar: "String", values: contract.fields.tax_country!.values,
         readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
     })]).labels["parties.Party"]!;
     const facet = extractFacet({ parties_groups: [
-      { key: { tax_country: "BLANK" }, aggregate: { count: 2 } },
+      { key: { tax_country: blankKey }, aggregate: { count: 2 } },
       { key: { tax_country: null }, aggregate: { count: 1 } },
       { key: { tax_country: "DE" }, aggregate: { count: 3 } },
     ], totalCount: 3 }, "parties_groups", { id: "tax_country", dimensions: [groupDimension("TAX_COUNTRY", "tax_country")] });
     dataMocks.facets.mockReturnValue(resourceFacets({ tax_country: facet.options }));
-    const { result } = renderHook(() => useScalarFacets("parties.Party", [], metadata));
+    const { result } = renderHook(() => useScalarFacets("parties.Party", [{ field: "tax_country", widget: "statusBadge" }], metadata));
     expect(result.current.flatMap((facet) => facet.options)).toEqual([
-      { id: 'tax_country:""', label: "No value", filter: { tax_country: { exact: "" } }, value: "" },
+      { id: 'tax_country:""', label: "Blank", filter: { tax_country: { exact: "" } }, value: "" },
       { id: "tax_country:null", label: "No value", filter: { tax_country: { isNull: true } } },
-      { id: 'tax_country:"DE"', label: "Germany", filter: { tax_country: { exact: "DE" } }, value: "DE" },
+      { id: 'tax_country:"DE"', label: kind === "choice" ? "Germany" : "DE", filter: { tax_country: { exact: "DE" } }, value: "DE" },
     ]);
     expect(result.current.flatMap((facet) => facet.options).map((option) => ResourceQuery.from(metadata).toWhere(option.filter))).toEqual([
       { tax_country: { _eq: "" } }, { tax_country: { _is_null: true } }, { tax_country: { _eq: "DE" } },
     ]);
     expect(result.current[0]?.options[1]?.value).toBeUndefined();
     expect(result.current[0]?.source).toBe("scalar");
+    const catalog = searchFixture({ catalog: { facets: result.current } }).catalog;
+    for (const option of result.current[0]!.options.slice(0, 2)) {
+      expect(activeItems(createResourceViewState({ filter: option.filter }), catalog)).toEqual([
+        { id: "facet:tax_country", kind: "facet", field: "tax_country", label: "Tax Country", options: [option] },
+      ]);
+    }
   });
 });
 

@@ -183,7 +183,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       modelMetadata,
       emptyGroupMessage: t("list.emptyGroup"),
       emptySubgroupsMessage: t("list.emptySubgroups"),
-      emptyValueLabel: t("list.emptyValue"),
       emptyRelationLabel: (field) =>
         t("list.emptyRelation", {
           relation: groupFieldLabel(field).toLocaleLowerCase(),

@@ -423,13 +423,15 @@ describe("Hasura custom operations", () => {
     const facet = extractFacet({
       choices_groups: [
         { key: { choice: "BLANK" }, aggregate: { count: 2 } },
+        { key: { choice: "" }, aggregate: { count: 4 } },
         { key: { choice: null }, aggregate: { count: 1 } },
         { key: { choice: "DE" }, aggregate: { count: 3 } },
         { key: {}, aggregate: { count: 1 } },
-      ], totalCount: 4,
+      ], totalCount: 5,
     }, "choices_groups", { id: "choice", dimensions: [groupDimension("CHOICE", "choice")] });
     expect(facet.options).toEqual([
       { value: "BLANK", label: "BLANK", count: 2, key: { choice: "BLANK" } },
+      { value: "", label: "", count: 4, key: { choice: "" } },
       { value: null, label: "", count: 1, key: { choice: null } },
       { value: "DE", label: "DE", count: 3, key: { choice: "DE" } },
     ]);
