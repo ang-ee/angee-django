@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useInAppLinkClick } from "../lib/in-app-link";
+import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
@@ -79,7 +79,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
     { className, density = "compact", detail, icon, label, value, tone, href, onClick, valueClassName, ...props },
     ref,
   ) {
-    const handleClick = useInAppLinkClick(href, onClick);
+    const link = useInAppLink(href, { ...props, onClick });
     const styles = metricStripVariants({ density });
     const body = (
       <>
@@ -104,8 +104,8 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
           <a
             ref={ref as React.Ref<HTMLAnchorElement>}
             href={href}
-            onClick={handleClick}
             {...props}
+            {...link}
           >
             {body}
           </a>

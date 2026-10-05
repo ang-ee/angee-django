@@ -232,9 +232,12 @@ shared UI copy through an addon bundle.
   `resourcePageRoutes` names record children `${collectionName}.record` by
   default; use `detailName` only when preserving a deliberate established name.
 - In-app anchors compose the [in-app link owner](../../packages/ui/src/lib/in-app-link.tsx),
-  mounted by `createApp`; plain clicks route automatically and provider-less links
-  stay native. Never pass `onNavigate` merely to call the router, or put a
-  query-bearing href in TanStack `to`; use `navigate({ href })` or the owner's
+  mounted by `createApp`; plain clicks route automatically, hover, focus and touch
+  preload the route under the router's `defaultPreload: "intent"`, and
+  provider-less links stay native. Never pass `onNavigate` merely to call the
+  router, or put a query-bearing href in TanStack `to`; use `navigate({ href })`,
+  the owner's `hrefLocation` (also for a redirect, which a preload can follow only
+  as location options), or the
   [chrome href conversion](../../packages/ui/src/chrome/href-link-options.ts).
   Use `rel="external"` for server-served root-relative paths such as admin,
   media and logout so they load as documents.
@@ -292,9 +295,12 @@ shared UI copy through an addon bundle.
   "Page")` (the stack-native helper from `@tanstack/react-router`, already a
   direct addon dep) — never an eager `import { Page }` + `component: Page`, which
   pulls every page into the entry graph. The router owns the route-loading
-  fallback *once*: `createApp` sets `defaultPendingComponent` (the unboxed,
-  indeterminate `LoadingPanel`), which wraps every non-root match in Suspense
-  inside its layout's `<Outlet/>`, so the chrome stays mounted. Do not hand-roll
+  fallback *once*: `createApp` sets `defaultPendingComponent` (the page-shaped
+  `LoadingPanel shape="page"`), which wraps every non-root match in Suspense
+  inside its layout's `<Outlet/>`, so the chrome stays mounted. The previous page
+  stays mounted but hidden meanwhile; its portaled control band and statusline
+  hide with it ([layout band](../../packages/ui/src/layouts/layout-band.tsx)).
+  Link intent preloads the chunk, so the fallback shows only for slow loads. Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
   around a route's `<Outlet/>`. Lighter manifest content (container children,
   forms, glyphs) stays eager. Keep a registered form and its descriptor in an
@@ -519,8 +525,9 @@ shared UI copy through an addon bundle.
   their own slot (`InlineEmpty` `label`, `LoadingPanel` `message`). For a
   full-height empty panel pass `EmptyState fill` (it centers an intrinsic-size
   card) instead of wrapping it in a `grid place-content-center` div. Use the
-  unboxed `LoadingPanel` only when the final geometry is unknowable, such as the
-  router's code-split boundary. A renderer that knows its final geometry owns a
+  unboxed `LoadingPanel` only when the final geometry is unknowable; the router's
+  code-split boundary knows only that a console page comes next and takes its
+  neutral `shape="page"`. A renderer that knows its final geometry owns a
   shape-preserving skeleton built from `Skeleton` and one `SkeletonStatus`; retain
   settled content during background refresh. The renderer owns loading/error so
   callers describe only the happy path (cf. `preview/builtins.tsx` `FileText`).
@@ -1116,7 +1123,11 @@ Hard-won traps — the wise learn from others' mistakes
 - **Route code-splitting touches three things.** (1) `defaultPendingComponent` is
   the *app-wide* pending surface — it renders for every non-root match while its
   chunk loads, and (after `defaultPendingMs`) for any future `loader`-bearing
-  route, not just lazy pages. (2) The addon-index imports in `runtime/web/app.ts`
+  route, not just lazy pages. Intent preloading runs each matched route's
+  `beforeLoad` on hover (an already-active ancestor with the current search), so a
+  `beforeLoad` only reads and redirects; session side effects belong to a router
+  event, as `?debug` does with `onBeforeLoad`. A future `loader` would also run on
+  hover, at most once per `defaultPreloadStaleTime`. (2) The addon-index imports in `runtime/web/app.ts`
   stay eager — manifests compose synchronously; only each manifest's *page*
   imports go through `lazyRouteComponent`. (3) A test that renders a routed page
   *through the router* (`createApp`/`RouterProvider`) must await the lazy boundary

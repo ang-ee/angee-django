@@ -150,6 +150,8 @@ export interface GroupedResourceViewSurface<TRow extends Row = Row>
   /** Server `_groups` bucket expansion keys. */
   expandedKeys: ReadonlySet<string>;
   toggleGroup: (key: string) => void;
+  /** Expand or collapse several buckets at once, for example every visible group. */
+  setGroupsExpanded: (keys: readonly string[], expanded: boolean) => void;
 }
 
 export const EMPTY_ARRAY = [] as const;

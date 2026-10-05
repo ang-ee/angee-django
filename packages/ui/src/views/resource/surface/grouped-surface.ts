@@ -149,21 +149,18 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
           current?.axisKey === expansionAxisKey
             ? current
             : emptyGroupExpansion(expansionAxisKey);
-        const currentlyExpanded =
-          !base.collapsedKeys.has(key) &&
-          (base.defaultExpandedKeys.has(key) ||
-            base.explicitExpandedKeys.has(key));
-        const collapsedKeys = new Set(base.collapsedKeys);
-        const explicitExpandedKeys = new Set(base.explicitExpandedKeys);
-        if (currentlyExpanded) {
-          collapsedKeys.add(key);
-          explicitExpandedKeys.delete(key);
-        } else {
-          collapsedKeys.delete(key);
-          explicitExpandedKeys.add(key);
-        }
-        return { ...base, collapsedKeys, explicitExpandedKeys };
+        return withGroupsExpanded(base, [key], !effectiveExpandedKeys(base).has(key));
       });
+    },
+    [expansionAxisKey, setExpansionState],
+  );
+  const setGroupsExpanded = React.useCallback(
+    (keys: readonly string[], expanded: boolean) => {
+      setExpansionState((current) => withGroupsExpanded(
+        current?.axisKey === expansionAxisKey ? current : emptyGroupExpansion(expansionAxisKey),
+        keys,
+        expanded,
+      ));
     },
     [expansionAxisKey, setExpansionState],
   );
@@ -524,9 +521,30 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     selectedIds: idsFromRowSelectionState(resourceView.state.rowSelection),
     expandedKeys,
     toggleGroup,
+    setGroupsExpanded,
     tableScrollRef,
     rowVirtualizer,
   };
+}
+
+/** Expand or collapse several buckets at once; a user's choice overrides the default policy. */
+function withGroupsExpanded(
+  base: ResourceViewGroupExpansion,
+  keys: readonly string[],
+  expanded: boolean,
+): ResourceViewGroupExpansion {
+  const collapsedKeys = new Set(base.collapsedKeys);
+  const explicitExpandedKeys = new Set(base.explicitExpandedKeys);
+  for (const key of keys) {
+    if (expanded) {
+      collapsedKeys.delete(key);
+      explicitExpandedKeys.add(key);
+    } else {
+      collapsedKeys.add(key);
+      explicitExpandedKeys.delete(key);
+    }
+  }
+  return { ...base, collapsedKeys, explicitExpandedKeys };
 }
 
 function emptyGroupExpansion(axisKey: string): ResourceViewGroupExpansion {

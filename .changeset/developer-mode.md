@@ -19,7 +19,7 @@ headers show technical field names on hover.
   `composition`, `activeRouteName` and `activeApp`. `ChromeMenuNode` gains
   `railChildren(includeHidden)`, and `activeTargetedChild`, `railMenuItems`,
   `settingsMenuItems` and `railPlace` take an `includeHidden` flag.
-- `@angee/app`: the root route applies `?debug`; `CompiledMenus.removed`
+- `@angee/app`: the router applies `?debug` on every load; `CompiledMenus.removed`
   entries carry the `parent` they showed under and their `label`;
   `CompositionExplanation` extends `RuntimeComposition` with the typed
   `ResolvedShell`.

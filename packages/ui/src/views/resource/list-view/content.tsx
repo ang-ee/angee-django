@@ -300,6 +300,7 @@ export function ListViewContent<TRow extends Row = Row>({
           footerAggregate={surface.footerAggregate}
           expandedKeys={surface.expandedKeys}
           toggleGroup={surface.toggleGroup}
+          setGroupsExpanded={surface.setGroupsExpanded}
           setScopePage={surface.setScopePage}
           setScopePageSize={surface.setScopePageSize}
           selectedIds={surface.selectedIds}

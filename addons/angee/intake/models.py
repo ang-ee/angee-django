@@ -13,7 +13,6 @@ from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.functions import Coalesce, NullIf
-from django.db.models.lookups import Exact
 from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
 from rebac.backends import backend
 from rebac.relation_loading import relation_actor
@@ -424,6 +423,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             models.Index(fields=("project", "importance")),
             models.Index(fields=("task", "importance")),
             models.Index(fields=("party", "importance")),
+            # Each task's first request (task_requester_rows) is an ordered LIMIT 1 probe.
+            models.Index(fields=("task", "created_at", "id")),
         )
 
     @property
@@ -851,11 +852,14 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         return task
 
 
-def task_requester_rows() -> models.QuerySet[Any]:
-    """A task's requests in attribution order; the first is the one the task shows as filed by."""
+def task_requester_rows(task: str = "pk") -> models.QuerySet[Any]:
+    """A task's requests in attribution order; the first is the one the task shows as filed by.
+
+    ``task`` names the outer query's column holding the task id.
+    """
 
     return apps.get_model("intake", "Need")._base_manager.filter(
-        task_id=models.OuterRef("pk"),
+        task_id=models.OuterRef(task),
     ).order_by("created_at", "pk")
 
 
@@ -869,7 +873,7 @@ def task_requester_name() -> models.Subquery:
             NullIf(models.F("claimed_name"), blank),
             output_field=models.TextField(),
         )).values("name")[:1],
-        output_field=models.TextField(),
+        output_field=models.TextField(null=True),
     )
 
 
@@ -891,9 +895,13 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     user_id = actor_user_id(relation_actor(queryset))
     if user_id is None:
         return models.Value(False, output_field=models.BooleanField())
-    filed_by = models.Subquery(task_requester_rows().values("party__person__user")[:1])
+    # Uncorrelated, so the database evaluates it once from the viewer's own requests.
+    filed = apps.get_model("intake", "Need")._base_manager.filter(
+        party__person__user=user_id,
+        pk=models.Subquery(task_requester_rows("task_id").values("pk")[:1]),
+    ).values("task_id")
     return models.Case(
-        models.When(Exact(filed_by, user_id), then=models.Value(True)),
+        models.When(pk__in=filed, then=models.Value(True)),
         default=models.Value(False),
         output_field=models.BooleanField(),
     )

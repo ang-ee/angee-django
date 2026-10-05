@@ -8,7 +8,7 @@ import { useDeveloperFieldTitle } from "../../../chrome/DeveloperMode";
 import { useUiT } from "../../../i18n";
 import { type DndPayload } from "../../../lib/dnd";
 import { Button } from "../../../ui/button";
-import { Checkbox, CheckboxVisual } from "../../../ui/checkbox";
+import { CheckboxVisual } from "../../../ui/checkbox";
 import { DropdownMenu } from "../../../ui/dropdown-menu";
 import { SelectionBar as SelectionBarPrimitive } from "../../../ui/selection-bar";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "../../../ui/table";
@@ -18,7 +18,7 @@ import type { ListEmptyContent, ResourceTableHeaderVisibility, ResourceTableLayo
 import type { ColumnDescriptor } from "../../page";
 import { alignOf, ariaSortForColumn, formatMeasure, groupMeasuresFromColumns, measureValue } from "./cell-utils";
 import { ListEmpty, ListSkeletonRows } from "./loading";
-import { renderListRow } from "./rows";
+import { LeadingSelectionCell, renderListRow } from "./rows";
 import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
@@ -150,15 +150,13 @@ export function FlatListBody<TRow extends Row>({
           {table.getHeaderGroups().map((group) => (
             <TableRow key={group.id}>
               {selectable ? (
-                <TableHead sticky className="w-8">
-                  <Checkbox
-                    size="sm"
-                    aria-label={t("list.selectAllOnPage")}
-                    checked={allPageSelected}
-                    indeterminate={!allPageSelected && somePageSelected}
-                    onCheckedChange={onPageSelectionChange}
-                  />
-                </TableHead>
+                <LeadingSelectionCell
+                  head
+                  label={t("list.selectAllOnPage")}
+                  checked={allPageSelected}
+                  indeterminate={!allPageSelected && somePageSelected}
+                  onCheckedChange={onPageSelectionChange}
+                />
               ) : null}
               {group.headers.map((header, index) => (
                 <ListHeaderCell

@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { optimizeDeps, resolveConfig, type ConfigEnv, type Plugin, type UserConfig } from "vite";
+import { createServer, optimizeDeps, resolveConfig, type ConfigEnv, type Plugin, type UserConfig } from "vite";
 
 import {
   angeePrebundleForce,
@@ -38,31 +38,86 @@ describe("angeeUIAllowedHosts", () => {
   });
 });
 
-test("linked UI keeps the complete CodeMirror graph out of dependency optimization", async () => {
-  const webRoot = mkdtempSync(join(tmpdir(), "angee-vite-codemirror-"));
+// CodeMirror's package graph: its editor packages and the Lezer parser system.
+const CODEMIRROR_IMPORT = /^(?:codemirror|@codemirror\/[^/]+|@lezer\/[^/]+)(?:\/|$)/;
+const CODEMIRROR_MODULE = /\/node_modules\/(?:codemirror|@codemirror\/[^/]+|@lezer\/[^/]+)\//;
+const uiSource = fileURLToPath(new URL("../../ui/src/", import.meta.url));
+
+/** A web root whose only `@angee/*` dependency is the linked UI source, as on a dev stack. */
+function linkedUiWebRoot(prefix: string): string {
+  const webRoot = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(webRoot, "package.json"), '{"dependencies":{"@angee/ui":"workspace:*"}}\n');
+  symlinkSync(fileURLToPath(new URL("../node_modules", import.meta.url)), join(webRoot, "node_modules"));
+  writeFileSync(join(webRoot, "index.html"), '<script type="module" src="/main.ts"></script>\n');
+  writeFileSync(join(webRoot, "main.ts"), 'import "@angee/ui"; import "react-dom/client";\n');
+  return webRoot;
+}
+
+/** Every bare CodeMirror import in the UI's shipped source, with its importing file. */
+function uiCodeMirrorImports(): Array<{ specifier: string; importer: string }> {
+  return readdirSync(uiSource, { recursive: true, encoding: "utf8" })
+    .filter((file) => /\.tsx?$/.test(file) && !/\.(?:test|stories)\./.test(file))
+    .sort()
+    .flatMap((file) => [...readFileSync(join(uiSource, file), "utf8").matchAll(/\b(?:from|import)\s*\(?\s*"([^"]+)"/g)]
+      .flatMap(([, specifier = ""]) => CODEMIRROR_IMPORT.test(specifier) ? [{ specifier, importer: join(uiSource, file) }] : []));
+}
+
+// The browser requests linked UI modules one at a time, so whether CodeMirror
+// loads once is decided by Vite's request-time resolver after the startup scan.
+// Every CodeMirror import of the UI must resolve to the unoptimized file the
+// CodeMirror packages import among themselves, and must not register a late
+// dependency (a re-optimize and a full reload on first editor use).
+test("linked UI requests the CodeMirror graph as one unoptimized copy on first use", async () => {
+  const webRoot = linkedUiWebRoot("angee-vite-codemirror-");
   try {
-    writeFileSync(join(webRoot, "package.json"), '{"dependencies":{"@angee/ui":"workspace:*"}}\n');
     const config = await defineAngeeWebViteConfig({
       prebundleAngeePackages: true,
       gqlRuntimeDir: join(webRoot, "runtime", "gql"),
       webRoot,
     });
+    // An in-process dev environment in middleware mode: no port, socket or watcher.
+    const server = await createServer({
+      ...config,
+      configFile: false,
+      plugins: [],
+      logLevel: "silent",
+      appType: "custom",
+      cacheDir: join(webRoot, "cache"),
+      server: { middlewareMode: true, ws: false, watch: null },
+    });
+    try {
+      const client = server.environments.client;
+      const optimizer = client.depsOptimizer!;
+      await optimizer.scanProcessing;
+      const requests = uiCodeMirrorImports();
+      expect(requests.map(({ specifier }) => specifier)).toEqual(
+        expect.arrayContaining(["@codemirror/lang-json", "@codemirror/lang-markdown", "@codemirror/state", "codemirror"]),
+      );
 
-    expect(config.optimizeDeps?.exclude).toEqual(
-      expect.arrayContaining(["@angee/ui", "@codemirror", "codemirror"]),
-    );
+      const resolved = new Map<string, string>();
+      for (const { specifier, importer } of requests) {
+        const id = (await client.pluginContainer.resolveId(specifier, importer))?.id;
+        expect(id, `${specifier} from ${importer}`).toBeDefined();
+        expect(resolved.get(specifier) ?? id, specifier).toBe(id);
+        resolved.set(specifier, id!);
+      }
+
+      expect([...resolved].filter(([, id]) => optimizer.isOptimizedDepFile(id))).toEqual([]);
+      expect(Object.keys(optimizer.metadata.discovered).filter((id) => CODEMIRROR_IMPORT.test(id))).toEqual([]);
+      const graphImporter = resolved.get("codemirror")!.split("?")[0];
+      expect((await client.pluginContainer.resolveId("@codemirror/state", graphImporter))?.id)
+        .toBe(resolved.get("@codemirror/state"));
+    } finally {
+      await server.close();
+    }
   } finally {
     rmSync(webRoot, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test.each([false, true])("discovers linked UI dependencies across lazy boundaries at startup (prebundle: %s)", async (prebundleAngeePackages) => {
-  const webRoot = mkdtempSync(join(tmpdir(), "angee-vite-lazy-"));
+  const webRoot = linkedUiWebRoot("angee-vite-lazy-");
   try {
-    writeFileSync(join(webRoot, "package.json"), '{"dependencies":{"@angee/ui":"workspace:*"}}\n');
-    symlinkSync(fileURLToPath(new URL("../node_modules", import.meta.url)), join(webRoot, "node_modules"));
-    writeFileSync(join(webRoot, "index.html"), '<script type="module" src="/main.ts"></script>\n');
-    writeFileSync(join(webRoot, "main.ts"), 'import "@angee/ui"; import "react-dom/client";\n');
     const config = await defineAngeeWebViteConfig({
       prebundleAngeePackages,
       gqlRuntimeDir: join(webRoot, "runtime", "gql"),
@@ -85,8 +140,14 @@ test.each([false, true])("discovers linked UI dependencies across lazy boundarie
     expect(Object.keys(reference.optimized)).toContain("@date-fns/tz");
     expect(Object.keys(actual.optimized)).toEqual(expect.arrayContaining(Object.keys(reference.optimized)));
     expect(actual.optimized["react-dom/client"]).toBeDefined();
-    expect(Object.keys(actual.optimized).some((id) => id === "codemirror" || id.startsWith("@codemirror/"))).toBe(false);
     expect(actual.optimized["@angee/ui"]).toBeUndefined();
+    // No optimized bundle carries a CodeMirror module, as an entry or inlined.
+    const deps = join(webRoot, "actual-cache", "deps");
+    const bundled = readdirSync(deps)
+      .filter((file) => file.endsWith(".map"))
+      .flatMap((file) => (JSON.parse(readFileSync(join(deps, file), "utf8")) as { sources: string[] }).sources);
+    expect(bundled.length).toBeGreaterThan(0);
+    expect(bundled.filter((source) => CODEMIRROR_MODULE.test(source))).toEqual([]);
   } finally {
     rmSync(webRoot, { recursive: true, force: true });
   }

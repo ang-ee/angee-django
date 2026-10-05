@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useInAppLinkClick } from "../../lib/in-app-link";
+import { useInAppLink } from "../../lib/in-app-link";
 import { Avatar, avatarInitials } from "../../ui/avatar";
 import type { GanttEvent } from "./GanttView";
 
@@ -28,10 +28,10 @@ export function GanttLane({ details, onOpen }: {
   const { title, href, secondary, people } = details;
   const titleClass = "block max-w-full truncate text-start font-medium text-brand hover:underline";
   const visiblePeople = people?.filter((person) => person.name.trim());
-  const handleLinkClick = useInAppLinkClick(href, (event) => event.stopPropagation(), { navigate: onOpen });
+  const link = useInAppLink(href, { onClick: (event) => event.stopPropagation() }, { navigate: onOpen });
   return (
     <div className="flex min-w-0 flex-col gap-0.5 py-1">
-      {href ? <a className={titleClass} href={href} title={title} onClick={handleLinkClick}>{title}</a>
+      {href ? <a className={titleClass} href={href} title={title} {...link}>{title}</a>
         : onOpen ? <button type="button" className={titleClass} onClick={(event) => { event.stopPropagation(); onOpen(); }} title={title}>{title}</button>
           : <span className="block truncate font-medium" title={title}>{title}</span>}
       {secondary?.trim() ? <span className="block truncate text-xs text-fg-muted" title={secondary}>{secondary}</span> : null}

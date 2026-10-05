@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { LiveEvent } from "@refinedev/core";
 import {
@@ -26,11 +27,14 @@ import {
 import {
   ANONYMOUS_AUTH,
   AuthStateProvider,
+  createAngeeAuthProviderFromRequest,
   currentUserToAuthState,
+  identityQueryOptions,
   type AuthState,
   UserPreferencesProvider,
   useUserPreferences,
 } from "./auth";
+import { loadRouteIdentity } from "../route-tree";
 
 const liveHarness = vi.hoisted(() => ({
   invalidateAuthStore: vi.fn(async () => undefined),
@@ -136,6 +140,24 @@ describe("live user preferences", () => {
     expect(captured.current?.rail.railPreferences.expanded).toBe(false);
     expect(captured.current?.view.savedFavorites.map(({ label }) => label))
       .toEqual(["Remote"]);
+  });
+
+  test("a remote delivery reaches the identity the route gate resolves home from", async () => {
+    const queryClient = new QueryClient();
+    const authProvider = createAngeeAuthProviderFromRequest(async () => {
+      throw new Error("The route gate reads the cached identity.");
+    });
+    const initial = preferenceDocument("Initial", true);
+    queryClient.setQueryData(
+      identityQueryOptions(authProvider).queryKey,
+      currentUserToAuthState({ ...USER, preferences: initial }).user,
+    );
+    renderPreferences(captureRef(), initial, { queryClient });
+
+    const remote = preferenceDocument("Remote", false);
+    act(() => emitPreferences(remote));
+
+    expect((await loadRouteIdentity(authProvider, queryClient))?.preferences).toEqual(remote);
   });
 
   test("keeps an in-flight remote rebase and bases the next surface write on it", async () => {
@@ -249,10 +271,10 @@ interface CapturedPreferences {
 function renderPreferences(
   captured: { current: CapturedPreferences | null },
   preferences: RuntimeUserPreferences,
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; queryClient?: QueryClient } = {},
 ): void {
   const auth = currentUserToAuthState({ ...USER, preferences });
-  const tree = <PreferencesRoot auth={auth} captured={captured} />;
+  const tree = <PreferencesRoot auth={auth} captured={captured} queryClient={options.queryClient} />;
   render(options.strict ? <React.StrictMode>{tree}</React.StrictMode> : tree);
 }
 
@@ -266,22 +288,27 @@ function renderPreferencesWithAuth(
 function PreferencesRoot({
   auth,
   captured,
+  queryClient,
 }: {
   auth: AuthState;
   captured: { current: CapturedPreferences | null };
+  queryClient?: QueryClient | undefined;
 }): React.ReactElement {
+  const [client] = React.useState(() => queryClient ?? new QueryClient());
   return (
-    <AuthStateProvider auth={auth}>
-      <UserPreferencesProvider dataProviderName="public">
-        <PreferenceRuntime>
-          <ModelMetadataProvider metadata={METADATA}>
-            <ResourceViewProvider scope="local" resource="notes.Note">
-              <Capture captured={captured} />
-            </ResourceViewProvider>
-          </ModelMetadataProvider>
-        </PreferenceRuntime>
-      </UserPreferencesProvider>
-    </AuthStateProvider>
+    <QueryClientProvider client={client}>
+      <AuthStateProvider auth={auth}>
+        <UserPreferencesProvider dataProviderName="public">
+          <PreferenceRuntime>
+            <ModelMetadataProvider metadata={METADATA}>
+              <ResourceViewProvider scope="local" resource="notes.Note">
+                <Capture captured={captured} />
+              </ResourceViewProvider>
+            </ModelMetadataProvider>
+          </PreferenceRuntime>
+        </UserPreferencesProvider>
+      </AuthStateProvider>
+    </QueryClientProvider>
   );
 }
 
