@@ -134,11 +134,30 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("platform route consumers", () => {
-  test("FieldsPage declares no unsupported grouping on its server-paged resource", () => {
+  test("FieldsPage offers its server group columns and groups by model by default", () => {
     render(<FieldsPage />);
     const list = screen.getByTestId("platform.Field");
-    expect(list.getAttribute("data-default-group")).toBeNull();
-    expect(list.getAttribute("data-group-options")).toBeNull();
+    expect(
+      JSON.parse(list.getAttribute("data-group-options")!).map((option: { group: { field: string } }) => option.group.field),
+    ).toEqual(["addon", "model", "kind", "relation_target"]);
+    expect(JSON.parse(list.getAttribute("data-default-group")!)).toEqual({ field: "model" });
+  });
+
+  test("FieldsPage scoped to one model has no default group", () => {
+    mocks.scopes = { model: "notes.Note" };
+    render(<FieldsPage />);
+    const list = screen.getByTestId("platform.Field");
+    // An explicit null, not an omitted default.
+    expect(list.getAttribute("data-default-group")).toBe("null");
+    expect(list.getAttribute("data-group-options")).not.toBeNull();
+  });
+
+  test("FieldsPage scoped to one addon still groups by model", () => {
+    mocks.scopes = { addon: "example.notes" };
+    render(<FieldsPage />);
+    expect(JSON.parse(screen.getByTestId("platform.Field").getAttribute("data-default-group")!)).toEqual({
+      field: "model",
+    });
   });
 
   test("FieldsPage keeps model and addon scopes as exact server filters", () => {

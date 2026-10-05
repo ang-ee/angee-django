@@ -81,3 +81,90 @@ def test_pydantic_resource_by_pk() -> None:
     result = _schema().execute_sync('query { platform_addons_by_pk(id: "storage") { label } }')
     assert result.errors is None, result.errors
     assert result.data["platform_addons_by_pk"]["label"] == "Storage"
+
+
+class CatalogueEntry(BaseModel):
+    """A computed row whose scalar columns group through the run-query roots."""
+
+    id: str
+    category: str
+    shelf: str | None
+    active: bool
+
+
+_ENTRIES = [
+    CatalogueEntry(id="hammer", category="tools", shelf="A", active=True),
+    CatalogueEntry(id="saw", category="tools", shelf="", active=False),
+    CatalogueEntry(id="atlas", category="books", shelf=None, active=True),
+]
+
+
+def _grouped_schema() -> object:
+    resource = hasura_pydantic_resource(
+        CatalogueEntry,
+        name="catalogue_entries",
+        model_label="catalogue.entry",
+        filterable=["id", "category", "shelf", "active"],
+        sortable=["category"],
+        groupable=["category", "shelf", "active"],
+        rows=lambda info: _ENTRIES,
+        frontend_row_model="server",
+    )
+    return GraphQLSchemas([SchemaAddon({"public": {"query": [resource.query], "types": [*resource.types]}})]).build(
+        "public"
+    )
+
+
+def test_pydantic_resource_groupable_columns_project_server_axes() -> None:
+    """Declared group columns expose the native group roots and drillable axes."""
+
+    [meta] = _grouped_schema().angee_resources
+    assert meta.roots.group_name == "catalogue_entries_groups"
+    assert meta.roots.group_count_name == "catalogue_entries_groups_count"
+    assert meta.type_names.group_key is not None
+    assert meta.type_names.group_by_spec is not None
+    assert {
+        name: (axis.server.input, axis.server.key, axis.drill.field)
+        for name, axis in meta.query.axes.items()
+        if axis.server is not None and axis.drill is not None
+    } == {
+        "category": ("CATEGORY", "category", "category"),
+        "shelf": ("SHELF", "shelf", "shelf"),
+        "active": ("ACTIVE", "active", "active"),
+    }
+
+
+def test_pydantic_resource_groups_filtered_rows_with_distinct_blank_and_null() -> None:
+    """Grouping counts the filtered rows; a blank string and NULL stay separate buckets."""
+
+    result = _grouped_schema().execute_sync(
+        """
+        query {
+          by_category: catalogue_entries_groups(group_by: [{field: CATEGORY}]) {
+            key { category } aggregate { count }
+          }
+          active: catalogue_entries_groups(where: {active: {_eq: true}}, group_by: [{field: CATEGORY}]) {
+            key { category } aggregate { count }
+          }
+          by_shelf: catalogue_entries_groups(group_by: [{field: SHELF}]) {
+            key { shelf } aggregate { count }
+          }
+          catalogue_entries_groups_count(group_by: [{field: SHELF}])
+        }
+        """
+    )
+    assert result.errors is None, result.errors
+    assert result.data["by_category"] == [
+        {"key": {"category": "books"}, "aggregate": {"count": 1}},
+        {"key": {"category": "tools"}, "aggregate": {"count": 2}},
+    ]
+    assert result.data["active"] == [
+        {"key": {"category": "books"}, "aggregate": {"count": 1}},
+        {"key": {"category": "tools"}, "aggregate": {"count": 1}},
+    ]
+    assert result.data["by_shelf"] == [
+        {"key": {"shelf": ""}, "aggregate": {"count": 1}},
+        {"key": {"shelf": "A"}, "aggregate": {"count": 1}},
+        {"key": {"shelf": None}, "aggregate": {"count": 1}},
+    ]
+    assert result.data["catalogue_entries_groups_count"] == 3

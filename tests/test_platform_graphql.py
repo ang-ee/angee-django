@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections import Counter
 from typing import Any, NoReturn
 
 import pytest
@@ -239,6 +240,64 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
         {"id": "example.alpha", "name": "example.alpha", "label": "Zulu"},
         {"id": "example.zebra", "name": "example.zebra", "label": "example.zebra"},
     ]
+
+
+def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> None:
+    """The computed field collection advertises server group axes and counts each bucket."""
+
+    config = apps.get_app_config("linesdemo")
+    rows = [
+        field
+        for name in ("DocumentLine", "Tag")
+        for field in composed.PlatformModelRow.from_model(config, apps.get_model("linesdemo", name)).fields()
+    ]
+    line = "linesdemo.documentline"
+    monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
+    monkeypatch.setattr(composed, "field_rows", lambda: rows)
+    schema = _schema()
+    [resource] = [item for item in schema.angee_resources if item.model_label == "platform.Field"]
+
+    assert (resource.roots.group_name, resource.roots.group_count_name) == (
+        "platform_fields_groups",
+        "platform_fields_groups_count",
+    )
+    assert {name: axis.server.input for name, axis in resource.query.axes.items() if axis.server is not None} == {
+        "model": "MODEL",
+        "addon": "ADDON",
+        "kind": "KIND",
+        "is_relation": "IS_RELATION",
+        "relation_target": "RELATION_TARGET",
+    }
+
+    data = _data(
+        execute_schema(
+            schema,
+            """
+            query {
+              by_model: platform_fields_groups(group_by: [{field: MODEL}]) {
+                key { model } aggregate { count }
+              }
+              line_kinds: platform_fields_groups(
+                where: {model: {_eq: "linesdemo.documentline"}}
+                group_by: [{field: KIND}]
+              ) {
+                key { kind } aggregate { count }
+              }
+              platform_fields_groups_count(group_by: [{field: KIND}])
+            }
+            """,
+        )
+    )
+
+    assert data["by_model"] == [
+        {"key": {"model": model}, "aggregate": {"count": count}}
+        for model, count in sorted(Counter(row.model for row in rows).items())
+    ]
+    assert data["line_kinds"] == [
+        {"key": {"kind": kind}, "aggregate": {"count": count}}
+        for kind, count in sorted(Counter(row.kind for row in rows if row.model == line).items())
+    ]
+    assert data["platform_fields_groups_count"] == len({row.kind for row in rows})
 
 
 def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: Any) -> None:

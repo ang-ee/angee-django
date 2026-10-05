@@ -25,6 +25,7 @@ from strawberry_django_hasura import (
 )
 
 from angee.data.metadata import DataAggregateMeasureMetadata
+from angee.graphql.data.hasura import hasura_query_axes
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -52,6 +53,7 @@ def hasura_pydantic_resource(
     model_label: str,
     filterable: Sequence[str],
     sortable: Sequence[str],
+    groupable: Sequence[str] = (),
     rows: Callable[[Any], Iterable[BaseModel]] | None = None,
     source: RowSource | None = None,
     node_name: str | None = None,
@@ -64,7 +66,12 @@ def hasura_pydantic_resource(
     derived from it. ``name`` is the resource stem (plural snake, the list field
     name); ``model_label`` is the dotted ``app.model`` label the frontend keys
     on. ``rows(info) -> Iterable[row_model]`` is the in-memory provider; pass a
-    ``source`` instead for a pushdown :class:`RowSource`.
+    ``source`` instead for a pushdown :class:`RowSource`, which must return
+    every matching row when grouping asks for ``limit=None``.
+
+    ``groupable`` names scalar row columns exposed through the library's
+    ``<name>_groups`` roots; their group axes are read from the library's
+    ``HasuraResource.row_model``, as the model path reads its Django model.
 
     The attached ``DataResourceMetadata`` carries ``roots.list`` so the frontend
     treats the resource as Hasura-backed and drives it through ``useList``.
@@ -80,6 +87,7 @@ def hasura_pydantic_resource(
         name=name,
         filterable=list(filterable),
         sortable=list(sortable),
+        groupable=list(groupable),
         source=source,
         id_field=id_field,
     )
@@ -95,11 +103,17 @@ def hasura_pydantic_resource(
             native_resource=resource,
             policy=DataResourcePolicy(
                 # Small computed sources may deliberately execute in the browser;
-                # larger sources keep filter/sort/page execution on the server.
+                # larger sources keep filter/sort/page/group execution on the server.
                 public_id_field=id_field,
                 row_model=frontend_row_model,
                 filter_fields=tuple(filterable),
                 order_fields=tuple(sortable),
+                group_by_fields=tuple(groupable),
+                query_axes=(
+                    hasura_query_axes(resource.row_model, tuple(groupable), tuple(filterable))
+                    if resource.row_model is not None
+                    else ()
+                ),
                 default_measures=(DataAggregateMeasureMetadata(op="count"),),
             ),
         ),
