@@ -15,7 +15,8 @@ from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
-from tests.conftest import vault_for
+from tests.conftest import create_platform_admin, create_user, vault_for
+from tests.mtidemo.models import MtiChild, MtiParent
 
 
 class ReviewPrefix(Step[None, None, None]):
@@ -214,3 +215,46 @@ def test_application_uses_owner_write_permission(review):
         apply_proposals(decision, actor=people[0])
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Applied"
+
+
+def test_concrete_action_owner_applies_child_fields_with_canonical_concern(composed_tables):
+    actor = create_platform_admin("concrete-review")
+    reader = create_user("concrete-reader")
+    with system_context(reason="test concrete decision target"):
+        record = MtiChild.objects.create(title="Parent", detail="Before")
+    write_relationships([
+        RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(reader)),
+        RelationshipTuple(to_object_ref(record.mtiparent_ptr), "reader", to_subject_ref(reader)),
+    ])
+    decision = Decision.objects.ask(DecisionRequest(
+        kind="confirm_detail", records=(record,), assignees=(reader,), requester=None,
+        proposal=DecisionProposal(alternatives=[{
+            "key": "confirm", "label": "Confirm detail", "outcome": "confirmed",
+            "actions": {public_id_of(record): {"model": "mtidemo.MtiChild", "fields": {"detail": {"set": "After"}}}},
+        }]),
+    ), actor=actor)
+    concern = decision.records.with_actor(actor).get()
+    assert type(concern.record) is MtiParent
+    decision = Decision.objects.decide(decision, actor=reader, chosen=["confirm"])
+    with pytest.raises(PermissionDenied):
+        apply_proposals(decision, actor=reader)
+    record.refresh_from_db()
+    assert record.detail == "Before"
+    assert apply_proposals(decision, actor=actor) == "confirmed"
+    record.refresh_from_db()
+    assert record.detail == "After" and record.title == "Parent"
+
+
+@pytest.mark.parametrize("model", ["storage.Drive", "missing.Model", "not-a-model", ""])
+def test_action_model_must_share_the_concerned_identity(composed_tables, model):
+    actor = create_platform_admin("invalid-concrete-review")
+    with system_context(reason="test invalid decision target"):
+        record = MtiChild.objects.create(detail="Before")
+    with pytest.raises(ValueError):
+        DecisionRequest(
+            kind="confirm_detail", records=(record,), assignees=(actor,),
+            proposal=DecisionProposal(alternatives=[{
+                "key": "confirm", "label": "Confirm", "outcome": "confirmed",
+                "actions": {public_id_of(record): {"model": model, "fields": {"detail": {"set": "After"}}}},
+            }]),
+        )

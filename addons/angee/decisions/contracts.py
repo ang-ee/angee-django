@@ -49,8 +49,24 @@ class CallMethod(BaseModel):
 
 class RecordActions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    model: str | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
     fields: dict[str, SetValue] = Field(default_factory=dict)
     record: CallMethod | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    def target_model(self, record: models.Model) -> type[models.Model]:
+        """Keep canonical identity while naming a concrete action owner."""
+        from django.apps import apps
+
+        from angee.base.refs import canonical_record_model
+
+        canonical = canonical_record_model(type(record))
+        try:
+            target = apps.get_model(self.model) if self.model else canonical
+        except (LookupError, ValueError) as error:
+            raise ValueError("Unknown action model.") from error
+        if target._meta.abstract or canonical_record_model(target) is not canonical:
+            raise ValueError("The action model must share the concerned record's canonical identity.")
+        return target
 
 
 class Alternative(BaseModel):
@@ -99,7 +115,9 @@ class DecisionProposal(BaseModel):
                 if identity not in records:
                     raise ValueError(f"Unknown concerned record: {identity}.")
                 record = records[identity]
-                model = canonical_record_model(type(record))
+                model = actions.target_model(record)
+                if not isinstance(record, model):
+                    raise ValueError("Concern the concrete record named by the action model.")
                 for name, operation in actions.fields.items():
                     try:
                         field = model._meta.get_field(name)

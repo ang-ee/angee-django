@@ -33,7 +33,7 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                 if reference is None:
                     raise ValidationError("The record for a chosen action is missing or inaccessible.")
                 record = lock_if_supported(
-                    type(reference).objects.with_actor(actor).for_write().filter(pk=reference.pk)
+                    actions.target_model(reference).objects.with_actor(actor).for_write().filter(pk=reference.pk)
                 ).get()
                 for name, operation in actions.fields.items():
                     field = record._meta.get_field(name)

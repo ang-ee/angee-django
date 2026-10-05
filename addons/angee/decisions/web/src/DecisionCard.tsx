@@ -30,8 +30,8 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   const openRecord = useRecordPeek();
   const metadata = useSchemaFieldMetadata();
   const form = useActiveRecordForm();
-  const fieldLabel = (id: string, field: string) => (form?.id === id ? form.fieldLabel?.(field) : undefined)
-    ?? modelMetadataForLabel(metadata, decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field]?.label
+  const fieldLabel = (id: string, field: string, model?: string) => (form?.id === id ? form.fieldLabel?.(field) : undefined)
+    ?? modelMetadataForLabel(metadata, model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field]?.label
     ?? titleCase(field);
   useEffect(() => {
     if (highlighted) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -77,9 +77,9 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
         {actions.record ? <span className="text-xs text-fg-2">{actions.record.call.replaceAll("_", " ")}</span> : null}
         <MetaGrid rows={Object.entries(actions.fields).map(([field, operation]) => ({
           id: field,
-          label: fieldLabel(id, field),
+          label: fieldLabel(id, field, actions.model),
           value: (() => {
-            const facts = modelMetadataForLabel(metadata, decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
+            const facts = modelMetadataForLabel(metadata, actions.model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
             return facts?.relationModelLabel && typeof operation.set === "string" ? <RecordReference model={facts.relationModelLabel} id={operation.set} onOpen={() => openRecord({ model: facts.relationModelLabel!, id: operation.set as string })} />
               : operation.set === null ? "None" : typeof operation.set === "boolean" ? operation.set ? "Yes" : "No"
               : facts?.values?.find((value) => value.value === operation.set)?.description ?? (typeof operation.set === "string" ? operation.set : JSON.stringify(operation.set));

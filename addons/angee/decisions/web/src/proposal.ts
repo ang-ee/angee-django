@@ -2,6 +2,7 @@ import * as v from "valibot";
 import { JsonValueSchema } from "@angee/ui";
 
 const RecordActionsSchema = v.strictObject({
+  model: v.optional(v.pipe(v.string(), v.minLength(1))),
   fields: v.optional(v.record(v.string(), v.strictObject({ set: JsonValueSchema })), {}),
   record: v.optional(v.strictObject({ call: v.pipe(v.string(), v.regex(/^[A-Za-z][A-Za-z0-9_]*$/)), arguments: v.optional(v.record(v.string(), JsonValueSchema), {}) })),
 });

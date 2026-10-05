@@ -58,6 +58,11 @@ How the ontology maps to this addon.
   ```
 
   Fields are names inside the JSON. No field table, no per-field rows.
+  An action may name `model` for a concrete child owning those fields or methods.
+  It must share the concerned record's canonical identity, and the asker supplies
+  that concrete record. Concern links remain canonical; application locks and
+  writes through the named model's permission owner. Omission uses the canonical
+  model. The card uses the action model's field metadata.
   A model declares callable proposal methods once in its class-level
   `decision_methods` tuple. Ask-time validation requires a declared method with
   no required arguments, rejects `delete`, and checks optional keyword

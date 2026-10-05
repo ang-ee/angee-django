@@ -3,7 +3,7 @@ import * as v from "valibot";
 import { fieldsToMark, ProposalSchema } from "./proposal";
 
 const proposal = { multiple: true, alternatives: [
-  { key: "rename", label: "Rename", outcome: "done", actions: { nte_1: { fields: { title: { set: "Draft" }, body: { set: null } } } } },
+  { key: "rename", label: "Rename", outcome: "done", actions: { nte_1: { model: "knowledge.Note", fields: { title: { set: "Draft" }, body: { set: null } } } } },
   { key: "keep", label: "Keep", outcome: "done" },
   { key: "other", label: "Other record", outcome: "done", actions: { nte_2: { fields: { title: { set: "Other" } } } } },
 ] };
@@ -19,4 +19,6 @@ test("rejects empty and duplicate alternatives while preserving null sets", () =
   expect(v.safeParse(ProposalSchema, { alternatives: [] }).success).toBe(false);
   expect(v.safeParse(ProposalSchema, { alternatives: [proposal.alternatives[0], proposal.alternatives[0]] }).success).toBe(false);
   expect(v.parse(ProposalSchema, proposal).alternatives[0]?.actions.nte_1?.fields.body?.set).toBeNull();
+  expect(v.parse(ProposalSchema, proposal).alternatives[0]?.actions.nte_1?.model).toBe("knowledge.Note");
+  expect(v.safeParse(ProposalSchema, { alternatives: [{ ...proposal.alternatives[0], actions: { nte_1: { model: "" } } }] }).success).toBe(false);
 });
