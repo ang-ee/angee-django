@@ -149,7 +149,7 @@ export function RuntimeFixture({
       <Refine
         dataProvider={dataProvider}
         liveProvider={liveProvider}
-        resources={resources ?? refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)}
+        resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
         routerProvider={routed ? tanStackRouterProvider : undefined}
         options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
       >
