@@ -726,7 +726,7 @@ def test_t6_reaped_io_attempt_cannot_overwrite_its_successor(execution, register
 
 @pytest.mark.parametrize("first_holder", ["effect", "reaper"])
 def test_t8_reaper_and_begin_effect_share_the_step_fence(execution, register_step, monkeypatch, first_holder):
-    """Marker-first waits for an operator; reaper-first prevents the external effect."""
+    """Marker-first holds on an error for an operator's retry; reaper-first prevents the external effect."""
     actor, _ = execution
     entered, begin, locked, release, finish, effect_called, marked = (Event() for _ in range(7))
     effects = []
@@ -804,7 +804,7 @@ def test_t8_reaper_and_begin_effect_share_the_step_fence(execution, register_ste
     assert attempt.result == "timed_out"
     assert (attempt.effect_started_at is not None) is (first_holder == "effect")
     assert bool(effects) is (first_holder == "effect")
-    assert row(run).waiting_kind == ("operator" if first_holder == "effect" else "time")
+    assert row(run).waiting_kind == ("error" if first_holder == "effect" else "time")
 
 
 def test_t2_io_simultaneous_branch_results_plan_one_join(execution, register_step):
