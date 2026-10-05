@@ -141,6 +141,27 @@ def test_topology_projects_frozen_labels_all_routed_ports_and_map_identity():
     assert not definition.edge_live(row("start", status="skipped", outcome="alternate"), {"alternate"})
 
 
+@pytest.mark.parametrize("label,expected", [("", "Review items"), ("Map", "Map"),
+                                           ("Review invoices", "Review invoices")])
+def test_map_labels_share_meaningful_names_with_topology_and_publication(label, expected):
+    """Unlabeled maps use their key; every authored label survives publication."""
+    definition = graph({"review_items": {"step": "map", "label": label, "body": {"step": "echo"}}})
+    assert definition.node_label("review_items") == expected
+    node = definition.topology().nodes[0]
+    assert node.label == expected
+    assert node.step_label == "Map"
+    published = definition.published_document()
+    assert published["nodes"]["review_items"]["label"] == expected
+    assert Definition.model_validate(published).node_label("review_items") == expected
+
+
+def test_map_without_a_label_freezes_its_key_based_title():
+    """An omitted map label publishes the same title used by the graph."""
+    definition = graph({"review_items": {"step": "map", "body": {"step": "echo"}}})
+    assert definition.node_label("review_items") == "Review items"
+    assert definition.published_document()["nodes"]["review_items"]["label"] == "Review items"
+
+
 def test_branching_creates_live_and_skipped_rows():
     """Branching creates live and skipped rows."""
     definition = graph({"choose": {"next": {"done": "left", "alternate": "right"}}, "left": {}, "right": {}})

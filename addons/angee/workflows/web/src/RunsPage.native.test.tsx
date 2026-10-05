@@ -15,7 +15,9 @@ afterEach(cleanup);
 
 test("the routed run defaults to its filling graph and retains Overview", async () => {
   render(<RunStory />);
-  await screen.findByTestId("rf__node-inspect");
+  // The file's first render pays the cold graph-module transform; under CI's parallel `pnpm -r test`
+  // load that exceeds the default 1s wait (locally it is ~250ms).
+  await screen.findByTestId("rf__node-inspect", undefined, { timeout: 5000 });
   expect(screen.getByRole("tab", { name: "Graph" }).getAttribute("aria-selected")).toBe("true");
   expect(screen.getByTestId("run-graph-canvas").className).toContain("flex-1");
   await openOverview();

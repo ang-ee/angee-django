@@ -2927,7 +2927,7 @@ describe("FormView", () => {
     expect(document.querySelectorAll("aside")).toHaveLength(1);
   });
 
-  test("a full-bleed tab fills compact chrome while document tabs retain their column and editor draft", async () => {
+  test("full-bleed and document tabs share their header and tab geometry while retaining the editor draft", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} defaultRecordTab="editor"
       recordTabs={[
         { id: "editor", label: "Editor", presentation: "full-bleed", keepMounted: true,
@@ -2944,14 +2944,24 @@ describe("FormView", () => {
     expect(editor.firstElementChild?.className).toContain("h-full");
     expect(draft.parentElement?.parentElement?.className).toContain("h-full");
     expect(draft.parentElement?.parentElement?.className).toContain("grid-rows-[minmax(0,1fr)]");
-    expect(screen.getByRole("textbox", { name: "Title" }).closest("header")?.className).toContain("gap-1");
+    const recordChrome = () => {
+      const title = screen.getByRole("textbox", { name: "Title" });
+      const header = title.closest("header")!;
+      const strip = screen.getByRole("tablist");
+      expect(header.className).toContain("gap-4");
+      expect(title.className).toContain("text-28");
+      return { headerClasses: header.parentElement!.className, stripClasses: strip.className };
+    };
+    const chrome = recordChrome();
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
     const activity = await screen.findByRole("tabpanel", { name: "Activity" });
     expect(activity.className).toContain("max-w-[1100px]");
-    expect(screen.getByRole("textbox", { name: "Title" }).closest("header")?.className).toContain("gap-4");
+    expect(recordChrome()).toEqual(chrome);
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(await screen.findByLabelText("Reminder")).toBeTruthy();
+    expect(recordChrome().stripClasses).toBe(chrome.stripClasses);
     fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+    expect(recordChrome()).toEqual(chrome);
     expect(screen.getByRole("textbox", { name: "Editor draft" })).toBe(draft);
     expect(draft).toHaveProperty("value", "Unsaved draft");
   });
@@ -2971,6 +2981,7 @@ describe("FormView", () => {
     const heading = await screen.findByRole("heading", { name: "First" });
     expect(heading.className).toContain("text-base");
     expect(heading.className).not.toContain("text-28");
+    expect(within(heading.closest("header")!).getByText("Active").className).toContain("justify-self-start");
     expect(document.querySelector("form")?.className).toContain("min-h-0");
     expect(heading.closest("form")?.querySelector(".overflow-auto")).toBeTruthy();
     expect(screen.queryByRole("tab")).toBeNull();

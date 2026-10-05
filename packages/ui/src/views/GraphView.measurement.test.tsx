@@ -7,6 +7,14 @@ import { GraphView } from "./GraphView";
 import { GraphEditor } from "./GraphEditor";
 
 const capture = vi.hoisted(() => ({ props: null as ReactFlowProps | null, instance: null as ReactFlowInstance | null, width: 0 }));
+const dagreMock = vi.hoisted(() => ({ layouts: 0 }));
+vi.mock("@dagrejs/dagre", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dagrejs/dagre")>();
+  return { ...actual, layout: (graph: Parameters<typeof actual.layout>[0]) => {
+    dagreMock.layouts += 1;
+    return actual.layout(graph);
+  } };
+});
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
   return {
@@ -20,7 +28,36 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   };
 });
 const { Provider } = createUiTestProviders();
-afterEach(cleanup);
+afterEach(() => { cleanup(); dagreMock.layouts = 0; });
+
+test("native measured tall branches do not overlap or relayout for unchanged dimensions and status", async () => {
+  const nodes = ["entry", "context", "classification", "bank"].map((id) => ({ id, kind: "handler", title: id,
+    ports: [{ id: "done", label: "Done" }] }));
+  const edges = nodes.slice(1).map((node) => ({ id: node.id, source: "entry", sourceHandle: "done", target: node.id, kind: "next" }));
+  const nodeStyles = {
+    handler: { width: 244, height: 100, borderColor: "gray" },
+    gate: { width: 244, height: 80, borderColor: "gray" },
+  };
+  const props = { nodes, edges, nodeStyles, layout: { rankdir: "LR" as const } };
+  const view = render(<GraphView {...props} />, { wrapper: Provider });
+  const dimensions = nodes.map((node) => ({ type: "dimensions" as const,
+    id: node.id, dimensions: { width: 244, height: node.id === "entry" ? 110 : 290 } }));
+  act(() => capture.props?.onNodesChange?.(dimensions));
+  await waitFor(() => {
+    const branches = capture.instance!.getNodes().filter((node) => node.id !== "entry").sort((a, b) => a.position.y - b.position.y);
+    expect(branches).toHaveLength(3);
+    for (let index = 1; index < branches.length; index += 1) {
+      expect(branches[index]!.position.y).toBeGreaterThanOrEqual(branches[index - 1]!.position.y + 290 + 34);
+    }
+  });
+  const positions = capture.instance!.getNodes().map((node) => node.position);
+  const layouts = dagreMock.layouts;
+  act(() => capture.props?.onNodesChange?.(dimensions));
+  view.rerender(<GraphView {...props} nodes={nodes.map((node) => ({ ...node, kind: "gate", highlighted: true }))}
+    status={{ context: { label: "Canceled", tone: "warning" } }} />);
+  expect(capture.instance!.getNodes().map((node) => node.position)).toEqual(positions);
+  expect(dagreMock.layouts).toBe(layouts);
+});
 
 test("native measured anchored viewport is readable and the Fit control still fits a long graph", async () => {
   const nodes = Array.from({ length: 13 }, (_, index) => ({ id: `node-${index}`, kind: "node", title: `Item ${index}` }));

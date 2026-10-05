@@ -80,7 +80,8 @@ test("writers default to Studio while readers retain Overview without authoring 
   expect(studioPanel.className).toContain("flex-1");
   expect(studioPanel.className).toContain("overflow-hidden");
   expect(studioPanel.className).not.toContain("max-w-[1100px]");
-  expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-base");
+  // Full-bleed tabs keep the document header, so switching tabs never moves the header or tab strip.
+  expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-28");
   fireEvent.click(await screen.findByTestId("rf__node-entry"));
   fireEvent.change(await screen.findByRole("textbox", { name: "Key" }), { target: { value: "retained" } });
   fireEvent.click(screen.getByRole("tab", { name: "Versions" }));

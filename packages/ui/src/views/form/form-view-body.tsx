@@ -201,7 +201,7 @@ export function FormViewRecordHeader({
                 tone={statusTone(value)}
                 density="compact"
                 shape="pill"
-                className="self-start"
+                className="justify-self-start"
               >
                 {optionLabel(currentStatusField.options, value)}
               </Badge>

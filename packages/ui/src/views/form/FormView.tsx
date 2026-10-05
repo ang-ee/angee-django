@@ -461,6 +461,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
 
   // Keep one panel tree across presentations so retained editor drafts survive tab changes.
   if (tabbed && (recordPresentation === "workspace" || recordTabList.some((tab) => tab.presentation === "full-bleed"))) {
+    const compactHeader = recordPresentation === "workspace";
     const workspace = recordPresentation === "workspace"
       || recordTabList.some((tab) => tab.id === activeRecordTab && tab.presentation === "full-bleed");
     return (
@@ -478,10 +479,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           }}
         >
           {controlBand}
-          <div className={workspace ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
-            {recordHeader(workspace)}
+          <div className={compactHeader ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex-none flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
+            {recordHeader(compactHeader)}
             {errorBanners}
-            <Tabs.List className={workspace ? "mt-2" : undefined}>
+            <Tabs.List className={compactHeader ? "mt-2" : undefined}>
               {orderedTabs.map((tab) => (
                 <Tabs.Tab
                   key={tab.id}

@@ -83,6 +83,11 @@ creation-key conflict. A stale revision keeps local edits until an explicit relo
 and discard. Custom submit owners receive `baselineRecord` and `clientCreationKey`
 and retain responsibility for their own operation arguments.
 
+`GraphView` automatically lays out unpositioned nodes using measured sizes and
+preserves explicit positions. Layout debt: `GraphEditor` still lays out from
+declared sizes; `GraphView` should become the single automatic-layout owner and
+report measured positions to the editor.
+
 ## Resource query migration
 
 Resource views now use the resource's single `query` contract through

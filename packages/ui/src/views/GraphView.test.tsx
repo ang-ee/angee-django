@@ -2,7 +2,7 @@
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { type ReactNode } from "react";
-import type { Node } from "@xyflow/react";
+import type { Node, ReactFlowProps } from "@xyflow/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GraphView, graphNodeStyle } from "./GraphView";
@@ -144,6 +144,16 @@ test("MiniMap is opt-in and uses native pan and zoom navigation", () => {
   view.rerender(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} miniMap />);
   expect(screen.getByTestId("mini-map")).toBeTruthy();
   expect(reactFlowMock.miniMapProps).toMatchObject({ pannable: true, zoomable: true });
+  const node = (currentProps().nodes as Node[])[0]!;
+  const props = reactFlowMock.miniMapProps as { nodeColor: (node: Node) => string; nodeStrokeColor: (node: Node) => string };
+  expect(props.nodeColor(node)).toBe(node.style?.borderColor);
+  expect(props.nodeStrokeColor(node)).toBe(node.style?.borderColor);
+  const withoutStyle = { id: "plain", data: {}, position: { x: 0, y: 0 } };
+  expect(props.nodeColor(withoutStyle)).toBe("var(--border-strong)");
+  expect(props.nodeStrokeColor(withoutStyle)).toBe("var(--border-strong)");
+  view.rerender(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} miniMap status={{ draft: { label: "Ready" } }} />);
+  expect(reactFlowMock.miniMapProps?.nodeColor).toBe(props.nodeColor);
+  expect(reactFlowMock.miniMapProps?.nodeStrokeColor).toBe(props.nodeStrokeColor);
 });
 
 test("initial fit waits for native measurement and does not depend on edges", () => {
@@ -250,7 +260,7 @@ const nodeStyles = {
   },
   gate: {
     width: 160,
-    height: 72,
+    height: 96,
     borderColor: "var(--border-subtle)",
   },
 } as const;
@@ -419,14 +429,15 @@ describe("GraphView", () => {
     ]);
   });
 
-  test("uses persisted node positions before dagre layout positions", () => {
-    render(
+  test("positioned graphs preserve native edges and never run automatic layout", () => {
+    const positioned = [
+      { ...nodes[0], position: { x: 120, y: 80 } },
+      { ...nodes[1], position: { x: 360, y: 140 } },
+    ];
+    const view = render(
       <GraphView
-        nodes={[
-          { ...nodes[0], position: { x: 120, y: 80 } },
-          { ...nodes[1], position: { x: 360, y: 140 } },
-        ]}
-        edges={edges}
+        nodes={positioned}
+        edges={[...edges, { ...edges[0], id: "self", target: "draft" }]}
         nodeStyles={nodeStyles}
       />,
     );
@@ -439,6 +450,14 @@ describe("GraphView", () => {
       ["draft", { x: 120, y: 80 }],
       ["review", { x: 360, y: 140 }],
     ]);
+    expect((currentProps().edges as Array<{ id: string }>).map((edge) => edge.id)).toEqual(["draft-review", "self"]);
+    act(() => (currentProps() as ReactFlowProps).onNodesChange?.(positioned.map((node) => ({
+      type: "dimensions", id: node.id, dimensions: { width: 244, height: 290 },
+    }))));
+    view.rerender(<GraphView nodes={positioned} edges={edges} nodeStyles={nodeStyles} layout={{ rankdir: "LR" }} />);
+    expect(dagreMock.layouts).toBe(0);
+    view.rerender(<GraphView nodes={[positioned[0]!, nodes[1]]} edges={edges} nodeStyles={nodeStyles} />);
+    expect(dagreMock.layouts).toBe(1);
   });
 
   test("adapts editable canvas callbacks to graph records", () => {
