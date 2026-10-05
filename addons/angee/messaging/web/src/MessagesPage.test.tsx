@@ -41,6 +41,11 @@ vi.mock("@angee/ui", () => ({
     {parts.map((part, index) => <span key={index}>{part.fragment?.text || part.file?.filename}</span>)}
   </div>,
   registerForm: (resource: string, Component: React.ComponentType<Record<string, unknown>>) => ({ resource, Component }),
+  useTrashActions: () => [{ id: "trash", label: "Move to trash" }, { id: "restore", label: "Restore" }],
+}));
+
+vi.mock("@angee/metadata", () => ({
+  useModelMetadata: () => null,
 }));
 
 vi.mock("@angee/refine", () => ({
@@ -131,6 +136,7 @@ describe("MessagesPage", () => {
       "title", "status", "sender", "sent_at", "platform", "direction", "external_id",
     ]));
     expect(pageMocks.fields).not.toContain("sender_name");
+    expect(pageMocks.fields).toContain("is_trashed");
     expect(pageMocks.actions).toBe(0);
     expect(pageMocks.formProps?.recordTabs).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "content", label: "messages.tabContent" }),
@@ -139,5 +145,11 @@ describe("MessagesPage", () => {
     render(<>{formExtras({ recordId: "msg-1" })}</>);
     expect(screen.getByText("The complete retained message body.")).toBeTruthy();
     expect(screen.getByText("document.pdf")).toBeTruthy();
+  });
+
+  test("moderates an editable Message through the shared trash verbs", () => {
+    render(<messageForm.Component resource="messaging.Message" id="msg-1" />);
+
+    expect(pageMocks.actions).toBe(2);
   });
 });
