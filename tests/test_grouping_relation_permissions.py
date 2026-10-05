@@ -846,6 +846,48 @@ def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case:
     assert " IN (" in reads[0]
 
 
+def test_positive_relation_matches_seek_the_raw_key(relation_grouping_case: Any) -> None:
+    """Outside ``_not``, a relation match constrains the indexed key column.
+
+    The redacted alias is the key or NULL, so the raw-key predicate changes no
+    result; for a direct relation whose operands resolved through the target's
+    read scope it replaces the alias. Under ``_not`` it would turn a hidden
+    target's UNKNOWN into a match, so a negated comparison keeps only the alias.
+    """
+
+    case = relation_grouping_case
+    key = f'"{GroupParent._meta.db_table}"."target_id"'
+    redacted = '"_angee_scalar"'  # the redacted alias's own projection
+    alpha, hidden = str(case.alpha.sqid), str(case.beta.sqid)
+    # Group on the twin key so the grouping expression never reads ``target_id``.
+    document = """query($where: group_parents_bool_exp!) {
+        group_parents_groups(group_by: [{field: METRIC_TARGET}], where: $where) {
+          key { metric_target_id } aggregate { count }
+        }
+    }"""
+
+    def grouped(where: dict[str, Any]) -> tuple[dict[str | None, int], list[str]]:
+        with CaptureQueriesContext(connection) as queries:
+            data = result_data(execute_schema(case.schema, document, {"where": where}, user=case.alice))
+        counts = {row["key"]["metric_target_id"]: row["aggregate"]["count"] for row in data["group_parents_groups"]}
+        return counts, [query["sql"] for query in queries if "GROUP BY" in query["sql"]]
+
+    counts, sql = grouped({"target": {"_eq": alpha}})
+    assert counts == {alpha: 2}
+    assert len(sql) == 1 and f"{key} = {case.alpha.pk}" in sql[0] and redacted not in sql[0]
+    counts, sql = grouped({"target": {"_in": [alpha, hidden, "unknown"]}})
+    assert counts == {alpha: 2}
+    assert len(sql) == 1 and f"{key} IN ({case.alpha.pk})" in sql[0] and redacted not in sql[0]
+    counts, sql = grouped({"target": {"_eq": hidden}})
+    assert counts == {} and sql == []
+    counts, sql = grouped({"target": {"_in": [alpha], "_neq": hidden}})
+    assert counts == {alpha: 2}
+    assert len(sql) == 1 and f"{key} IN ({case.alpha.pk})" in sql[0] and redacted in sql[0]
+    counts, sql = grouped({"_not": {"target": {"_eq": alpha}}})
+    assert counts == {str(case.duplicate_one.sqid): 1, str(case.duplicate_two.sqid): 1}
+    assert len(sql) == 1 and key not in sql[0] and redacted in sql[0]
+
+
 @pytest.mark.parametrize("limit", (1, 6))
 def test_unused_relation_axes_do_not_compile_permission_scopes(relation_grouping_case: Any, limit: int) -> None:
     """A scalar-only read must not build any declared relation's permission tree."""
