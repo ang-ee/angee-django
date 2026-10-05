@@ -56,6 +56,8 @@ describe("ResourceList Gantt declaration", () => {
       </ResourceViewProvider>
     </ToastProvider></ModalsHost></AppRuntimeProvider></Provider></RouterContextProvider>);
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    expect(drawing.props?.resources.map(({ id }) => id)).toEqual(["lane-a", "lane-b"]);
+    expect(view!.state.groupStack).toEqual([]);
     const event = drawing.props?.events[0];
     if (!event) throw new Error("Missing fixture event");
     act(() => drawing.props?.onEventClick?.(event));
@@ -68,8 +70,46 @@ describe("ResourceList Gantt declaration", () => {
     act(() => view.setView("gantt"));
     await screen.findByLabelText("Schedule chart");
     expect(view!.state.filter).toEqual({ name: { iContains: "First" } });
-    expect(view!.state.groupStack).toEqual([{ field: "lane" }]);
+    // Pinned lanes are a render override; they must not replace saved query intent.
+    expect(view!.state.groupStack).toEqual([]);
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    expect(drawing.props?.resources.map(({ id }) => id)).toEqual(["lane-a", "lane-b"]);
+    expect(drawing.props?.events[0]?.resourceId).toBe("lane-a");
     expect(dataProvider.update).not.toHaveBeenCalled();
+  });
+
+  test("a nested List seeds per-kind default stacks and user grouping carries across kinds", () => {
+    const listStack = [{ field: "lane" }, { field: "status" }];
+    const boardStack = [{ field: "status" }];
+    const userStack = [{ field: "status" }, { field: "lane" }];
+    let view!: ResourceViewContextValue;
+    // Observe the real ResourceList/provider seam independently of data fetching.
+    function DeclaredList() {
+      view = useResourceView();
+      return null;
+    }
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterContextProvider router={router}><Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
+      <ResourceList resource={ganttRecord.modelLabel} scope="local" hideCreate list={DeclaredList}>
+        <List defaultGroup={{ field: "lane" }} defaultGroups={{ list: listStack, board: boardStack, gantt: null }}>
+          <Column field="name" header="Name" />
+        </List>
+      </ResourceList>
+    </ToastProvider></AppRuntimeProvider></Provider></RouterContextProvider>);
+    expect(view.state.groupStack).toEqual(listStack);
+    expect(view.defaultState.groupStack).toEqual(listStack);
+    expect(view.queryDirty).toBe(false);
+    act(() => view.setView("board"));
+    expect(view.state.groupStack).toEqual(boardStack);
+    act(() => view.setView("gantt"));
+    expect(view.state.groupStack).toEqual([]);
+    act(() => view.setView("list"));
+    expect(view.state.groupStack).toEqual(listStack);
+    act(() => view.setGroupStack(userStack));
+    act(() => view.setView("gantt"));
+    expect(view.state.groupStack).toEqual(userStack);
+    act(() => view.setView("board"));
+    expect(view.state.groupStack).toEqual(userStack);
+    expect(view.state.queryError).toBeFalsy();
   });
 });

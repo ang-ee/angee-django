@@ -66,10 +66,10 @@ test("local rows keep curated group shortcuts separate from complete query capab
     />
   </ResourceViewProvider></ToastProvider>);
 
-  fireEvent.click(screen.getByLabelText("Group by"));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   expect(screen.queryByRole("button", { name: "Owner" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-  const field = screen.getByLabelText("Group field");
+  fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
+  const field = screen.getByRole("combobox", { name: "Group axis" });
   fireEvent.click(field);
   expect(await screen.findByRole("option", { name: "Owner" })).toBeTruthy();
 });
@@ -97,10 +97,13 @@ test("drops a curated date shortcut when its granularity is no longer supported"
     />
   </ResourceViewProvider></ToastProvider>);
 
-  fireEvent.click(screen.getByLabelText("Group by"));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   expect(screen.queryByRole("button", { name: "Document date by day" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-  expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
+  fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
+  const granularity = screen.getByRole("combobox", { name: "Group granularity" });
+  expect(granularity.textContent).toContain("Month");
+  fireEvent.click(granularity);
+  expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["Month"]);
 });
 
 test("the native row model sorts declared Decimal strings numerically without losing precision", () => {
