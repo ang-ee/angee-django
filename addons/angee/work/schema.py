@@ -237,12 +237,21 @@ def decline_task(
     return ActionResult(ok=True, message="Task declined.", id=target.sqid)
 
 @action_guard("Remove task failed.")
-def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int) -> ActionResult:
-    """Conceal a writable task through its stage owner."""
+def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int, reason: str = "") -> ActionResult:
+    """Conceal a writable task through its stage owner, recording an optional reason."""
 
     target = authorized_permission_target(info, Task, task, "write")
-    target.remove(expected_revision=expected_revision)
+    target.remove(reason=reason, expected_revision=expected_revision)
     return ActionResult(ok=True, message="Task removed.", id=target.sqid)
+
+
+@action_guard("Restore task failed.")
+def restore_task(info: strawberry.Info, task: PublicID, expected_revision: int) -> ActionResult:
+    """Return a removed task to the stage it held before removal."""
+
+    target = authorized_permission_target(info, Task, task, "write")
+    target.restore(expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task restored.", id=target.sqid)
 
 
 @strawberry.type
@@ -344,6 +353,8 @@ class WorkActionMutation:
 
     remove_task = strawberry.mutation(resolver=remove_task)
 
+    restore_task = strawberry.mutation(resolver=restore_task)
+
     @strawberry.mutation
     def accept_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
         """Accept selected tasks; refusals do not roll back eligible rows."""
@@ -363,10 +374,20 @@ class WorkActionMutation:
         ))
 
     @strawberry.mutation
-    def remove_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+    def remove_tasks(
+        self, info: strawberry.Info, selection: list[ActionSelectionInput], reason: str = "",
+    ) -> list[ActionResult]:
         """Conceal selected tasks; refusals do not roll back eligible rows."""
 
         return many_actions(selection, lambda item: remove_task(
+            info, item.id, item.expected_revision, reason,
+        ))
+
+    @strawberry.mutation
+    def restore_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Restore selected removed tasks; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: restore_task(
             info, item.id, item.expected_revision,
         ))
 

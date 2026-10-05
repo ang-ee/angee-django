@@ -29,7 +29,7 @@ from rebac.mixins import RebacModelBase
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ImmutableFieldsMixin
+from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, clean_trash_reason
 from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import system_queryset
@@ -1228,9 +1228,14 @@ class TaskWork(StagedModelMixin):
             self.require_revision(expected_revision)
 
     @transaction.atomic
-    def remove(self, *, expected_revision: int | None = None) -> Any:
-        """Conceal an unpromoted task in its queue; never physically delete it."""
+    def remove(self, *, reason: str = "", expected_revision: int | None = None) -> Any:
+        """Conceal an unpromoted task in its queue; never physically delete it.
 
+        The optional reason (at most 1000 characters) is the removal's history
+        change reason, beside the stage it left for :meth:`restore`.
+        """
+
+        reason = clean_trash_reason(reason)
         self._require_work_action(expected_revision)
         if apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=self.pk).exists():
             raise ValidationError({"stage": "A promoted task cannot be removed."})
@@ -1241,8 +1246,57 @@ class TaskWork(StagedModelMixin):
         Stage.validate_transition(previous, target)
         if self.stage_id != target.pk:
             self.stage = target
+            self._change_reason = reason or None
+            try:
+                self.save(update_fields=("stage", "updated_at"))
+            finally:
+                del self._change_reason
+        return self
+
+    @transaction.atomic
+    def restore(self, *, expected_revision: int | None = None) -> Any:
+        """Return a removed task to the stage it held before removal.
+
+        History owns that stage. When it no longer admits the task by hand
+        (deleted, concealing or rule-owned), the queue's default stage serves.
+        Restoration changes only the stage: today's permissions decide access.
+        """
+
+        self._require_work_action(expected_revision)
+        if not self.stage_model()._base_manager.filter(pk=self.stage_id, conceals=True).exists():
+            raise ValidationError({"stage": "Only a removed task can be restored."})
+        target = self._stage_before_removal() or self.resolve_default_stage()
+        if target is None:
+            raise ValidationError({"stage": "Queue has no default stage."})
+        system = target.category in Stage.SYSTEM_CATEGORIES
+        self._reject_reserved_stage_transition(target=target, manual=True, allow_system_entry=system, lock=True)
+        self.stage = target
+        if not system:
+            self.save(update_fields=("stage", "updated_at"))
+            return self
+        self._reject_direct_status_write()
+        with self._work_verb_write():
             self.save(update_fields=("stage", "updated_at"))
         return self
+
+    def _stage_before_removal(self) -> Stage | None:
+        """Return the stage history shows before the latest concealment, if still enterable."""
+
+        earlier = (
+            self.history.exclude(stage_id=self.stage_id)
+            .exclude(stage_id=None)
+            .order_by("-history_date", "-history_id")
+            .values_list("stage_id", flat=True)
+            .first()
+        )
+        if earlier is None:
+            return None
+        return cast(
+            "Stage | None",
+            self.stage_model()._base_manager.filter(
+                pk=earlier, queue_id=self.queue_id, conceals=False, rule_owned=False,
+            ).first(),
+        )
 
     @transaction.atomic
     def accept(self, stage: models.Model | None = None, *, expected_revision: int | None = None) -> Any:
