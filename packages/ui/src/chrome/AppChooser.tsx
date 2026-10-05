@@ -57,6 +57,8 @@ export interface AppChooserProps {
   items?: readonly AppChooserItem[];
   /** Menu declarations (or a built tree) to project instead of the composed runtime menu. */
   menuItems?: readonly ChromeMenuItem[] | MenuTree;
+  /** Called as the chooser opens, from its trigger or the keyboard. */
+  onOpen?: (() => void) | undefined;
   searchPlaceholder?: string;
   side?: PopoverPositionerProps["side"];
   sideOffset?: PopoverPositionerProps["sideOffset"];
@@ -75,6 +77,7 @@ function AppChooserBody({
   className,
   defaultOpen = false,
   items,
+  onOpen,
   searchPlaceholder,
   side = "right",
   sideOffset = 8,
@@ -107,7 +110,10 @@ function AppChooserBody({
     : resolvedItems.find((item) => pathMatchesTarget(pathname, item.to))?.id);
 
   return (
-    <PopoverRoot open={open} onOpenChange={setOpen}>
+    <PopoverRoot open={open} onOpenChange={(next) => {
+      setOpen(next);
+      if (next) onOpen?.();
+    }}>
       <Tooltip label={resolvedTriggerLabel} side={side}>
         <PopoverTrigger
           aria-label={resolvedTriggerLabel}

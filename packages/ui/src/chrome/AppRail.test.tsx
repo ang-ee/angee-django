@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -12,8 +12,8 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppRuntimeProvider, type AppRuntime } from "../runtime";
-import { AppRail } from "./AppRail";
+import { AppRuntimeProvider } from "../runtime";
+import { AppRail, type AppRailProps } from "./AppRail";
 import { AppMenu } from "./AppMenu";
 import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 import { ChromePlaceProvider } from "./refine-menu";
@@ -119,7 +119,7 @@ describe("AppRail intermediate navigation", () => {
     ["brand", "Projects", true],
   ])("icon-only %s tooltip supplements the link's accessible name", async (_kind, label, confined) => {
     media.large = false;
-    renderRail({}, confined);
+    renderRail({ confined });
     const link = await screen.findByRole("link", { name: label });
     fireEvent.mouseEnter(link);
     fireEvent.mouseMove(link);
@@ -131,13 +131,18 @@ describe("AppRail intermediate navigation", () => {
     expect(screen.getAllByText(tooltipText)).toHaveLength(1);
   });
 
-  test("expanded app, sub-app, shortcut and Settings links have no supplementary name tooltips", async () => {
+  test("expanded sub-app, shortcut and Settings links have no supplementary name tooltips; app roots keep only their hint", async () => {
     media.large = true;
     renderRail();
-    for (const label of ["Projects", "Desk", "Saved project", "Settings"]) {
+    for (const label of ["Desk", "Saved project", "Settings"]) {
       const link = await screen.findByRole("link", { name: label });
       expect(link.hasAttribute("data-base-ui-tooltip-trigger")).toBe(false);
     }
+    const projects = screen.getByRole("link", { name: "Projects" });
+    fireEvent.mouseEnter(projects);
+    fireEvent.mouseMove(projects);
+    const hint = await screen.findByText("Projects — drag to reorder; long press to set as default");
+    expect(hint.closest("[data-base-ui-portal]")).toBeTruthy();
   });
 
   test.each([
@@ -147,9 +152,9 @@ describe("AppRail intermediate navigation", () => {
     ["Projects", "projects", true, false],
   ])("icon tooltips retain %s and hints before developer description %s (confined: %s, default: %s)", async (label, id, confined, defaultApp) => {
     media.large = false;
-    renderRail({ userPreferences: { available: true, preferences: {
+    renderRail({ confined, preferences: {
       developerMode: true, "chrome.rail": { defaultItemId: defaultApp ? "projects" : null },
-    }, patchPreferences: async () => undefined } }, confined);
+    } });
     const link = await screen.findByRole("link", { name: label });
     fireEvent.mouseEnter(link);
     fireEvent.mouseMove(link);
@@ -347,19 +352,199 @@ describe("AppRail intermediate navigation", () => {
   });
 });
 
-function renderRail(runtime: Partial<AppRuntime> = {}, confined = false) {
+describe("AppRail order, default app and chooser", () => {
+  test.each([false, true])("dragging a root reorders the shared rail order without navigating (expanded: %s)", async (expanded) => {
+    media.large = expanded;
+    const { preferences, router } = renderRail();
+    const notes = await screen.findByRole("link", { name: "Notes" });
+    layOutRailRows();
+    dragRailLink(notes, -40);
+    expect(fireEvent.click(notes)).toBe(false);
+    expect(router.state.location.pathname).toBe("/projects");
+    expect(railPreferences(preferences()).order).toEqual(["notes", "projects", "help"]);
+    expect(rootLabels()).toEqual(["Notes", "Projects", "Help"]);
+  });
+
+  test.each([false, true])("long press sets the default app without navigating or toggling (expanded: %s)", async (expanded) => {
+    media.large = expanded;
+    const { preferences, router } = renderRail();
+    const notes = await screen.findByRole("link", { name: "Notes" });
+    expect(notes.querySelector(".bg-success")).toBeNull();
+    longPressRailLink(notes);
+    expect(fireEvent.click(notes)).toBe(false);
+    expect(router.state.location.pathname).toBe("/projects");
+    expect(railPreferences(preferences()).defaultItemId).toBe("notes");
+    expect(notes.querySelector(".bg-success")).toBeTruthy();
+    fireEvent.mouseEnter(notes);
+    fireEvent.mouseMove(notes);
+    expect(await screen.findByText("Notes — default app; drag to reorder")).toBeTruthy();
+  });
+
+  test.each([false, true])("Alt+Arrow moves a root through the shared rail order (expanded: %s)", async (expanded) => {
+    media.large = expanded;
+    const { preferences } = renderRail();
+    const projects = await screen.findByRole("link", { name: "Projects" });
+    fireEvent.keyDown(projects, { key: "ArrowDown" });
+    fireEvent.keyDown(projects, { key: "ArrowUp", altKey: true });
+    expect(preferences()["chrome.rail"]).toBeUndefined();
+    fireEvent.keyDown(projects, { key: "ArrowDown", altKey: true });
+    expect(railPreferences(preferences()).order).toEqual(["notes", "projects", "help"]);
+    expect(rootLabels()).toEqual(["Notes", "Projects", "Help"]);
+  });
+
+  test("a dragged tree root carries its open panel, and the icon rail shows the new order", async () => {
+    media.large = true;
+    const { preferences } = renderRail();
+    const projects = await screen.findByRole("link", { name: "Projects" });
+    layOutRailRows();
+    dragRailLink(projects, 80);
+    expect(fireEvent.click(projects)).toBe(false);
+    expect(railPreferences(preferences()).order).toEqual(["notes", "help", "projects"]);
+    expect(navLinkLabels()).toEqual(["Notes", "Help", "Projects", "Desk", "Saved project"]);
+    // dnd-kit keeps stopping document clicks for 50ms after a drop.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    fireEvent.click(screen.getAllByRole("button", { name: "Collapse app navigation" })[0]!);
+    await screen.findByRole("button", { name: "Expand app navigation" });
+    expect(rootLabels()).toEqual(["Notes", "Help", "Projects"]);
+  });
+
+  test("tree sub-apps and disclosures stay plain links and buttons", async () => {
+    media.large = true;
+    const { preferences } = renderRail();
+    const desk = await screen.findByRole("link", { name: "Desk" });
+    longPressRailLink(desk);
+    fireEvent.keyDown(desk, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Collapse Projects" }), { key: "ArrowDown", altKey: true });
+    expect(preferences()["chrome.rail"]).toBeUndefined();
+    expect(desk.getAttribute("draggable")).toBeNull();
+    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("draggable")).toBe("false");
+  });
+
+  test.each(["settings", "flat", "drawer"] as const)("the %s tree is not sortable", async (kind) => {
+    media.large = kind !== "drawer";
+    const { preferences, router } = renderRail({ confined: kind === "flat", presentation: kind === "drawer" ? "drawer" : "rail" });
+    if (kind === "settings") await router.navigate({ to: "/settings" });
+    const link = await screen.findByRole("link", { name: { settings: "Platform", flat: "Desk", drawer: "Notes" }[kind] });
+    longPressRailLink(link);
+    fireEvent.keyDown(link, { key: "ArrowUp", altKey: true });
+    expect(preferences()["chrome.rail"]).toBeUndefined();
+    expect(link.getAttribute("draggable")).toBeNull();
+    expect(link.hasAttribute("data-base-ui-tooltip-trigger")).toBe(false);
+  });
+
+  test("developer-mode hidden roots move with the order but never become the default", async () => {
+    media.large = true;
+    const { preferences } = renderRail({
+      menuItems: [...menuItems, { id: "archive", label: "Archive", appRoot: true, hidden: true, to: "/archive" }],
+      preferences: { developerMode: true },
+    });
+    const archive = await screen.findByRole("link", { name: "Archive (hidden)" });
+    fireEvent.keyDown(archive, { key: "ArrowUp", altKey: true });
+    expect(railPreferences(preferences()).order).toEqual(["projects", "notes", "archive", "help"]);
+    longPressRailLink(archive);
+    expect(fireEvent.click(archive)).toBe(false);
+    expect(railPreferences(preferences()).defaultItemId).toBeNull();
+    const projects = screen.getByRole("link", { name: "Projects" });
+    fireEvent.mouseEnter(projects);
+    fireEvent.mouseMove(projects);
+    expect(await screen.findByText("Projects — drag to reorder; long press to set as default · projects")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "Collapse app navigation" })[0]!);
+    await screen.findByRole("button", { name: "Expand app navigation" });
+    expect(rootLabels()).toEqual(["Projects", "Notes", "Help"]);
+  });
+
+  test("opening the app chooser expands a collapsed desktop rail and never collapses it", async () => {
+    media.large = true;
+    const { preferences } = renderRail({ preferences: { "chrome.rail": { order: [], defaultItemId: null, expanded: false } } });
+    expect(await screen.findByRole("button", { name: "Expand app navigation" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch app" }));
+    expect(await screen.findByRole("dialog", { name: "Switch app" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Collapse app navigation" })).toHaveLength(2);
+    expect(railPreferences(preferences()).expanded).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Close app chooser" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Switch app" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Switch app" }));
+    expect(await screen.findByRole("dialog", { name: "Switch app" })).toBeTruthy();
+    expect(railPreferences(preferences()).expanded).toBe(true);
+    expect(screen.getAllByRole("button", { name: "Collapse app navigation" })).toHaveLength(2);
+  });
+
+  test.each(["rail", "drawer"] as const)("opening the app chooser leaves a %s that cannot expand alone", async (presentation) => {
+    media.large = false;
+    const { preferences } = renderRail({ presentation });
+    fireEvent.click(await screen.findByRole("button", { name: "Switch app" }));
+    expect(await screen.findByRole("dialog", { name: "Switch app" })).toBeTruthy();
+    expect(preferences()["chrome.rail"]).toBeUndefined();
+  });
+});
+
+/** The primary navigation's links in display order, by accessible name. */
+function navLinkLabels(): string[] {
+  return within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("link")
+    .map((link) => link.getAttribute("aria-label") ?? link.textContent ?? "");
+}
+
+/** The rail's app roots in display order, whichever presentation shows them. */
+function rootLabels(): string[] {
+  return navLinkLabels().filter((label) => ["Projects", "Notes", "Help"].includes(label));
+}
+
+function railPreferences(preferences: Record<string, unknown>): { order?: unknown; defaultItemId?: unknown; expanded?: unknown } {
+  return (preferences["chrome.rail"] ?? {}) as { order?: unknown; defaultItemId?: unknown; expanded?: unknown };
+}
+
+/** Lay every element out as a 32px row on a 40px pitch so dnd-kit can measure the rail's sortable rows. */
+function layOutRailRows(): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const index = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0;
+    return DOMRect.fromRect({ x: 0, y: index * 40, width: 200, height: 32 });
+  });
+}
+
+const pointer = { pointerId: 1, isPrimary: true, button: 0, clientX: 10 };
+
+function dragRailLink(link: HTMLElement, deltaY: number): void {
+  fireEvent.pointerDown(link, { ...pointer, clientY: 10 });
+  fireEvent.pointerMove(document, { ...pointer, clientY: 10 + deltaY / 2 });
+  fireEvent.pointerMove(document, { ...pointer, clientY: 10 + deltaY });
+  fireEvent.pointerUp(link, { ...pointer, clientY: 10 + deltaY });
+}
+
+/** Hold the primary pointer past the long-press delay, then release it. */
+function longPressRailLink(link: HTMLElement): void {
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerDown(link, { ...pointer, clientY: 10 });
+    act(() => { vi.advanceTimersByTime(700); });
+  } finally {
+    vi.useRealTimers();
+  }
+  fireEvent.pointerUp(link, { ...pointer, clientY: 10 });
+}
+
+function renderRail({ confined = false, preferences: initialPreferences = {}, menuItems: items = menuItems, presentation }: {
+  confined?: boolean;
+  preferences?: Record<string, unknown>;
+  menuItems?: readonly ChromeMenuItem[];
+  presentation?: AppRailProps["presentation"];
+} = {}) {
+  const saved = { current: {} as Record<string, unknown> };
   function Host() {
     const [preferences, setPreferences] = useState<Record<string, unknown>>({
       "chrome.routeShortcuts": [{ id: "saved", label: "Saved project", path: "/projects/all/1" }],
+      ...initialPreferences,
     });
+    saved.current = preferences;
     return <AppRuntimeProvider runtime={{
       ...(confined ? { confineTo: "projects" } : {}),
       userPreferences: { available: true, preferences, patchPreferences: async (patch) => setPreferences(patch) },
-      ...runtime,
-    }}><AppRail menuItems={confined ? MenuTree.from(menuItems).confineTo("projects").roots : menuItems} /></AppRuntimeProvider>;
+    }}><AppRail menuItems={confined ? MenuTree.from(items).confineTo("projects").roots : items} presentation={presentation} /></AppRuntimeProvider>;
   }
   const root = createRootRoute({ component: Host });
-  const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/projects" })]),
+  const router = createRouter({ routeTree: root.addChildren(["/projects", "/settings"].map((path) =>
+    createRoute({ getParentRoute: () => root, path }))),
     history: createMemoryHistory({ initialEntries: ["/projects"] }) });
   render(<RouterProvider router={router} />);
+  return { preferences: () => saved.current, router };
 }
+

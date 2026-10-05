@@ -1223,7 +1223,11 @@ Hard-won traps — the wise learn from others' mistakes
   when no entries fit, More holds them all and is marked current when it holds
   the current page. A route-less menu with one child is the same link in the row
   and in More. Icon-only rail links show supplementary name tooltips; developer
-  descriptions follow the name.
+  descriptions follow the name. Both rail modes compose
+  [`RailSortable`](../../packages/ui/src/chrome/RailSortable.tsx) for the app
+  roots: dragging a root's link or Alt+Arrow reorders the one persisted rail
+  order, a long press makes it the default app, and the root's tooltip gives
+  that hint. The Settings, single-app and drawer trees stay plain.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
   `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
   contributes to the shared **Settings place** in every console: the rail and
@@ -1231,7 +1235,8 @@ Hard-won traps — the wise learn from others' mistakes
   the platform tree with a back header. Settings and the expansion toggle sit
   below the scrolling list, and the rail is viewport-sticky so both remain
   reachable. The expanded desktop
-  header also composes the same expansion toggle. At desktop widths, a
+  header also composes the same expansion toggle, and opening the rail's app
+  chooser expands a collapsed desktop rail. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
   a root with visible included apps opens those sub-apps temporarily in the

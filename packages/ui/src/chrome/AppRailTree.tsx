@@ -3,6 +3,7 @@ import { useLinkProps, useRouterState } from "@tanstack/react-router";
 
 import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT, type UiTranslate } from "../i18n";
+import { cn } from "../lib/cn";
 import { toneGlyph } from "../lib/tones";
 import { tv } from "../lib/variants";
 import { barVariants } from "../layouts/bar";
@@ -14,6 +15,13 @@ import { railLinkToggleProps } from "./app-rail-model";
 import { useDeveloperRail, type DeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuNode } from "./menu-tree";
+import {
+  RailDefaultMark,
+  RailSortable,
+  useRailSortableItem,
+  type RailSortableItem,
+  type RailSorting,
+} from "./RailSortable";
 import { useOptionalChromePlace } from "./refine-menu";
 
 const ActiveMenuItemContext = createContext<{ selected?: string; page?: string }>({});
@@ -69,6 +77,8 @@ export interface AppRailTreeProps {
   defaultOpenRootId?: string | null;
   /** The rail collapse toggle, fired by a second activation of the current page's link. */
   onActiveToggle?: (() => void) | undefined;
+  /** Reorder the app roots and set the default app; the Settings and flat trees stay plain. */
+  sorting?: RailSorting | undefined;
 }
 
 /** Accordion navigation rendered as the expanded state of the app rail. */
@@ -83,6 +93,7 @@ export function AppRailTree({
   pageId,
   defaultOpenRootId = activeRootId,
   onActiveToggle,
+  sorting,
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
   const rail = useDeveloperRail();
@@ -95,6 +106,19 @@ export function AppRailTree({
   const idPrefix = `app-rail-${useId().replaceAll(":", "")}`;
   const styles = appRailTreeVariants();
   const [onlyRoot] = roots;
+  const rootSorting = scope === "apps" && !flat ? sorting : undefined;
+  const Root = rootSorting ? SortableRootMenuItem : RootMenuItem;
+  const rootItems = roots.map((item) => (
+    <Root
+      key={item.id}
+      idPrefix={idPrefix}
+      item={item}
+      open={openRootId === item.id}
+      pathname={pathname}
+      styles={styles}
+      onActiveToggle={onActiveToggle}
+    />
+  ));
 
   return (
     <DeveloperRailContext.Provider value={rail}>
@@ -128,17 +152,7 @@ export function AppRailTree({
               setOpenRootId(String(value[0] ?? "") || null);
             }}
           >
-            {roots.map((item) => (
-              <RootMenuItem
-                key={item.id}
-                idPrefix={idPrefix}
-                item={item}
-                open={openRootId === item.id}
-                pathname={pathname}
-                styles={styles}
-                onActiveToggle={onActiveToggle}
-              />
-            ))}
+            {rootSorting ? <RailSortable items={roots} {...rootSorting}>{rootItems}</RailSortable> : rootItems}
           </Accordion.Root>}
           {scope === "apps" && !flat ? <RemovedMenuItems parentId={null} styles={styles} /> : null}
         </div>
@@ -186,6 +200,22 @@ function useDerivedOverride<T>(
 
 type AppRailTreeStyles = ReturnType<typeof appRailTreeVariants>;
 
+interface RootMenuItemProps {
+  idPrefix: string;
+  item: ChromeMenuNode;
+  open: boolean;
+  pathname: string;
+  styles: AppRailTreeStyles;
+  onActiveToggle?: (() => void) | undefined;
+}
+
+/** An app root of the enclosing `RailSortable`: its link moves the whole item, open panel included. */
+function SortableRootMenuItem(props: RootMenuItemProps): ReactElement | null {
+  const rail = useRail();
+  const sortable = useRailSortableItem(props.item, rail.label(props.item), rail.describe(props.item));
+  return <RootMenuItem {...props} sortable={sortable} />;
+}
+
 function RootMenuItem({
   idPrefix,
   item,
@@ -193,41 +223,31 @@ function RootMenuItem({
   pathname,
   styles,
   onActiveToggle,
-}: {
-  idPrefix: string;
-  item: ChromeMenuNode;
-  open: boolean;
-  pathname: string;
-  styles: AppRailTreeStyles;
-  onActiveToggle?: (() => void) | undefined;
-}): ReactElement | null {
+  sortable,
+}: RootMenuItemProps & { sortable?: RailSortableItem }): ReactElement | null {
   const t = useUiT();
   const rail = useRail();
   if (!item.target) return null;
   const children = rail.apps(item);
+  const link = (
+    <MenuLink
+      item={item}
+      pathname={pathname}
+      styles={styles}
+      onActiveToggle={onActiveToggle}
+      sortable={sortable}
+    />
+  );
+  const rootItemClassName = styles.rootItem({ className: sortable?.node.className });
   if (!children.length && !rail.removedUnder(item.id).some((node) => node.app)) {
-    return (
-      <div className={styles.rootItem()}>
-        <MenuLink
-          item={item}
-          pathname={pathname}
-          styles={styles}
-          onActiveToggle={onActiveToggle}
-        />
-      </div>
-    );
+    return <div {...sortable?.node} className={rootItemClassName}>{link}</div>;
   }
   const panelId = menuPanelId(idPrefix, item.id);
   const accessibleLabel = menuItemAccessibleLabel(t, item, rail.label(item));
   return (
-    <Accordion.Item value={item.id} className={styles.rootItem()}>
+    <Accordion.Item {...sortable?.node} value={item.id} className={rootItemClassName}>
       <Accordion.Header className={styles.row()}>
-        <MenuLink
-          item={item}
-          pathname={pathname}
-          styles={styles}
-          onActiveToggle={onActiveToggle}
-        />
+        {link}
         <Accordion.Trigger
           aria-controls={panelId}
           aria-label={t(open ? "chrome.collapseItem" : "chrome.expandItem", {
@@ -284,11 +304,13 @@ function MenuLink({
   pathname,
   styles,
   onActiveToggle,
+  sortable,
 }: {
   item: ChromeMenuNode;
   pathname: string;
   styles: AppRailTreeStyles;
   onActiveToggle?: (() => void) | undefined;
+  sortable?: RailSortableItem | undefined;
 }): ReactElement | null {
   const active = useContext(ActiveMenuItemContext);
   const rail = useRail();
@@ -301,16 +323,18 @@ function MenuLink({
   });
   if (!item.target) return null;
   return (
-    <Tooltip label={rail.describe(item)} side="right">
+    <Tooltip label={sortable ? sortable.tooltip : rail.describe(item)} side="right">
       <a
         {...linkProps}
+        {...sortable?.link}
         aria-current={current ? (active.page === item.id ? "page" : "true") : undefined}
         data-current={current}
         data-status={undefined}
-        className={styles.link()}
+        className={styles.link({ className: sortable?.link.className })}
       >
-        <span className={item.tone ? toneGlyph(item.tone) : undefined}>
+        <span className={cn("relative", item.tone && toneGlyph(item.tone))}>
           <Glyph name={item.iconName} fallbackName="help" size={14} aria-hidden="true" />
+          {sortable?.defaultApp ? <RailDefaultMark className="-bottom-0.5 -right-0.5" /> : null}
         </span>
         <span className="min-w-0 flex-1 truncate">{rail.label(item)}</span>
         <MenuItemMetadata item={item} styles={styles} />
