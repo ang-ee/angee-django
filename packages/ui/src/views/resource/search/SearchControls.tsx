@@ -26,16 +26,22 @@ export function SearchControls({ search, shortcuts, box = true, narrow = false }
 }): React.ReactElement {
   const t = useUiT();
   const reported = React.useRef(new Set<string>()).current;
-  const availableShortcuts = React.useMemo(() => validateSearchShortcutCatalog(shortcuts, search.catalog, { reported }), [shortcuts, search.catalog, reported]);
+  const availableShortcuts = React.useMemo(() => validateSearchShortcutCatalog(shortcuts, search.catalog, {
+    query: search.catalog.query, renderItem: search.catalog.renderItem, reported,
+  }), [shortcuts, search.catalog, reported]);
   const pinned = search.catalog.favorites.filter((favorite) => favorite.pinned);
-  return <Toolbar.Root aria-label={t("search.shortcuts")} data-search-shortcuts={availableShortcuts.length || pinned.length ? "" : undefined} className="flex flex-1 flex-wrap gap-2">
+  const mode = narrow ? "collapsed" : box;
+  // The host sizes the search area by what it shows: a shortcut row takes a row,
+  // the full box flexes, and the collapsed trigger alone keeps its natural width.
+  const layout = !narrow && (availableShortcuts.length || pinned.length) ? "shortcuts" : mode === "collapsed" ? "trigger" : "box";
+  return <Toolbar.Root aria-label={t("search.shortcuts")} data-search-layout={layout} className="flex flex-1 flex-wrap gap-2">
     {!narrow ? <>
       {availableShortcuts.filter(({ content }) => content.kind !== "toggle" || !pinned.some((favorite) => favorite.id === content.id))
         .map(({ id, content }) => <Shortcut key={id} search={search} shortcut={content} />)}
       {pinned.map((favorite) => <ToggleShortcut key={favorite.id} search={search} id={favorite.id} />)}
       {search.queryDirty ? <Toolbar.Button onClick={search.clearQuery}>{t("resourceToolbar.clear")}</Toolbar.Button> : null}
     </> : null}
-    <SearchBox search={search} box={narrow ? "collapsed" : box} toolbar />
+    <SearchBox search={search} box={mode} toolbar />
   </Toolbar.Root>;
 }
 

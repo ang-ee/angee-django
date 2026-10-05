@@ -324,13 +324,16 @@ export function fieldsWithMetadataDefaults(
   });
 }
 
-/** Scoped vocabulary wins over authored labels; otherwise use the title-case default. */
+/** Scoped vocabulary wins over authored labels; pass the model for filter-only predicates. */
 export function fieldLabel(
   name: string,
-  metadata: ModelFieldMetadata | undefined,
+  metadata: ModelFieldMetadata | ModelMetadata | null | undefined,
   explicit?: ReactNode,
 ): ReactNode {
-  return metadata?.label ?? explicit ?? titleCase(name);
+  const field = metadata && "fields" in metadata
+    ? metadata.fields[name] ?? metadata.fieldVocabulary?.[name]
+    : metadata;
+  return field?.label ?? explicit ?? titleCase(name);
 }
 
 /** Resolve a grouping-field label from resource metadata, then field text. */

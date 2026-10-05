@@ -1,4 +1,4 @@
-import { Fragment, createContext, createElement, useContext, useMemo, type ReactElement, type ReactNode } from "react";
+import { Fragment, createContext, createElement, useContext, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { useMenu, type TreeMenuItem } from "@refinedev/core";
 import { useRouterState } from "@tanstack/react-router";
 
@@ -50,6 +50,9 @@ interface ChromePlace {
   pathname: string;
   searchStr: string;
   match: MenuMatch | undefined;
+  railPlace: ReturnType<MenuTree["railPlace"]>;
+  /** Last committed location outside Settings, including search and hash; reloads forget it. */
+  lastAppHref: string | null;
 }
 
 const ChromePlaceContext = createContext<ChromePlace | null>(null);
@@ -73,11 +76,15 @@ function ChromePlaceOwner({ menuItems, children }: {
   const tree = useMemo(() => MenuTree.from(menuItems ?? runtimeTree), [menuItems, runtimeTree]);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const searchStr = useRouterState({ select: (state) => state.location.searchStr });
+  const href = useRouterState({ select: (state) => state.location.href });
   // Developer mode's rail lists hidden apps, so the top bar follows into them.
   const developerMode = useDeveloperMode();
   const { activeMenuId } = useAppRuntime();
   const match = useMemo(() => tree.match(pathname, searchStr, developerMode, activeMenuId ?? undefined), [tree, pathname, searchStr, developerMode, activeMenuId]);
-  const place = useMemo(() => ({ tree, pathname, searchStr, match }), [tree, pathname, searchStr, match]);
+  const railPlace = useMemo(() => tree.railPlace(match, developerMode), [tree, match, developerMode]);
+  const [lastAppHref, setLastAppHref] = useState<string | null>(null);
+  if (railPlace.scope !== "settings" && lastAppHref !== href) setLastAppHref(href);
+  const place = useMemo(() => ({ tree, pathname, searchStr, match, railPlace, lastAppHref }), [tree, pathname, searchStr, match, railPlace, lastAppHref]);
   return createElement(ChromePlaceContext.Provider, { value: place }, children);
 }
 

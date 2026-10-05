@@ -1,13 +1,16 @@
 // @vitest-environment happy-dom
 import type { ReactNode } from "react";
-import { cleanup, renderHook } from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { testDataResource } from "@angee/metadata/testing";
-import { ResourceQuery } from "@angee/metadata";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, schemaFieldMetadataWithVocabulary } from "@angee/metadata";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
 import { useSearchCatalog, searchTextFields, type UseSearchCatalogInput } from "./catalog";
 import type { SearchFacet } from "./types";
 import { developmentMode } from "../../../lib/development-mode";
+import { SearchControls } from "./SearchControls";
+import { pageSearchShortcuts } from "./shortcuts";
+import { searchFixture } from "./search-fixture.test-support";
 
 vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
 beforeEach(() => vi.mocked(developmentMode).mockReturnValue(true));
@@ -75,6 +78,26 @@ test("text defaults and shortcuts deduplicate and require iContains; null remove
   expect(catalog({ textFilterField: null, search }).text.map((item) => item.field)).toEqual(["title", "owner.name"]);
 });
 
+test.each(["Who wrote it", { label: "Who wrote it" }])("filter-only field and text shortcut labels come from vocabulary: %j", (word) => {
+  const resource = testDataResource("test.Record", { query: testResourceQuery({ fields: {
+    author_name: testQueryField("author_name", { row: null,
+      filter: { field: "author_name", scalar: "String", values: [], operators: ["exact", "iContains"] } }),
+  } }) });
+  const metadata = schemaFieldMetadataWithVocabulary(schemaFieldMetadataFromDataResources([resource]), {
+    "test.Record": { fields: { author_name: word } },
+  });
+  const modelMetadata = metadata.labels["test.Record"]!;
+  expect(modelMetadata.resource).toBe(resource);
+  expect(Object.keys(modelMetadata.fields)).toEqual([]);
+  const search = { shortcuts: [{ kind: "text", field: "author_name" }] } as const;
+  const result = catalog({ query: ResourceQuery.from(resource), modelMetadata,
+    columns: [], textFilterField: null, search });
+  expect(result.fields.find((field) => field.field === "author_name")?.label).toBe("Who wrote it");
+  expect(result.text).toEqual([{ field: "author_name", label: "Who wrote it" }]);
+  render(<SearchControls search={searchFixture({ catalog: result })} shortcuts={pageSearchShortcuts(search)} />);
+  expect(screen.getByRole("searchbox", { name: "Who wrote it" }).getAttribute("placeholder")).toBe("Who wrote it");
+});
+
 test("curated grouping preserves declared, contributed and inferred precedence", () => {
   const authored = { id: "authored", label: "Authored status", group: { field: "status" } };
   const contributed = { id: "contributed", label: "Contributed owner", group: { field: "owner" } };
@@ -118,17 +141,21 @@ test("production catalog drops invalid declared and contributed predicates and t
   vi.mocked(developmentMode).mockReturnValue(false);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   const valid = { id: "open", label: "Open", filter: { status: { exact: "open" } } };
+  const search = { shortcuts: [{ kind: "toggle", id: "setup" }, { kind: "toggle", id: "open" }] } as const;
   const result = catalog({
     filterOptions: [{ id: "setup", label: "Accepted", filter: { "stage.name": { exact: "Accepted" } } }, valid],
     contributedFilterOptions: [{ id: "contributed-invalid", label: "Missing", filter: { missing: { exact: "value" } } }],
     scalarFacets: [{ ...status, options: [...status.options,
       { id: "invalid-bucket", label: "Invalid bucket", filter: { missing: { exact: "value" } } },
     ] }],
-    search: { shortcuts: [{ kind: "toggle", id: "setup" }, { kind: "toggle", id: "open" }] },
+    search,
   });
   expect(result.filters).toEqual([valid]);
-  expect(result.shortcuts?.map((shortcut) => shortcut.id)).toEqual(["page.toggle.open"]);
   expect(result.facets.flatMap((facet) => facet.options).some((option) => option.id === "invalid-bucket")).toBe(false);
+  expect(error).toHaveBeenCalledTimes(3);
+  render(<SearchControls search={searchFixture({ catalog: result })} shortcuts={pageSearchShortcuts(search)} />);
+  expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Accepted" })).toBeNull();
   expect(error).toHaveBeenCalledTimes(4);
   expect(error).toHaveBeenCalledWith('Search shortcut "page.toggle.setup": unknown toggle id "setup".');
 });
@@ -142,11 +169,16 @@ test("development catalog fails during render with the invalid filter's identity
 test("metadata-dependent field shortcuts are omitted in production and retain valid shortcuts", () => {
   vi.mocked(developmentMode).mockReturnValue(false);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
-  const result = catalog({ search: { shortcuts: [
+  const search = { shortcuts: [
     { kind: "clause", field: "missing" }, { kind: "text", field: "amount" },
     { kind: "facet", field: "owner" }, { kind: "text", field: "title" },
-  ] } });
-  expect(result.shortcuts?.map((shortcut) => shortcut.id)).toEqual(["page.text.title"]);
+  ] } as const;
+  const result = catalog({ search });
+  expect(error).not.toHaveBeenCalled();
+  const shortcuts = pageSearchShortcuts(search);
+  const rendered = render(<SearchControls search={searchFixture({ catalog: result })} shortcuts={shortcuts} />);
+  expect(screen.getAllByRole("searchbox").map((input) => input.getAttribute("aria-label"))).toEqual(["Title"]);
+  rendered.rerender(<SearchControls search={searchFixture({ catalog: { ...result } })} shortcuts={[...shortcuts]} />);
   expect(error).toHaveBeenCalledTimes(3);
   expect(error).toHaveBeenCalledWith('Search shortcut "page.clause.missing": field "missing" is not filterable.');
   expect(error).toHaveBeenCalledWith('Search shortcut "page.text.amount": field "amount" does not support iContains.');

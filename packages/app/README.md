@@ -111,9 +111,9 @@ An addon can specialize existing copy and declare named resource views:
 }
 ```
 
-The referenced app root, route, menu IDs, message keys and metadata fields must
-exist. Duplicate vocabulary scopes fail composition. App scope precedes route
-scope; nearer route ancestors win. Scoped field labels override
+The referenced app root, route, menu IDs, message keys and metadata fields or
+filterable predicates must exist. Duplicate vocabulary scopes fail composition.
+App scope precedes route scope; nearer route ancestors win. Scoped field labels override
 authored labels without altering wire metadata. A field may declare
 `{ label: "Priority", tones: { HIGH: "warning" } }` in place of a string label;
 the scoped map colors that field's badge, and route maps extend app maps.

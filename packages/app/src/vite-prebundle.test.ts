@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { ConfigEnv, Plugin, UserConfig } from "vite";
+import { optimizeDeps, resolveConfig, type ConfigEnv, type Plugin, type UserConfig } from "vite";
 
 import {
   angeePrebundleForce,
@@ -54,6 +55,42 @@ test("linked UI keeps the complete CodeMirror graph out of dependency optimizati
     rmSync(webRoot, { recursive: true, force: true });
   }
 });
+
+test.each([false, true])("discovers linked UI dependencies across lazy boundaries at startup (prebundle: %s)", async (prebundleAngeePackages) => {
+  const webRoot = mkdtempSync(join(tmpdir(), "angee-vite-lazy-"));
+  try {
+    writeFileSync(join(webRoot, "package.json"), '{"dependencies":{"@angee/ui":"workspace:*"}}\n');
+    symlinkSync(fileURLToPath(new URL("../node_modules", import.meta.url)), join(webRoot, "node_modules"));
+    writeFileSync(join(webRoot, "index.html"), '<script type="module" src="/main.ts"></script>\n');
+    writeFileSync(join(webRoot, "main.ts"), 'import "@angee/ui"; import "react-dom/client";\n');
+    const config = await defineAngeeWebViteConfig({
+      prebundleAngeePackages,
+      gqlRuntimeDir: join(webRoot, "runtime", "gql"),
+      webRoot,
+    });
+    // Run Vite's native scanner/optimizer without a server. Scanning the UI
+    // entry directly supplies the reference graph, including its import()
+    // edges, so new lazy dependencies need no hand-maintained test inventory.
+    const scanConfig = { ...config, configFile: false as const, plugins: [], logLevel: "silent" as const };
+    const reference = await optimizeDeps(await resolveConfig({
+      ...scanConfig,
+      cacheDir: join(webRoot, "reference-cache"),
+      optimizeDeps: { ...config.optimizeDeps, entries: [fileURLToPath(new URL("../../ui/src/index.ts", import.meta.url))] },
+    }, "serve"));
+    const actual = await optimizeDeps(await resolveConfig({
+      ...scanConfig,
+      cacheDir: join(webRoot, "actual-cache"),
+    }, "serve"));
+
+    expect(Object.keys(reference.optimized)).toContain("@date-fns/tz");
+    expect(Object.keys(actual.optimized)).toEqual(expect.arrayContaining(Object.keys(reference.optimized)));
+    expect(actual.optimized["react-dom/client"]).toBeDefined();
+    expect(Object.keys(actual.optimized).some((id) => id === "codemirror" || id.startsWith("@codemirror/"))).toBe(false);
+    expect(actual.optimized["@angee/ui"]).toBeUndefined();
+  } finally {
+    rmSync(webRoot, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test("proxies the agent ACP WebSocket with the browser Origin intact", async () => {
   const webRoot = mkdtempSync(join(tmpdir(), "angee-vite-acp-"));

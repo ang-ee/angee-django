@@ -17,6 +17,7 @@ import { AppRail } from "./AppRail";
 import { AppMenu } from "./AppMenu";
 import { MenuTree, type ChromeMenuItem } from "./menu-tree";
 import { ChromePlaceProvider } from "./refine-menu";
+import { InAppLinkProvider, routerNavigator } from "../lib/in-app-link";
 
 const media = vi.hoisted(() => ({ large: false }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
@@ -60,6 +61,41 @@ const menuItems: readonly ChromeMenuItem[] = [
 ];
 
 describe("AppRail intermediate navigation", () => {
+  test.each(["rail", "drawer"] as const)("Settings Back in the %s remembers the last app's path, search and hash", async (presentation) => {
+    media.large = presentation === "rail";
+    const tree = MenuTree.from(menuItems);
+    const root = createRootRoute({ component: () => <InAppLinkProvider navigate={routerNavigator(router)}>
+      <ChromePlaceProvider menuItems={tree}><AppRail presentation={presentation} /><AppMenu /></ChromePlaceProvider>
+    </InAppLinkProvider> });
+    const router = createRouter({ routeTree: root.addChildren(["/projects/all", "/notes/all", "/settings", "/settings/apps"].map((path) =>
+      createRoute({ getParentRoute: () => root, path, validateSearch: (search) => search }))),
+      history: createMemoryHistory({ initialEntries: ["/projects/all?preset=open#record"] }) });
+    render(<RouterProvider router={router} />);
+    await screen.findByRole("navigation", { name: "Primary navigation" });
+    await router.navigate({ to: "/settings" });
+    const back = await screen.findByRole("link", { name: "Back" });
+    expect(back.getAttribute("href")).toBe("/projects/all?preset=open#record");
+    await router.navigate({ to: "/settings/apps" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/apps"));
+    expect(screen.getByRole("link", { name: "Back" }).getAttribute("href")).toBe("/projects/all?preset=open#record");
+    expect(fireEvent.click(back, { ctrlKey: true })).toBe(true);
+    expect(router.state.location.pathname).toBe("/settings/apps");
+    fireEvent.click(back);
+    await waitFor(() => expect(router.state.location.href).toBe("/projects/all?preset=open#record"));
+    await router.navigate({ href: "/notes/all?sort=name#top" });
+    await router.navigate({ to: "/settings/apps" });
+    expect((await screen.findByRole("link", { name: "Back" })).getAttribute("href")).toBe("/notes/all?sort=name#top");
+  });
+
+  test.each(["rail", "drawer"] as const)("a direct Settings load in the %s gives Back the home fallback", async (presentation) => {
+    media.large = presentation === "rail";
+    const root = createRootRoute({ component: () => <AppRail menuItems={menuItems} presentation={presentation} /> });
+    const router = createRouter({ routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/settings/apps" })]),
+      history: createMemoryHistory({ initialEntries: ["/settings/apps"] }) });
+    render(<RouterProvider router={router} />);
+    expect((await screen.findByRole("link", { name: "Back" })).getAttribute("href")).toBe("/");
+  });
+
   test("the top collapse toggle shares the footer control and disappears in icon mode", async () => {
     media.large = true;
     renderRail();

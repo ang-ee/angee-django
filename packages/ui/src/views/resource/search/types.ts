@@ -1,12 +1,10 @@
 import type { ReactNode } from "react";
-import type { GroupSpec, QueryFilter } from "@angee/metadata";
+import type { GroupSpec, QueryFilter, ResourceQuery } from "@angee/metadata";
 import type { FilterClause, FilterClauseField, FilterClauseOperator } from "../../../toolbars/FilterClauseEditor";
 import type { ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars/ResourceToolbar";
 import type { ResourceViewFavorite } from "../resource-view-model";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { RelationFieldInfo } from "../model-metadata-defaults";
-import type { ComposedContainerChild } from "../../../runtime/containers";
-import type { SearchShortcut } from "./shortcuts";
 
 /** A bucket keeps its executable predicate, including the valueless blank bucket. */
 export interface SearchFacetOption {
@@ -29,8 +27,10 @@ export interface SearchFacet {
 }
 
 export interface SearchCatalog {
-  /** The catalog owner's validated container projection, when it resolves shortcuts. */
-  shortcuts?: readonly ComposedContainerChild<SearchShortcut>[];
+  /** Executable capabilities behind the choices, when built from a resource query. */
+  query?: ResourceQuery;
+  /** A custom item renderer cannot offer grouping, even when the query has axes. */
+  renderItem?: boolean;
   text: readonly { field: string; label: ReactNode }[];
   filters: readonly ResourceToolbarFilterOption[];
   facets: readonly SearchFacet[];

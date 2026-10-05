@@ -41,7 +41,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  useNavigate,
+  redirect,
   useRouterState,
 } from "@tanstack/react-router";
 import {
@@ -87,7 +87,6 @@ import {
   resolveMenuRouteTargets,
   type ChromeMenuItem,
 } from "@angee/ui/chrome/menu-tree";
-import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
 import { enUiBundle } from "@angee/ui/i18n";
 import { defaultWidgets } from "@angee/ui/widgets/index";
 import type { ThemeContribution } from "@angee/ui/theme";
@@ -110,11 +109,11 @@ import {
   UserPreferencesProvider,
   createAngeeAuthProvider,
   identityQueryOptions,
-  useAuth,
   useLogoutAction,
   useRuntimeAuthState,
   useUserPreferences,
   type AuthState,
+  type UserPreferences,
 } from "./providers/auth";
 import { createViewAsProvider, useViewAsState, type ViewAsProvider } from "./providers/view-as";
 import {
@@ -134,10 +133,11 @@ import { developmentMode } from "@angee/ui/lib/development-mode";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
   compareCodePoint,
+  authRouteError,
   createAddonRouteNodes,
   createLayoutRoutes,
-  layoutAuthGuard,
   layoutNamesForRoutes,
+  loadRouteIdentity,
 } from "./route-tree";
 
 export {
@@ -467,8 +467,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     refineResourceRegistry,
   );
   const declaredHome = homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined;
-  // Where a person without preferences lands; also where an unavailable page sends them.
-  const home = landingTarget(navigationTree, {}, declaredHome) ?? "/";
+  // Where a person without preferences lands; also where an unavailable page sends them. A host with
+  // routes but no rail (a minimal test host) still lands on its first page.
+  const home = landingTarget(navigationTree, {}, declaredHome)
+    ?? routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path
+    ?? "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
     ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
@@ -578,9 +581,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    // `/` signs in like the default layout, so a signed-out visit returns here after login.
-    ...layoutAuthGuard("console", input.layouts, refineAuthProvider, queryClient, loginPath),
-    component: () => <HomeRedirect declaredHome={declaredHome} />,
+    beforeLoad: async () => {
+      const identity = await loadRouteIdentity(refineAuthProvider, queryClient);
+      // Signed out: sign in and come back here, so the landing rule runs with this person's preferences.
+      if (identity === null && (input.layouts?.console?.requireAuth ?? true)) throw redirect({ to: loginPath, search: { next: "/" } });
+      throw redirect({
+        href: homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}, declaredHome),
+        replace: true,
+      });
+    },
+    errorComponent: authRouteError(queryClient, refineAuthProvider),
   });
 
   const layoutRoutes = createLayoutRoutes({
@@ -871,22 +881,10 @@ function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
 }
 
-/** `/` waits for the person's sign-in and preferences, then lands where `landingTarget` says. */
-function HomeRedirect({ declaredHome }: { declaredHome: string | undefined }): ReactNode {
-  const { status } = useAuth();
-  const menuTree = useChromeMenuTree();
-  const { preferences } = useUserPreferences();
-  const target = landingTarget(menuTree, preferences, declaredHome);
-  return status === "resolving" || target === null ? null : <Redirect to={target} />;
-}
-
-function Redirect({ to }: { to: string }): ReactNode {
-  const navigate = useNavigate();
-  useEffect(() => {
-    // Replace `/`, so Back leaves the app instead of landing again.
-    void navigate({ href: to, replace: true });
-  }, [to, navigate]);
-  return null;
+/** Where `/` lands: the declared home inside a confined shell, otherwise `landingTarget`'s order for this person. */
+function homeTarget(fallback: string, confined: boolean, menuTree: MenuTree, preferences: UserPreferences, declaredHome: string | undefined): string {
+  if (confined) return fallback;
+  return landingTarget(menuTree, preferences, declaredHome) ?? fallback;
 }
 
 /** Base and addon namespaces have disjoint ownership. */

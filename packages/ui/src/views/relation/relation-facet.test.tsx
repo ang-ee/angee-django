@@ -53,6 +53,20 @@ beforeEach(() => {
 });
 
 describe("useRelationFacets", () => {
+  test.each([null, ""])("a missing relation remains No value with label key %j", (label) => {
+    dataMocks.facets.mockReturnValue(resourceFacets({
+      provider: [{ value: "", label: "Blank", count: 2,
+        key: { providerId: null, provider_Name: label } }],
+    }));
+    const { result } = renderHook(
+      () => useRelationFacets("agents.InferenceModel", [{ field: "provider" }]),
+      { wrapper: Metadata },
+    );
+    expect(result.current[0]?.options).toEqual([
+      { id: "provider:null", label: "No value", filter: { provider: { isNull: true } } },
+    ]);
+  });
+
   test("builds declared list facets in one model query", () => {
     const { result } = renderHook(
       () =>
@@ -179,16 +193,21 @@ describe("useRelationFacets", () => {
 
   test("labels an explicit enum facet from field metadata instead of the raw bucket", () => {
     dataMocks.facets.mockReturnValue(resourceFacets({
-      status: [{ value: "draft", label: "DRAFT", count: 1, key: { status: "draft" } }],
+      status: [
+        { value: "draft", label: "DRAFT", count: 1, key: { status: "draft" } },
+        { value: "BLANK", label: "No value", count: 2, key: { status: "BLANK" } },
+        { value: "", label: "Blank", count: 3, key: { status: null } },
+      ],
     }));
     const { result } = renderHook(
       () => useRelationFacets("agents.InferenceModel", [{ field: "status" }]),
       { wrapper: Metadata },
     );
-    expect(result.current.flatMap((facet) => facet.options)).toEqual([{
-      id: 'status:"DRAFT"', label: "Draft",
-      filter: { status: { exact: "DRAFT" } }, value: "DRAFT",
-    }]);
+    expect(result.current.flatMap((facet) => facet.options)).toEqual([
+      { id: 'status:"DRAFT"', label: "Draft", filter: { status: { exact: "DRAFT" } }, value: "DRAFT" },
+      { id: 'status:""', label: "Blank", filter: { status: { exact: "" } }, value: "" },
+      { id: "status:null", label: "No value", filter: { status: { isNull: true } } },
+    ]);
     expect(result.current[0]?.options[0]?.value).toBe("DRAFT");
   });
 
@@ -215,7 +234,7 @@ describe("useRelationFacets", () => {
 
 const query = ResourceQuery.forRows({ fields: {
   id: { scalar: "ID" }, name: { scalar: "String" },
-  status: { kind: "enum", values: [{ value: "DRAFT", description: "Draft" }] },
+  status: { kind: "enum", values: [{ value: "DRAFT", description: "Draft" }, { value: "" }] },
   provider: { kind: "relation", identityPath: "provider.id", labelPath: "provider.name" },
   publisher: { kind: "relation", identityPath: "publisher.id", labelPath: "publisher.name" },
 } }).contract;
@@ -226,15 +245,15 @@ for (const field of ["provider", "publisher"]) {
   };
   query.axes[field]!.drill = { kind: "identity", field, valueKey: key, nullMode: "isNull", valueMap: [] };
 }
-query.axes.status!.server = { input: "STATUS", key: "status" };
-query.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap: [{ from: "draft", to: "DRAFT" }] };
+query.axes.status!.server = { input: "STATUS", key: "status", valueMap: [{ from: "BLANK", to: "" }] };
+query.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap: [{ from: "draft", to: "DRAFT" }, { from: "BLANK", to: "" }] };
 query.fields.status!.filter!.valueMap = [{ from: "DRAFT", to: "draft" }];
 const METADATA = schemaFieldMetadataFromDataResources([testDataResource("agents.InferenceModel", {
   roots: { groups: "inference_models_groups" }, query,
   fields: ["name", "provider", "publisher", "status"].map((name) => ({ name,
     kind: name === "name" ? "scalar" as const : name === "status" ? "enum" as const : "relation" as const,
     scalar: name === "name" ? "String" : name === "status" ? "Enum" : "ID",
-    ...(name === "status" ? { values: [{ value: "DRAFT", description: "Draft" }] } : {}),
+    ...(name === "status" ? { values: query.fields.status!.values } : {}),
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   })),
 })]);

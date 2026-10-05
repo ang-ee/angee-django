@@ -78,6 +78,52 @@ test("Backspace removes the last chip and Delete removes the focused chip withou
   expect(screen.getByRole("button", { name: "Remove Open" })).toBeTruthy();
 });
 
+test("chips that do not fit collapse into +N on one line, and the panel lists and removes every active item", async () => {
+  // happy-dom has no layout: the chip row is 450px wide and every intrinsic copy
+  // (each chip, the input's minimum width and "+N") is 100px.
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    return { width: this.matches('[aria-label="Active search"]') ? 450 : this.closest("[inert]") ? 100 : 0 } as DOMRect;
+  });
+  const active = ["discord", "email", "imessage", "signal", "telegram", "whatsapp"].map((value) => ({
+    id: `filter:platform:${value}` as const, kind: "filter" as const, label: `Platforms: ${value}`,
+  }));
+  const search = searchFixture({ active });
+  render(<SearchBox search={search} />);
+  const row = screen.getByRole("toolbar", { name: "Active search" });
+  // Two chips and the input fit beside "+N"; together they account for every item.
+  const visible = within(row).getAllByRole("button", { name: /^Remove / });
+  expect(visible.map((button) => button.getAttribute("aria-label"))).toEqual(["Remove Platforms: discord", "Remove Platforms: email"]);
+  const more = within(row).getByRole("button", { name: "+4 more active items" });
+  expect(more.textContent).toBe("+4");
+  expect(more.tabIndex).toBe(0);
+  expect(visible.length + 4).toBe(active.length);
+  expect(row.className).toContain("flex-nowrap");
+  expect(row.className).not.toMatch(/(^|\s)flex-wrap(\s|$)/);
+  expect(within(row).getByRole("combobox", { name: "Filter records" })).toBeTruthy();
+  // A truncating chip keeps its full text as its name and title.
+  const chip = visible[0]!.parentElement!;
+  expect(chip.getAttribute("aria-label")).toBe("Platforms: discord");
+  expect(chip.getAttribute("title")).toBe("Platforms: discord");
+  // Visible chips are a prefix of the combobox value: Backspace removes the last
+  // visible chip, and Delete removes the focused one.
+  const input = within(row).getByRole("combobox", { name: "Filter records" });
+  input.focus();
+  fireEvent.keyDown(input, { key: "Backspace" });
+  expect(search.clear).toHaveBeenLastCalledWith("filter:platform:email");
+  fireEvent.keyDown(input, { key: "ArrowLeft" });
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(chip);
+  fireEvent.keyDown(chip, { key: "Delete" });
+  expect(search.clear).toHaveBeenLastCalledWith("filter:platform:discord");
+  // "+N" opens the panel, which lists every active item for removal.
+  fireEvent.click(more);
+  const panel = await screen.findByRole("dialog", { name: "Search options" });
+  const listed = within(within(panel).getByRole("region", { name: "Active search" })).getAllByRole("button");
+  expect(listed.map((button) => button.getAttribute("aria-label"))).toEqual(active.map((item) => `Remove ${item.label}`));
+  fireEvent.click(listed[5]!);
+  expect(search.clear).toHaveBeenLastCalledWith("filter:platform:whatsapp");
+});
+
 test("collapsed mode counts all items and opens the chips, input and panel with focus", async () => {
   const search = searchFixture({ active: [
     { id: "text:title", kind: "text", field: "title", label: "Title", value: "ab" },

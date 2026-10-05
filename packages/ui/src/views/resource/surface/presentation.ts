@@ -182,7 +182,6 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
         : rowGroupsFromTableRows(
             groupedRowModels,
             rowGroupStack,
-            t("list.emptyValue"),
             t,
           ),
     [rowModels, groupedRowModels, rowGroupStack, boardLaneState, t],

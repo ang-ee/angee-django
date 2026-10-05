@@ -119,7 +119,6 @@ export function leafTableRows<TRow extends Row>(
 export function rowGroupsFromTableRows<TRow extends Row>(
   rows: readonly TableRowModel<TRow>[],
   groupStack: readonly ResourceViewGroup[],
-  emptyValueLabel: string,
   t: UiTranslate,
 ): readonly RowGroup<TRow>[] {
   if (groupStack.length === 0) {
@@ -132,17 +131,16 @@ export function rowGroupsFromTableRows<TRow extends Row>(
       children: [],
     }];
   }
-  return rows.map((row) => rowGroupFromTableRow(row, [], groupStack, emptyValueLabel, t));
+  return rows.map((row) => rowGroupFromTableRow(row, [], groupStack, t));
 }
 
 function rowGroupFromTableRow<TRow extends Row>(
   row: TableRowModel<TRow>,
   parentPath: readonly string[],
   groupStack: readonly ResourceViewGroup[],
-  emptyValueLabel: string,
   t: UiTranslate,
 ): RowGroup<TRow> {
-  const label = groupedRowLabel(row, groupStack, emptyValueLabel, t);
+  const label = groupedRowLabel(row, groupStack, t);
   const path = [...parentPath, label];
   const children = row.subRows.filter((child) => child.getIsGrouped());
   return {
@@ -152,7 +150,7 @@ function rowGroupFromTableRow<TRow extends Row>(
     depth: row.depth,
     rows: leafTableRows(row.subRows),
     children: children.map((child) =>
-      rowGroupFromTableRow(child, path, groupStack, emptyValueLabel, t),
+      rowGroupFromTableRow(child, path, groupStack, t),
     ),
   };
 }

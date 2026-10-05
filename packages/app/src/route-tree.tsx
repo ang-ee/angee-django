@@ -228,19 +228,23 @@ export function layoutAuthGuard(
     : {};
 }
 
+/** Read route identity through the shared cache and the route's session failure policy. */
+export async function loadRouteIdentity(authProvider: RefineAuthProvider, queryClient: QueryClient) {
+  try {
+    return await queryClient.ensureQueryData(identityQueryOptions(authProvider));
+  } catch (error) {
+    if (!isUnauthorizedError(error)) throw new AuthIdentityCheckError();
+    return null;
+  }
+}
+
 export function authBeforeLoad(
   authProvider: RefineAuthProvider,
   queryClient: QueryClient,
   loginPath: string,
 ) {
   return async ({ location }: { location: { href: string } }): Promise<void> => {
-    let identity;
-    try {
-      identity = await queryClient.ensureQueryData(identityQueryOptions(authProvider));
-    } catch (error) {
-      if (!isUnauthorizedError(error)) throw new AuthIdentityCheckError();
-      identity = null;
-    }
+    const identity = await loadRouteIdentity(authProvider, queryClient);
     if (identity) return;
     throw redirect({
       to: loginPath,

@@ -2,7 +2,7 @@ import { parse } from "graphql";
 // @vitest-environment happy-dom
 
 import { createElement, useEffect, type ReactNode } from "react";
-import { cleanup, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
 import { useAuthoredQuery } from "@angee/refine";
@@ -14,6 +14,7 @@ import {
   useResourceRecordHrefLookup,
   useResourceRoute,
   useRouteHref,
+  HOME_PATH_PREFERENCE_KEY,
 } from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
 import { resourcePageRoutes } from "./define-base-addon";
@@ -1535,6 +1536,168 @@ describe("createApp route tree", () => {
       await app.router.navigate({ to: "/second" });
       await waitFor(() => expect(host.textContent).toContain("Second page"));
       expect(mounts).toBe(initialMounts);
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test.each([
+    { label: "fallback", preferences: {}, target: "/first" },
+    { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/second?tab=activity#details" }, target: "/second?tab=activity#details" },
+    { label: "default app", preferences: { "chrome.rail": { defaultItemId: "second" } }, target: "/second" },
+  ])("redirects / to the $label without remounting the layout or leaving / in history", async ({ preferences, target }) => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/first");
+    let mounts = 0;
+    function Provider({ children }: RefineLayoutChromeProps): ReactNode {
+      useEffect(() => { mounts += 1; }, []);
+      return children;
+    }
+    const identityFetch: typeof fetch = async () => Response.json({ data: {
+      current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [], preferences },
+      real_user: null, viewable_people: [],
+    } });
+    const app = createApp({
+      ...testAppInput([{
+        id: "pages",
+        layoutProviders: [{ id: "session", layout: "console", component: Provider }],
+        routes: [
+          { name: "first", path: "/first", component: () => createElement("p", null, "First page") },
+          { name: "second", path: "/second", component: () => createElement("p", null, "Second page") },
+          { name: "settings", path: "/settings", component: () => createElement("p", null, "Settings page") },
+        ],
+        menus: [{ id: "first", route: "first" }, { id: "second", route: "second" }],
+      }], { console: { chrome: TestChrome, requireAuth: true } }),
+      schemas: {
+        public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
+        console: { ...TEST_SCHEMAS.console, fetch: identityFetch },
+      },
+    });
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(host.textContent).toContain("First page"));
+      await app.router.navigate({ to: "/settings" });
+      await waitFor(() => expect(host.textContent).toContain("Settings page"));
+      const initialMounts = mounts;
+      const historyLength = app.router.history.length;
+      await app.router.navigate({ to: "/" });
+      await waitFor(() => expect(app.router.state.location.href).toBe(target));
+      await waitFor(() => expect(host.textContent).toContain(target.startsWith("/first") ? "First page" : "Second page"));
+      expect(mounts).toBe(initialMounts);
+      expect(app.router.history.length).toBe(historyLength + 1);
+      app.router.history.back();
+      await waitFor(() => expect(app.router.state.location.pathname).toBe("/settings"));
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test("a cold / waits for identity and honours homePath before rendering the fallback", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/");
+    let releaseIdentity!: () => void;
+    const identityReady = new Promise<void>((resolve) => { releaseIdentity = resolve; });
+    let identityRequested = false;
+    let fallbackRendered = false;
+    const identityFetch: typeof fetch = async () => {
+      identityRequested = true;
+      await identityReady;
+      return Response.json({ data: {
+        current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [],
+          preferences: { [HOME_PATH_PREFERENCE_KEY]: "/preferred?tab=activity#details" } },
+        real_user: null, viewable_people: [],
+      } });
+    };
+    const app = createApp({
+      ...testAppInput([{ id: "pages", routes: [
+        { name: "fallback", path: "/fallback", component: () => { fallbackRendered = true; return null; } },
+        { name: "preferred", path: "/preferred", component: () => createElement("p", null, "Preferred page") },
+      ] }]),
+      schemas: {
+        public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
+        console: { ...TEST_SCHEMAS.console, fetch: identityFetch },
+      },
+    });
+    const root = app.mount(host);
+    try {
+      const historyLength = app.router.history.length;
+      await waitFor(() => expect(identityRequested).toBe(true));
+      expect(fallbackRendered).toBe(false);
+      releaseIdentity();
+      await waitFor(() => expect(host.textContent).toContain("Preferred page"));
+      expect(app.router.state.location.href).toBe("/preferred?tab=activity#details");
+      expect(fallbackRendered).toBe(false);
+      expect(app.router.history.length).toBe(historyLength);
+    } finally {
+      releaseIdentity();
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test("a cold / still sends an authoritative 401 to the protected home's sign-in", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/");
+    const unauthorizedFetch: typeof fetch = async () => Response.json({ errors: [{ message: "Authentication required" }] }, { status: 401 });
+    const app = createApp({
+      ...testAppInput([{ id: "pages", routes: [
+        { name: "private", path: "/private", component: () => createElement("p", null, "Private page") },
+        { name: "sign-in", path: "/sign-in", layout: "public", component: () => createElement("p", null, "Sign-in page") },
+      ] }], {
+        console: { chrome: TestChrome, requireAuth: true },
+        public: { chrome: TestChrome, requireAuth: false, schema: "public" },
+      }),
+      loginPath: "/sign-in",
+      schemas: {
+        public: { ...TEST_SCHEMAS.public, fetch: unauthorizedFetch },
+        console: { ...TEST_SCHEMAS.console, fetch: unauthorizedFetch },
+      },
+    });
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(host.textContent).toContain("Sign-in page"));
+      expect(app.router.state.location.pathname).toBe("/sign-in");
+      // Back to `/` after sign-in, so the landing rule runs with the person's preferences.
+      expect(app.router.state.location.search).toEqual({ next: "/" });
+      expect(host.textContent).not.toContain("Private page");
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test("a cold / uses the session retry surface after a transient identity failure", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/");
+    let requests = 0;
+    const identityFetch: typeof fetch = async () => {
+      requests += 1;
+      if (requests === 1) throw new Error("Transient identity failure");
+      return testGraphQLFetch();
+    };
+    const app = createApp({
+      ...testAppInput([{ id: "pages", routes: [
+        { name: "home", path: "/home", component: () => createElement("p", null, "Home page") },
+      ] }]),
+      schemas: {
+        public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
+        console: { ...TEST_SCHEMAS.console, fetch: identityFetch },
+      },
+    });
+    const root = app.mount(host);
+    try {
+      await within(host).findByText("Unable to check your session");
+      expect(host.textContent).not.toContain("Transient identity failure");
+      expect(app.router.state.location.pathname).toBe("/");
+      fireEvent.click(within(host).getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(host.textContent).toContain("Home page"));
+      expect(app.router.state.location.pathname).toBe("/home");
     } finally {
       root.unmount();
       host.remove();

@@ -5,6 +5,8 @@ import { testDataResource } from "@angee/metadata/testing";
 import { bucketValueLabels, groupLabel, tableGroupAxes } from "./resource-view-list-body";
 
 const TEST_T = (key: string, vars?: Record<string, unknown>): string => {
+  if (key === "list.emptyValue") return "No value";
+  if (key === "list.blankValue") return "Blank";
   if (key === "list.quarter") return `Q${vars?.quarter} ${vars?.year}`;
   if (key === "list.weekOf") return `Week of ${vars?.date}`;
   return key;
@@ -154,7 +156,6 @@ describe("resource query grouping projections", () => {
         first,
         [{ field: "party" }],
         metadata,
-        "No value",
         TEST_T,
       ),
     ).toEqual(["Same"]);
@@ -163,7 +164,6 @@ describe("resource query grouping projections", () => {
         second,
         [{ field: "party" }],
         metadata,
-        "No value",
         TEST_T,
       ),
     ).toEqual(["Same"]);
@@ -180,7 +180,6 @@ describe("resource query grouping projections", () => {
         { key: { partyId: null, party_DisplayName: null }, count: 1 },
         [{ field: "party" }],
         metadata,
-        "No value",
         TEST_T,
         (field) => `No ${field}`,
       ),
@@ -190,7 +189,6 @@ describe("resource query grouping projections", () => {
         { key: {}, count: 1 },
         [{ field: "party" }],
         null,
-        "No value",
         TEST_T,
       ),
     ).toThrow("resource query");
@@ -198,6 +196,19 @@ describe("resource query grouping projections", () => {
 });
 
 describe("localized labels over stable identities", () => {
+  test("null and blank labels use separate translations without interpreting label text", () => {
+    const t = (key: string) => ({ "list.emptyValue": "Sin valor", "list.blankValue": "Vacío" })[key] ?? key;
+    const group = { field: "status" };
+    expect(groupLabel(null, group, metadata, t)).toBe("Sin valor");
+    expect(groupLabel("", group, metadata, t)).toBe("Vacío");
+    expect(groupLabel("No value", group, metadata, t)).toBe("No value");
+    expect(groupLabel("Blank", group, metadata, t)).toBe("Blank");
+    expect(bucketValueLabels(
+      { key: { partyId: null, party_DisplayName: null }, count: 1 },
+      [{ field: "party" }], metadata, TEST_T,
+    )).toEqual(["No value"]);
+  });
+
   test.each([
     ["quarter", "2026-Q3"],
     ["month", "2026-08"],
@@ -216,8 +227,8 @@ describe("localized labels over stable identities", () => {
     const key = query
       .group(group)
       .identity({ createdAt: "2026-08-22T12:00:00Z" });
-    expect(groupLabel(key, group, metadata, "None", TEST_T)).toBe("Q3 2026");
-    expect(groupLabel(key, group, metadata, "None", alternateT)).toBe(
+    expect(groupLabel(key, group, metadata, TEST_T)).toBe("Q3 2026");
+    expect(groupLabel(key, group, metadata, alternateT)).toBe(
       "2026 trimestre 3",
     );
     expect(
@@ -225,23 +236,22 @@ describe("localized labels over stable identities", () => {
         { key: { createdAtmonth: "2026-02-01 00:00:00+00:00" }, count: 1 },
         [{ field: "createdAt", granularity: "month" }],
         metadata,
-        "None",
         TEST_T,
       ),
     ).toEqual(["February 2026"]);
   });
   test("boolean buckets use the translated yes/no labels", () => {
     const t = (key: string) => ({ "list.yes": "Sí", "list.no": "No" })[key] ?? key;
-    expect(groupLabel(false, { field: "is_archived" }, null, "None", t)).toBe("No");
-    expect(groupLabel(true, { field: "is_archived" }, null, "None", t)).toBe("Sí");
-    expect(groupLabel("false", { field: "status" }, metadata, "None", t)).toBe("false");
+    expect(groupLabel(false, { field: "is_archived" }, null, t)).toBe("No");
+    expect(groupLabel(true, { field: "is_archived" }, null, t)).toBe("Sí");
+    expect(groupLabel("false", { field: "status" }, metadata, t)).toBe("false");
   });
   test("date-like relation labels and scalar text stay verbatim", () => {
     expect(
-      groupLabel("2026-09", { field: "party" }, metadata, "None", TEST_T),
+      groupLabel("2026-09", { field: "party" }, metadata, TEST_T),
     ).toBe("2026-09");
     expect(
-      groupLabel("CATC", { field: "party" }, metadata, "None", TEST_T),
+      groupLabel("CATC", { field: "party" }, metadata, TEST_T),
     ).toBe("CATC");
   });
   test("declared local rows use the same semantic axis without server dimensions", () => {

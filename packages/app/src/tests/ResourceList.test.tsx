@@ -859,7 +859,12 @@ function lastActiveListCall(): ResourceListOptions | undefined {
 }
 
 describe("ResourceList", () => {
-  beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
+  // A roomy toolbar whose box chips fit: the box measures its narrow inert chip copies.
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, this.closest("[inert]") ? 60 : 1024, 80);
+    });
+  });
   beforeAll(() => {
     installTestLocalStorage();
   });
@@ -2272,7 +2277,7 @@ describe("ResourceList", () => {
     // with the free-text search box's `iContains` on the same field; the chip
     // labels that distinction.
     expect(
-      await screen.findAllByText("Title contains (case-sensitive) Fir"),
+      await screen.findAllByRole("button", { name: "Remove Title contains (case-sensitive) Fir" }),
     ).toHaveLength(1);
   });
 
