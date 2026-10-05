@@ -66,6 +66,7 @@ interface AngeePackageSets {
   all: string[];
   built: string[];
   source: string[];
+  entries: string[];
 }
 
 // CodeMirror extensions are branded by the @codemirror/state instance that
@@ -99,6 +100,7 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
     .sort();
   const built: string[] = [];
   const source: string[] = [];
+  const entries: string[] = [];
   for (const name of all) {
     try {
       const packageRoot = realpathSync(join(cwd, "node_modules", name));
@@ -106,15 +108,18 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
         readFileSync(join(packageRoot, "package.json"), "utf8"),
       ) as Record<string, unknown>;
       const entry = packageImportEntry(packageManifest);
-      if (entry && existsSync(join(packageRoot, entry)) && /\.[cm]?js$/.test(entry)) built.push(name);
-      else source.push(name);
+      if (entry && existsSync(join(packageRoot, entry))) {
+        entries.push(join(packageRoot, entry));
+        if (/\.[cm]?js$/.test(entry)) built.push(name);
+        else source.push(name);
+      } else source.push(name);
     } catch {
       // An absent or unfamiliar package cannot be safely forced through the
       // dependency optimizer. Normal resolution will report a useful error.
       source.push(name);
     }
   }
-  return { all, built, source };
+  return { all, built, source, entries };
 }
 
 // Generated/vendored trees that never feed the prebundle — skipped so an
@@ -312,12 +317,15 @@ export async function defineAngeeWebViteConfig({
     // Built package outputs are dependency bundles. Linked TypeScript package
     // entrypoints are application source: leave them in Vite's transform/HMR
     // pipeline so addon asset imports such as `?url` keep their native meaning.
-    optimizeDeps: prebundleAngeePackages
-      ? {
-          include: angeePackages.built,
-          exclude: [...angeePackages.source, ...CODEMIRROR_OPTIMIZER_EXCLUDES],
-        }
-      : { exclude: [...angeePackages.all, ...CODEMIRROR_OPTIMIZER_EXCLUDES] },
+    // Vite's startup scanner stops at excluded bare imports. Scan the installed
+    // package entries directly as well as the host HTML so their import() trees
+    // contribute npm dependencies before first use, without loading them in the
+    // browser or maintaining a second dependency inventory.
+    optimizeDeps: {
+      entries: angeePackages.entries.length > 0 ? ["**/*.html", ...angeePackages.entries] : undefined,
+      include: prebundleAngeePackages ? angeePackages.built : undefined,
+      exclude: [...(prebundleAngeePackages ? angeePackages.source : angeePackages.all), ...CODEMIRROR_OPTIMIZER_EXCLUDES],
+    },
     server: {
       host: true,
       ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),
