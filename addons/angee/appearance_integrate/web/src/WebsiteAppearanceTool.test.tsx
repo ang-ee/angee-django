@@ -77,3 +77,63 @@ test.each([paper, fixed])("applying a website palette from $definition.id edits 
   expect(current.dirty).toBe(false);
   expect(stored).toEqual({ appearance: current.currentPreferences, unrelated: true });
 });
+
+test("the palette target follows the active theme until the user picks another, and the pick sticks", async () => {
+  const ink = defineThemeContribution({
+    definition: defineTheme({
+      ...paper.definition, id: "example.ink", labelKey: "ink.label", descriptionKey: "ink.description",
+    }),
+  });
+  const stored: RuntimeUserPreferences = { appearance: { version: 1, themeId: paper.definition.id } };
+  let current!: AppearanceState;
+  function Probe() { current = useAppearance(); return null; }
+  render(<ShellPageTestProviders runtime={{
+    themes: [paper, ink, fixed],
+    auth: { status: "authenticated", user: { id: "actor-1", name: "Example" }, hasRole: () => false },
+    userPreferences: { available: true, preferences: stored, patchPreferences: vi.fn(async () => undefined) },
+  }}><AppearanceProvider><Probe /><WebsiteAppearanceTool /></AppearanceProvider></ShellPageTestProviders>);
+  act(() => current.openDraft());
+  fireEvent.change(screen.getByLabelText("Website URL"), { target: { value: "https://example.test" } });
+  fireEvent.click(screen.getByRole("button", { name: "Analyse" }));
+  // The active theme is the default target.
+  expect(screen.getByRole("button", { name: "Customize paper.label" })).toBeTruthy();
+
+  // A deliberate pick replaces it and is not pulled back to the active theme.
+  fireEvent.click(screen.getByLabelText("Apply palette to"));
+  const option = await screen.findByRole("option", { name: "ink.label" });
+  fireEvent.pointerDown(option);
+  fireEvent.pointerUp(option);
+  fireEvent.click(option);
+  expect(await screen.findByRole("button", { name: "Customize ink.label" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Customize paper.label" })).toBeNull();
+
+  // Applying targets the pick; the theme switch it causes keeps the pick.
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Customize ink.label" })); });
+  expect(current.currentPreferences.themeId).toBe(ink.definition.id);
+  expect(screen.getByRole("button", { name: "Customize ink.label" })).toBeTruthy();
+
+  // Changing the active theme elsewhere does not override a deliberate pick.
+  await act(async () => { await current.setTheme(paper.definition.id); });
+  expect(screen.getByRole("button", { name: "Customize ink.label" })).toBeTruthy();
+});
+
+test("with no pick, the palette target follows a change of the active theme", async () => {
+  const ink = defineThemeContribution({
+    definition: defineTheme({
+      ...paper.definition, id: "example.ink", labelKey: "ink.label", descriptionKey: "ink.description",
+    }),
+  });
+  let current!: AppearanceState;
+  function Probe() { current = useAppearance(); return null; }
+  render(<ShellPageTestProviders runtime={{
+    themes: [paper, ink],
+    auth: { status: "authenticated", user: { id: "actor-1", name: "Example" }, hasRole: () => false },
+    userPreferences: { available: true, preferences: { appearance: { version: 1, themeId: paper.definition.id } }, patchPreferences: vi.fn(async () => undefined) },
+  }}><AppearanceProvider><Probe /><WebsiteAppearanceTool /></AppearanceProvider></ShellPageTestProviders>);
+  act(() => current.openDraft());
+  fireEvent.change(screen.getByLabelText("Website URL"), { target: { value: "https://example.test" } });
+  fireEvent.click(screen.getByRole("button", { name: "Analyse" }));
+  expect(screen.getByRole("button", { name: "Customize paper.label" })).toBeTruthy();
+  await act(async () => { await current.setTheme(ink.definition.id); });
+  expect(screen.getByRole("button", { name: "Customize ink.label" })).toBeTruthy();
+});
