@@ -4,7 +4,7 @@ export { SelectionBar, FlatListBody, MeasureFooter, RowActionsHeader, ListHeader
 export type { FlatListBodyProps } from "./list-body/table-pieces";
 export { buildColumns, ListCellContent } from "./list-body/columns";
 export type { BuildColumnsOptions } from "./list-body/columns";
-export { RecordRow } from "./list-body/rows";
+export { LeadingSelectionCell, RecordRow, SelectionToggle } from "./list-body/rows";
 export { VirtualPaddingRow, useVirtualWindow } from "./list-body/virtualization";
 export { groupedRowLabel, tableGroupAxes, bucketValueLabels, groupLabel } from "./list-body/grouping";
 export { cellContent, tableColumnLabel, ariaSortForColumn, readPath, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, measureValue, formatMeasure, alignOf, isQueryOnlyColumn, withQueryOnlyColumnsHidden, groupFieldLabel, enumValueLabel } from "./list-body/cell-utils";

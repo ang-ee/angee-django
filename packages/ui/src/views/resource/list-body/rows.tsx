@@ -4,8 +4,9 @@ import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { dragSourceProps, type DndPayload, type DragSourceProps } from "../../../lib/dnd";
+import { cn } from "../../../lib/cn";
 import { Checkbox } from "../../../ui/checkbox";
-import { TableCell, TableRow } from "../../../ui/table";
+import { TableCell, TableHead, TableRow } from "../../../ui/table";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import {
@@ -153,15 +154,12 @@ function LinkedRecordRow<TRow extends Row>({
       }
     >
       {selectable ? (
-        <TableCell className="w-8">
-          <Checkbox
-            size="sm"
-            aria-label={t("list.selectRow")}
-            checked={selected}
-            onClick={(event) => event.stopPropagation()}
-            onCheckedChange={(checked) => onToggleSelected(id, checked)}
-          />
-        </TableCell>
+        <LeadingSelectionCell
+          grouped={reserveLeadingColumn}
+          label={t("list.selectRow")}
+          checked={selected}
+          onCheckedChange={(checked) => onToggleSelected(id, checked)}
+        />
       ) : reserveLeadingColumn ? (
         <TableCell className="w-8" />
       ) : null}
@@ -266,15 +264,12 @@ function PlainRecordRow<TRow extends Row>({
       }
     >
       {selectable ? (
-        <TableCell className="w-8">
-          <Checkbox
-            size="sm"
-            aria-label={t("list.selectRow")}
-            checked={selected}
-            onClick={(event) => event.stopPropagation()}
-            onCheckedChange={(checked) => onToggleSelected(id, checked)}
-          />
-        </TableCell>
+        <LeadingSelectionCell
+          grouped={reserveLeadingColumn}
+          label={t("list.selectRow")}
+          checked={selected}
+          onCheckedChange={(checked) => onToggleSelected(id, checked)}
+        />
       ) : reserveLeadingColumn ? (
         <TableCell className="w-8" />
       ) : null}
@@ -367,4 +362,71 @@ export function renderListRow<TRow extends Row>({
       renderRowActions={renderRowActions}
     />
   );
+}
+
+export interface SelectionToggleProps {
+  label: string;
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  className?: string;
+}
+
+/**
+ * A selection checkbox whose whole area toggles it. A near miss beside the box
+ * selects instead of opening the row, and the click never reaches the row.
+ */
+export function SelectionToggle({
+  label,
+  checked,
+  indeterminate = false,
+  disabled = false,
+  onCheckedChange,
+  className,
+}: SelectionToggleProps): React.ReactElement {
+  return (
+    <div
+      className={cn("flex items-center justify-center", disabled ? "cursor-not-allowed" : "cursor-pointer", className)}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (disabled || (event.target as Element).closest("[role=checkbox]")) return;
+        onCheckedChange(indeterminate || !checked);
+      }}
+    >
+      <Checkbox
+        size="sm"
+        aria-label={label}
+        checked={checked}
+        indeterminate={indeterminate}
+        disabled={disabled}
+        onCheckedChange={(next) => onCheckedChange(next)}
+      />
+    </div>
+  );
+}
+
+/**
+ * The leading selection cell of list rows and the list header. In a grouped
+ * list the column also holds a chevron slot before the checkbox, so record,
+ * group and header checkboxes stay in one vertical line.
+ */
+export function LeadingSelectionCell({
+  head = false,
+  grouped = false,
+  chevron,
+  ...toggle
+}: SelectionToggleProps & { head?: boolean; grouped?: boolean; chevron?: React.ReactNode }): React.ReactElement {
+  // Without a chevron (a grouped record row) the whole cell is the toggle; the
+  // padding keeps its checkbox in line with the header's and the groups'.
+  const content = (
+    <div className="absolute inset-0 flex">
+      {grouped && chevron ? <div className="flex w-8 shrink-0 items-center justify-center">{chevron}</div> : null}
+      <SelectionToggle {...toggle} className={cn("flex-1", grouped && !chevron && "pl-8")} />
+    </div>
+  );
+  const width = grouped ? "w-14" : "w-8";
+  return head
+    ? <TableHead sticky className={cn(width, "p-0")}>{content}</TableHead>
+    : <TableCell className={cn("relative p-0", width)}>{content}</TableCell>;
 }

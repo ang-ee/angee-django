@@ -19,7 +19,7 @@ export const checkboxVariants = tv({
   },
   variants: {
     size: {
-      sm: { root: "size-3.5" },
+      sm: { root: "size-3 rounded-2", indicator: "[&_svg]:size-2.5" },
       md: { root: "size-4" },
       lg: { root: "size-5 rounded-6", indicator: "[&_svg]:size-3.5" },
     },
