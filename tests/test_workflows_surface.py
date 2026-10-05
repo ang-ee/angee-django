@@ -48,7 +48,7 @@ EXPECTED_VERBS = {
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
         "cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
-        "extend_deadline fenced for_map settle settled_decisions terminal_runs to_ready to_running "
+        "extend_deadline fenced for_map item_counts nodes settle settled_decisions terminal_runs to_ready to_running "
         "to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change register wait_kind",
