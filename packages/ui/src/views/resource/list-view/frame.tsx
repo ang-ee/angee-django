@@ -190,7 +190,7 @@ function ListViewBody<TRow extends Row = Row>({
   fields,
   baseFilter,
   filterOptions: explicitFilterOptions,
-  filterRow,
+  search: searchDeclaration,
   facets,
   customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
@@ -409,7 +409,7 @@ function ListViewBody<TRow extends Row = Row>({
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}
       explicitFilterOptions={explicitFilterOptions}
-      filterRow={filterRow}
+      searchDeclaration={searchDeclaration}
       explicitCustomFilterFields={explicitCustomFilterFields}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
@@ -435,7 +435,7 @@ function ListViewBody<TRow extends Row = Row>({
     />
   );
   const searchInput = {
-    columns: resolvedColumns, modelMetadata, resourceView,
+    columns: resolvedColumns, modelMetadata, resourceView, search: searchDeclaration, renderItem: Boolean(renderItem),
     query: source?.query, inferOptions: !source,
     defaultGroup, defaultGroups, textFilterField, groupOptions: explicitGroupOptions,
     declaredFacets, scalarFacets, filterOptions: explicitFilterOptions,

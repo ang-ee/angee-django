@@ -41,11 +41,32 @@ import {
   resourceViewStateToSearch,
   mergeResourceViewSearch,
 } from "@angee/ui/views/resource-view-model";
-import { useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
+import { ResourceQuery, useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
+import type { ContainersDeclaration } from "@angee/ui/runtime";
 import { testDataResource } from "@angee/metadata/testing";
 import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
+
+test("search contributions validate shapes and model field capabilities at createApp", () => {
+  const contract = ResourceQuery.forRows({ fields: { title: { scalar: "String" }, amount: { scalar: "Float" }, hidden: { scalar: "String" } } }).contract;
+  const resource = testDataResource("notes.Note", { query: { ...contract, fields: { ...contract.fields,
+    hidden: { ...contract.fields.hidden!, filter: { ...contract.fields.hidden!.filter!, operators: [] } },
+  } } });
+  const input = (content: unknown, address = "notes.Note#search") => ({ ...testAppInput([{
+    id: "extension", containers: { [address]: { "extension.shortcut": { content } } } as ContainersDeclaration,
+  }]), schemas: testSchemasWithConsoleResources([resource]) });
+  expect(() => createApp(input({ kind: "text", field: "title" }))).not.toThrow();
+  expect(() => createApp(input({ kind: "facet", field: "amount" }))).not.toThrow();
+  expect(() => createApp(input({ kind: "text", field: "amount" }))).toThrow(/extension.shortcut.*amount.*iContains/);
+  expect(() => createApp(input({ kind: "clause", field: "hidden" }))).toThrow(/extension.shortcut.*hidden.*not filterable/);
+  expect(() => createApp(input({ kind: "facet", field: "unknown" }))).toThrow(/extension.shortcut.*unknown.*not filterable/);
+  expect(() => createApp(input({ kind: "invalid" }, "resource#search"))).toThrow(/extension.shortcut.*unknown kind/);
+  expect(() => createApp(input({ kind: "toggle", id: 7 }, "resource#search"))).toThrow(/extension.shortcut.*string id/);
+  // Kind-level fields and toggle targets require the rendering list's catalog.
+  expect(() => createApp(input({ kind: "clause", field: "unknown" }, "resource#search"))).not.toThrow();
+  expect(() => createApp(input({ kind: "toggle", id: "list-owned" }))).not.toThrow();
+});
 
 describe("route-owned chrome", () => {
   test("a parameterized destination beats the dashboard anchor in chrome, app scope and native breadcrumbs", async () => {

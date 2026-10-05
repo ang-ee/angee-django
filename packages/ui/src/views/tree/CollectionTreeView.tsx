@@ -24,6 +24,7 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   | "resource"
   | "presentation"
   | "columns"
+  | "search"
   | "filterOptions"
   | "customFilterFields"
   | "toolbarActions"
@@ -115,6 +116,7 @@ export function CollectionTreeView<TRow extends Row>(
   );
   const catalog = useSearchCatalog({
     query: props.source.query,
+    search: props.search,
     inferOptions: false,
     modelMetadata: null,
     columns: props.columns,
@@ -127,7 +129,7 @@ export function CollectionTreeView<TRow extends Row>(
   });
   const search = useResourceSearch({ resourceView: view, catalog, groupingEnabled: false });
   const toolbar: ResourceToolbarProps = {
-    search, pager: surface.list, view: "list", availableViews: ["list"],
+    search, searchDeclaration: props.search, pager: surface.list, view: "list", availableViews: ["list"],
     onPageChange: view.setPage, onPageSizeChange: view.setPageSize,
     actions: props.toolbarActions, wrap: props.toolbarWrap,
   };

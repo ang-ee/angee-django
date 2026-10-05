@@ -30,6 +30,7 @@ import {
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
 import type {
+  ListSearchDeclaration,
   ListEmptyContent,
   ResourceCollectionPresentation,
   ResourceTableHeaderVisibility,
@@ -49,6 +50,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   /** Explicit local query fields, including relations and fields outside display columns. */
   query?: ResourceQuery;
   columns: readonly ListColumn<TRow>[];
+  /** Combined box and optional controls over this collection's search model. */
+  search?: ListSearchDeclaration;
   filterOptions?: readonly ResourceToolbarFilterOption[];
   customFilterFields?: readonly FilterClauseField[];
   groupOptions?: readonly ResourceToolbarGroupOption[];
@@ -145,6 +148,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rows,
   query,
   columns,
+  search: searchDeclaration,
   filterOptions: explicitFilterOptions,
   customFilterFields: explicitCustomFilterFields,
   groupOptions,
@@ -191,6 +195,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     onListStateChange,
   });
   const catalog = useSearchCatalog({
+    search: searchDeclaration,
     columns,
     query,
     rows: surface.sourceRows,
@@ -216,7 +221,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     : emptyContent ?? t("list.empty");
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack });
   const toolbar: ResourceToolbarProps = {
-    search, actions: toolbarActions, pager: surface.list,
+    search, searchDeclaration, actions: toolbarActions, pager: surface.list,
     viewSwitcher: gallery ? (
       <ResourceViewSwitcher<RowLayout> mode="layout" view={layout} onViewChange={setLayout} />
     ) : undefined,

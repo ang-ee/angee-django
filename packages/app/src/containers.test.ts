@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { resolveContainer, type ContainersDeclaration, type CoreContainer } from "@angee/ui/runtime";
+import { RESOURCE_CONTAINERS } from "@angee/ui/views/index";
 
 import { compileContainers, type ContainerLayer } from "./containers";
 import { explainComposition } from "./explain";
@@ -12,6 +13,33 @@ const layer = (id: string, containers: Record<string, unknown>, dependsOn: strin
   ({ id, dependsOn, containers: containers as ContainersDeclaration });
 const ids = (children: readonly { id: string }[]): string[] => children.map((child) => child.id);
 const scope = (routes: string[] = [], apps: string[] = []) => ({ apps, routes, perspective: null });
+
+test("search extras interleave with contributions and route narrowing reaches page ids with diagnostics", () => {
+  const composed = compileContainers([layer("extension", { "notes.Note#search": [
+    { "extension.mine": { sequence: 15, content: { kind: "toggle", id: "mine" } } },
+    { only: ["page.text.title", "extension.mine"], when: { route: "extension.queue" } },
+    { except: ["page.text.title"], when: { route: "extension.detail" } },
+  ] })], RESOURCE_CONTAINERS);
+  const extra = [
+    { id: "page.text.title", owner: "page", address: "resource#search", sequence: 10, content: { kind: "text", field: "title" } },
+    { id: "page.facet.status", owner: "page", address: "resource#search", sequence: 20, content: { kind: "facet", field: "status" } },
+  ];
+  const children = (route?: string) => resolveContainer(composed, "resource#search", {
+    models: ["notes.Note"], extra, scope: scope(route ? [route] : []),
+  });
+  expect(ids(children())).toEqual(["page.text.title", "extension.mine", "page.facet.status"]);
+  expect(ids(resolveContainer(compileContainers([], []), "resource#search", { extra: [...extra].reverse() })))
+    .toEqual(["page.text.title", "page.facet.status"]);
+  expect(ids(children("extension.queue"))).toEqual(["page.text.title", "extension.mine"]);
+  expect(ids(children("extension.detail"))).toEqual(["extension.mine", "page.facet.status"]);
+  expect(composed.diagnostics.some((message) => message.includes("page.text.title"))).toBe(true);
+  expect(() => compileContainers([layer("extension", { "notes.Note#search": { "page.text.title": { hide: true } } })], RESOURCE_CONTAINERS))
+    .toThrow(/alters unknown child.*page.text.title/);
+  expect(() => compileContainers([layer("extension", { "resource#search": { "page.text.title": { content: { kind: "text", field: "title" } } } })], RESOURCE_CONTAINERS))
+    .toThrow(/namespace/);
+  expect(() => compileContainers([layer("extension", { "resource#search": { when: { route: "extension.queue" },
+    "extension.mine": { content: { kind: "toggle", id: "mine" } } } })], RESOURCE_CONTAINERS)).toThrow(/conditional|when/);
+});
 
 describe("compileContainers", () => {
   test("declares kind and model children; a page merges kind, canonical and concrete model in position order", () => {

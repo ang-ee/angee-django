@@ -395,11 +395,14 @@ shared UI copy through an addon bundle.
   because a verb must remain understandable without recognizing its icon.
   Mark the state's next descriptor `primary`; keep infrequent descriptors at
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
-- A list route declares its shipped `presetIds`, `filterRow` quick filter and facet
-  ids, `createAction`, and `boardCard` fields on `ResourceList`/`List` rather than
-  building parallel controls. The route default preset is included automatically.
-  Quick filter ids may name shipped presets or filter options. A scoped create verb
-  uses a server-projected parent record for its permission; the create label comes
+- A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
+  and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full
+  combined box; declared or contributed shortcuts default it to a collapsed
+  trigger. The box stays reachable below 36rem toolbar width, where shortcuts
+  hide. Shortcuts compose the same model as the box; toggle ids may name filter
+  options, presets or favorites. The route default preset joins automatically.
+  A scoped create verb uses a server-projected parent record for its permission;
+  the create label comes
   from resource vocabulary. `chrome` may hide the view switcher, pager, or column
   chooser without changing query state; `chrome.heading` declares label, hint,
   and audience around the live count. A nonselectable list hides Share but keeps
@@ -869,6 +872,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `form#chrome` | passive record chrome at the toolbar's right edge | `ReactNode` |
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
+| `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
 | `record#aside` | chatter tabs | `ChatterTabContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
@@ -915,6 +919,14 @@ and presets and favourites name it. Whether a built-in kind can run on a page
 capability check; whether a
 kind is offered is the container's, so layers narrow kinds per model with
 `only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
+
+`resource#search` has model inheritance and accepts page-declared `page.*`
+extras alongside contributed typed shortcuts. `only`/`except` reach both;
+`hide` alters declared contributions only, and route/app/perspective `when`
+narrows those verbs. The box follows the shortcuts and is never a child that
+can be hidden. Field capability checks run at composition for model
+contributions; list catalogs validate page and kind-level targets at render.
+See [search declarations](../../packages/ui/src/views/resource/search/shortcuts.ts).
 
 ### Rendering and testing
 

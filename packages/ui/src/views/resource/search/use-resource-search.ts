@@ -36,11 +36,18 @@ export function useResourceSearch({ resourceView, catalog, groupStack = resource
     const setFacet = (field: string, ids: readonly string[]) => {
       const facet = catalog.facets.find((candidate) => candidate.field === field);
       if (!facet) return;
-      const selected = facet.options.filter((option) => ids.includes(option.id));
+      const currentItem = active.find((item) => item.kind === "facet" && item.field === field);
+      const options = [...facet.options, ...(currentItem?.kind === "facet" ? currentItem.options.filter((option) => !facet.options.some((known) => known.id === option.id)) : [])];
+      const selected = options.filter((option) => ids.includes(option.id));
       const blank = selected.find((option) => option.value === undefined);
       resourceView.setFilter((current) => {
-        const remaining = Filter.from(current).withoutFields([field]);
-        if (blank) return Filter.combine(remaining, blank.filter);
+        const filter = Filter.from(current);
+        const remaining = filter.withoutFields([field]);
+        // A newly selected blank replaces values. Adding a value to an active
+        // blank replaces that blank, including native multi-select proposals.
+        if (blank && !(filter.hasPreset(blank.filter) && selected.some((option) => option.value !== undefined))) {
+          return Filter.combine(remaining, blank.filter);
+        }
         return selected.reduce((next, option) => {
           const value = Filter.facetFromFilter(option.filter);
           return value ? Filter.from(next).toggleFacet(value) : next;

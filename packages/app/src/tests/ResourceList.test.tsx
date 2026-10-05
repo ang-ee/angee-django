@@ -37,6 +37,7 @@ import {
   } from "react";
 import { afterEach,
   beforeAll,
+  beforeEach,
   describe,
   expect,
   test,
@@ -858,6 +859,7 @@ function lastActiveListCall(): ResourceListOptions | undefined {
 }
 
 describe("ResourceList", () => {
+  beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
   beforeAll(() => {
     installTestLocalStorage();
   });
@@ -869,6 +871,7 @@ describe("ResourceList", () => {
     });
     sdkMocks.listCalls.length = 0;
     sdkMocks.fetching = false;
+    vi.restoreAllMocks();
   });
 
   test("renders ListView with the resource toolbar and group controls", async () => {
@@ -926,6 +929,7 @@ describe("ResourceList", () => {
             createLabel="Add note"
             emptyContent="No matching notes."
             filterOptions={[{ id: "active", label: "Active", filter: {} }]}
+            search={{ shortcuts: [{ kind: "toggle", id: "active" }] }}
           >
             <Facet field="author" label="Author" />
             <Column field="title" header="Title" />
@@ -954,6 +958,7 @@ describe("ResourceList", () => {
     expect(captured.current?.filterOptions).toEqual([
       { id: "active", label: "Active", filter: {} },
     ]);
+    expect(captured.current?.search).toEqual({ shortcuts: [{ kind: "toggle", id: "active" }] });
     expect(captured.current?.facets).toEqual([
       { field: "author", label: "Author" },
     ]);
@@ -971,7 +976,7 @@ describe("ResourceList", () => {
 
     render(
       <TestUrlState>
-        <ResourceList resource="notes.Note" list={CapturingList}>
+        <ResourceList resource="notes.Note" list={CapturingList} search={{ box: "collapsed", shortcuts: [{ kind: "text", field: "title" }] }}>
           <List>
             <Column field="title" header="Title" />
           </List>
@@ -984,6 +989,7 @@ describe("ResourceList", () => {
       { field: "title", header: "Title" },
     ]);
     expect(captured.current?.onCreate).toBeUndefined();
+    expect(captured.current?.search).toEqual({ box: "collapsed", shortcuts: [{ kind: "text", field: "title" }] });
     expect(captured.current?.onRowClick).toBeUndefined();
   });
 
