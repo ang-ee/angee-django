@@ -279,8 +279,9 @@ shared UI copy through an addon bundle.
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
 - Chatter publishers compose by owner for their mounted lifetime. Panels mount
   lazily when first visited and then remain mounted for that record, so a shared
-  `useRecordPeek` Records tab can open evidence without discarding draft input
-  in another panel; unmounting the temporary peek must leave other publishers'
+  `useRecordPeek` Records tab provides an explicit preview opened from main
+  content, not link following from a pane, without discarding draft input in
+  another panel; unmounting the temporary peek must leave other publishers'
   tabs and composer intact. Chatter stays in the shell's right pane. Consumers
   do not mount their own chatter. Its tabs are `record#aside` and
   `<model>#aside` children, narrowed by the layers for the current app and

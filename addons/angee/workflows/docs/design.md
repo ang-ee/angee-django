@@ -20,7 +20,7 @@ What exists and how it relates, independent of any code.
   apart from its steps. The next steps act on the result (for example, set a flag after an answer).
 - **Timeline of a record:** the runs that worked on the record, in order: the trigger, the steps done with their
   outcomes, the current step with its open decisions, and the steps still planned. Every entry links to the
-  records that step worked with.
+  records that step worked with. Links in the pane follow the record route in the main window and carry the breadcrumb trail.
 
 Rules:
 

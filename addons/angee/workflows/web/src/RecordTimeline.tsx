@@ -6,7 +6,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
   SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useStatusTone,
-  useRecordPeek, formatDateTime, type StepListItem,
+  formatDateTime, type StepListItem,
 } from "@angee/ui";
 import { RecordTimelineDocument, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -47,12 +47,10 @@ export function RecordTimelineView({ data, openCount, set = false }: {
   const t = useWorkflowsT();
   const [grouping, setGrouping] = useState<"record" | "question">("record");
   const form = useActiveRecordForm();
-  const openRecord = useRecordPeek();
   const retryActions = useStepRetryActions(true);
   const cancelActions = useRunCancelActions(data.map((entry) => entry.record_model));
   const cancelRun = (run: TimelineRun) => <RecordActionBar record={run} actions={cancelActions} />;
-  const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label}
-    onOpen={() => openRecord({ model, id, label })} /></Chip>;
+  const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label} /></Chip>;
   const card = (decision: TimelineData[number]["decisions"][number], id: string, compact = false, records?: readonly string[], runId?: string) =>
     <DecisionCard key={decision.id} decision={decision} selfId={id}
       compact={compact} inStep={records ? { records } : undefined}

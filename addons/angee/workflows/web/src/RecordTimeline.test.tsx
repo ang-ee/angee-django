@@ -15,7 +15,7 @@ test("a completed run shows its outcome, workflow name, local time and run link"
   render(<TimelineStory state="clean" />);
   expect(await screen.findByText("Plan complete")).toBeTruthy();
   expect(screen.getByRole("heading", { name: /Record review/ })).toBeTruthy();
-  expect(screen.getByText("Open run")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open run" }).getAttribute("href")).toBe("/workflows/runs/wfr_review");
   expect(document.querySelector('time[datetime="2026-10-03T10:00:00Z"]')).toBeTruthy();
 });
 
@@ -109,14 +109,14 @@ test("answering refreshes the concerned form without a socket", async () => {
     JSON.stringify(requests.map(({ query }) => query.slice(0, 100)))).toBe("Reviewed notes"));
 });
 
-test("routine history folds while waiting and the record reference opens a peek", async () => {
+test("routine history folds while waiting and record references link to the main record route", async () => {
   render(<TimelineStory />);
   const fold = await screen.findByRole("button", { name: "Show 7 steps done" });
   fireEvent.click(fold);
   expect(screen.getByText("Receive record")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Review notes/ }));
-  expect(await screen.findByRole("navigation", { name: "Related records" })).toBeTruthy();
-  expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:records");
+  expect(screen.getByRole("link", { name: /Review notes/ }).getAttribute("href")).toBe("/notes/nte_7");
+  expect(screen.queryByRole("navigation", { name: "Related records" })).toBeNull();
+  expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline");
 });
 
 test("form marks reveal and highlight the inline card through the right host", async () => {

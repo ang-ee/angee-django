@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
-import { AppRuntimeProvider, defaultWidgets, ModalsHost, ToastProvider } from "@angee/ui";
+import { AppRuntimeProvider, createRouteHref, defaultWidgets, ModalsHost, ToastProvider } from "@angee/ui";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { DecisionCard } from "./DecisionCard";
@@ -164,4 +164,19 @@ test("a record action uses its human alternative label", () => {
   render(<Provider><DecisionCard decision={decision} /></Provider>);
   expect(screen.getByRole("radio", { name: "Approve change" })).toBeTruthy();
   expect(screen.queryByText("internal method name")).toBeNull();
+});
+
+test("a concerned record carries its evidence tab and page into the canonical link", () => {
+  const reference = { model: "storage.File", id: "fil_source", label: "Source file", tab: "preview", page: 2, search: { previewPage: "fil_source:2" } };
+  const decision = decisionFixture({
+    records: [{ id: "dcr_source", record_model: reference.model, record_id: reference.id }],
+    context: { references: [reference] },
+    proposal: { alternatives: [{ key: "accept", label: "Accept", outcome: "done" }] },
+  });
+  render(<Provider resources={[testDataResource("storage.File")]}><AppRuntimeProvider runtime={{
+    routeHref: createRouteHref([{ name: "storage.file", path: "/storage/$id" }]),
+    routesByResource: { "storage.File": { collection: "storage.files", record: { name: "storage.file", param: "id" } } },
+  }}><DecisionCard decision={decision} /></AppRuntimeProvider></Provider>);
+  expect(screen.getByRole("link", { name: "Source file" }).getAttribute("href")).toBe("/storage/fil_source?recordTab=preview&previewPage=fil_source%3A2");
+  expect(screen.queryByRole("button", { name: "Source file" })).toBeNull();
 });

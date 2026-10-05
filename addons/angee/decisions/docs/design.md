@@ -104,6 +104,7 @@ UI, all in this addon's web fragment:
 
 - **Decision card:** the question, the concerned records as links, the alternatives with what each would change. One component, used in
   the inbox, in the record timeline and next to a record set.
+  Links in the pane follow the record route in the main window and carry the breadcrumb trail.
   The alternative's label describes a record-method action; the card does not display its internal method name.
 - **Field mark:** a form marks the fields named in the proposals of its record's open decisions; choosing the
   mark opens the card.

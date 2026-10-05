@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 test("the inbox card links concerned records and lists proposed field and record actions", async () => {
   render(Open.render());
-  expect(await screen.findByRole("button", { name: /Review notes/ })).toBeTruthy();
+  expect((await screen.findByRole("link", { name: /Review notes/ })).getAttribute("href")).toBe("/notes/nte_7");
   expect(screen.getByText("Display Name")).toBeTruthy();
   expect(screen.getByText("Proposed name")).toBeTruthy();
   expect(screen.queryByText("archive")).toBeNull();
