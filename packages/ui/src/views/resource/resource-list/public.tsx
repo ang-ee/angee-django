@@ -19,6 +19,7 @@ import type { AnyCalendarWindowSource } from "../../calendar/use-calendar-window
 import { type ActionDescriptor, type FacetDescriptor, type GroupDescriptor } from "../../page";
 import { ResourceListBody } from "./body";
 import { parseResourceListDeclarations, validateResourceListDeclarations } from "./declarations";
+import { declaredGroupDefaults } from "../search/group-defaults";
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer" | "split";
 
@@ -143,7 +144,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   defaultView?: ResourceViewKind;
   /** Shipped view ids visible on this route (its route default joins them). */
   presetIds?: readonly string[];
-  defaultGroup?: ResourceViewGroup | null;
+  defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   defaultGroups?: ResourceViewDefaultGroups;
   /** Calendar sources + interaction seams. When declared, the Calendar kind is
    * offered in the switcher and rendered as a windowed-collection surface;
@@ -259,14 +260,17 @@ export function ResourceList<TRow extends Row = Row>({
   const resourceView = useResourceViewMaybe();
   const modelMetadata = useModelMetadata(props.resource);
   const initialOrder = declarations.list?.props.order ?? props.order;
+  const initialDefaultGroup = declarations.list?.props.defaultGroup === undefined ? defaultGroup : declarations.list.props.defaultGroup;
+  const initialDefaultGroups = declarations.list?.props.defaultGroups ?? defaultGroups;
   const initialState = React.useMemo(
     () => ({
       pageSize: initialPageSize,
       view: initialDefaultView,
       sorting: initialResourceSorting(modelMetadata, initialOrder),
       filter: defaultFilter,
+      ...declaredGroupDefaults(initialDefaultGroup, initialDefaultGroups),
     }),
-    [defaultFilter, initialDefaultView, initialPageSize, initialOrder, modelMetadata],
+    [defaultFilter, initialDefaultView, initialPageSize, initialOrder, initialDefaultGroup, initialDefaultGroups, modelMetadata],
   );
   return withResourceViewScope({
     ambient: resourceView,

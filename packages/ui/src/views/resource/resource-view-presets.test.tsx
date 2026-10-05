@@ -224,6 +224,23 @@ function LocalCapture({ onValue }: { onValue: (value: ResourceViewContextValue) 
   return null;
 }
 
+test.each([{ groupStack: [{ field: "status" }] }, { groupStack: [] }])("an explicit shipped preset stack $groupStack overrides per-view defaults", ({ groupStack }) => {
+  let view!: ResourceViewContextValue;
+  render(<ModelMetadataProvider metadata={metadata}>
+    <AppRuntimeProvider runtime={{ resourceViews: presets }}>
+      <ResourceViewProvider scope="local" resource="notes.Note" initialState={resourceViewPresetDefaults({
+        groupStacks: { list: [{ field: "owner" }], board: [{ field: "owner" }] },
+      }, { ...open, groupStack })}>
+        <LocalCapture onValue={(value) => { view = value; }} />
+      </ResourceViewProvider>
+    </AppRuntimeProvider>
+  </ModelMetadataProvider>);
+  expect(view.state.groupStack).toEqual(groupStack);
+  act(() => view.setGroupStack([{ field: "owner" }]));
+  act(() => view.clearQuery());
+  expect(view.state.groupStack).toEqual(groupStack);
+});
+
 test.each([
   { fixedFilter: { absent: { exact: "x" } } },
   { filter: { status: { absent: "x" } } },

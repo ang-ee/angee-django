@@ -24,8 +24,7 @@ import { resolveResourceViewGroup } from "../resource-view-utils";
 import { columnsWithMetadataDefaults, relationFieldInfo } from "../model-metadata-defaults";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
-import { defaultGroupForView } from "../search/group-defaults";
-import { useResourceViewGroupState } from "../resource-view-group-state";
+import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "../search/group-defaults";
 import { initialResourceSorting } from "../resource-view-codecs";
 import { useRowActionsSurface } from "../RowActions";
 import { isBoardFoldField, isBoardRankField, ListViewContent } from "./content";
@@ -56,6 +55,7 @@ function ListViewFrame<TRow extends Row = Row>(
           pageSize: props.pageSize,
           view: props.defaultView,
           sorting: initialResourceSorting(modelMetadata, props.order),
+          ...declaredGroupDefaults(props.defaultGroup, props.defaultGroups),
         },
         error: null,
       };
@@ -66,7 +66,7 @@ function ListViewFrame<TRow extends Row = Row>(
           error instanceof Error ? error : new Error("Invalid declared query."),
       };
     }
-  }, [props.defaultView, props.pageSize, props.order, modelMetadata]);
+  }, [props.defaultView, props.pageSize, props.order, props.defaultGroup, props.defaultGroups, modelMetadata]);
   if (initial.error) return <ErrorBanner description={initial.error.message} />;
   return withResourceViewScope({
     ambient: resourceView,
@@ -85,15 +85,24 @@ function ListViewFrame<TRow extends Row = Row>(
 function ValidatedListViewBody<TRow extends Row>(
   props: ListViewProps<TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
+  const t = useUiT();
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const query =
     props.source?.query ?? (metadata ? ResourceQuery.from(metadata) : null);
+  try {
+    validateDeclaredGroupDefaults("ListView", props.defaultGroup, props.defaultGroups, props.resourceView.defaultState, t);
+  } catch (error) {
+    return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
+  }
   let error = props.resourceView.state.queryError;
   if (!error && props.renderItem && props.resourceView.state.view !== "list") {
     error = new Error("Ordered item lists support only the flat list view.");
   }
   if (!error && query) {
     try {
+      const defaults = declaredGroupDefaults(props.defaultGroup, props.defaultGroups);
+      query.groupsFrom(defaults.groupStack);
+      for (const stack of Object.values(defaults.groupStacks)) query.groupsFrom(stack);
       error = validateResourceViewState(
         props.resourceView.state,
         query,
@@ -102,11 +111,7 @@ function ValidatedListViewBody<TRow extends Row>(
       const group =
         (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource
           ? { field: props.laneSource.field }
-          : defaultGroupForView(
-              props.defaultGroup,
-              props.defaultGroups,
-              props.resourceView.state.view,
-            );
+          : null;
       if (group) query.group(group);
       const groups = query.groupsFrom(props.resourceView.state.groupStack);
       if (
@@ -120,11 +125,7 @@ function ValidatedListViewBody<TRow extends Row>(
       const effectiveGroups =
         (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource && group
           ? [group]
-          : groups.length > 0
-            ? groups
-            : group
-              ? [group]
-              : [];
+          : groups;
       if (props.renderItem && effectiveGroups.length > 0) {
         throw new Error("Ordered item lists do not support grouping.");
       }
@@ -200,7 +201,7 @@ function ListViewBody<TRow extends Row = Row>({
   defaultExpandedGroups,
   calendar,
   gantt,
-  laneSource: laneSourceInput,
+  laneSource,
   boardCard,
   onCreate,
   onCreateInLane,
@@ -223,14 +224,6 @@ function ListViewBody<TRow extends Row = Row>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
-  // A board page declares `laneSource` inline (`{ field, filters: fn(id), … }`),
-  // so it arrives as a fresh identity every render. That identity cascades
-  // through `resolvedLaneSource` → the pinned board group → the group-state
-  // effect, which re-dispatches `setGroup` faster than the async URL write can
-  // settle `state.group` — an update-depth loop. Collapsing value-equal
-  // laneSource back to one identity lets the derived group memoise and the
-  // effect settle after a single dispatch.
-  const laneSource = useValueStable(laneSourceInput);
   const rowActionSurface = useRowActionsSurface(rowActions);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
   const resolvedEmptyContent = filtered
@@ -347,15 +340,9 @@ function ListViewBody<TRow extends Row = Row>({
   );
   const boardGroupingPinned =
     (resourceView.state.view === "board" || resourceView.state.view === "gantt") && laneSourceGroup !== null;
-  const rawActiveDefaultGroup = boardGroupingPinned
-    ? laneSourceGroup
-    : defaultGroupForView(defaultGroup, defaultGroups, resourceView.state.view);
-  const effectiveGroupStack = useResourceViewGroupState({
-    resourceView,
-    defaultGroup: rawActiveDefaultGroup,
-    modelMetadata,
-    pinned: boardGroupingPinned,
-  });
+  const effectiveGroupStack = React.useMemo(() => boardGroupingPinned
+    ? [laneSourceGroup!] : resourceView.state.groupStack,
+  [boardGroupingPinned, laneSourceGroup, resourceView.state.groupStack]);
 
   // A client resource holds the whole set in the browser, so it groups through
   // TanStack row models — never the server _groups/GroupedListBody path (the

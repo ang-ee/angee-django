@@ -41,11 +41,3 @@ export function buildGroupOptions<TRow extends Row>(
 export function resolveResourceViewGroup(group: ResourceViewGroup, metadata: ModelMetadata | null): ResourceViewGroup {
   return metadata ? ResourceQuery.from(metadata).group(group).spec : group;
 }
-
-/** A malformed group is a view error, never silently removed from the request. */
-export function validResourceViewGroupStack(
-  groups: readonly ResourceViewGroup[],
-  metadata: ModelMetadata | null,
-): readonly ResourceViewGroup[] {
-  return metadata ? ResourceQuery.from(metadata).groupsFrom(groups).map((axis) => axis.spec) : groups;
-}

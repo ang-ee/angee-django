@@ -83,7 +83,7 @@ test.each(["list", "board"] as const)("a client-only axis in a server %s gives a
   act(() => f.view.setView(view));
   await waitFor(() => expect(f.view.state.view).toBe(view));
   const requests = f.getList.mock.calls.length;
-  act(() => f.view.setGroup({ field: "title" }));
+  act(() => f.view.setGroupStack([{ field: "title" }]));
   expect(await screen.findByText(/does not support server grouping/)).toBeTruthy();
   expect(screen.queryByText("Kept note")).toBeNull();
   expect(f.getList).toHaveBeenCalledTimes(requests);
@@ -94,12 +94,12 @@ test.each(["list", "board"] as const)("a client-only axis in a server %s gives a
 test.each(["server", "client"] as const)("list and board group choices follow the resource's %s grouping capability", async (rowModel) => {
   const f = fixture({ rowModel });
   expect(await screen.findByText("Kept note")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Group by" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 
   act(() => f.view.setView("board"));
   await waitFor(() => expect(f.view.state.view).toBe("board"));
-  const trigger = await screen.findByRole("button", { name: "Group by" });
+  const trigger = await screen.findByRole("button", { name: "Search options" });
   if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
   expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 });
