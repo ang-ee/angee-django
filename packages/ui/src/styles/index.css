@@ -437,10 +437,14 @@
   display: none;
 }
 
+/* One wrapping row of actions, the search area and utilities, each group at its
+   natural width; when they do not fit, whole groups move to the next line. The
+   width rules query this container from its children: a container query never
+   applies to the container itself. */
 .resource-toolbar {
   container-type: inline-size;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
 }
@@ -453,63 +457,53 @@
   gap: 0.5rem;
 }
 
+/* The search area sizes by what SearchControls shows (`data-search-layout`):
+   the full box takes a line of its own on a narrow toolbar and the leftover
+   width between actions and utilities on a roomy one; a shortcut row always
+   takes a line of its own; the collapsed trigger alone keeps its natural width
+   in the row. */
 .resource-toolbar-query {
-  grid-column: 1 / -1;
-  grid-row: 2;
+  order: 3;
+  flex: 1 0 100%;
   min-width: 0;
 }
 
 .resource-toolbar-utilities {
-  grid-column: 2;
-  grid-row: 1;
   display: flex;
   min-width: 0;
+  margin-left: auto;
   align-items: center;
   justify-content: flex-end;
   gap: 0.25rem;
 }
 
+@container (min-width: 52rem) {
+  .resource-toolbar-query {
+    order: 0;
+    flex: 1 1 12rem;
+  }
+}
+
 /* An inline collection toolbar may live in a narrow explorer/drawer. Its
    declared wrap mode lets whole control groups move instead of crushing their
    labels or forcing the pane to scroll horizontally. */
-.resource-toolbar-wrap {
-  display: flex;
-  flex-wrap: wrap;
-}
-
 .resource-toolbar-wrap > .resource-toolbar-actions {
   flex: 1 1 9rem;
 }
 
-.resource-toolbar-wrap > .resource-toolbar-query {
+.resource-toolbar-wrap > .resource-toolbar-query,
+.resource-toolbar-query:has(> [data-search-layout="shortcuts"]) {
   order: 3;
   flex: 1 0 100%;
 }
 
 .resource-toolbar-wrap > .resource-toolbar-utilities {
-  flex: 0 1 auto;
   flex-wrap: wrap;
-  margin-left: auto;
 }
 
-@container (min-width: 52rem) {
-  .resource-toolbar {
-    grid-template-columns: auto minmax(12rem, 1fr) auto;
-  }
-
-  .resource-toolbar-query {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .resource-toolbar-utilities {
-    grid-column: 3;
-  }
-}
-
-.resource-toolbar:has([data-search-shortcuts]) > .resource-toolbar-query {
-  grid-column: 1 / -1;
-  grid-row: 2;
+.resource-toolbar-query:has(> [data-search-layout="trigger"]) {
+  order: 0;
+  flex: 0 0 auto;
 }
 
 .resource-list-frame[data-resource-presentation="page"] {

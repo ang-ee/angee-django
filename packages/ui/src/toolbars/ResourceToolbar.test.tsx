@@ -13,7 +13,12 @@ const status = { id: "status", label: "Status", group: { field: "status" } };
 function toolbar(props: Partial<ResourceToolbarProps> = {}) {
   return render(<ResourceToolbar pager={PAGER} search={searchFixture()} onViewChange={vi.fn()} {...props} />);
 }
-beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
+// A roomy toolbar whose box chips fit: the box measures its narrow inert chip copies.
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return new DOMRect(0, 0, this.closest("[inert]") ? 60 : 1024, 80);
+  });
+});
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function groupSearch(options: Parameters<typeof searchFixture>[0]) {

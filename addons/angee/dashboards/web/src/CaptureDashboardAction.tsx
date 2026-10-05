@@ -28,7 +28,7 @@ function CaptureDashboardMenu({ store }: { store: DashboardStore }): React.React
   );
   if (targets.length === 0) return null;
   return (
-    <ActionMenu label={t("capture.add")} glyph="plus" size="sm">
+    <ActionMenu label={null} aria-label={t("capture.add")} glyph="layout-dashboard" variant="icon" size="iconMd">
       {targets.map((dashboard) => (
         <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
       ))}

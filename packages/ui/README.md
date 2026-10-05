@@ -18,10 +18,11 @@ field as their table ID even when metadata resolves a different display path.
 `search={{ box, shortcuts }}` with text, facet, clause, toggle and group controls,
 and `boardCard` with a title and up to four fields. The full search box is the
 default; shortcuts default it to a collapsed badge trigger (`box: true` keeps
-it full). Every control reads the shared model, and the box shows every active
-item. Pinned favorites appear as toggles after declared shortcuts without
+it full). Every control reads the shared model. The box keeps one line: the
+chips that fit, then "+N", which opens the panel listing every active item.
+Pinned favorites appear as toggles after declared shortcuts without
 collapsing a box-only list. Below 36rem toolbar width only the badge trigger
-remains. Addons contribute the same typed shortcuts through `resource#search`;
+remains, at its natural width beside the actions and pager. Addons contribute the same typed shortcuts through `resource#search`;
 `sequence` interleaves them with page `page.*` extras, and `only`/`except` narrow
 both. See [the declaration contract](src/views/resource/search/shortcuts.ts).
 Named filters that fail resource-query parsing and shortcuts with unavailable
