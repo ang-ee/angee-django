@@ -3,10 +3,12 @@ import { useDebounce } from "use-debounce";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../../i18n";
 import { cn } from "../../../lib/cn";
+import { toneClass } from "../../../lib/tones";
 import { useMediaQuery } from "../../../lib/use-media-query";
+import { useOverflowCount } from "../../../lib/use-overflow-count";
 import { Button } from "../../../ui/button";
 import { CountBadge } from "../../../ui/badge";
-import { RemovableChip } from "../../../ui/chip";
+import { RemovableChip, chipVariants } from "../../../ui/chip";
 import { Combobox } from "../../../ui/combobox";
 import { Input } from "../../../ui/input";
 import { Toolbar } from "../../../ui/toolbar";
@@ -22,6 +24,8 @@ import type { ResourceSearch, SearchActiveItem, SearchFacet, SearchFacetOption }
 
 /** The three-column panel is 48rem wide; below this viewport width it stacks. */
 const SEARCH_PANEL_ROOMY_QUERY = "(min-width: 52rem)";
+/** "+N" for the chips that do not fit wears the chip recipe, so its measured copy matches it. */
+const MORE_CHIP = cn(chipVariants({ size: "sm" }), toneClass("brand", "soft"), "cursor-pointer outline-none focus-visible:focus-ring");
 
 type SearchSuggestion = { id: `suggest:${string}`; kind: "suggest"; label: string; apply: () => void };
 type SearchItem = SearchActiveItem | SearchSuggestion;
@@ -84,13 +88,20 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   const suggestions = groups.flatMap((group) => group.items);
   const collapsed = box === "collapsed";
   const active = search.active;
-  const input = <Combobox.Chips aria-label={t("search.active")} className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-    {active.map((item) => <Combobox.Chip key={item.id}
-      render={<RemovableChip tone="brand" size="sm" className="max-w-64 focus-visible:focus-ring"
-        removeLabel={item.kind === "group" ? groupLevelLabel(item, t) : activeLabel(item, t)}
-        onRemove={() => { search.clear(item.id); inputRef.current?.focus(); }} />}>
-      <ActiveLabel item={item} search={search} />
-    </Combobox.Chip>)}
+  // The box keeps one line: the chips that fit stay in it and the rest collapse
+  // into "+N", which opens the panel. The input is the last entry and is always
+  // kept, so the row reserves its minimum width. Visible chips are a prefix of the
+  // combobox value, which keeps Base UI's chip removal index aligned with it.
+  const entries = React.useMemo(() => [...active, null], [active]);
+  const [rowRef, measurementRef, visible] = useOverflowCount(entries, active.length);
+  const shown = collapsed ? active : active.filter((_, index) => visible.includes(index));
+  const hidden = active.length - shown.length;
+  const input = <Combobox.Chips ref={collapsed ? undefined : rowRef} aria-label={t("search.active")}
+    className={cn("flex min-w-0 flex-1 items-center gap-1", collapsed ? "flex-wrap" : "flex-nowrap")}>
+    {shown.map((item) => <Combobox.Chip key={item.id} render={<ActiveChip item={item} search={search}
+      onRemove={() => { search.clear(item.id); inputRef.current?.focus(); }} />} />)}
+    {hidden ? <PopoverTrigger className={MORE_CHIP} aria-label={t("search.moreActive", { count: hidden })}
+      title={t("search.moreActive", { count: hidden })}>+{hidden}</PopoverTrigger> : null}
     <Combobox.Input ref={inputRef} aria-label={t("resourceToolbar.filterRecords")}
       placeholder={t("resourceToolbar.filterPlaceholder")}
       className="h-7 min-w-28 flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted" />
@@ -116,8 +127,18 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
         if (added.length) { setInputValue(""); setSuggestionsOpen(false); }
       }}>
       <div ref={hostRef} className={cn("flex min-w-0 items-center gap-1 rounded-6",
-        collapsed ? "shrink-0" : "min-h-8 flex-1 bg-inset px-2 py-0.5 focus-within:focus-ring")}>
-        {!collapsed ? <><Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />{input}</> : null}
+        collapsed ? "shrink-0" : "relative min-h-8 flex-1 bg-inset px-2 py-0.5 focus-within:focus-ring")}>
+        {!collapsed ? <>
+          {/* One intrinsic copy per entry, then "+N"; clipped, inert and hidden so it is never reachable. */}
+          <div inert aria-hidden="true" className="pointer-events-none invisible absolute inset-0 overflow-hidden">
+            <div ref={measurementRef} className="flex w-max items-center gap-1">
+              {active.map((item) => <ActiveChip key={item.id} item={item} search={search} onRemove={() => undefined} />)}
+              <span className="w-28 shrink-0" />
+              <span className={MORE_CHIP}>+{active.length}</span>
+            </div>
+          </div>
+          <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />{input}
+        </> : null}
         <PopoverTrigger render={toolbar ? <Toolbar.Button /> : undefined} aria-label={t("search.panel")} className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-6 px-1 text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring">
           <Glyph name={collapsed ? "filter" : "chevron-down"} className="size-3.5" />
           {collapsed && active.length > 0 ? <CountBadge tone="brand">{active.length}</CountBadge> : null}
@@ -139,7 +160,10 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
         <PopoverContent aria-label={t("search.panel")} initialFocus={collapsed ? inputRef : undefined}
           className={cn("grid max-h-[min(36rem,calc(100dvh-5rem))] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain",
             roomy && !collapsed ? "w-[48rem] grid-cols-3" : "w-[min(22rem,calc(100vw-1rem))] grid-cols-1")}>
-          <SearchPanel search={search} stacked={!roomy || collapsed} input={collapsed ? input : null} />
+          <SearchPanel search={search} stacked={!roomy || collapsed} lead={collapsed ? input : hidden ? <section
+            aria-label={t("search.active")} className="flex flex-wrap gap-1 pb-1">
+            {active.map((item) => <ActiveChip key={item.id} item={item} search={search} onRemove={() => search.clear(item.id)} />)}
+          </section> : null} />
         </PopoverContent>
       </PopoverPositioner></PopoverPortal>
     </Combobox.Root>
@@ -185,6 +209,17 @@ function activeLabel(item: SearchActiveItem, t: UiTranslate): string {
   }
 }
 
+/** A removable active item; the label truncates, and its full text names the chip and titles it. */
+function ActiveChip({ item, search, className, ...props }: { item: SearchActiveItem; search: ResourceSearch }
+  & Omit<React.ComponentProps<typeof RemovableChip>, "children" | "removeLabel">): React.ReactElement {
+  const t = useUiT();
+  const label = activeLabel(item, t);
+  return <RemovableChip {...props} tone="brand" size="sm" className={cn("max-w-64 focus-visible:focus-ring", className)}
+    aria-label={label} title={label} removeLabel={item.kind === "group" ? groupLevelLabel(item, t) : label}>
+    <ActiveLabel item={item} search={search} />
+  </RemovableChip>;
+}
+
 function ActiveLabel({ item, search }: { item: SearchActiveItem; search: ResourceSearch }): React.ReactElement {
   const t = useUiT();
   if (item.kind === "group") return <>{t(item.index === 0 ? "resourceToolbar.groupBy" : "search.then")}: <GroupLevelLabel item={item} /></>;
@@ -206,7 +241,8 @@ function RelationSelectedLabel({ facet, value }: { facet: SearchFacet; value: st
   return <>{selected?.label ?? value}</>;
 }
 
-function SearchPanel({ search, stacked, input }: { search: ResourceSearch; stacked: boolean; input: React.ReactNode }): React.ReactElement {
+/** `lead` heads the Filters column: the collapsed box's chips and input, or every active item when chips overflow the box. */
+function SearchPanel({ search, stacked, lead }: { search: ResourceSearch; stacked: boolean; lead: React.ReactNode }): React.ReactElement {
   const t = useUiT();
   const [clauseOpen, setClauseOpen] = React.useState(false);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
@@ -222,7 +258,7 @@ function SearchPanel({ search, stacked, input }: { search: ResourceSearch; stack
   }
   return <>
     <PickerColumn stacked={stacked} icon={<Glyph name="filter" className="size-3.5" />} title={t("resourceToolbar.filters")}>
-      {input}
+      {lead}
       {[...sections].map(([label, choices]) => <section key={label} aria-label={label || undefined} className="grid gap-1">
         {label ? <h4 className="px-2 pt-2 text-2xs font-semibold text-fg-muted">{label}</h4> : null}
         {choices.map((option) => <PickerButton key={option.id} active={search.active.some((item) => item.id === `filter:${option.id}`)}

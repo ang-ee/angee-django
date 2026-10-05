@@ -226,6 +226,8 @@ export const enUiMessages: Record<string, string> = {
   "search.notGiven": "Not given",
   "search.panel": "Search options",
   "search.active": "Active search",
+  "search.moreActive_one": "+{count} more active item",
+  "search.moreActive_other": "+{count} more active items",
   "search.searchField": "Search {field} for: {text}",
   "search.textSuggestions": "Search fields",
   "search.facetSuggestion": "{field}: {value}",

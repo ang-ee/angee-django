@@ -60,6 +60,9 @@ describe("CaptureDashboardAction", () => {
     mocks.save.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     await React.act(async () => root.render(<CaptureDashboardAction />));
     const trigger = host.querySelector<HTMLButtonElement>("button")!;
+    // An icon-only toolbar button, named for assistive technology.
+    expect(trigger.getAttribute("aria-label")).toBe("Add to dashboard");
+    expect(trigger.textContent).toBe("");
     await React.act(async () => trigger.click());
     const item = document.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
     expect(item.textContent).toContain("My dashboard");
