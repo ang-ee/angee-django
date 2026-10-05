@@ -146,14 +146,20 @@ export function FormViewRecordHeader({
   } = surface;
   const headerValues = useWatch({
     control: form.control,
-    disabled: !titleField?.resolve && !statusField?.resolve,
+    disabled: !titleField?.resolve && !statusField?.resolve && !statusField?.showWhen,
   }) as FormValues;
   const currentTitleField = titleField
     ? resolveField(titleField, headerValues)
     : undefined;
-  const currentStatusField = statusField
+  const resolvedStatusField = statusField
     ? resolveField(statusField, headerValues)
     : undefined;
+  const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
+    && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
+    ? resolvedStatusField : undefined;
+  const statusbar = currentStatusField && fieldWidgetId(currentStatusField) === "statusbar";
+  const statusOnTitleRow = statusbar && !compact;
+  const compactStatus = statusbar && compact;
   const titleRelation = currentTitleField
     ? relationByField.get(currentTitleField.name)
     : undefined;
@@ -185,53 +191,37 @@ export function FormViewRecordHeader({
       </header>
     );
   }
+  const statusMark = currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null;
+  const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
+    compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
+    statusOnTitleRow ? "ml-auto max-w-full" : "w-full",
+  )}>
+    <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
+      compactStatus ? (
+        typeof controller.value === "string" && controller.value ? <Badge
+          tone={statusTone(controller.value)} density="compact" shape="pill" className="justify-self-start"
+        >{optionLabel(currentStatusField.options, controller.value)}</Badge> : <span aria-hidden />
+      ) : <FieldDescriptorControl
+        controlRef={controller.ref}
+        field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
+        value={controller.value}
+        row={displayRecord ?? undefined}
+        readOnly={fieldReadOnly(currentStatusField)}
+        onChange={(next) => {
+          startFieldInteraction(currentStatusField.name);
+          clearServerFieldError(currentStatusField.name);
+          controller.onChange(next);
+          afterFieldChange(currentStatusField, next);
+        }}
+        onCommit={() => commitFieldInteraction(currentStatusField.name)}
+      />
+    } />
+    {statusOnTitleRow ? statusMark : null}
+  </div>{!statusOnTitleRow ? statusMark : null}</> : null;
   return (
-    <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
-      {currentStatusField && compact && fieldWidgetId(currentStatusField) === "statusbar" ? (
-        <Controller
-          control={form.control}
-          name={currentStatusField.name}
-          render={({ field: controller }) => {
-            const value = typeof controller.value === "string"
-              ? controller.value
-              : "";
-            return value ? (
-              <Badge
-                tone={statusTone(value)}
-                density="compact"
-                shape="pill"
-                className="justify-self-start"
-              >
-                {optionLabel(currentStatusField.options, value)}
-              </Badge>
-            ) : <span aria-hidden />;
-          }}
-        />
-      ) : currentStatusField ? (
-        <div ref={statusContainerRef} className="flex min-w-0 w-full flex-wrap items-center gap-3">
-          <Controller
-            control={form.control}
-            name={currentStatusField.name}
-            render={({ field: controller }) => (
-              <FieldDescriptorControl
-                controlRef={controller.ref}
-                field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
-                value={controller.value}
-                row={displayRecord ?? undefined}
-                readOnly={fieldReadOnly(currentStatusField)}
-                onChange={(next) => {
-                  startFieldInteraction(currentStatusField.name);
-                  controller.onChange(next);
-                  afterFieldChange(currentStatusField, next);
-                }}
-                onCommit={() => commitFieldInteraction(currentStatusField.name)}
-              />
-            )}
-          />
-        </div>
-      ) : null}
-      {currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null}
-      <div className="min-w-0 flex-1 self-start">
+    <header className={cn(statusOnTitleRow ? "flex flex-wrap items-start gap-x-6 gap-y-4" : "grid", compact ? "gap-1" : !statusOnTitleRow && "gap-4")}>
+      {!statusOnTitleRow ? status : null}
+      <div className={cn("min-w-0 flex-1 self-start", statusOnTitleRow && "basis-64")}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="min-w-0 flex-1">
         {title !== undefined ? (
@@ -317,7 +307,8 @@ export function FormViewRecordHeader({
         {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         {contextLine ? <div className="mt-1 break-words text-xs text-fg-muted">{contextLine}</div> : null}
       </div>
-      {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
+      {statusOnTitleRow ? status : null}
+      {extra ? <div className={cn(compact && "pt-1", statusOnTitleRow && "w-full")}>{extra}</div> : null}
     </header>
   );
 }

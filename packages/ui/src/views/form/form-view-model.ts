@@ -125,7 +125,7 @@ export function formViewFieldLayout(
   const titleField = titleFieldFor(formFields, metadata);
   const titlePlacementField = isCreate ? undefined : formFields.find((field) => field.placement === "title");
   const statusField = formFields.find(
-    (field) => field.status && !field.showWhen,
+    (field) => fieldWidgetId(field) === "statusbar" || (field.status && !field.showWhen),
   );
   const bodyField = bodyFieldFor(formFields, titleField, statusField);
   const excluded = new Set(

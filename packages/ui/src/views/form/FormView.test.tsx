@@ -59,6 +59,7 @@ import {
 } from "./FormView";
 import { ActionTrigger } from "../../toolbars/ActionMenu";
 import { useRecordChromeContext } from "../resource/record-chrome-context";
+import { RecordFieldMarksProvider, useRecordFieldMarks } from "./record-field-marks";
 import {
   Action,
   Field,
@@ -2418,18 +2419,91 @@ describe("FormView", () => {
     expect(sdkMocks.recordSelection).toContain("reminderAt");
   });
 
-  test("places the declared status field before the hero and the lead body before secondary fields", async () => {
+  test.each([true, undefined])("places a statusbar once to the title's right, without a label or body copy (status=%s)", async (status) => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1">
       <Field name="title" label="Title" title />
-      <Field name="status" label="Status" widget="statusbar" status options={statusOptions} />
+      <Field name="status" label="Status" widget="statusbar" status={status} options={statusOptions} />
       <Group label="Details"><Field name="wordCount" label="Words" /></Group>
       <Field name="body" label="Lead body" body />
     </FormView>);
     const title = await screen.findByDisplayValue("First");
-    const status = screen.getByRole("list");
-    expect(status.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const header = title.closest("header")!;
+    const steps = within(header).getByRole("list");
+    expect(screen.getAllByRole("list")).toEqual([steps]);
+    expect(title.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(header.firstElementChild?.contains(title)).toBe(true);
+    expect(header.lastElementChild?.contains(steps)).toBe(true);
+    expect(header.lastElementChild?.className).toContain("ml-auto");
+    expect(header.className).toContain("flex-wrap");
+    expect(header.firstElementChild?.className).toContain("basis-64");
+    expect(screen.queryByText("Status")).toBeNull();
     expect(screen.queryByLabelText("Status")).toBeNull();
     expect(screen.getByText("Lead body").compareDocumentPosition(screen.getByText("Details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test.each(["field", "form", "resolve"] as const)("a grouped statusbar in the header keeps %s read-only policy", async (lock) => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly={lock === "form"}>
+      <Field name="title" label="Title" title />
+      <Group label="Details">
+        <Field name="status" label="Status" widget="statusbar" options={statusOptions}
+          readOnly={lock === "field"} resolve={lock === "resolve" ? (values) => ({ name: "status", readOnly: values.wordCount === 3 }) : undefined} />
+        <Field name="wordCount" label="Words" />
+      </Group>
+    </FormView>);
+    await screen.findByRole("button", { name: "Draft" });
+    const header = document.querySelector("header")!;
+    expect(within(header).getByRole("list")).toBe(screen.getByRole("list"));
+    expect(screen.queryByText("Status")).toBeNull();
+    const draft = within(header).getByRole("button", { name: "Draft" });
+    await waitFor(() => expect(draft.hasAttribute("disabled")).toBe(true));
+    fireEvent.click(draft);
+    expect(within(header).getByText("Active").closest("[role='listitem']")?.getAttribute("aria-current")).toBe("step");
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("a header statusbar retains its field mark and reveal action", async () => {
+    const onReveal = vi.fn();
+    const marks = [{ model: "notes.Note", id: "note-1", marks: [
+      { field: "status", label: "Unconfirmed", tone: "warning" as const, onReveal },
+    ] }];
+    function Marks() { useRecordFieldMarks(marks); return null; }
+    renderWithProviders(<RecordFieldMarksProvider><Marks /><FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Field name="status" label="Status" widget="statusbar" readOnly options={statusOptions} />
+    </FormView></RecordFieldMarksProvider>);
+    await screen.findByDisplayValue("First");
+    const mark = within(document.querySelector("header")!).getByRole("button", { name: "Unconfirmed: Status" });
+    expect(mark.parentElement?.contains(screen.getByRole("list"))).toBe(true);
+    fireEvent.click(mark);
+    expect(onReveal).toHaveBeenCalledOnce();
+  });
+
+  test("a form without a statusbar keeps its status field labelled in the body", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Field name="status" label="Status" />
+    </FormView>);
+    const title = await screen.findByDisplayValue("First");
+    const header = title.closest("header")!;
+    expect(header.className).toBe("grid gap-4");
+    const status = screen.getByLabelText("Status");
+    expect(header.contains(status)).toBe(false);
+    expect(screen.getByText("Status")).toBeTruthy();
+  });
+
+  test("a conditional statusbar stays in the header as its visibility changes", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Field name="status" label="Status" widget="statusbar" options={statusOptions} showWhen={(values) => values.title === "First"} />
+    </FormView>);
+    const title = await screen.findByDisplayValue("First");
+    const header = title.closest("header")!;
+    expect(screen.getByRole("list").closest("header")).toBe(header);
+    fireEvent.change(title, { target: { value: "Hidden" } });
+    await waitFor(() => expect(screen.queryByRole("list")).toBeNull());
+    expect(screen.queryByText("Status")).toBeNull();
+    fireEvent.change(title, { target: { value: "First" } });
+    expect(screen.getByRole("list").closest("header")).toBe(header);
   });
 
   test.each([
@@ -2969,7 +3043,7 @@ describe("FormView", () => {
       <FormView
         resource="notes.Note"
         id="note-1"
-        fields={fields}
+        fields={fields.map((field) => field.name === "status" ? { ...field, status: undefined } : field)}
         recordPresentation="workspace"
         defaultRecordTab="editor"
         recordExtras={() => <p>Related records</p>}
@@ -3072,6 +3146,11 @@ describe("FormView", () => {
     expect(heading.className).toContain("text-base");
     expect(heading.className).not.toContain("text-28");
     expect(within(heading.closest("header")!).getByText("Active").className).toContain("justify-self-start");
+    expect(heading.closest("header")?.className).toBe("grid gap-1");
+    expect(screen.getAllByText("Active")).toHaveLength(1);
+    expect(screen.queryByRole("list")).toBeNull();
+    expect(screen.queryByText("Draft")).toBeNull();
+    expect(screen.queryByText("Status")).toBeNull();
     expect(document.querySelector("form")?.className).toContain("min-h-0");
     expect(heading.closest("form")?.querySelector(".overflow-auto")).toBeTruthy();
     expect(screen.queryByRole("tab")).toBeNull();

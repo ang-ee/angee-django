@@ -534,7 +534,7 @@ shared UI copy through an addon bundle.
   Overview appears only on forms without body tabs. `defaultRecordTab` and controlled
   `recordTab` address either kind; field reveal selects its owning body tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
-  above the title and its lead body before the overview's groups. A domain-owned
+  above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the overview's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget
   with the addon. Add `fill` when it should use the measured hero width; the
   widget receives `field.fill` and `field.containerWidth`. Do not repeat that
