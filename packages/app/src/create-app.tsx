@@ -580,10 +580,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    beforeLoad: async () => {
+    beforeLoad: async ({ preload }) => {
       const identity = await loadRouteIdentity(refineAuthProvider, queryClient);
       // Signed out: sign in and come back here, so the landing rule runs with this person's preferences.
-      if (identity === null && homeRequiresSignIn) throw redirect({ to: loginPath, search: { next: "/" } });
+      // A preload only resolves the landing target; it never sends anyone to sign in.
+      if (identity === null && homeRequiresSignIn && !preload) throw redirect({ to: loginPath, search: { next: "/" } });
       // Location options rather than `href`: a preload follows a redirect only
       // through them, and would otherwise preload `/` again without end.
       throw redirect({
