@@ -36,8 +36,11 @@ control; nothing reaches a record or query cache. Controls read the row's
 `account_actions` projection, which batches the verbs' own conditions.
 
 The generic update runs through `write` plus `write__<field>` gates: identity,
-credential and authority columns stay with administrators, and a protected
-account also needs `administer`. `last_login` reads through `read__last_login`.
+credential and authority columns, a person's UI preferences and the account's
+audit dates (`date_joined`, `last_login`) stay with administrators, and a
+protected account also needs `administer`. People save their own preferences
+through the self-service mutation, and IAM stamps `last_login` on sign-in in
+place of Django's receiver. `last_login` reads through `read__last_login`.
 The users list renders `iam.users#columns` (username, email, staff, active,
 last sign-in) and ships the `iam.users.active` and `iam.users.deactivated`
 presets. A consumer grants its manager role these powers and marks the role as
