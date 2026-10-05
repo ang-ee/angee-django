@@ -244,7 +244,7 @@ export function LabeledDescriptorField({
           onCommit,
           dialogValues: dialogValues ?? {},
         })
-      ) : field.relation ? (
+      ) : field.relation && (!field.widget || field.widget === "many2one" || field.widget === "many2many") ? (
         <DescriptorRelationControl
           controlId={controlId}
           describedBy={describedBy}

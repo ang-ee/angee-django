@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { defaultWidgets } from "@angee/ui";
 
-import { DecisionContext } from "./DecisionContext";
+import { DecisionContext, FactValue } from "./DecisionContext";
 
 const mocks = vi.hoisted(() => ({ openRecord: vi.fn() }));
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -14,6 +14,13 @@ vi.mock("@angee/ui", async (importOriginal) => {
 afterEach(() => { cleanup(); mocks.openRecord.mockReset(); });
 
 describe("decision context", () => {
+  test("a proposed relation retains its readable reference label", () => {
+    render(<ShellPageTestProviders><FactValue value="nte_related" relationModel="notes.Note"
+      label="Related note" /></ShellPageTestProviders>);
+    expect(screen.getByRole("button", { name: "Related note" })).toBeTruthy();
+    expect(screen.queryByText("nte_related")).toBeNull();
+  });
+
   test("shows attributed facts and evidence and passes complete locators to the native record peek", async () => {
     const evidence = { model: "notes.Note", id: "nte_evidence", label: "Evidence note", tab: "source", page: 2, search: { query: "passage", stale: null } };
     render(<ShellPageTestProviders><DecisionContext context={{

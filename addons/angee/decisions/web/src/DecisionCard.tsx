@@ -85,9 +85,10 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
           label: fieldLabel(id, field, actions.model),
           value: (() => {
             const facts = modelMetadataForLabel(metadata, actions.model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
-            return <FactValue value={operation.set} relationModel={facts?.relationModelLabel} options={facts?.values}
+            const reference = references.find((reference) => reference.id === operation.set);
+            return <FactValue value={operation.set} relationModel={facts?.relationModelLabel ?? reference?.model} label={reference?.label} options={facts?.values}
               widget={facts?.widget} row={context.success ? context.output.facts.find((fact) => Object.keys(fact.row).length)?.row : undefined}
-              emptyLabel={t("decision.none")} json />;
+              emptyLabel={t("decision.none")} />;
           })(),
         }))} />
       </span>)}</span>;

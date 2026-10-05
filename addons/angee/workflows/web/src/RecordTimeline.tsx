@@ -198,7 +198,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const append = (node: typeof ordered[number]) => {
     const step = node.step_run;
     const outcome = step?.outcome_label && step.outcome_label !== titleCase(step.outcome) ? step.outcome_label : null;
-    const title = optionToken(step?.status) === "succeeded"
+    const title = optionToken(step?.status) === "succeeded" && !step?.decision
       ? outcome || node.label : node.label;
     items.push({ id: node.key, state: optionToken(step?.status) === "canceled" ? "stopped" : node.plan === "current" ? "current" : "done", title,
       timestamp: step?.updated_at, tone: resolveTone(step?.hold === "error" ? "error" : "succeeded"),

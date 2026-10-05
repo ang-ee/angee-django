@@ -57,16 +57,15 @@ export function DecisionContext({ context, reasonOnly = false, representedRecord
   </section>;
 }
 
-export function FactValue({ value, widget, row, relationModel, options, emptyLabel = "-", json = false }: {
-  value: JsonValue; widget?: string | null; row?: Record<string, JsonValue>; relationModel?: string | null;
-  options?: readonly { value: string; description?: string | null }[]; emptyLabel?: string; json?: boolean;
+export function FactValue({ value, widget, row, relationModel, label, options, emptyLabel = "-" }: {
+  value: JsonValue; widget?: string | null; row?: Record<string, JsonValue>; relationModel?: string | null; label?: string;
+  options?: readonly { value: string; description?: string | null }[]; emptyLabel?: string;
 }): ReactElement {
   const t = useUiT();
   const definition = useResolvedWidget(widget ?? "text");
   const openRecord = useRecordPeek();
-  if (relationModel && typeof value === "string") return <RecordReference model={relationModel} id={value} onOpen={() => openRecord({ model: relationModel, id: value })} />;
+  if (relationModel && typeof value === "string") return <RecordReference model={relationModel} id={value} label={label} onOpen={() => openRecord({ model: relationModel, id: value })} />;
   if (widget && definition) return <definition.read value={value} row={row} />;
-  if (json && value !== null && typeof value === "object") return <span>{JSON.stringify(value)}</span>;
   if (Array.isArray(value)) return <span>{value.map((item, index) => <span key={index}>{index ? "; " : ""}<FactValue value={item} /></span>)}</span>;
   if (value !== null && typeof value === "object") return <span>{Object.entries(value).filter(([, item]) => item !== null && item !== "").map(([name, item], index) =>
     <span key={name}>{index ? " · " : ""}<span className="text-fg-muted">{titleCase(name)} </span><FactValue value={item} /></span>,

@@ -58,7 +58,7 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
         title={title}
         {...props}
       >
-        <span className="block truncate">{description}</span>
+        <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{description}</span>
       </Alert>
     );
   },

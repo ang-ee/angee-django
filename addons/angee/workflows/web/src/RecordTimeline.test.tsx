@@ -61,6 +61,8 @@ test("a first visit opens a collapsed pane only when a decision is waiting", asy
 test("answered cards do not nest list items outside a list", async () => {
   const { container } = render(<TimelineStory state="clean" />);
   await screen.findByText("Chose: Use proposed name");
+  expect(screen.queryByText("Use proposed name", { exact: true })).toBeNull();
+  expect(screen.getByText("Review the record")).toBeTruthy();
   for (const item of container.querySelectorAll("li")) {
     expect(["UL", "OL"]).toContain(item.parentElement?.tagName);
   }

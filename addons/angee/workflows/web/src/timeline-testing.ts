@@ -39,6 +39,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     run.status = "SUCCEEDED"; run.can_cancel = false; run.finished_at = at;
     decision.is_open = false; decision.verdict = ["accept"]; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
     decision.verdict_label = "Use proposed name";
+    review.outcome = "accepted"; review.outcome_label = "Use proposed name";
     for (const node of nodes) if (node.plan !== "optional") { node.plan = "done"; if (node.step_run) { node.step_run.status = "SUCCEEDED"; node.step_run.hold = null; } }
     nodes[8] = node("finish", "Finish the plan", 8, "done"); nodes[9]!.plan = "not_run";
   } else if (state === "error" || state === "run") {
