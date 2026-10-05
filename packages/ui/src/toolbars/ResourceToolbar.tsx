@@ -85,9 +85,8 @@ export interface ResourceToolbarGroupOption {
   label: ReactNode;
   group: ResourceViewGroup;
   type?: "date" | "value";
+  /** Granularities whose groups can be opened; number parts with no matching filter are left out. */
   granularities?: readonly ResourceViewGroupGranularity[];
-  /** Server extractions with matching bucket filters; absent for local axes. */
-  granularityDrills?: readonly ResourceViewGroupGranularity[];
 }
 
 export interface ResourceToolbarCustomFilterChip {

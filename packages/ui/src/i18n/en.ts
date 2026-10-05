@@ -229,8 +229,6 @@ export const enUiMessages: Record<string, string> = {
   "search.textSuggestions": "Search fields",
   "search.facetSuggestion": "{field}: {value}",
   "search.groupSuggestion": "Group by: {field}",
-  "search.ranges": "Ranges",
-  "search.numberParts": "Number parts",
   "search.numberPartItemsUnavailable": "Items unavailable: grouping by a number part has no matching filter, so its rows cannot be listed.",
   "search.empty": "empty",
   "search.notEmpty": "not empty",

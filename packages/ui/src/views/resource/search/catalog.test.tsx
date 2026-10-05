@@ -95,7 +95,7 @@ test("the box catalog retains every query axis and filterable field regardless o
     .filter(([, field]) => field.filter?.operators.length).map(([name]) => name).sort());
 });
 
-test("date grouping choices carry the query extraction's drill capability", () => {
+test("date grouping offers only granularities whose groups can be opened", () => {
   const contract = ResourceQuery.forRows({ fields: { created: { scalar: "DateTime" } } }).contract;
   contract.axes.created!.server = { input: "created", key: "created" };
   contract.axes.created!.extractions = [
@@ -105,5 +105,5 @@ test("date grouping choices carry the query extraction's drill capability", () =
     } },
   ];
   const result = catalog({ query: ResourceQuery.from(testDataResource("test.Record", { query: contract })), serverGrouping: true, columns: [] });
-  expect(result.groups[0]).toMatchObject({ granularities: ["year_number", "month"], granularityDrills: ["month"] });
+  expect(result.groups[0]?.granularities).toEqual(["month"]);
 });

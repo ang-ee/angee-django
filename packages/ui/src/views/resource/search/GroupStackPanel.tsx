@@ -67,7 +67,7 @@ export function GroupStackPanel({ search }: { search: ResourceSearch }): React.R
           onValueChange={setAxisId} />
         {selected?.granularities?.length ? <Select size="sm" value={granularity}
           disabled={!canAdd} aria-label={t("search.groupGranularity")}
-          options={granularityOptions(selected, t)}
+          options={selected.granularities.map((value) => ({ value, label: t(`search.granularity.${value}`) }))}
           onValueChange={setGranularityDraft} /> : null}
         <Button type="button" variant="secondary" size="sm" className="justify-center"
           disabled={!canAdd || !selectedLevel || contains(selectedLevel)} onClick={() => {
@@ -116,7 +116,7 @@ function GroupLevel({ item, search, axis }: {
     {axis?.granularities?.length ? <Select size="sm" value={item.level.granularity ?? ""}
       placeholder={t("search.groupGranularity")} disabled={!search.groupingEnabled}
       aria-label={t("search.levelGranularity", { label })}
-      options={granularityOptions(axis, t)}
+      options={axis.granularities.map((value) => ({ value, label: t(`search.granularity.${value}`) }))}
       onValueChange={(granularity) => search.setGroupLevel(item.index, { ...item.level, granularity })} /> : null}
   </li>;
 }
@@ -131,27 +131,21 @@ function GroupAxisChoice({ option, axis, canAdd, contains, onAdd }: {
   const t = useUiT();
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const granularities = axis?.granularities ?? option.granularities ?? [];
-  const { ranges, parts } = granularityFamilies(axis ?? option);
   const level = option.group.granularity ? option.group : axis?.group ?? option.group;
-  const visible = advancedOpen ? ranges : ranges.filter((value) => PRIMARY_GRANULARITIES.has(value));
-  const choice = (granularity: string) => {
-    const level = { ...option.group, granularity };
-    return <Button key={granularity} type="button" variant="ghost" size="sm" className="h-5 px-1.5 text-2xs"
-      disabled={!canAdd || contains(level)}
-      aria-label={t("search.addGroupGranularity", { label: labelText(option.label) ?? option.group.field,
-        granularity: t(`search.granularity.${granularity}`) })}
-      onClick={() => onAdd(level)}>{t(`search.granularity.${granularity}`)}</Button>;
-  };
+  const visible = advancedOpen ? granularities : granularities.filter((value) => PRIMARY_GRANULARITIES.has(value));
   return <div>
     <Button type="button" variant="ghost" size="sm" className="w-full justify-start"
       disabled={!canAdd || contains(level)} onClick={() => onAdd(level)}>{option.label}</Button>
     {granularities.length > 0 ? <div className="flex flex-wrap gap-0.5 px-2">
-      <div role="group" aria-label={t("search.ranges")} className="flex flex-wrap gap-0.5">{visible.map(choice)}</div>
-      {advancedOpen && parts.length ? <section aria-label={t("search.numberParts")} className="w-full border-t border-border-subtle pt-1">
-        <h4 className="mb-1 text-2xs text-fg-muted">{t("search.numberParts")}</h4>
-        <div className="flex flex-wrap gap-0.5">{parts.map(choice)}</div>
-      </section> : null}
-      {parts.length > 0 || ranges.some((value) => !PRIMARY_GRANULARITIES.has(value)) ? <Button type="button" variant="ghost"
+      {visible.map((granularity) => {
+        const level = { ...option.group, granularity };
+        return <Button key={granularity} type="button" variant="ghost" size="sm" className="h-5 px-1.5 text-2xs"
+          disabled={!canAdd || contains(level)}
+          aria-label={t("search.addGroupGranularity", { label: labelText(option.label) ?? option.group.field,
+            granularity: t(`search.granularity.${granularity}`) })}
+          onClick={() => onAdd(level)}>{t(`search.granularity.${granularity}`)}</Button>;
+      })}
+      {granularities.some((value) => !PRIMARY_GRANULARITIES.has(value)) ? <Button type="button" variant="ghost"
         size="sm" className="h-5 px-1.5 text-2xs" aria-expanded={advancedOpen}
         aria-label={t(advancedOpen ? "search.lessGranularities" : "search.moreGranularities",
           { label: labelText(option.label) ?? option.group.field })}
@@ -159,19 +153,4 @@ function GroupAxisChoice({ option, axis, canAdd, contains, onAdd }: {
         {t(advancedOpen ? "resourceToolbar.basicGranularity" : "resourceToolbar.advancedGranularity")}</Button> : null}
     </div> : null}
   </div>;
-}
-
-/** Extraction metadata decides the two families, preserving order within each. */
-function granularityOptions(axis: ResourceToolbarGroupOption, t: UiTranslate) {
-  const { ranges, parts } = granularityFamilies(axis);
-  return [...ranges.map((value) => ({ value, label: t(`search.granularity.${value}`), group: t("search.ranges") })),
-    ...parts.map((value) => ({ value, label: t(`search.granularity.${value}`), group: t("search.numberParts") }))];
-}
-
-function granularityFamilies(axis: ResourceToolbarGroupOption) {
-  const values = axis.granularities ?? [];
-  const drills = axis.granularityDrills;
-  const ranges = values.filter((value) => drills === undefined || drills.includes(value));
-  const parts = values.filter((value) => drills !== undefined && !drills.includes(value));
-  return { ranges, parts };
 }
