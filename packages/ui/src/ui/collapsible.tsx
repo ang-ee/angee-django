@@ -26,7 +26,7 @@ export const collapsibleVariants = tv({
     panel: cn(
       textRoleVariants({ role: "description" }),
       "overflow-hidden leading-relaxed",
-      "h-[var(--collapsible-panel-height)] [transition:height_var(--dur-base,180ms)_var(--ease,ease),opacity_var(--dur-base,180ms)_var(--ease,ease)]",
+      "h-[var(--collapsible-panel-height)] motion-safe:[transition:height_var(--dur-base,180ms)_var(--ease,ease),opacity_var(--dur-base,180ms)_var(--ease,ease)]",
       "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
       "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
     ),

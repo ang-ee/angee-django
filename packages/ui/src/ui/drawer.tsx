@@ -33,7 +33,7 @@ export const drawerVariants = tv({
       // Tailwind 4 emits `translate` (not `transform`) for translate-x/y-full, so
       // transition-[translate] is the correct property. Duration and easing come from
       // --dur-base / --ease tokens; fallback 200ms matches the original hardcoded value.
-      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none transition-[translate] [transition-duration:var(--dur-base,200ms)] [transition-timing-function:var(--ease,ease)]",
+      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none motion-safe:transition-[translate] motion-safe:[transition-duration:var(--dur-base,200ms)] motion-safe:[transition-timing-function:var(--ease,ease)]",
     header: "space-y-1.5 border-b border-border-subtle px-5 py-4",
     body: cn(textRoleVariants({ role: "description" }), "min-h-0 flex-1 overflow-y-auto px-5 py-4"),
     footer:
