@@ -91,6 +91,16 @@ export const IamUsers = graphql(`
 export const IamIssueUserPassword = graphql(`
   mutation IamIssueUserPassword($id: ID!) {
     issue_user_password(id: $id) {
+      username
+      password
+    }
+  }
+`);
+
+export const IamResetUserPassword = graphql(`
+  mutation IamResetUserPassword($id: ID!, $confirmed: Boolean!, $expectedRevision: Int!) {
+    reset_user_password(id: $id, confirmed: $confirmed, expected_revision: $expectedRevision) {
+      username
       password
     }
   }

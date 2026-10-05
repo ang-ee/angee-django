@@ -3,17 +3,29 @@ import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { createElement } from "react";
 
-import { IssuePasswordRecordAction } from "./password-actions";
-
-
+import {
+  ACCOUNT_ACTION_FIELDS,
+  IssuePasswordRecordAction,
+  RenameRecordAction,
+  ResetPasswordRecordAction,
+  SetActiveRecordActions,
+} from "./account-actions";
 import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 import { enIamMessages } from "./i18n";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
 import { LOGIN_CALLBACK_PATH } from "./redirects";
 import { subjectsWidget } from "./assignment-subject-widget";
+import { USER_LIST_COLUMNS, USER_LIST_PRESETS } from "./users-list";
 import { oidcLoginSection } from "./views/oidc-section";
 
-export { useIssuePasswordAction } from "./password-actions";
+export {
+  offersAccountAction,
+  useIssuePasswordAction,
+  useRenameAction,
+  useResetPasswordAction,
+  useSetActiveActions,
+  type UserAccountAction,
+} from "./account-actions";
 export {
   IamLoginPage,
   IAM_LOGIN_BACKGROUND_IMAGE_URLS,
@@ -90,6 +102,7 @@ const iam = defineBaseAddon({
     { name: "iam.relationships", path: "/iam/relationships", resource: "iam.Relationship", component: lazyRouteComponent(() => import("./views/RelationshipsPage"), "RelationshipsPage") },
     { name: "iam.schema", path: "/iam/schema", component: lazyRouteComponent(() => import("./views/SchemaPage"), "SchemaPage") },
   ],
+  resourceViews: USER_LIST_PRESETS,
   menus: identityMenu,
   i18n: { iam: enIamMessages },
   containers: {
@@ -99,13 +112,31 @@ const iam = defineBaseAddon({
     "auth.login#method": {
       "iam.oauth-login": { content: createElement(OAuthLoginMethods) },
     },
+    // Account verbs on every saved user form, each offered by the row's `account_actions`.
     "iam.User#actions-menu": {
-      "iam.issue-password": {
+      "iam.set-active": {
         sequence: 5,
-        requiredFields: ["can_issue_password"],
+        requiredFields: [...ACCOUNT_ACTION_FIELDS, "is_active"],
+        content: createElement(SetActiveRecordActions),
+      },
+      "iam.rename": {
+        sequence: 6,
+        requiredFields: [...ACCOUNT_ACTION_FIELDS, "first_name", "last_name"],
+        content: createElement(RenameRecordAction),
+      },
+      "iam.issue-password": {
+        sequence: 7,
+        requiredFields: ACCOUNT_ACTION_FIELDS,
         content: createElement(IssuePasswordRecordAction),
       },
+      "iam.reset-password": {
+        sequence: 8,
+        requiredFields: ACCOUNT_ACTION_FIELDS,
+        content: createElement(ResetPasswordRecordAction),
+      },
     },
+    // The users list's columns; other addons add seat columns by sequence.
+    "iam.users#columns": USER_LIST_COLUMNS,
     "resource#utilities": {
       "iam.share-list": { sequence: 20, content: createElement(ShareListChrome) },
     },
