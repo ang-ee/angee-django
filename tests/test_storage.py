@@ -31,7 +31,8 @@ from strawberry.django.views import GraphQLView
 from angee.base.identity import public_id_of
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.base.refs import canonical_record_target
-from angee.data.field_classification import is_archive_field
+from angee.data.field_classification import is_archive_field, is_trash_field
+from angee.graphql import records
 from angee.graphql.views import graphql_endpoint
 from angee.storage import exceptions
 from angee.storage import models as storage_models
@@ -203,21 +204,27 @@ def test_archive_queryset_scopes_partition_storage_rows(drive: Any) -> None:
     assert archived.pk in archived_ids and drive.pk not in archived_ids
 
 
-def test_archive_column_is_marked_archivable_in_resource_metadata() -> None:
-    """The final resource marks the mixin column archivable by its one name.
+def test_archive_and_trash_columns_are_classified_in_resource_metadata() -> None:
+    """The final resources mark each mixin column by its one name.
 
-    A same-typed boolean under a different contract (storage's soft-delete
-    ``is_trashed``) is deliberately left plain — the vocabulary is name-based.
+    The archive flag and the trash flag are distinct contracts: each column is
+    classified as its own facet and never as the other.
     """
 
     schema = addon_schema(storage_schema.schemas, "public")
-    resource = next(item for item in schema.angee_resources if item.model_label == Drive._meta.label)
-    fields = {field.name: field for field in resource.fields}
-    assert fields["is_archived"].archivable is True
-    assert fields["slug"].archivable is False
+    resources = {item.model_label: item for item in schema.angee_resources}
+    drive_fields = {field.name: field for field in resources[Drive._meta.label].fields}
+    file_fields = {field.name: field for field in resources[File._meta.label].fields}
+    assert drive_fields["is_archived"].archivable is True
+    assert drive_fields["is_archived"].trashable is False
+    assert drive_fields["slug"].archivable is False
+    assert file_fields["is_trashed"].trashable is True
+    assert file_fields["is_trashed"].archivable is False
 
     assert is_archive_field(Drive._meta.get_field("is_archived")) is True
     assert is_archive_field(File._meta.get_field("is_trashed")) is False
+    assert is_trash_field(File._meta.get_field("is_trashed")) is True
+    assert is_trash_field(Drive._meta.get_field("is_archived")) is False
 
 
 def test_detect_mime_falls_back_to_the_filename_when_libmagic_is_unsure() -> None:
@@ -736,17 +743,19 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
 
     restored = result_data(
         execute_schema(
-            schema,
+            addon_schema(storage_schema.schemas, "public", records.schemas),
             """
             mutation Restore($id: ID!) {
-              restore_file(id: $id) { id is_trashed }
+              restore_record(target_type: "storage/file", target_id: $id, confirm: true) { ok message }
             }
             """,
             {"id": str(row.sqid)},
             user=drive.alice,
         )
-    )["restore_file"]
-    assert restored == {"id": str(row.sqid), "is_trashed": False}
+    )["restore_record"]
+    assert restored == {"ok": True, "message": "Restored from the trash."}
+    row.refresh_from_db()
+    assert not row.is_trashed
 
 
 @pytest.mark.django_db(transaction=True)

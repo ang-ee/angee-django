@@ -27,7 +27,14 @@ from angee.base.checks import (
 )
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, HierarchyQuerySet, OwnerMixin
+from angee.base.mixins import (
+    AppendOnlyModel,
+    AppendOnlyQuerySet,
+    HierarchyQuerySet,
+    OwnerMixin,
+    TrashMixin,
+    TrashQuerySet,
+)
 from angee.base.models import AngeeManager, AngeeModel
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
@@ -67,6 +74,30 @@ def test_append_only_default_manager_check(guarded: bool) -> None:
         assert len(append_errors) == (0 if guarded else 1)
         if append_errors:
             assert append_errors[0].obj is Retained
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_trash_default_manager_check(guarded: bool) -> None:
+    """A model storing the trash flag must offer the trash row scopes."""
+
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class Removable(TrashMixin):
+            objects = TrashQuerySet.as_manager() if guarded else models.Manager()
+
+            class Meta:
+                app_label = "contenttypes"
+
+        errors = checks.run_checks(app_configs=list(isolated.get_app_configs()), tags=[checks.Tags.models])
+        trash_errors = [error for error in errors if error.id == "angee.E036"]
+        assert len(trash_errors) == (0 if guarded else 1)
+        if trash_errors:
+            assert trash_errors[0].obj is Removable
+
+
+def test_installed_trash_models_compose_the_trash_scopes() -> None:
+    models_ = [model for model in apps.get_models() if issubclass(model, TrashMixin)]
+    assert models_
+    assert all(not [error for error in model.check() if error.id == "angee.E036"] for model in models_)
 
 
 def test_installed_append_only_default_managers_compose_guard() -> None:

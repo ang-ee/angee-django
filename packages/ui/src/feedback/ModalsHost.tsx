@@ -13,6 +13,7 @@ import {
 import { useUiT } from "../i18n";
 import { AlertDialog } from "../ui/alert-dialog";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 import { FieldRoot, FieldLabel } from "../ui/field";
 import { ErrorBanner } from "../fragments/ErrorBanner";
@@ -30,8 +31,11 @@ export interface ConfirmOptions {
 export interface PromptField {
   name: string;
   label?: ReactNode;
-  type?: "text" | "password";
+  /** A `textarea` collects free text over several lines; Enter adds a line instead of submitting. */
+  type?: "text" | "password" | "textarea";
   placeholder?: string;
+  /** Upper bound on the collected characters, enforced by the control. */
+  maxLength?: number;
   defaultValue?: string;
   /** Show the value uneditable — e.g. revealing a freshly rotated secret. */
   readOnly?: boolean;
@@ -47,6 +51,8 @@ export interface PromptOptions {
   copy?: PromptCopy;
   confirm?: ReactNode;
   cancel?: ReactNode;
+  /** Confirm a destructive change: the dialog and its confirm action take the danger tone. */
+  danger?: boolean;
 }
 
 /** A labelled clipboard control a prompt offers below its fields. */
@@ -282,7 +288,7 @@ function PromptDialogForm({
     >
       <AlertDialog.Portal>
         <AlertDialog.Backdrop />
-        <AlertDialog.Content tone="info">
+        <AlertDialog.Content tone={options.danger ? "danger" : "info"}>
           <AlertDialog.Body className="space-y-3 p-5">
             <AlertDialog.Title>{options.title}</AlertDialog.Title>
             {options.body ? (
@@ -295,27 +301,47 @@ function PromptDialogForm({
                     {field.label ?? field.name}
                   </FieldLabel>
                   <div className="flex items-start gap-2">
-                    <Input
-                      id={`prompt-${request.id}-${field.name}`}
-                      type={field.type ?? "text"}
-                      value={values[field.name] ?? ""}
-                      placeholder={field.placeholder}
-                      readOnly={field.readOnly}
-                      autoFocus={index === 0 && !field.readOnly}
-                      onChange={(event) => {
-                        const next = event.currentTarget.value;
-                        setValues((current) => ({
-                          ...current,
-                          [field.name]: next,
-                        }));
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && !readOnly) {
-                          event.preventDefault();
-                          submit();
-                        }
-                      }}
-                    />
+                    {field.type === "textarea" ? (
+                      <Textarea
+                        id={`prompt-${request.id}-${field.name}`}
+                        value={values[field.name] ?? ""}
+                        placeholder={field.placeholder}
+                        maxLength={field.maxLength}
+                        readOnly={field.readOnly}
+                        rows={3}
+                        autoFocus={index === 0 && !field.readOnly}
+                        onChange={(event) => {
+                          const next = event.currentTarget.value;
+                          setValues((current) => ({
+                            ...current,
+                            [field.name]: next,
+                          }));
+                        }}
+                      />
+                    ) : (
+                      <Input
+                        id={`prompt-${request.id}-${field.name}`}
+                        type={field.type ?? "text"}
+                        value={values[field.name] ?? ""}
+                        placeholder={field.placeholder}
+                        maxLength={field.maxLength}
+                        readOnly={field.readOnly}
+                        autoFocus={index === 0 && !field.readOnly}
+                        onChange={(event) => {
+                          const next = event.currentTarget.value;
+                          setValues((current) => ({
+                            ...current,
+                            [field.name]: next,
+                          }));
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !readOnly) {
+                            event.preventDefault();
+                            submit();
+                          }
+                        }}
+                      />
+                    )}
                     {field.readOnly && field.copyable ? (
                       <PromptCopyButton value={values[field.name] ?? ""} />
                     ) : null}
@@ -331,7 +357,7 @@ function PromptDialogForm({
                 {options.cancel ?? t("modal.cancel")}
               </AlertDialog.Cancel>
             )}
-            <AlertDialog.Action type="button" tone="info" onClick={submit}>
+            <AlertDialog.Action type="button" tone={options.danger ? "danger" : "info"} onClick={submit}>
               {options.confirm ?? (readOnly ? t("modal.done") : t("modal.confirm"))}
             </AlertDialog.Action>
           </AlertDialog.Footer>

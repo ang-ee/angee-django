@@ -29,7 +29,7 @@ from rebac.mixins import RebacModelBase
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ImmutableFieldsMixin
+from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, clean_trash_reason
 from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import system_queryset
@@ -1216,21 +1216,26 @@ class TaskWork(StagedModelMixin):
         self.save(update_fields=("stage", "updated_at"))
         return self
 
-    def _require_work_action(self, expected_revision: int | None) -> None:
+    def _require_work_action(self, expected_revision: int | None, *, permission: str = "write") -> None:
         """Recheck the locked, fresh row before a hand verb, including no-op replay."""
 
         system_queryset(type(self), lock=("self",)).get(pk=self.pk)
         self.refresh_from_db()
         actor, elevated = self.effective_actor(strict=True)
-        if not elevated and not self.with_actor(actor).has_access("write"):
-            raise PermissionDenied("Task write access is required.")
+        if not elevated and not self.with_actor(actor).has_access(permission):
+            raise PermissionDenied(f"Task {permission} access is required.")
         if expected_revision is not None:
             self.require_revision(expected_revision)
 
     @transaction.atomic
-    def remove(self, *, expected_revision: int | None = None) -> Any:
-        """Conceal an unpromoted task in its queue; never physically delete it."""
+    def remove(self, *, reason: str = "", expected_revision: int | None = None) -> Any:
+        """Conceal an unpromoted task in its queue; never physically delete it.
 
+        The optional reason (at most 1000 characters) is the removal's history
+        change reason, beside the stage it left for :meth:`restore`.
+        """
+
+        reason = clean_trash_reason(reason)
         self._require_work_action(expected_revision)
         if apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=self.pk).exists():
             raise ValidationError({"stage": "A promoted task cannot be removed."})
@@ -1241,8 +1246,105 @@ class TaskWork(StagedModelMixin):
         Stage.validate_transition(previous, target)
         if self.stage_id != target.pk:
             self.stage = target
-            self.save(update_fields=("stage", "updated_at"))
+            self._change_reason = reason or None
+            try:
+                self.save(update_fields=("stage", "updated_at"))
+            finally:
+                del self._change_reason
         return self
+
+    @transaction.atomic
+    def restore(self, *, expected_revision: int | None = None) -> Any:
+        """Return a removed task to the stage it held before removal.
+
+        The task's ``restore`` permission authorizes it: the inherited queue's
+        writers and administrators. Concealment still withholds the task from
+        those writers, so the authorized stage move elevates this instance's
+        save alone and rebinds the restorer afterwards. History
+        owns the earlier stage; when it no longer admits the task by hand
+        (deleted, concealing or rule-owned), the queue's default stage serves.
+        Restoration changes only the stage: today's permissions decide access.
+        """
+
+        self._require_work_action(expected_revision, permission="restore")
+        if not self.stage_model()._base_manager.filter(pk=self.stage_id, conceals=True).exists():
+            raise ValidationError({"stage": "Only a removed task can be restored."})
+        target = self._stage_before_removal() or self.resolve_default_stage()
+        if target is None:
+            raise ValidationError({"stage": "Queue has no default stage."})
+        system = target.category in Stage.SYSTEM_CATEGORIES
+        self._reject_reserved_stage_transition(target=target, manual=True, allow_system_entry=system, lock=True)
+        self.stage = target
+        actor = self.actor()
+        self.sudo(reason="work.task.restore")
+        try:
+            if system:
+                self._reject_direct_status_write()
+                with self._work_verb_write():
+                    self.save(update_fields=("stage", "updated_at"))
+            else:
+                self.save(update_fields=("stage", "updated_at"))
+        finally:
+            if actor is not None:
+                self.with_actor(actor)
+            else:
+                self.unsudo()
+        return self
+
+    @classmethod
+    def removed_for(cls, actor: Any, *, queue: Any = None, parent: Any = None) -> models.QuerySet[Any]:
+        """Return the concealed tasks ``actor`` may restore, newest change first.
+
+        The ``restore`` permission scopes the rows, so the removed list never
+        reads a task its reader cannot bring back; concealment keeps every other
+        read of these rows closed, including the reader's own.
+        """
+
+        rows = cls._default_manager.with_actor(actor).with_action("restore").scoped().filter(stage__conceals=True)
+        if queue is not None:
+            rows = rows.filter(queue=queue)
+        if parent is not None:
+            rows = rows.filter(parent=parent)
+        return rows.order_by("-updated_at", "-pk")
+
+    @classmethod
+    def removal_records(cls, pks: Iterable[Any]) -> dict[Any, Any]:
+        """Return each concealed task's removal history record: when, by whom and why.
+
+        The removal is the oldest record of the latest run in the current
+        concealing stage. One history read serves the whole page.
+        """
+
+        records: dict[Any, Any] = {}
+        stages: dict[Any, Any] = {}
+        closed: set[Any] = set()
+        for record in cls.history.filter(id__in=list(pks)).order_by("id", "-history_date", "-history_id"):
+            if record.id in closed:
+                continue
+            if record.stage_id == stages.setdefault(record.id, record.stage_id):
+                records[record.id] = record
+            else:
+                closed.add(record.id)
+        return records
+
+    def _stage_before_removal(self) -> Stage | None:
+        """Return the stage history shows before the latest concealment, if still enterable."""
+
+        earlier = (
+            self.history.exclude(stage_id=self.stage_id)
+            .exclude(stage_id=None)
+            .order_by("-history_date", "-history_id")
+            .values_list("stage_id", flat=True)
+            .first()
+        )
+        if earlier is None:
+            return None
+        return cast(
+            "Stage | None",
+            self.stage_model()._base_manager.filter(
+                pk=earlier, queue_id=self.queue_id, conceals=False, rule_owned=False,
+            ).first(),
+        )
 
     @transaction.atomic
     def accept(self, stage: models.Model | None = None, *, expected_revision: int | None = None) -> Any:

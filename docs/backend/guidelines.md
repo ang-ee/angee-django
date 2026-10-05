@@ -1694,6 +1694,18 @@ Their docstrings own the exact behavior.
   Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
+- **Archive and trash are different facts.** `ArchiveMixin` soft-hides a row
+  from default pickers. `TrashMixin` removes it: who, when and an optional reason
+  are stamped and restore re-grants nothing. The model's Zed withholds a trashed
+  row from everyone but its managers — a constant `trashed` relation filtered on
+  `is_trashed`, subtracted outside any recursive arm (see
+  [knowledge pages](../../addons/angee/knowledge/permissions.zed)). The shared
+  [`trash_record` / `restore_record`](../../addons/angee/graphql/trash.py) verbs
+  check the row's `delete`; metadata marks the flag `trashable` for shared views.
+  A domain authority that is not `delete` (record-chatter moderation) keeps its own
+  verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
+  sudo read path it owns, such as the chatter transcript, must exclude trashed rows
+  itself. Work tasks keep their concealing stage as the removal convention.
 
 ### Addon WebSocket endpoints
 

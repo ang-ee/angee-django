@@ -29,6 +29,8 @@ const sdk = vi.hoisted(() => {
     refineMutations: [] as RefineMutation[],
     invalidations: [] as unknown[],
     createPage: vi.fn(),
+    trash: vi.fn(),
+    restore: vi.fn(),
     invalidatedModels: invalidated,
     invalidateModels: (models: unknown) => {
       invalidated.push(models);
@@ -45,6 +47,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
   rowPublicId: (record: { id?: string } | null | undefined) => record?.id ?? null,
+  useTrashRecord: () => ({ available: true, busy: false, trash: sdk.trash, restore: sdk.restore }),
   useBusyRun: vi.fn((onChanged?: () => void) => ({
     busy: false,
     run: async <T,>(task: () => Promise<T>) => {
@@ -75,16 +78,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       id: (input as { id?: string }).id,
       ...(input as { values?: Record<string, unknown> }).values,
     })),
-    useCustomMutation: mutation("deletePreview", () => ({
-      deletePagePreview: {
-        totalDeletedCount: 1,
-        deleted: [],
-        updated: [],
-        blocked: [],
-        hasBlockers: false,
-        root: { label: "page", objectLabel: "Page", objectId: "pag_1", children: [] },
-      },
-    })),
     useInvalidate: () => vi.fn(async (input: unknown) => {
       sdk.invalidations.push(input);
     }),
@@ -99,23 +92,27 @@ describe("knowledge page actions", () => {
     sdk.invalidations.length = 0;
     sdk.createPage.mockReset();
     sdk.createPage.mockResolvedValue({ create_page: { id: "pag_new" } });
+    sdk.trash.mockReset();
+    sdk.trash.mockResolvedValue(true);
+    sdk.restore.mockReset();
+    sdk.restore.mockResolvedValue(true);
     sdk.invalidatedModels.length = 0;
   });
 
-  test("uses refine mutations and preserves returned page id", async () => {
+  test("uses refine mutations, the shared trash verbs, and preserves returned page id", async () => {
     const { result } = renderHook(() => usePageActions(), {
       wrapper: MetadataWrapper,
     });
-    const [updatePage, deletePage] = sdk.refineMutations;
-    expect(deletePage).toMatchObject({
-      kind: "deletePreview",
-    });
+    const [updatePage] = sdk.refineMutations;
+    expect(sdk.refineMutations).toHaveLength(1);
     expect(updatePage).toMatchObject({
       kind: "update",
       options: { resource: "pages", dataProviderName: "console" },
     });
 
     let createdId: string | null = null;
+    let trashed = false;
+    let restored = false;
     await act(async () => {
       createdId = await result.current.createPage({
         vault: "vlt_1",
@@ -124,7 +121,8 @@ describe("knowledge page actions", () => {
         parent: null,
       });
       await result.current.movePage("pag_1", "pag_parent");
-      await result.current.deletePage("pag_1");
+      trashed = await result.current.trashPage("pag_1", "Plan");
+      restored = await result.current.restorePage("pag_1");
     });
 
     expect(createdId).toBe("pag_new");
@@ -134,21 +132,11 @@ describe("knowledge page actions", () => {
     expect(updatePage?.calls).toEqual([
       { id: "pag_1", values: { parent: "pag_parent" } },
     ]);
-    expect(deletePage?.calls).toEqual([
-      expect.objectContaining({
-        values: { id: "pag_1", confirm: true },
-        dataProviderName: "console",
-      }),
-    ]);
-    expect(sdk.invalidations).toEqual([
-      expect.objectContaining({
-        resource: "pages",
-        dataProviderName: "console",
-        id: "pag_1",
-        invalidates: ["list", "many", "detail"],
-      }),
-    ]);
+    expect([trashed, restored]).toEqual([true, true]);
+    expect(sdk.trash).toHaveBeenCalledWith("pag_1", "Plan");
+    expect(sdk.restore).toHaveBeenCalledWith("pag_1");
     expect(sdk.invalidatedModels).toEqual([
+      ["knowledge.Page"],
       ["knowledge.Page"],
       ["knowledge.Page"],
       ["knowledge.Page"],
@@ -166,7 +154,8 @@ describe("knowledge page actions", () => {
 
     expect(result.current).toBe(first);
     expect(result.current.createPage).toBe(first.createPage);
-    expect(result.current.deletePage).toBe(first.deletePage);
+    expect(result.current.trashPage).toBe(first.trashPage);
+    expect(result.current.restorePage).toBe(first.restorePage);
     expect(result.current.movePage).toBe(first.movePage);
   });
 });

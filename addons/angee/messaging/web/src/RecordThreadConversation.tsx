@@ -2,7 +2,7 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
-import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
+import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
 import {
   StorageUploadTasks,
   useStorageUpload,
@@ -23,9 +23,12 @@ import {
   MessagingRecipientUsersDocument,
   PostRecordMessageDocument,
   READ_MODELS,
+  RecordRemovedMessagesDocument,
   RecordThreadDocument,
+  RestoreRecordMessageDocument,
   SetRecordMessageReactionDocument,
   SetRecordMessageStarredDocument,
+  TrashRecordMessageDocument,
   UpdateRecordMessageDocument,
   type RecordMessageRow,
   type RecordActivityRow,
@@ -178,6 +181,14 @@ export function RecordThreadConversation({
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.delete_record_message,
   });
+  const [trashMessage] = useAuthoredMutation(TrashRecordMessageDocument, {
+    invalidateModels: READ_MODELS,
+    errorFrom: (data) => data?.trash_record_message,
+  });
+  const [restoreMessage] = useAuthoredMutation(RestoreRecordMessageDocument, {
+    invalidateModels: READ_MODELS,
+    errorFrom: (data) => data?.restore_record_message,
+  });
   const [setReaction] = useAuthoredMutation(SetRecordMessageReactionDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.set_record_message_reaction,
@@ -268,6 +279,32 @@ export function RecordThreadConversation({
       }
     },
     [modelLabel, recordId, deleteMessage, t],
+  );
+
+  // Moderators move a comment to the trash; it leaves every reader's feed and
+  // waits in their "Removed" list. The row's confirmation collected the reason.
+  const handleTrashMessage = React.useCallback(
+    async (message: RecordMessageRow, reason: string): Promise<void> => {
+      setError(null);
+      try {
+        await trashMessage({ modelLabel, recordId, messageId: message.id, reason });
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.trash")));
+      }
+    },
+    [modelLabel, recordId, trashMessage, t],
+  );
+
+  const handleRestoreMessage = React.useCallback(
+    async (messageId: string): Promise<void> => {
+      setError(null);
+      try {
+        await restoreMessage({ modelLabel, recordId, messageId });
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.restore")));
+      }
+    },
+    [modelLabel, recordId, restoreMessage, t],
   );
 
   const handleToggleReaction = React.useCallback(
@@ -432,6 +469,7 @@ export function RecordThreadConversation({
                 onSaveEdit={handleSaveEdit}
                 onStartReply={handleStartReply}
                 onDelete={handleDeleteMessage}
+                onTrash={handleTrashMessage}
                 onToggleReaction={handleToggleReaction}
                 onToggleStarred={handleToggleStarred}
                 onMarkDone={handleMarkMessageDone}
@@ -449,6 +487,16 @@ export function RecordThreadConversation({
           className="min-h-40 p-4"
         />
       )}
+      {threadPayload?.removed_message_count ? (
+        <RemovedMessages
+          modelLabel={modelLabel}
+          recordId={recordId}
+          count={threadPayload.removed_message_count}
+          readOnly={readOnly}
+          t={t}
+          onRestore={handleRestoreMessage}
+        />
+      ) : null}
       {canPost ? (
         <ChatterComposer
           t={t}
@@ -844,6 +892,7 @@ interface MessageFeedRowProps {
   onSaveEdit: (messageId: string, body: string) => void;
   onStartReply: (message: RecordMessageRow) => void;
   onDelete: (message: RecordMessageRow) => void;
+  onTrash: (message: RecordMessageRow, reason: string) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
   onToggleStarred: (message: RecordMessageRow) => void;
   onMarkDone: (messageId: string) => void;
@@ -864,6 +913,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   onSaveEdit,
   onStartReply,
   onDelete,
+  onTrash,
   onToggleReaction,
   onToggleStarred,
   onMarkDone,
@@ -1014,6 +1064,9 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               <Glyph name="trash" />
             </Button>
           ) : null}
+          {message.can_trash && !readOnly ? (
+            <MessageTrashButton t={t} onConfirmed={(reason) => onTrash(message, reason)} />
+          ) : null}
         </MessageActions>
       }
     >
@@ -1034,6 +1087,64 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
     </MessageRow>
   );
 });
+
+/** A moderator's remove control: the shared trash confirmation collects an optional reason. */
+function MessageTrashButton({ t, onConfirmed }: {
+  t: MessagingT;
+  onConfirmed: (reason: string) => void;
+}): React.ReactElement {
+  const askTrash = useTrashPrompt();
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="iconSm"
+      aria-label={t("message.remove")}
+      onClick={() => {
+        void askTrash().then((answer) => {
+          if (answer) onConfirmed(answer.reason);
+        });
+      }}
+    >
+      <Glyph name="archive" fallbackName="trash" />
+    </Button>
+  );
+}
+
+/**
+ * The moderators' "Removed (n)" list: the server reports a count only to the
+ * record's moderators, so readers never mount this or learn that it exists.
+ */
+function RemovedMessages({ modelLabel, recordId, count, readOnly, t, onRestore }: {
+  modelLabel: string;
+  recordId: string;
+  count: number;
+  readOnly: boolean;
+  t: MessagingT;
+  onRestore: (messageId: string) => void;
+}): React.ReactElement | null {
+  const variables = React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
+  const removedQuery = useAuthoredQuery(RecordRemovedMessagesDocument, variables, { models: READ_MODELS });
+  const payload = removedQuery.data?.record_removed_messages;
+  if (removedQuery.error || payload?.error_code) {
+    return <ErrorBanner description={t("error.removed")} />;
+  }
+  return (
+    <RemovedDisclosure count={payload?.message_result_count ?? count}>
+      {(payload?.messages ?? []).map((message) => (
+        <RemovedItem
+          key={message.id}
+          label={message.author_label || t("message.author")}
+          trashedByLabel={message.trashed_by_label}
+          trashReason={message.trash_reason}
+          {...(readOnly ? {} : { onRestore: () => onRestore(message.id) })}
+        >
+          <span className="line-clamp-2 text-13 text-fg-muted">{message.preview}</span>
+        </RemovedItem>
+      ))}
+    </RemovedDisclosure>
+  );
+}
 
 function MessageEditor({
   initialBody,

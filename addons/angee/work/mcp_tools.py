@@ -62,8 +62,16 @@ def register(server: FastMCP) -> None:
                 name="remove_task",
                 fields=ACTION_RESULT,
                 id_arg="task",
+                args=("expected_revision", "reason"),
+                description="Remove a task at its observed revision through its queue stage, with an optional reason.",
+            ),
+            GraphQLTool(
+                operation="restore_task",
+                name="restore_task",
+                fields=ACTION_RESULT,
+                id_arg="task",
                 args=("expected_revision",),
-                description="Remove a task at its observed revision through its queue stage.",
+                description="Restore a removed task at its observed revision to the stage it held before removal.",
             ),
             GraphQLTool(
                 operation="close_work_cycle",
@@ -83,7 +91,8 @@ def register(server: FastMCP) -> None:
                 for operation, args, description in (
                     ("accept_tasks", ("selection",), "Accept selected tasks with their observed revisions."),
                     ("decline_tasks", ("selection", "reason"), "Decline selected tasks with their observed revisions."),
-                    ("remove_tasks", ("selection",), "Remove selected tasks with their observed revisions."),
+                    ("remove_tasks", ("selection", "reason"), "Remove selected tasks with their observed revisions."),
+                    ("restore_tasks", ("selection",), "Restore selected removed tasks with their observed revisions."),
                 )
             ),
         ],

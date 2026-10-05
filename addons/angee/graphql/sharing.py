@@ -194,12 +194,3 @@ def authorized_record_access(
         target = authorized_permission_target(info, model, target_id, next(iter(declaration.values())))
     target.validate_record_access_target()
     return target, allowed
-
-
-schemas = {
-    "console": {
-        "query": [RecordAccessQuery],
-        "mutation": [RecordAccessMutation],
-        "types": [RecordAccessType, RecordAccessOption],
-    }
-}

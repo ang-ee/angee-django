@@ -12,6 +12,7 @@ import * as React from "react";
 
 import { useQueueContext } from "../context";
 import { useWorkT } from "../i18n";
+import { RemovedTasks } from "../removed-tasks";
 import { queueStageFilters } from "../stage-filters";
 import { WorkTaskCard, type WorkTaskRow } from "../task-work";
 
@@ -30,6 +31,7 @@ export function QueueBoardPage(): React.ReactElement {
       />
       <PageBody gutter="none" scroll="hidden">
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
+        <RemovedTasks queue={queueId} className="px-4 pt-2" />
         <TaskBoardSurface<WorkTaskRow> createDefaults={{ queue: queueId }}>
           <List<WorkTaskRow>
             resource={TASK_MODEL}

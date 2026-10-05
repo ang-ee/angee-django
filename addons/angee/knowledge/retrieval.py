@@ -66,11 +66,12 @@ class LexicalRetrievalBackend(RetrievalBackend):
     label = "Lexical"
 
     def search(self, query: str, *, first: int = 20) -> Iterable[Any]:
-        """Return up to ``first`` actor-visible pages whose title or body matches ``query``."""
+        """Return up to ``first`` actor-visible pages outside the trash whose title or body matches ``query``."""
 
         page_model = apps.get_model("knowledge", "Page")
         rows = (
             page_model._default_manager.filter(vault=self.vault)
+            .untrashed()
             .filter(Q(title__icontains=query) | Q(markdown__body__icontains=query))
             .order_by("title", "sqid")
             .scoped()

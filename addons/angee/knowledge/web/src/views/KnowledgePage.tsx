@@ -1,9 +1,10 @@
+import { holdsPermission } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import { useCallback, useMemo, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  EmptyState, LoadingPanel, ScopedExplorerPane, TreeView, WikilinkProvider, useChatterContent, useConfirm, useRouteHref, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
+  EmptyState, LoadingPanel, RemovedDisclosure, RemovedItem, ScopedExplorerPane, TRASH_PERMISSION, TreeView, WikilinkProvider, useChatterContent, useRouteHref, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -22,6 +23,7 @@ import {
   pageDragPayload,
   pageIdByTitle,
   pageTreeRows,
+  removedPages,
   type KnowledgeTreeRow,
   type PageDragData,
 } from "../data/page-rows";
@@ -95,8 +97,7 @@ export function KnowledgePage(): ReactElement {
     [backlinkSignature],
   );
 
-  const confirm = useConfirm();
-  const { busy: actionsBusy, createPage, deletePage, movePage } =
+  const { busy: actionsBusy, createPage, trashPage, restorePage, movePage } =
     usePageActions();
   const activePage = pageById(pages, openPageId);
   // Stable accessors: the explorer memoizes `rootOptions`/`treeRows` on these, and
@@ -119,18 +120,13 @@ export function KnowledgePage(): ReactElement {
     },
     [pages, movePage],
   );
-  const handleDeletePage = useCallback(async () => {
+  // Removal is the shared trash: the page and the pages below it leave every
+  // reader who cannot delete them, and wait in the vault's "Removed" list.
+  const handleTrashPage = useCallback(async () => {
     if (!activePage) return;
-    const ok = await confirm({
-      title: t("page.deleteConfirmTitle", { title: activePage.title }),
-      body: t("page.deleteConfirmBody"),
-      confirm: t("page.deleteConfirm"),
-      danger: true,
-    });
-    if (!ok) return;
-    await deletePage(activePage.id);
-    closePage();
-  }, [activePage, confirm, deletePage, closePage, t]);
+    if (await trashPage(activePage.id, activePage.title)) closePage();
+  }, [activePage, trashPage, closePage]);
+  const canTrashActivePage = holdsPermission(activePage, TRASH_PERMISSION);
   const vaultRootPicker = useMemo(
     () => ({
       "aria-label": t("vault.label"),
@@ -180,9 +176,18 @@ export function KnowledgePage(): ReactElement {
         });
         if (id) openPage(id);
       };
-      return <NewPageControl busy={actionsBusy} onCreate={createInScope} />;
+      return (
+        <>
+          <RemovedPages
+            pages={removedPages(pages, controller.rootId ?? "")}
+            busy={actionsBusy}
+            onRestore={restorePage}
+          />
+          <NewPageControl busy={actionsBusy} onCreate={createInScope} />
+        </>
+      );
     },
-    [actionsBusy, activePage, createPage, openPage, openPageId],
+    [actionsBusy, activePage, createPage, openPage, openPageId, pages, restorePage],
   );
 
   // The backlinks rail rides along as an additive secondary (chatter) tab.
@@ -248,10 +253,32 @@ export function KnowledgePage(): ReactElement {
           openPageId={openPageId}
           onOpenPage={openPage}
           pageNotFound={pageNotFound}
-          onDeletePage={handleDeletePage}
+          {...(canTrashActivePage ? { onDeletePage: handleTrashPage } : {})}
         />
       )}
     </ScopedExplorerPane>
+  );
+}
+
+/** The vault's "Removed (n)": each trashed subtree once, restorable by its deleters. */
+function RemovedPages({ pages, busy, onRestore }: {
+  pages: readonly KnowledgePageRow[];
+  busy: boolean;
+  onRestore: (id: string) => Promise<boolean>;
+}): ReactElement | null {
+  return (
+    <RemovedDisclosure count={pages.length} className="px-2">
+      {pages.map((page) => (
+        <RemovedItem
+          key={page.id}
+          label={page.title}
+          trashedByLabel={page.trashed_by_label}
+          trashReason={page.trash_reason}
+          busy={busy}
+          {...(holdsPermission(page, TRASH_PERMISSION) ? { onRestore: () => void onRestore(page.id) } : {})}
+        />
+      ))}
+    </RemovedDisclosure>
   );
 }
 
@@ -268,7 +295,8 @@ function KnowledgeExplorerContent({
   openPageId: string | null;
   onOpenPage: (id: string) => void;
   pageNotFound: boolean;
-  onDeletePage: () => Promise<void>;
+  /** Present only when the reader may delete — and so trash — the open page. */
+  onDeletePage?: () => Promise<void>;
 }): ReactElement {
   const t = useKnowledgeT();
   // A `[[wikilink]]` resolves to a page by title within the vault; clicking it

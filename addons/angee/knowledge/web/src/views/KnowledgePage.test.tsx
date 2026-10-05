@@ -25,7 +25,8 @@ const sdkMocks = vi.hoisted(() => ({
 // an effect, so its hooks must hand back stable references (matching production, // where `usePageActions` memoizes). A fresh object per render would republish
 // every render and spin the publish effect. Hoist one stable actions object.
 const pageActionMocks = vi.hoisted(() => ({
-  busy: false, createPage: vi.fn(async () => "created-page"), deletePage: vi.fn(async () => undefined), movePage: vi.fn(), }));
+  busy: false, createPage: vi.fn(async () => "created-page"), trashPage: vi.fn(async () => true),
+  restorePage: vi.fn(async () => true), movePage: vi.fn(), }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -249,6 +250,27 @@ describe("KnowledgePage explorer wiring", () => {
     expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe(
       "",
     );
+  });
+
+  test("trashed pages leave the tree and wait in the vault's Removed list", () => {
+    knowledgeData.pages = [
+      ...knowledgeData.pages,
+      { ...page("page-gone", "Gone", "folder", "vault-a"), is_trashed: true, trash_reason: "Superseded",
+        trashed_by_label: "Alex", permissions: ["write", "delete"] },
+      { ...page("page-gone-child", "Gone child", "note", "vault-a"), parent: "page-gone", is_trashed: true,
+        permissions: ["write", "delete"] },
+    ] as typeof knowledgeData.pages;
+    pageActionMocks.restorePage.mockClear();
+
+    renderPage();
+
+    const primary = within(screen.getByTestId("shell-primary"));
+    expect(treeAttribute("data-row-ids")).toBe("page-a");
+    fireEvent.click(primary.getByRole("button", { name: "Removed (1)" }));
+    expect(primary.getByText("Gone")).toBeTruthy();
+    expect(primary.queryByText("Gone child")).toBeNull();
+    fireEvent.click(primary.getByRole("button", { name: "Restore" }));
+    expect(pageActionMocks.restorePage).toHaveBeenCalledWith("page-gone");
   });
 
   test("selecting a page navigates to its detail route", () => {

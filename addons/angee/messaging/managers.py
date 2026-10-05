@@ -50,7 +50,7 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
-from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet
+from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_model, canonical_record_target
@@ -1384,7 +1384,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         """Anchor a fresh follower's receipt at the latest pre-join message."""
 
         message_model = apps.get_model("messaging", "Message")
-        queryset = message_model._base_manager.filter(thread=thread).annotate(
+        queryset = message_model._base_manager.filter(thread=thread, is_trashed=False).annotate(
             _order_at=MessageQuerySet.chronological_time()
         )
         if history_before is not None:
@@ -1420,7 +1420,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         target = message
         if target is None:
             target = (
-                message_model._base_manager.filter(thread=thread)
+                message_model._base_manager.filter(thread=thread, is_trashed=False)
                 .annotate(_order_at=MessageQuerySet.chronological_time())
                 .order_by("-_order_at", "-pk")
                 .first()
@@ -1477,7 +1477,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if follower is None:
             return message_model._base_manager.none()
         queryset = (
-            message_model._base_manager.filter(thread=thread)
+            message_model._base_manager.filter(thread=thread, is_trashed=False)
             .annotate(_order_at=MessageQuerySet.chronological_time())
             .filter(follower.notification_preference.subscribed_subtype_q())
         )
@@ -1527,7 +1527,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         receipt — the per-message marker cannot disagree with the badge count.
         """
 
-        if message.thread_id is None:
+        if message.thread_id is None or message.is_trashed:
             return False
         party_id = self.get_party_id(party=party, user=user, user_id=user_id)
         if party_id is None:
@@ -1652,7 +1652,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
                 target = attachment.target
                 allowed[key] = isinstance(target, ThreadedModelMixin) and target.thread_reader_allowed(actor)
             message = messages.get(row.message_id)
-            if allowed[key] and message is not None:
+            if allowed[key] and message is not None and not message.is_trashed:
                 message._inbox_attachment = attachment
                 row._inbox_message_pointer = message
         senders = {
@@ -1712,6 +1712,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             .filter(
                 user_id=resolved_user_id,
             )
+            .exclude(message__is_trashed=True)
         )
 
     def error_count_for_record(
@@ -2395,8 +2396,13 @@ class ReactionManager(AngeeManager):
         return len(rows)
 
 
-class MessageQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
+
+    def trash_targets(self) -> MessageQuerySet:
+        """Keep record chatter off the shared trash verbs; its record moderates it."""
+
+        return self.inbox()
 
     @staticmethod
     def chronological_time(prefix: str = "") -> Any:
@@ -2666,8 +2672,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         after: Any | None = None,
         around: Any | None = None,
         message_types: tuple[str, ...] = (),
+        trashed: bool = False,
     ) -> tuple[list[Any], int]:
-        """Return fetched chatter messages for a record, optionally search-filtered."""
+        """Return fetched chatter messages for a record, optionally search-filtered.
+
+        Trashed messages never join the transcript; ``trashed=True`` returns only
+        them, for a caller that already required the record's moderation.
+        """
 
         attachment = apps.get_model("messaging", "ThreadAttachment").objects.for_record(record, role=role)
         if attachment is None:
@@ -2678,6 +2689,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         queryset = (
             self.sudo(reason="messaging.message.for_record")
             .for_thread(attachment.thread)
+            .filter(is_trashed=trashed)
             .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
             .prefetch_related(
                 models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.all()),
@@ -3035,24 +3047,79 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 self._recount_thread(thread)
         return thread
 
+    def trash_in_thread(self, message: Any, *, thread: Any, reason: str = "") -> Any:
+        """Trash a comment of ``thread`` as its record's moderator and recount the thread.
+
+        The moderator, not the elevated write, is stamped as the acting user.
+        """
+
+        return self._moderate_in_thread(message, thread=thread, trash=True, reason=reason)
+
+    def restore_in_thread(self, message: Any, *, thread: Any) -> Any:
+        """Restore a trashed comment of ``thread`` as its record's moderator and recount."""
+
+        return self._moderate_in_thread(message, thread=thread, trash=False)
+
+    def in_record(self, record: Any, message_id: str, *, role: str = "chatter", trashed: bool = False) -> Any | None:
+        """Return one message of ``record``'s thread by public id, in or out of the trash.
+
+        Elevated structural lookup, like the transcript it serves: the caller has
+        gated the record's read and, for a trashed message, its moderation.
+        """
+
+        attachment = apps.get_model("messaging", "ThreadAttachment").objects.for_record(record, role=role)
+        if attachment is None:
+            return None
+        return (
+            self.sudo(reason="messaging.message.in_record")
+            .for_thread(attachment.thread)
+            .filter(is_trashed=trashed, **self.model.public_id_lookup(str(message_id)))
+            .first()
+        )
+
+    def _moderate_in_thread(self, message: Any, *, thread: Any, trash: bool, reason: str = "") -> Any:
+        """Lock, re-authorize and trash or restore one comment, then recount its thread."""
+
+        with transaction.atomic():
+            message = type(message)._base_manager.select_for_update().annotate(
+                _has_tracking_values=self.model.has_tracking_values_expression(),
+            ).get(pk=message.pk)
+            if message.thread_id != thread.pk:
+                raise ValueError("Message does not belong to this record thread.")
+            if trash and (error := message.trash_error()):
+                raise ValueError(error)
+            record = message.threaded_record()
+            if record is None or not record.can_moderate():
+                raise PermissionDenied("Removing or restoring comments requires moderator access to the record.")
+            with system_context(reason="messaging.comment.trash" if trash else "messaging.comment.restore"):
+                if trash:
+                    message.trash(reason=reason)
+                else:
+                    message.restore()
+        return message
+
     def _recount_thread(self, thread: Any) -> None:
         """Recompute a thread's denormalised counters from its surviving messages.
 
-        Shared by the two paths where a thread *loses* a message: a delete
-        (``unlink_from_thread``) and a re-threading re-sync (``_ingest_one``). An
-        ``F()`` delta cannot repair a subtraction whose true total is unknown, so the
-        losing thread is recounted by aggregate. Call with the locked ``thread`` row.
+        Shared by the paths where a thread *loses* or regains a message: a delete
+        (``unlink_from_thread``), a trash or restore, and a re-threading re-sync
+        (``_ingest_one``). Trashed messages never count. An ``F()`` delta cannot
+        repair a subtraction whose true total is unknown, so the losing thread is
+        recounted by aggregate. Call with the locked ``thread`` row.
         """
 
+        untrashed = models.Q(is_trashed=False)
         summary = self.model._base_manager.filter(thread=thread).aggregate(
-            count=models.Count("pk"),
-            last_sent_at=models.Max("sent_at"),
+            total=models.Count("pk"),
+            count=models.Count("pk", filter=untrashed),
+            last_sent_at=models.Max("sent_at", filter=untrashed),
         )
         count = int(summary["count"] or 0)
-        if count == 0 and not thread.is_record_attached():
+        if not summary["total"] and not thread.is_record_attached():
             # An emptied inbox thread is a husk — every message re-resolved
             # elsewhere. Deleting it keeps the thread list free of zero-message
-            # rows; a record chatter thread stays (it exists before its first post).
+            # rows; a record chatter thread stays (it exists before its first post),
+            # and so does a thread still holding trashed messages.
             thread.delete()
             return
         thread.message_count = count

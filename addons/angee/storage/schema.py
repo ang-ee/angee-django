@@ -31,7 +31,7 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
-from angee.iam.audit import AuthoredRefMixin
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
 from angee.storage.models import FileVisibility, UploadState
@@ -104,7 +104,7 @@ class FolderType(AngeeNode):
 
 
 @strawberry_django.type(File)
-class FileType(AuthoredRefMixin, AngeeNode):
+class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
 
     display_name: str = strawberry_django.field(
@@ -120,7 +120,6 @@ class FileType(AuthoredRefMixin, AngeeNode):
     upload_state: auto
     visibility: auto
     is_trashed: auto
-    trashed_at: auto
     created_at: auto
     updated_at: auto
     mime_type: MimeTypeType | None
@@ -446,16 +445,6 @@ class StorageMutation:
         except exceptions.UploadError as error:
             return FileUploadFinalizePayload(error=str(error), error_code=error.code)
         return FileUploadFinalizePayload(file=row)
-
-    @strawberry.mutation(name="restore_file")
-    def restore_file(self, id: PublicID) -> FileType | None:
-        """Pull one file out of the Trash smart folder."""
-
-        row = require_instance_for_id(
-            File, id, queryset=File.objects.all(), not_found="file not found"
-        )
-        row.restore()
-        return cast(FileType, row)
 
     @strawberry.mutation(name="delete_file")
     def delete_file(self, id: PublicID, confirm: bool = False) -> DeletePreview:

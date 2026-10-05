@@ -21,6 +21,9 @@ from angee.base.mixins import (
     OptimisticLockMixin,
     OwnerMixin,
     OwnerQuerySet,
+    TimestampMixin,
+    TrashMixin,
+    TrashQuerySet,
 )
 from angee.base.models import AngeeModel, AngeeQuerySet
 from angee.testing.permissions import install_permission_schema
@@ -88,6 +91,14 @@ class ReceiptRow(ImmutableFieldsMixin):
     identity = models.CharField(max_length=40)
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=40, default="original")
+
+    class Meta:
+        app_label = "scopedemo"
+
+
+class TrashRow(TrashMixin, TimestampMixin):
+    title = models.CharField(max_length=40, default="kept")
+    objects = TrashQuerySet.as_manager()
 
     class Meta:
         app_label = "scopedemo"

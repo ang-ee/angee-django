@@ -183,4 +183,5 @@ const work = defineBaseAddon({
 export { estimateLabel } from "./estimates";
 export { CYCLE_MODEL, QUEUE_MODEL, STAGE_MODEL } from "./resources";
 export { useQueueRecordTabs } from "./queue-record-tabs";
+export { RemovedTasks, type RemovedTasksProps } from "./removed-tasks";
 export default work;

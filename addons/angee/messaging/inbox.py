@@ -149,6 +149,7 @@ class MessageInbox:
         self.user_id = actor_user_id(self.actor)
         self.messages = (
             queryset.inbox()
+            .untrashed()
             .filter(status__in=("synced", "edited", "sent"))
             .exclude(thread__modality="public_thread")
             .for_feed()

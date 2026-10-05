@@ -57,7 +57,7 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin, canonical_record_model
 from angee.base.scoping import system_queryset
@@ -437,12 +437,22 @@ class ThreadedModelMixin(models.Model):
         )
 
     def _require_thread_message(self, message: models.Model) -> models.Model:
-        """Require that a message belongs to this record's chatter thread."""
+        """Require that a message belongs to this record's chatter thread, outside the trash.
+
+        A trashed message reads as absent here: only the moderation verbs
+        (:meth:`message_removed`, :meth:`removed_message`) reach it.
+        """
 
         attachment = self.message_thread_attachment(create=False)
-        if attachment is None or message.thread_id != attachment.thread_id:
+        if attachment is None or message.thread_id != attachment.thread_id or message.is_trashed:
             raise ValueError("Message does not belong to this record thread.")
         return attachment
+
+    def _require_moderation(self, verb: str) -> None:
+        """Require the record's moderation authority; authorship never suffices."""
+
+        if not self.can_moderate():
+            raise PermissionDenied(f"{verb} comments on {self._meta.label} requires moderator access to the record.")
 
     def message_update_content(self, message: models.Model, *, body: str) -> models.Model:
         """Update an authored comment or moderate one as a record writer."""
@@ -461,6 +471,47 @@ class ThreadedModelMixin(models.Model):
         if error := message.delete_error():
             raise ValueError(error)
         return apps.get_model("messaging", "Message").objects.unlink_from_thread(message, thread=attachment.thread)
+
+    def message_trash(self, message: models.Model, *, reason: str = "") -> models.Model:
+        """Move a comment to the trash as a record moderator, recording an optional reason.
+
+        Moderation is the record's write authority (:meth:`can_moderate`); an
+        author without it never trashes, even their own comment. The trashed
+        comment leaves every chatter read except :meth:`message_removed`.
+        """
+
+        attachment = self._require_thread_message(message)
+        self._require_moderation("Removing")
+        return apps.get_model("messaging", "Message").objects.trash_in_thread(
+            message, thread=attachment.thread, reason=reason,
+        )
+
+    def message_restore(self, message: models.Model) -> models.Model:
+        """Take a trashed comment out of the trash as a record moderator."""
+
+        self._require_moderation("Restoring")
+        attachment = self.message_thread_attachment(create=False)
+        if attachment is None or message.thread_id != attachment.thread_id:
+            raise ValueError("Message does not belong to this record thread.")
+        return apps.get_model("messaging", "Message").objects.restore_in_thread(message, thread=attachment.thread)
+
+    def message_removed(self, *, role: str = "chatter", limit: int = 50) -> tuple[list[Any], int]:
+        """Return the newest trashed chatter messages and their count, for moderators only."""
+
+        self._require_moderation("Listing removed")
+        return apps.get_model("messaging", "Message").objects.for_record(self, role=role, limit=limit, trashed=True)
+
+    def record_message(self, message_id: str, *, role: str = "chatter", trashed: bool = False) -> models.Model:
+        """Return one message of this record's thread; a trashed one only for moderators."""
+
+        if trashed:
+            self._require_moderation("Restoring")
+        message = apps.get_model("messaging", "Message").objects.in_record(
+            self, message_id, role=role, trashed=trashed,
+        )
+        if message is None:
+            raise ValueError("Message does not belong to this record thread.")
+        return message
 
     def message_reaction(
         self,
@@ -1787,7 +1838,7 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
+class Message(TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1805,6 +1856,10 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
     ``{edited_at, edited_by_id, prev_fragment_hashes}`` entries while the replaced
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
+
+    Moderation is trash (:class:`~angee.base.mixins.TrashMixin`): a trashed
+    message is withheld from every reader but channel managers and admins, and
+    record chatter leaves it out of every read but its moderators' removed list.
     """
 
     runtime = True
@@ -1821,15 +1876,13 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
         INTERNAL = "internal", "Internal"
 
     class MessageStatus(models.TextChoices):
-        """Lifecycle + public moderation state of a message."""
+        """Delivery lifecycle state of a message; moderation is the trash flag."""
 
         DRAFT = "draft", "Draft"
         QUEUED = "queued", "Queued"
         SENT = "sent", "Sent"
         SYNCED = "synced", "Synced"
         EDITED = "edited", "Edited"
-        HIDDEN = "hidden", "Hidden"
-        REMOVED = "removed", "Removed"
         FAILED = "failed", "Failed"
 
     class MessageKind(models.TextChoices):
@@ -1992,11 +2045,50 @@ class Message(CreationKeyMixin, AuditMixin, AngeeDataModel):
     def delete_error(self) -> str | None:
         """Only comments may be deleted; notes and automatic messages are retained."""
 
+        return self._retained_error("deleted")
+
+    def trash_error(self) -> str | None:
+        """Only comments may be trashed; notes and automatic messages stay on record."""
+
+        return self._retained_error("removed")
+
+    def _retained_error(self, verb: str) -> str | None:
+        """Return why this message is a retained record that no removal verb may take."""
+
         if self.message_type != self.MessageKind.COMMENT:
-            return "Only comment messages can be deleted."
+            return f"Only comment messages can be {verb}."
         if self.has_tracking_values():
-            return "Messages with tracking values cannot be deleted."
+            return f"Messages with tracking values cannot be {verb}."
         return None
+
+    def can_trash(self, *, moderate_access: bool) -> bool:
+        """Return whether a record moderator may move this comment to the trash."""
+
+        return moderate_access and not self.is_trashed and self.trash_error() is None
+
+    def trash(self, *, reason: str = "", using: str | None = None) -> None:
+        """Trash this message and recount its thread without it."""
+
+        with transaction.atomic(using=using):
+            super().trash(reason=reason, using=using)
+            self._recount_thread()
+
+    def restore(self, *, using: str | None = None) -> None:
+        """Restore this message and recount its thread with it."""
+
+        with transaction.atomic(using=using):
+            super().restore(using=using)
+            self._recount_thread()
+
+    def _recount_thread(self) -> None:
+        """Keep the thread's counters to its untrashed messages; bookkeeping, not access."""
+
+        if self.thread_id is None:
+            return
+        thread_model = self._meta.get_field("thread").related_model
+        with system_context(reason="messaging.message.recount_thread"):
+            thread = thread_model._base_manager.select_for_update().get(pk=self.thread_id)
+            type(self).objects._recount_thread(thread)
 
     def can_change_comment(self, *, post_access: bool, moderate_access: bool, actor_id: Any) -> bool:
         """Combine record moderation with the author's continuing post access."""

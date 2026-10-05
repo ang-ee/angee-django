@@ -87,3 +87,27 @@ export const DeclineTaskDocument = graphql(`
     }
   }
 `);
+
+// Removed tasks stay unreadable to every ordinary read; this root lists only
+// the ones the reader holds `restore` on, with their removal facts.
+export const RemovedTasksDocument = graphql(`
+  query WorkRemovedTasks($queue: ID, $parent: ID) {
+    removed_tasks(queue: $queue, parent: $parent) {
+      id
+      title
+      revision
+      parent
+      removed_at
+      removed_by_label
+      removal_reason
+    }
+  }
+`);
+
+export const RestoreTaskDocument = graphql(`
+  mutation WorkRestoreTask($task: ID!, $expected_revision: Int!) {
+    restore_task(task: $task, expected_revision: $expected_revision) {
+      ok message id code validation_errors
+    }
+  }
+`);

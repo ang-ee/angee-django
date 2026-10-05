@@ -28,7 +28,7 @@ from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
-from angee.graphql.capabilities import held_permissions
+from angee.graphql.capabilities import held_permissions, permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -42,6 +42,7 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
+from angee.iam.audit import TrashedRefMixin
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
@@ -389,8 +390,8 @@ class RecordMessageReactionGroupType:
 
 
 @strawberry_django.type(Message)
-class MessageType(AngeeNode):
-    """GraphQL projection of a message."""
+class MessageType(TrashedRefMixin, AngeeNode):
+    """GraphQL projection of a message; its managers see trash stamps and ``delete``."""
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
@@ -410,6 +411,8 @@ class MessageType(AngeeNode):
     preview: auto
     sent_at: auto
     received_at: auto
+    is_trashed: auto
+    permissions = permissions_field(("delete",))
     sender: HandleType | None = actor_scoped_to_one("sender")
 
     @strawberry_django.field(
@@ -529,12 +532,17 @@ class RecordMessageParentType(AngeeNode):
 
 
 @strawberry_django.type(Message)
-class RecordMessageType(AngeeNode):
-    """Record-gated message projection without generic inbox relation backedges."""
+class RecordMessageType(TrashedRefMixin, AngeeNode):
+    """Record-gated message projection without generic inbox relation backedges.
+
+    A trashed message appears only in its moderators' removed list, where the
+    trash stamps say who removed it, when and why.
+    """
 
     direction: auto
     status: auto
     message_type: auto
+    is_trashed: auto
     preview: auto
     sent_at: auto
     created_at: auto
@@ -622,6 +630,15 @@ class RecordMessageType(AngeeNode):
         """Return the model-owned delete capability for this record message."""
 
         return cast(Any, self).can_delete(**_message_access(self, info))
+
+    @strawberry_django.field(
+        only=["thread_id", "message_type", "is_trashed"],
+        annotate={"_has_tracking_values": lambda info: Message.has_tracking_values_expression()},
+    )
+    def can_trash(self, info: strawberry.Info) -> bool:
+        """Return whether the reader moderates this record and may trash this comment."""
+
+        return cast(Any, self).can_trash(moderate_access=_message_access(self, info)["moderate_access"])
 
 
 @strawberry_django.type(Thread)
@@ -1062,6 +1079,23 @@ class RecordMessageDeleteInput(RecordReferenceInput):
 
 
 @strawberry.input
+class RecordMessageTrashInput(RecordReferenceInput):
+    """Fields accepted when a moderator moves a chatter comment to the trash."""
+
+    message_id: strawberry.ID = strawberry.field(name="message_id")
+    confirm: bool
+    reason: str = ""
+
+
+@strawberry.input
+class RecordMessageRestoreInput(RecordReferenceInput):
+    """Fields accepted when a moderator restores a trashed chatter comment."""
+
+    message_id: strawberry.ID = strawberry.field(name="message_id")
+    confirm: bool
+
+
+@strawberry.input
 class RecordMessageReactionInput(RecordReferenceInput):
     """Fields accepted when reacting to a chatter message."""
 
@@ -1201,6 +1235,8 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
         default_factory=list,
     )
     subtypes: list[MessageSubtypeOptionType] = strawberry.field(default_factory=list)
+    removed_message_count: int | None = strawberry.field(name="removed_message_count", default=None)
+    """Trashed comments awaiting moderation; null for readers who do not moderate the record."""
 
     @strawberry.field(name="reply_count")
     def reply_count(self) -> int:
@@ -1218,7 +1254,7 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
             replies = replies.filter(message_type__in=kinds)
         for term in strip_null_bytes(self._reply_search or "").split():
             replies = replies.searching(term)
-        return replies.filter(parent__isnull=False).distinct().count()
+        return replies.untrashed().filter(parent__isnull=False).distinct().count()
 
 
 @strawberry.type
@@ -1240,6 +1276,24 @@ class RecordMessageDeletePayload(RecordThreadStatePayload, RecordErrorPayload):
     """A deleted chatter message id plus refreshed thread state, or an error."""
 
     deleted_message_id: strawberry.ID | None = strawberry.field(name="deleted_message_id", default=None)
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
+    message_result_count: int = strawberry.field(name="message_result_count", default=0)
+
+
+@strawberry.type
+class RecordMessageTrashPayload(RecordThreadStatePayload, RecordErrorPayload):
+    """A trashed or restored chatter comment plus refreshed thread state, or an error."""
+
+    message: RecordMessageType | None = None
+    messages: list[RecordMessageType] = strawberry.field(default_factory=list)
+    message_result_count: int = strawberry.field(name="message_result_count", default=0)
+    removed_message_count: int | None = strawberry.field(name="removed_message_count", default=None)
+
+
+@strawberry.type
+class RecordRemovedMessagesPayload(RecordErrorPayload):
+    """A record's trashed comments for its moderators, newest last, or an error."""
+
     messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
 
@@ -1365,7 +1419,7 @@ class MessagingQuery:
             not_found="thread not found",
         )
         return MessageFeedPage.from_scope(
-            Message.objects.inbox().for_thread(thread),
+            Message.objects.inbox().untrashed().for_thread(thread),
             scope=("thread", str(thread.sqid)),
             search=search,
             before_cursor=before_cursor,
@@ -1390,7 +1444,9 @@ class MessagingQuery:
             queryset=Thread.objects.all().scoped().inbox(),
             not_found="thread not found",
         )
-        return MessageFeedRevalidation.from_scope(Message.objects.inbox().for_thread(thread), ids, search=search)
+        return MessageFeedRevalidation.from_scope(
+            Message.objects.inbox().untrashed().for_thread(thread), ids, search=search,
+        )
 
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
@@ -1413,6 +1469,25 @@ class MessagingQuery:
             around=input.around,
             message_types=tuple(input.message_types),
         )
+
+    @strawberry.field(name="record_removed_messages")
+    def record_removed_messages(self, info: strawberry.Info, input: RecordThreadInput) -> RecordRemovedMessagesPayload:
+        """Return a record's trashed comments when the reader moderates the record."""
+
+        if _request_user(info) is None:
+            return RecordRemovedMessagesPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
+        try:
+            record = _threaded_record(input)
+        except ValueError as error:
+            return RecordRemovedMessagesPayload(error=str(error), error_code="BAD_RECORD")
+        if record is None:
+            return RecordRemovedMessagesPayload(error="record not found", error_code="NOT_FOUND")
+        try:
+            messages, count = cast(Any, record).message_removed(role=input.role, limit=input.message_limit)
+        except PermissionDenied as error:
+            return RecordRemovedMessagesPayload.from_error(error, invalid_code="BAD_MESSAGE")
+        _prime_record_messages(messages)
+        return RecordRemovedMessagesPayload(messages=messages, message_result_count=count)
 
     @strawberry.field(name="record_source_threads")
     def record_source_threads(self, input: RecordReferenceInput) -> list[ThreadAttachmentType]:
@@ -1619,6 +1694,22 @@ class MessagingMutation:
             messages=payload.messages,
             message_result_count=payload.message_result_count,
         )
+
+    @strawberry.mutation(name="trash_record_message")
+    def trash_record_message(self, info: strawberry.Info, input: RecordMessageTrashInput) -> RecordMessageTrashPayload:
+        """Move a chatter comment to the trash as a moderator of its record."""
+
+        return _moderate_record_message(info, input)
+
+    @strawberry.mutation(name="restore_record_message")
+    def restore_record_message(
+        self,
+        info: strawberry.Info,
+        input: RecordMessageRestoreInput,
+    ) -> RecordMessageTrashPayload:
+        """Restore a trashed chatter comment as a moderator of its record."""
+
+        return _moderate_record_message(info, input)
 
     @strawberry.mutation(name="set_record_message_reaction")
     def set_record_message_reaction(
@@ -2019,6 +2110,7 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "channel",
         "sender",
         "sent_at",
+        "is_trashed",
         # The transcript's keyset "load older" cursors on (sent_at, created_at).
         "created_at",
     ],
@@ -2150,10 +2242,17 @@ _MESSAGE_EDGE_RESOURCE = hasura_model_resource(
 
 
 def _notification_inbox_queryset(info: strawberry.Info) -> Any:
-    """Pin every generated inbox read, including by-pk and aggregates, to its recipient."""
+    """Pin every generated inbox read, including by-pk and aggregates, to its recipient.
+
+    A notification about a trashed message leaves the inbox with its message.
+    """
 
     del info
-    return ThreadNotification.objects.with_action("read_inbox").with_message_pointers()
+    return (
+        ThreadNotification.objects.with_action("read_inbox")
+        .exclude(message__is_trashed=True)
+        .with_message_pointers()
+    )
 
 
 _NOTIFICATION_INBOX_RESOURCE = hasura_model_resource(
@@ -2418,6 +2517,63 @@ def _prime_activity_identities(activities: list[Any], actor: Any) -> None:
             row._meta.get_field(name).set_cached_value(row, users.get(getattr(row, f"{name}_id")))
 
 
+def _moderate_record_message(
+    info: strawberry.Info,
+    input: RecordMessageTrashInput | RecordMessageRestoreInput,
+) -> RecordMessageTrashPayload:
+    """Dispatch one confirmed trash or restore to the record's moderation verbs.
+
+    The record's read gate authorizes the message lookup, as for the transcript.
+    """
+
+    if _request_user(info) is None:
+        return RecordMessageTrashPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
+    if not input.confirm:
+        return RecordMessageTrashPayload(error="Confirm the change to apply it.", error_code="CONFIRMATION_REQUIRED")
+    try:
+        record = _threaded_record(input)
+    except ValueError as error:
+        return RecordMessageTrashPayload(error=str(error), error_code="BAD_MESSAGE")
+    if record is None:
+        return RecordMessageTrashPayload(error="record not found", error_code="NOT_FOUND")
+    try:
+        if isinstance(input, RecordMessageTrashInput):
+            message = cast(Any, record).record_message(str(input.message_id), role=input.role)
+            message = cast(Any, record).message_trash(message, reason=input.reason)
+        else:
+            message = cast(Any, record).record_message(str(input.message_id), role=input.role, trashed=True)
+            message = cast(Any, record).message_restore(message)
+    except (PermissionDenied, ValueError, ValidationError) as error:
+        return RecordMessageTrashPayload.from_error(error, invalid_code="BAD_MESSAGE")
+    payload = _record_thread_payload(record, info, role=input.role)
+    return RecordMessageTrashPayload.from_thread_state(
+        payload,
+        message=message,
+        messages=payload.messages,
+        message_result_count=payload.message_result_count,
+        removed_message_count=payload.removed_message_count,
+    )
+
+
+def _prime_record_messages(messages: list[Any]) -> None:
+    """Project every page message's actor-readable sender label in one query.
+
+    Keep the projection on each message so ``author_label`` never performs a
+    per-row fallback lookup.
+    """
+
+    if not messages:
+        return
+    sender_names = dict(
+        Message.objects.sudo(reason="messaging.record_thread.sender_labels")
+        .filter(pk__in=[message.pk for message in messages])
+        .annotate(_sender_name=Message.objects.sender_name_expression())
+        .values_list("pk", "_sender_name")
+    )
+    for message in messages:
+        setattr(message, "_sender_name", sender_names.get(message.pk, ""))
+
+
 def _record_thread_payload(
     record: Any,
     info: strawberry.Info | None,
@@ -2448,18 +2604,7 @@ def _record_thread_payload(
         if thread is not None
         else ([], 0)
     )
-    if messages:
-        # The model's actor-readable sender expression resolves all labels in one
-        # query. Keep the projection on each message so author_label never performs
-        # a per-row fallback lookup.
-        sender_names = dict(
-            Message.objects.sudo(reason="messaging.record_thread.sender_labels")
-            .filter(pk__in=[message.pk for message in messages])
-            .annotate(_sender_name=Message.objects.sender_name_expression())
-            .values_list("pk", "_sender_name")
-        )
-        for message in messages:
-            setattr(message, "_sender_name", sender_names.get(message.pk, ""))
+    _prime_record_messages(messages)
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
     activities = (
@@ -2471,7 +2616,10 @@ def _record_thread_payload(
     )
     _prime_activity_identities(activities, current_actor())
     attachment_count = (
-        apps.get_model("messaging", "Part").objects.filter(message__thread=thread).attachments().count()
+        apps.get_model("messaging", "Part")
+        .objects.filter(message__thread=thread, message__is_trashed=False)
+        .attachments()
+        .count()
         if thread is not None
         else 0
     )
@@ -2525,6 +2673,13 @@ def _record_thread_payload(
         if thread is not None and user is not None
         else 0
     )
+    removed_message_count = None
+    if record_access[1]:
+        removed_message_count = (
+            Message.objects.sudo(reason="messaging.record_thread.removed_count").for_thread(thread).trashed().count()
+            if thread is not None
+            else 0
+        )
     return RecordThreadPayload(
         thread_post_access=record.thread_post_access,
         permissions=[record.thread_post_access] if record_access[0] else [],
@@ -2549,6 +2704,7 @@ def _record_thread_payload(
         activity_count=len(activities),
         activity_types=list(ActivityType.objects.all()),
         attachment_count=attachment_count,
+        removed_message_count=removed_message_count,
     )
 
 

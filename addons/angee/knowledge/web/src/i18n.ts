@@ -37,10 +37,6 @@ export const enKnowledgeMessages: Record<string, string> = {
   "page.lastUpdated": "Updated {value}",
   "page.emptyTitle": "This page is empty",
   "page.emptyDescription": "Edit the page to add content.",
-  "page.deleteConfirmTitle": 'Delete "{title}"?',
-  "page.deleteConfirmBody":
-    "Deleting a folder removes the pages inside it too.",
-  "page.deleteConfirm": "Delete",
   "backlinks.emptyTitle": "No backlinks",
   "backlinks.emptyDescription":
     "Pages that link to this one show up here.",
@@ -54,7 +50,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "editor.bodyPlaceholder": "Write your page…",
   "editor.titlePlaceholder": "Untitled",
   "editor.titleLabel": "Page title",
-  "editor.deleteLabel": "Delete page",
+  "editor.deleteLabel": "Move page to trash",
   "editor.done": "Done",
   "editor.saving": "Saving…",
   "editor.saveFailed": "Save failed",

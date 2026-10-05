@@ -44,6 +44,7 @@ export type ModelFieldMetadata =
     | "updatable"
     | "requiredOnCreate"
     | "nullable"
+    | "trashable"
     | "relationModelLabel"
     | "relationObject"
   >>;

@@ -3,8 +3,9 @@ import {
   Action, Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
   MessagePartsView, registerForm, TextLink, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
-  type RegisteredFormProps,
+  type RegisteredFormProps, useTrashActions,
 } from "@angee/ui";
+import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 
 import { useMessagingT } from "./i18n";
@@ -159,6 +160,9 @@ export function messageRecordTabs(
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
+  // Moderation is the shared trash: channel managers move a message there and
+  // back, offered by the message's projected `delete` permission.
+  const trashActions = useTrashActions(useModelMetadata(MODEL)?.resource);
   return <Form
     {...props}
     resource={MODEL}
@@ -176,28 +180,8 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
       <Field name="direction" readOnly />
       <Field name="external_id" readOnly />
     </Group>
-    {!readOnly ? <>
-      <Action
-        id="hide"
-        label={t("messages.hide")}
-        set={{ status: "hidden" }}
-        visibleWhen={(record) => record.status !== "HIDDEN" && record.status !== "REMOVED"}
-      />
-      <Action
-        id="remove"
-        label={t("messages.remove")}
-        danger
-        confirm={{ title: t("messages.removeTitle"), body: t("messages.removeBody"), danger: true }}
-        set={{ status: "removed" }}
-        visibleWhen={(record) => record.status !== "REMOVED"}
-      />
-      <Action
-        id="restore"
-        label={t("messages.restore")}
-        set={{ status: "synced" }}
-        visibleWhen={(record) => record.status === "HIDDEN" || record.status === "REMOVED"}
-      />
-    </> : null}
+    <Field name="is_trashed" hidden readOnly />
+    {!readOnly ? trashActions.map((action) => <Action key={action.id} {...action} />) : null}
   </Form>;
 }
 

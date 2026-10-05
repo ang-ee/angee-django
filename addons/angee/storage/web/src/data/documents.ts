@@ -37,10 +37,13 @@ export const StorageFileUploadFinalize = graphql(`
   }
 `);
 
+// Restoring a trashed file is the shared record verb; the Trash smart folder
+// reads the file resource's own trash flag.
 export const StorageRestoreFile = graphql(`
   mutation StorageRestoreFile($id: ID!) {
-    restore_file(id: $id) {
-      id
+    restore_record(target_type: "storage/file", target_id: $id, confirm: true) {
+      ok
+      message
     }
   }
 `);
