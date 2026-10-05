@@ -183,3 +183,29 @@ def test_verdict_audit_is_database_consistent(people):
     question = Decision.objects.ask(request_for(people), actor=requester)
     with pytest.raises(IntegrityError), transaction.atomic():
         system_queryset(Decision).filter(pk=question.pk).owner_update(verdict=["complete"])
+
+
+@pytest.mark.parametrize("withdrawn", [False, True])
+def test_supplied_values_cannot_be_stored_on_open_or_withdrawn_decisions(people, withdrawn):
+    requester, *_ = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+    if withdrawn:
+        with system_context(reason="test.withdraw"):
+            question = Decision.objects.withdraw(question, actor=requester)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        system_queryset(Decision).filter(pk=question.pk).owner_update(verdict_values={"record": {"name": "value"}})
+    question.refresh_from_db()
+    assert question.verdict_values is None
+
+
+def test_choose_requires_the_answerers_record_write_permission(people):
+    requester, reviewer, _, _, subject = people
+    proposal = DecisionProposal(alternatives=[{
+        "key": "complete", "label": "Complete", "outcome": "completed",
+        "actions": {subject.sqid: {"fields": {"name": {"choose": {}}}}},
+    }])
+    question = Decision.objects.ask(request_for(people, proposal=proposal), actor=requester)
+    with pytest.raises(PermissionDenied, match="write"):
+        question.decide(actor=reviewer, chosen=["complete"], values={subject.sqid: {"name": "Chosen"}})
+    question.refresh_from_db()
+    assert question.is_open and question.verdict_values is None

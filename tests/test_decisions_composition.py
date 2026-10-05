@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from graphql import build_schema
+from graphql import build_schema, get_named_type
 
 
 def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Path) -> None:
@@ -58,7 +58,8 @@ def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Pat
     assert schema.mutation_type is not None
     mutations = schema.mutation_type.fields
     assert "decide" in mutations
-    assert set(mutations["decide"].args) == {"id", "revision", "chosen"}
+    assert set(mutations["decide"].args) == {"id", "revision", "chosen", "values"}
+    assert "verdict_values" in get_named_type(schema.query_type.fields["decisions"].type).fields
     assert not any(name.startswith(("insert_decision", "update_decision", "delete_decision")) for name in mutations)
     filters = schema.query_type.fields["decisions"].args["where"].type
     assert {"assignees", "requester"} <= filters.fields.keys()

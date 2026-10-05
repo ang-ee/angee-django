@@ -28,6 +28,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     proposal = models.JSONField()
     context = models.JSONField(default=dict)
     verdict = models.JSONField(null=True, blank=True)
+    verdict_values = models.JSONField(null=True, blank=True)
     answered_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
     )
@@ -44,8 +45,10 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
         abstract = True
         rebac_resource_type = "decisions/decision"
         constraints = [models.CheckConstraint(
-            condition=models.Q(verdict__isnull=True, answered_by__isnull=True, answered_at__isnull=True)
-            | models.Q(verdict__isnull=False, answered_by__isnull=False, answered_at__isnull=False),
+            condition=models.Q(verdict__isnull=True, verdict_values__isnull=True,
+                               answered_by__isnull=True, answered_at__isnull=True)
+            | (models.Q(verdict__isnull=False, answered_by__isnull=False, answered_at__isnull=False)
+               & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True))),
             name="decisions_verdict_consistent",
         )]
 
@@ -71,8 +74,8 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     def __str__(self) -> str:
         return self.kind_label
 
-    def decide(self, *, actor: Any, chosen: list[str], revision: int | None = None) -> Any:
-        return type(self).objects.decide(self, actor=actor, chosen=chosen, revision=revision)
+    def decide(self, *, actor: Any, chosen: list[str], revision: int | None = None, values: Any = None) -> Any:
+        return type(self).objects.decide(self, actor=actor, chosen=chosen, revision=revision, values=values)
 
     def validate_verdict(self, chosen: tuple[Any, ...], *, actor: Any) -> None:
         """Allow composed policy to refuse an answer before its verdict is retained."""

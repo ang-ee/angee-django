@@ -5,11 +5,12 @@ from typing import Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, F, OuterRef, Q
 from django.db.models.functions import Now
-from rebac import current_actor, system_context, to_subject_ref
+from pydantic import JsonValue, TypeAdapter
+from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
@@ -131,6 +132,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 
     def decide(
         self, decision: Any, *, actor: Any, chosen: Sequence[str], revision: int | None = None,
+        values: dict[str, dict[str, JsonValue]] | None = None,
     ) -> Any:
         """Record one final verdict. Proposal actions belong to the asker."""
         answering = _user(actor)
@@ -143,12 +145,32 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             if not row.is_open:
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             try:
-                selected = DecisionProposal.model_validate(row.proposal).choose(chosen)
+                values = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python({} if values is None else values)
+                selected = DecisionProposal.model_validate(row.proposal).choose(chosen, values=values)
             except ValueError as error:
                 raise ValidationError({"chosen": str(error)}) from error
+            try:
+                links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
+                for alternative in selected:
+                    for identity, actions in alternative.actions.items():
+                        if identity not in values:
+                            continue
+                        link = links.get(identity)
+                        reference = link.record if link is not None else None
+                        if reference is None:
+                            raise ValueError("The record for a chosen action is missing or inaccessible.")
+                        record = actions.target_model(reference).objects.with_actor(answering).for_write().get(
+                            pk=reference.pk,
+                        )
+                        record.require_access("write", answering)
+                        with actor_context(answering):
+                            actions.resolve(record, context={"actor": answering}, values=values[identity])
+            except (ValueError, ObjectDoesNotExist) as error:
+                raise ValidationError({"values": str(error)}) from error
             row.validate_verdict(selected, actor=answering)
             if not self.filter(pk=pk, revision=row.revision).open().owner_update(
                 verdict=[alternative.key for alternative in selected], answered_by=answering, answered_at=Now(),
+                verdict_values=values or None,
                 revision=F("revision") + 1, updated_at=Now(),
             ):
                 raise ValidationError({"revision": "The decision has changed; reload it."})

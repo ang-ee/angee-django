@@ -48,7 +48,9 @@ def review(execution, register_step):
                     proposal=DecisionProposal(
                         multiple=ctx.input.get("multiple", False), alternatives=[
                             {"key": "approve", "label": "Approve", "outcome": "approved",
-                             "actions": {public_id_of(self.review_subject): {"fields": {"name": {"set": "Applied"}}}}},
+                             "actions": {public_id_of(self.review_subject): {"fields": {"name": (
+                                 {"choose": {}} if ctx.input.get("choose") else {"set": "Applied"}
+                             )}}}},
                             {"key": "reject", "label": "Keep current record", "outcome": "rejected"},
                         ],
                     ),
@@ -117,6 +119,24 @@ def test_multiple_choices_receive_the_set_and_route_done(review):
     Decision.objects.decide(decision, actor=people[0], chosen=["reject", "approve"])
     run_until(run)
     assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
+
+
+def test_choose_is_applied_on_workflow_resume(review):
+    _, people, _, question = review
+    write_relationships([
+        RelationshipTuple(to_object_ref(question.review_subject), "editor", to_subject_ref(people[0])),
+    ])
+    run, step = start_review(review, input={"choose": True})
+    decision = questions(step)[0]
+    values = {public_id_of(question.review_subject): {"name": "Answerer's value"}}
+    Decision.objects.decide(decision, actor=people[0], chosen=["approve"], values=values)
+    question.review_subject.refresh_from_db()
+    assert question.review_subject.name != "Answerer's value"
+    assert system_queryset(Decision).get(pk=decision.pk).verdict_values == values
+    run_until(run)
+    question.review_subject.refresh_from_db()
+    assert run.status == "succeeded" and run.outcome == "approved"
+    assert question.review_subject.name == "Answerer's value"
 
 
 def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, register_step):

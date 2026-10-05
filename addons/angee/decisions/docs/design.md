@@ -13,7 +13,7 @@ What exists and how it relates, independent of any code.
   decisions about a record are easy to find.
 - **Proposal:** the alternatives a decision offers. Each alternative says what happens if it is chosen: the
   actions on the concerned records (set this field to this value, do this to the whole record) and how the asker
-  continues.
+  continues. An alternative may leave a field's value to the answerer.
 - **Attention:** a record needs attention when at least one open decision concerns it, whoever may answer it. A field is unconfirmed when
   an open decision about its record proposes an action on that field. Attention is derived; it is never stored.
 - **Verdict:** the answer. It chooses one or several of the proposal's alternatives, with who answered, and
@@ -41,9 +41,10 @@ How the ontology maps to this addon.
 
 - **One model, `Decision`:** `kind`, `requester`, `assignees` (users or agents who may answer), `records`,
   `proposal`, `context` (evidence shown on the card), and the verdict: `verdict` (the chosen alternative keys),
-  `answered_by`, `answered_at`. A decision is open while it has no verdict. There is no group, no policy, no
-  round, no separate list of answer options and no input form: the alternatives are the proposal, and a free
-  correction is a direct edit of the record followed by choosing the alternative that keeps the record as it is.
+  `verdict_values` (supplied values by record public id and field), `answered_by`, `answered_at`.
+  A decision is open while it has no verdict. There is no group, no policy, no
+  round, no separate list of answer options and no answer form: a value the answerer supplies is a `choose`
+  action on a field, rendered by that field's own widget.
 - **`Decision.records`** (new): a many-to-many to the records the decision applies to (a through row of
   decision, content type and id). It exists to find decisions by record; it carries nothing else.
 - **`Decision.proposal`** (new, JSON): the alternatives, each with its actions per record and per field and the
@@ -69,20 +70,27 @@ How the ontology maps to this addon.
   `arguments`. Field values, readable foreign-key identities and editability are
   validated when asking; state and server-owned fields cannot be written, and
   declared per-field write permissions apply to the asking actor. A field action
-  of `{}` confirms its current value without writing; only an explicit `set`
-  changes it. Multiple alternatives cannot overlap a field write.
+  of `{}` confirms its current value without writing; `{"set": value}` proposes a value;
+  `{"choose": {}}` leaves the value to the answerer, with an optional `filter` for the relation picker.
+  Supplied values pass through the same field resolution as `set` under the answering actor, including
+  related-record read access, validators and write permissions. Every chosen `choose` field needs a value,
+  and no other field may receive one. Multiple alternatives cannot overlap a field write.
+  Many-to-many writes remain refused; `choose` does not apply inside method arguments.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Readers:**
   Decision content is readable only by its assignees, requester and administrators;
   operating the asking run grants no decision read access.
 - **Answering:** `Decision.objects.decide(decision, chosen keys, actor)` is the one entry, for humans and agents
-  alike. It records the verdict; it applies nothing itself. The asker applies the chosen alternatives' actions
-  through the records' own owners and continues along their outcome.
+  alike, with optional `values={record_id: {field: value}}`. It records those values once in `verdict_values`
+  alongside the verdict; it applies nothing itself. The asker applies `choose` from the stored value exactly
+  as `set`, through `RecordActions.resolve(..., values=decision.verdict_values[record_id])`, and applies the
+  chosen alternatives' actions through the records' own owners and continues along their outcome.
   Non-workflow askers apply inside the answer transaction and propagate refusal;
   workflow steps apply on resume and expose failure as an error hold.
 - **Gate:** `Decision.objects.open_for(record)` is the one call other owners use.
 - **Withdrawing:** the asker closes its own open decision with an empty verdict, recorded with who stopped it.
+  `verdict_values` is null while open and when withdrawn, enforced by the verdict consistency constraint.
   "Open" stays one rule: no verdict yet.
   The card's choice and accepted-answer lock belong to its observed revision. A new revision
   clears both; closing the card keeps focus on its outcome. Answers invalidate concerned records.

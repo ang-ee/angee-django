@@ -51,6 +51,16 @@ class SetValue(BaseModel):
     set: JsonValue | MISSING = MISSING
 
 
+class ChooseOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    filter: dict[str, JsonValue] | MISSING = MISSING
+
+
+class ChooseValue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    choose: ChooseOptions
+
+
 class CallMethod(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     call: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -60,7 +70,7 @@ class CallMethod(BaseModel):
 class RecordActions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
-    fields: dict[str, SetValue] = Field(default_factory=dict)
+    fields: dict[str, SetValue | ChooseValue] = Field(default_factory=dict)
     record: CallMethod | None = Field(default=None, exclude_if=lambda value: value is None)
 
     def target_model(self, record: models.Model) -> type[models.Model]:
@@ -74,7 +84,9 @@ class RecordActions(BaseModel):
             raise ValueError("The action model must share the concerned record's canonical identity.")
         return target
 
-    def resolve(self, record: models.Model, *, context: dict[str, Any]) -> dict[str, Any]:
+    def resolve(
+        self, record: models.Model, *, context: dict[str, Any], values: dict[str, JsonValue] | None = None,
+    ) -> dict[str, Any]:
         """Validate the action owner and decode writes through its model fields."""
         model = self.target_model(record)
         if not isinstance(record, model):
@@ -83,13 +95,13 @@ class RecordActions(BaseModel):
                      for parts in schema_parts_for(apps.get_app_config(model._meta.app_label)).values()
                      for surface in parts.mutation for item in data_resource_contributions(surface)
                      if item.model is model and item.native_resource is not None]
-        values = {}
+        resolved = {}
         for name, operation in self.fields.items():
             try:
                 field = model._meta.get_field(name)
             except FieldDoesNotExist as error:
                 raise ValueError(f"Unknown field: {name}.") from error
-            if "set" not in operation.model_fields_set:
+            if not operation.model_fields_set:
                 continue
             if resources and not any(name in resource.updatable_fields for resource in resources):
                 raise ValueError(f"The record owner does not expose writes to {name}.")
@@ -100,10 +112,13 @@ class RecordActions(BaseModel):
             permission = f"write__{name}"
             if ("actor" in context and definition and permission in field_gated_actions(definition, "write")
                     and not record.with_actor(context["actor"]).has_access(permission)):
-                raise ValueError(f"The asking actor cannot write {name}.")
+                raise ValueError(f"The actor cannot write {name}.")
             if field.many_to_many or field.one_to_many:
                 raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
-            value = operation.set
+            if isinstance(operation, ChooseValue) and values is None:
+                continue
+            value = values[name] if isinstance(operation, ChooseValue) else operation.set
+            supplied = value
             try:
                 if field.is_relation:
                     if value is not None and not isinstance(value, str):
@@ -119,7 +134,7 @@ class RecordActions(BaseModel):
                         field.related_model, value,
                         queryset=field.related_model.objects.with_actor(context.get("actor", current_actor())),
                     )
-                    if value is None and operation.set is not None:
+                    if value is None and supplied is not None:
                         raise ValueError(f"The related record for {name} is absent or unreadable.")
                     if value is not None:
                         context.get("related_records", []).append(value)
@@ -128,7 +143,7 @@ class RecordActions(BaseModel):
                     value = field.clean(value, record)
             except (ValidationError, TypeError) as error:
                 raise ValueError(f"Invalid proposed value for {name}: {error}") from error
-            values[name] = value
+            resolved[name] = value
         if self.record:
             call = self.record.call
             if call == "delete" or call not in getattr(model, "decision_methods", ()):
@@ -145,7 +160,7 @@ class RecordActions(BaseModel):
                 signature(bound).bind(**self.record.arguments)
             except TypeError as error:
                 raise ValueError(f"Invalid arguments for {call}: {error}") from error
-        return values
+        return resolved
 
 
 class Alternative(BaseModel):
@@ -181,7 +196,9 @@ class DecisionProposal(BaseModel):
                 actions.resolve(records[identity], context=info.context)
         return self
 
-    def choose(self, chosen: Sequence[str]) -> tuple[Alternative, ...]:
+    def choose(
+        self, chosen: Sequence[str], *, values: dict[str, dict[str, JsonValue]] | None = None,
+    ) -> tuple[Alternative, ...]:
         """Validate a verdict and return alternatives in authored order."""
         if isinstance(chosen, (str, bytes)) or not chosen or any(not isinstance(key, str) for key in chosen):
             raise ValueError("Choose at least one alternative.")
@@ -194,11 +211,18 @@ class DecisionProposal(BaseModel):
         for alternative in selected:
             for identity, actions in alternative.actions.items():
                 for name in actions.fields:
-                    if "set" not in actions.fields[name].model_fields_set:
+                    if not actions.fields[name].model_fields_set:
                         continue
                     if (identity, name) in written:
                         raise ValueError(f"Choose only one value for {name.replace('_', ' ')}.")
                     written.add((identity, name))
+        required = {(identity, name) for alternative in selected for identity, actions in alternative.actions.items()
+                    for name, operation in actions.fields.items() if isinstance(operation, ChooseValue)}
+        supplied = {(identity, name) for identity, fields in (values or {}).items() for name in fields}
+        if required - supplied:
+            raise ValueError("Supply a value for every chosen choose field.")
+        if supplied - required or set(values or {}) - {identity for identity, _ in required}:
+            raise ValueError("Supply values only for choose fields of chosen alternatives.")
         return selected
 
 

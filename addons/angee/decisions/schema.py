@@ -50,6 +50,7 @@ class DecisionType(AngeeNode):
     proposal: JSON
     records: list[DecisionRecordType] = actor_scoped_to_many("records")
     verdict: JSON | None
+    verdict_values: JSON | None
     verdict_label: str = strawberry_django.field(only=["verdict", "proposal"])
     answered_by: UserType | None = actor_scoped_to_one("answered_by")
     answered_at: auto
@@ -84,9 +85,11 @@ _RECORDS = hasura_model_resource(
 class DecisionMutation:
     @strawberry.mutation
     @action_guard("Could not decide.", camel_case_keys=False)
-    def decide(self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int) -> ActionResult:
+    def decide(
+        self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
+    ) -> ActionResult:
         decision = authorized_permission_target(info, Decision, id, "act")
-        decision = decision.decide(actor=info.context.request.user, revision=revision, chosen=chosen)
+        decision = decision.decide(actor=info.context.request.user, revision=revision, chosen=chosen, values=values)
         return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
 
 

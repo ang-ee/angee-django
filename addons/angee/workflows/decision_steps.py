@@ -23,7 +23,9 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
             raise ValidationError("The decision is still open.")
         if decision.verdict == []:
             raise ValidationError("A withdrawn decision cannot be applied.")
-        selected = DecisionProposal.model_validate(decision.proposal).choose(decision.verdict)
+        selected = DecisionProposal.model_validate(decision.proposal).choose(
+            decision.verdict, values=decision.verdict_values,
+        )
         links = {link.record_public_id: link for link in decision.records.with_actor(actor).all()}
         for alternative in selected:
             outcomes.add(alternative.outcome)
@@ -36,7 +38,8 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                     actions.target_model(reference).objects.with_actor(actor).for_write().filter(pk=reference.pk)
                 ).get()
                 try:
-                    values = actions.resolve(record, context={"actor": actor})
+                    values = actions.resolve(record, context={"actor": actor},
+                                             values=(decision.verdict_values or {}).get(identity))
                 except ValueError as error:
                     raise ValidationError(str(error)) from error
                 for name, value in values.items():
