@@ -298,7 +298,7 @@ export function resolveContainer<TContent = unknown>(
   // Composition validates every address; a runtime composed without this container
   // (a story, a bare test) has no composed children for it, only the page's own.
   const declared = composed.declared[address];
-  if (!declared) return extra as readonly ComposedContainerChild<TContent>[];
+  if (!declared) return positionSiblings(extra, `Children of "${address}"`) as readonly ComposedContainerChild<TContent>[];
   const name = containerName(address);
   const addresses = declared.models ? [address, ...models.map((model) => `${model}#${name}`)] : [address];
   // One id on a model and on its MTI parent (one addon's, as ids are namespaced): the model's own stands.

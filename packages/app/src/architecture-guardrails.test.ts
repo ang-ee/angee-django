@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 import { RecordIssues, baseIcons } from "@angee/ui";
+import { FILTER_OPERATORS } from "@angee/metadata";
 
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
@@ -146,6 +147,22 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
 ];
 
 const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
+  {
+    namespace: "ui",
+    owner: "@angee/ui FilterClauseOperator",
+    prefix: "search.operator.",
+    values: [...FILTER_OPERATORS, "isNotNull"],
+  },
+  {
+    namespace: "ui",
+    owner: "@angee/metadata QueryExtraction.name date granularities",
+    prefix: "search.granularity.",
+    values: [
+      "year", "quarter", "month", "week", "day", "hour", "minute", "second",
+      "year_number", "quarter_number", "month_number", "iso_week_number",
+      "day_of_month", "day_of_week", "day_of_year", "hour_number", "minute_number", "second_number",
+    ],
+  },
   {
     namespace: "ui",
     owner: "@refinedev/core resource action labels",

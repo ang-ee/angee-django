@@ -194,7 +194,7 @@ export function GanttCollectionSurface<TRow extends Row>({
   const search = useResourceSearch({ resourceView, catalog, groupStack,
     groupingEnabled: !groupingPinned && (catalog.groups.length > 0 || groupStack.length > 0), maxGroupDepth });
   const toolbar: ResourceToolbarProps = {
-    search, pager: list, availableViews, view: "gantt",
+    search, searchDeclaration: input.search, modelMetadata: input.modelMetadata, pager: list, availableViews, view: "gantt",
     createLabel, onCreate, actions: toolbarActions, wrap: toolbarWrap,
     onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     onViewChange: (availableViews?.length ?? 2) > 1 ? resourceView.setView : undefined,

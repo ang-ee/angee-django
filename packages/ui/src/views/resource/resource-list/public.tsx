@@ -134,7 +134,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Initial editable filter for a new view; route state and saved views remain authoritative thereafter. */
   defaultFilter?: ResourceViewFilter;
   filterOptions?: ListViewProps<TRow>["filterOptions"];
-  filterRow?: ListViewProps<TRow>["filterRow"];
+  search?: ListViewProps<TRow>["search"];
   facets?: ListViewProps<TRow>["facets"];
   customFilterFields?: ListViewProps<TRow>["customFilterFields"];
   groupOptions?: ListViewProps<TRow>["groupOptions"];

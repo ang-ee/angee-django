@@ -1,11 +1,14 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
   ListView,
+  RowsListView,
+  type ListSearchDeclaration,
   defineRowAction,
   type ListColumn,
   type RowActionDeclaration,
 } from "@angee/ui";
 
+import { ResourceQuery } from "@angee/metadata";
 import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 
 const rows = [
@@ -101,11 +104,11 @@ export const VisibleFieldsChooser: Story = {
   render: () => <ListFixture />,
 };
 
-export const QuickFilterRow: Story = {
-  render: () => <ListFixture withFilterRow />,
+export const SearchShortcuts: Story = {
+  render: () => <ListFixture withShortcuts />,
 };
 
-function ListFixture({ withFilterRow = false }: { withFilterRow?: boolean }) {
+function ListFixture({ withShortcuts = false }: { withShortcuts?: boolean }) {
   return (
     <RuntimeFixture schemas={storySchemas}>
       <div className="max-w-5xl">
@@ -114,13 +117,11 @@ function ListFixture({ withFilterRow = false }: { withFilterRow?: boolean }) {
           columns={columns}
           rowActions={rowActions}
           chrome={{ heading: { label: "Notes", hint: "Shared team records", audience: "Editors" } }}
-          filterRow={withFilterRow ? { quickFilterIds: ["status:ACTIVE"], facetIds: ["status"] } : undefined}
-          filterOptions={withFilterRow ? [
+          search={withShortcuts ? { shortcuts: [{ kind: "toggle", id: "status:ACTIVE" }, { kind: "facet", field: "status" }] } : undefined}
+          filterOptions={withShortcuts ? [
             { id: "status:ACTIVE", label: "Active", filter: { status: { exact: "ACTIVE" } } },
-            { id: "status:DRAFT", label: "Draft", filter: { status: { exact: "DRAFT" } } },
-            { id: "status:ARCHIVED", label: "Archived", filter: { status: { exact: "ARCHIVED" } } },
           ] : undefined}
-          customFilterFields={withFilterRow ? [{ id: "status", label: "Status", type: "selection", options: [
+          customFilterFields={withShortcuts ? [{ id: "status", label: "Status", type: "selection", options: [
             { value: "ACTIVE", label: "Active" }, { value: "DRAFT", label: "Draft" }, { value: "ARCHIVED", label: "Archived" },
           ] }] : undefined}
           createLabel="New note"
@@ -129,4 +130,38 @@ function ListFixture({ withFilterRow = false }: { withFilterRow?: boolean }) {
       </div>
     </RuntimeFixture>
   );
+}
+
+
+const referenceQuery = ResourceQuery.forRows({ fields: {
+  title: { scalar: "String" }, "requester.display_name": { scalar: "String" },
+  submitted: { scalar: "DateTime" }, due: { scalar: "Date" }, duration: { scalar: "Float" },
+  priority: { kind: "enum", values: [{ value: "high", description: "High" }, { value: "low", description: "Low" }] },
+  status: { kind: "enum", values: [{ value: "open", description: "Open" }, { value: "closed", description: "Closed" }] },
+  owner: { kind: "relation" },
+} });
+const referenceSearch: ListSearchDeclaration = { shortcuts: [
+  { kind: "text", field: "title" }, { kind: "text", field: "requester.display_name" },
+  { kind: "clause", field: "submitted" }, { kind: "clause", field: "due" }, { kind: "clause", field: "duration" },
+  { kind: "facet", field: "priority" }, { kind: "facet", field: "status" }, { kind: "toggle", id: "mine" },
+] };
+
+/** Eight separate controls and the trailing box, authored entirely as list options. */
+export const ReferenceShortcuts: Story = { render: () => <ReferenceList /> };
+export const ReferenceShortcutsFullBox: Story = { render: () => <ReferenceList box /> };
+
+function ReferenceList({ box }: { box?: true }) {
+  return <RowsListView
+    scope="local"
+    query={referenceQuery}
+    rows={[{ id: "record-1", title: "Review the draft", requester: { display_name: "Lee" }, submitted: "2026-10-04T09:00:00Z",
+      due: "2026-10-08", duration: 2, priority: "high", status: "open", owner: "viewer" }]}
+    columns={[
+      { field: "title", header: "Title" }, { field: "requester.display_name", header: "Filed by" },
+      { field: "submitted", header: "Submitted", widget: "datetime" }, { field: "due", header: "Need by", widget: "date" },
+      { field: "duration", header: "Duration" }, { field: "priority", header: "Priority" }, { field: "status", header: "Status" },
+    ]}
+    filterOptions={[{ id: "mine", label: "My records", filter: { owner: { exact: "viewer" } } }]}
+    search={{ ...referenceSearch, ...(box ? { box } : {}) }}
+  />;
 }

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { Filter, ModelMetadataProvider, ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 import { ResourceToolbar, ResourceViewSwitcher } from "../../toolbars/ResourceToolbar";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
@@ -34,7 +34,8 @@ const archived: ResourceViewPreset = {
 };
 const presets = { [open.id]: open, [archived.id]: archived };
 
-afterEach(cleanup);
+beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function fixture(entry = "/", presetIds: readonly string[] = [archived.id], toolbar = false, menuResourceViewIds: readonly string[] = []) {
   let view!: ResourceViewContextValue;
@@ -48,7 +49,7 @@ function fixture(entry = "/", presetIds: readonly string[] = [archived.id], tool
     const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
     const search = useResourceSearch({ resourceView: view, catalog });
     const controls = { search, pager: { total: 1, page: 1, pageSize: 20 }, view: view.state.view,
-      availableViews: ["list", "board"] as const, onViewChange: view.setView, filterRow: {} };
+      availableViews: ["list", "board"] as const, onViewChange: view.setView, searchDeclaration: { box: "collapsed" as const } };
     if (toolbar) return <ResourceToolbar {...controls} />;
     return <ResourceViewSwitcher view={view.state.view} favorites={view.savedFavorites}
       onFavoriteSelect={view.applyFavorite} onViewChange={view.setView} />;
@@ -178,14 +179,14 @@ test("a local preset mount without presetIds keeps its initial view valid and un
   expect(view.savedFavorites.map((favorite) => favorite.id)).toEqual([archived.id]);
 });
 
-test("a shipped preset quick filter toggles off its fixed scope in a local widget", () => {
+test("a shipped preset toggle shortcut removes its fixed scope in a local widget", () => {
   let view!: ResourceViewContextValue;
   function Widget() {
     view = useResourceView();
     const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
     const search = useResourceSearch({ resourceView: view, catalog });
     const toolbar = { search, pager: { total: 1, page: 1, pageSize: 10 },
-      view: "list" as const, filterRow: { quickFilterIds: [archived.id] } };
+      view: "list" as const, searchDeclaration: { shortcuts: [{ kind: "toggle" as const, id: archived.id }] } };
 
     return <ResourceToolbar {...toolbar} />;
   }
@@ -197,10 +198,10 @@ test("a shipped preset quick filter toggles off its fixed scope in a local widge
       </ResourceViewProvider>
     </AppRuntimeProvider>
   </ModelMetadataProvider>);
-  const quickFilter = screen.getByRole("button", { name: archived.label });
-  expect(quickFilter.getAttribute("aria-pressed")).toBe("true");
+  const toggle = screen.getByRole("button", { name: archived.label });
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
-  fireEvent.click(quickFilter);
+  fireEvent.click(toggle);
   expect(view.state.preset).toBe("");
   expect(view.baseFilter).toBeUndefined();
   expect(screen.getByRole("button", { name: "Clear" })).toBeTruthy();

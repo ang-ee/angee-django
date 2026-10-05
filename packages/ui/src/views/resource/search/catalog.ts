@@ -9,10 +9,13 @@ import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewDefaultGroups, ResourceViewGroup } from "../resource-view-model";
 import { buildFilterFields, buildFilterOptions, buildGroupOptions, mergeFilterFields, mergeFilterOptions } from "../resource-view-utils";
 import { defaultGroupsForToolbar } from "./group-defaults";
+import { useSearchShortcuts, validateSearchShortcut, validateSearchShortcutCatalog, type ListSearchDeclaration } from "./shortcuts";
 import type { SearchCatalog, SearchFacet } from "./types";
 
 export interface UseSearchCatalogInput<TRow extends Row> {
   query?: ResourceQuery;
+  search?: ListSearchDeclaration;
+  renderItem?: boolean;
   inferOptions?: boolean;
   serverGrouping?: boolean;
   columns: readonly ColumnDescriptor<TRow>[];
@@ -30,8 +33,6 @@ export interface UseSearchCatalogInput<TRow extends Row> {
   declaredFacets?: readonly SearchFacet[];
   scalarFacets?: readonly SearchFacet[];
   textFilterField?: string | null;
-  /** Additional fields requested by text presentations. */
-  textShortcutFields?: readonly string[];
 }
 
 const EMPTY = [] as const;
@@ -42,6 +43,9 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   const { columns, rows, modelMetadata, resourceView, inferOptions = true } = input;
   const defaults = React.useMemo(() => defaultGroupsForToolbar(input.defaultGroup, input.defaultGroups), [input.defaultGroup, input.defaultGroups]);
   const query = React.useMemo(() => input.query ?? queryForColumns(columns, modelMetadata, defaults), [input.query, columns, modelMetadata, defaults]);
+  const shortcuts = useSearchShortcuts(input.search, modelMetadata);
+  for (const child of shortcuts) validateSearchShortcut(child.content, child.id, query);
+  const shortcutTextFields = React.useMemo(() => shortcuts.flatMap(({ content }) => content.kind === "text" ? [content.field] : []), [shortcuts]);
   const serverGrouping = input.serverGrouping ?? Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource)
     && (resourceView.state.view === "list" || resourceView.state.view === "board"));
   const groups = React.useMemo(() => buildGroupOptions(columns, modelMetadata, defaults, query).filter(({ group }) => {
@@ -113,11 +117,13 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       return supported && (group.granularity === undefined || supported.granularities?.includes(group.granularity));
     });
   }, [input.groupOptions, input.contributedGroupOptions, contributedFacets, inferOptions, groups]);
-  const text = React.useMemo(() => searchTextFields(query, input.textFilterField, input.textShortcutFields).map((field) => ({
+  const text = React.useMemo(() => searchTextFields(query, input.textFilterField, shortcutTextFields).map((field) => ({
     field, label: fieldLabel(field, modelMetadata?.fields[field], columns.find((column) => column.field === field)?.header),
-  })), [query, input.textFilterField, input.textShortcutFields, modelMetadata, columns]);
-  return React.useMemo(() => ({ text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
+  })), [query, input.textFilterField, shortcutTextFields, modelMetadata, columns]);
+  const catalog = React.useMemo(() => ({ text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
     [text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
+  validateSearchShortcutCatalog(shortcuts, catalog, input.renderItem);
+  return catalog;
 }
 
 /** Null removes only the default; explicitly requested text fields still apply. */

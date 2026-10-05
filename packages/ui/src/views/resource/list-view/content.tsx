@@ -52,7 +52,7 @@ interface ListViewContentProps<TRow extends Row> {
   scalarFacets: ReturnType<typeof useScalarFacets>;
   explicitGroupOptions: ListViewProps<TRow>["groupOptions"];
   explicitFilterOptions: ListViewProps<TRow>["filterOptions"];
-  filterRow: ListViewProps<TRow>["filterRow"];
+  searchDeclaration: ListViewProps<TRow>["search"];
   explicitCustomFilterFields: ListViewProps<TRow>["customFilterFields"];
   defaultGroup: ListViewProps<TRow>["defaultGroup"];
   defaultGroups: ListViewProps<TRow>["defaultGroups"];
@@ -100,7 +100,7 @@ export function ListViewContent<TRow extends Row = Row>({
   scalarFacets,
   explicitGroupOptions,
   explicitFilterOptions,
-  filterRow,
+  searchDeclaration,
   explicitCustomFilterFields,
   defaultGroup,
   defaultGroups,
@@ -129,6 +129,7 @@ export function ListViewContent<TRow extends Row = Row>({
   );
   const catalog = useSearchCatalog({
     query: source?.query,
+    search: searchDeclaration, renderItem: Boolean(renderItem),
     inferOptions: !source,
     serverGrouping: !clientRowModel,
     columns: resolvedColumns,
@@ -198,7 +199,7 @@ export function ListViewContent<TRow extends Row = Row>({
   const toolbar: ResourceToolbarProps = {
     search, chrome, wrap: toolbarWrap, actions: toolbarActions,
     utilityActions: contributedUtilities, availableViews, pager: surface.list,
-    view: resourceView.state.view, filterRow,
+    view: resourceView.state.view, searchDeclaration, modelMetadata,
     createLabel: createLabel ?? createLabelForResource(resource, t, modelMetadata?.label),
     onCreate, onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     onViewChange: availableViews.length > 1 ? resourceView.setView : undefined,

@@ -67,6 +67,9 @@ test("text defaults and shortcuts deduplicate and require iContains; null remove
   expect(searchTextFields(query, null, ["owner.name", "amount"])).toEqual(["owner.name"]);
   expect(searchTextFields(query, null)).toEqual([]);
   expect(catalog({ textFilterField: "owner.name" }).text[0]?.field).toBe("owner.name");
+  const search = { shortcuts: [{ kind: "text", field: "title" }, { kind: "text", field: "owner.name" }] } as const;
+  expect(catalog({ textFilterField: "owner.name", search }).text.map((item) => item.field)).toEqual(["owner.name", "title"]);
+  expect(catalog({ textFilterField: null, search }).text.map((item) => item.field)).toEqual(["title", "owner.name"]);
 });
 
 test("curated grouping preserves declared, contributed and inferred precedence", () => {

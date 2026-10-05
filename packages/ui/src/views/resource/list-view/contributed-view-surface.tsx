@@ -42,7 +42,7 @@ export function ContributedViewSurface<TRow extends Row>({
   const catalog = useSearchCatalog({ ...searchInput, resourceView, rows: [] });
   const search = useResourceSearch({ resourceView, catalog, groupingEnabled: false });
   const toolbar: ResourceToolbarProps = {
-    search,
+    search, searchDeclaration: searchInput.search, modelMetadata: searchInput.modelMetadata,
     onViewChange: availableViews.length > 1 ? resourceView.setView : undefined,
     onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     view: resourceView.state.view,

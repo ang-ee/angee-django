@@ -9,6 +9,7 @@ import { CountBadge } from "../../../ui/badge";
 import { RemovableChip } from "../../../ui/chip";
 import { Combobox } from "../../../ui/combobox";
 import { Input } from "../../../ui/input";
+import { Toolbar } from "../../../ui/toolbar";
 import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverPositioner, PopoverContent,
   POPUP_BASE, POPUP_ITEM, PORTALED_CONTROL_LAYER } from "../../../ui/popover";
 import { textRoleVariants } from "../../../ui/text";
@@ -28,12 +29,12 @@ type SuggestionGroup = { label: string; items: SearchSuggestion[] };
 type RemoteFacetOptions = { facet: SearchFacet; options: readonly SearchFacetOption[] };
 
 /** Presentation only: the model owns every active item and query transition. */
-export function SearchBox({ search, box = true }: { search: ResourceSearch; box?: true | "collapsed" }): React.ReactElement {
+export function SearchBox({ search, box = true, toolbar = false }: { search: ResourceSearch; box?: true | "collapsed"; toolbar?: boolean }): React.ReactElement {
   const [inputValue, setInputValue] = React.useState("");
   const [searchText] = useDebounce(inputValue.trim(), 250);
   const relations = search.catalog.facets.filter((facet) => facet.relation);
   return <RelationSuggestions facets={relations} searchText={searchText}>
-    {(remote) => <SearchBoxContent search={search} box={box} remote={searchText === inputValue.trim() ? remote : []}
+    {(remote) => <SearchBoxContent search={search} box={box} toolbar={toolbar} remote={searchText === inputValue.trim() ? remote : []}
       inputValue={inputValue} setInputValue={setInputValue} />}
   </RelationSuggestions>;
 }
@@ -67,8 +68,8 @@ function RelationSuggestionRead({ facet, searchText, children }: {
   </p> : null}</>;
 }
 
-function SearchBoxContent({ search, box, remote, inputValue, setInputValue }: {
-  search: ResourceSearch; box: true | "collapsed"; remote: readonly RemoteFacetOptions[];
+function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputValue }: {
+  search: ResourceSearch; box: true | "collapsed"; toolbar: boolean; remote: readonly RemoteFacetOptions[];
   inputValue: string; setInputValue: (value: string) => void;
 }): React.ReactElement {
   const t = useUiT();
@@ -117,7 +118,7 @@ function SearchBoxContent({ search, box, remote, inputValue, setInputValue }: {
       <div ref={hostRef} className={cn("flex min-w-0 items-center gap-1 rounded-6",
         collapsed ? "shrink-0" : "min-h-8 flex-1 bg-inset px-2 py-0.5 focus-within:focus-ring")}>
         {!collapsed ? <><Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />{input}</> : null}
-        <PopoverTrigger aria-label={t("search.panel")} className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-6 px-1 text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring">
+        <PopoverTrigger render={toolbar ? <Toolbar.Button /> : undefined} aria-label={t("search.panel")} className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-6 px-1 text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring">
           <Glyph name={collapsed ? "filter" : "chevron-down"} className="size-3.5" />
           {collapsed && active.length > 0 ? <CountBadge tone="brand">{active.length}</CountBadge> : null}
         </PopoverTrigger>

@@ -1,4 +1,5 @@
 import type { Row, ResourceFilter, ResourceOrder } from "@angee/metadata";
+import type { ListSearchDeclaration } from "./search/shortcuts";
 import type {
   ReactNode } from "react";
 import type {
@@ -31,6 +32,9 @@ import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
 import type { CollectionSource } from "./collection-source";
 import type { AggregateBucket } from "@angee/refine";
+
+export type { ListSearchDeclaration, SearchShortcut } from "./search/shortcuts";
+export { validateSearchShortcut } from "./search/shortcuts";
 
 export interface GroupLabelContext {
   bucket: AggregateBucket;
@@ -169,7 +173,7 @@ export interface ListViewProps<TRow extends Row = Row> {
   availableViews?: readonly ResourceViewKind[];
   /** Shipped view ids declared for this collection route. */
   presetIds?: readonly string[];
-  /** Semantic search field; null omits the search control. */
+  /** Default box text field; null removes only that default, preserving per-field text shortcuts. */
   textFilterField?: string | null;
   /** Limit nested grouping where the source supports a single axis. */
   maxGroupDepth?: number;
@@ -187,15 +191,15 @@ export interface ListViewProps<TRow extends Row = Row> {
   fields?: readonly string[];
   /** Base resource filter applied before user-owned view filters. */
   baseFilter?: ResourceFilter<ResourceTypeName>;
-  /** Favorite or quick filters shown in the list toolbar. */
+  /** Named predicates available in search and toggle shortcuts. */
   filterOptions?: readonly ResourceToolbarFilterOption[];
-  /** Show filter-option or shipped-preset ids and facets in a compact row. */
-  filterRow?: { quickFilterIds?: readonly string[]; facetIds?: readonly string[] };
-  /** Explicit relation facets exposed as quick filters and group-by axes. */
+  /** Combined box and optional shortcuts over the shared search model. */
+  search?: ListSearchDeclaration;
+  /** Explicit relation facet catalogs and group axes. */
   facets?: readonly FacetDescriptor[];
-  /** Presentation overrides for custom filters; the query supplies all supported fields. */
+  /** Presentation overrides for typed clauses; the query supplies all supported fields. */
   customFilterFields?: readonly FilterClauseField[];
-  /** Curated group shortcuts; the custom editor always uses the query's supported axes. */
+  /** Curated group axes; the complete search catalog retains every supported axis. */
   groupOptions?: readonly ResourceToolbarGroupOption[];
   /** Default resource order when the URL-owned data view has no sort. */
   order?: ResourceOrder<ResourceTypeName>;

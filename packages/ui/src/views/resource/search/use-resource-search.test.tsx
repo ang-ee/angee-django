@@ -91,6 +91,9 @@ test("facet replacement is exclusive for blanks and value toggles round-trip", (
   expect(result.current.view.state.filter.status).toEqual({ inList: ["open", "closed"] });
   act(() => result.current.search.setFacet("status", ["open", "blank"]));
   expect(result.current.view.state.filter.status).toEqual({ isNull: true });
+  act(() => result.current.search.setFacet("status", ["blank", "closed"]));
+  expect(result.current.view.state.filter.status).toEqual({ exact: "closed" });
+  act(() => result.current.search.setFacet("status", ["blank"]));
   act(() => result.current.search.toggleFacetOption("status", "closed"));
   expect(result.current.view.state.filter.status).toEqual({ exact: "closed" });
   act(() => result.current.search.toggleFacetOption("status", "closed"));
@@ -99,6 +102,18 @@ test("facet replacement is exclusive for blanks and value toggles round-trip", (
   act(() => result.current.search.toggleFacetOption("status", "blank"));
   expect(result.current.view.state.filter.status).toBeUndefined();
   expect(result.current.view.state.filter.title).toEqual({ iContains: "baseline" });
+});
+
+test("facet replacement retains active buckets reached beyond the initial catalog page", () => {
+  const catalog = searchFixture({ catalog: { facets: [{ field: "status", label: "Status", source: "relation", options,
+    optionForValue: (value) => ({ id: value, label: value, value, filter: { status: { exact: value } } }),
+  }] } }).catalog;
+  const { result } = renderHook(() => {
+    const view = useResourceView();
+    return { view, search: useResourceSearch({ resourceView: view, catalog }) };
+  }, { wrapper: ({ children }) => <ResourceViewProvider scope="local" initialState={{ filter: { status: { exact: "beyond" } } }}>{children}</ResourceViewProvider> });
+  act(() => result.current.search.setFacet("status", ["beyond", "open"]));
+  expect(result.current.view.state.filter.status).toEqual({ inList: ["open", "beyond"] });
 });
 
 test("groups append, move, replace and remove through the provider and preserve URL order", () => {

@@ -116,7 +116,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
   const search = useResourceSearch({ resourceView, catalog, groupStack: surfaceProps.groupStack ?? resourceView.state.groupStack,
     groupingEnabled: false, maxGroupDepth });
   const toolbar: ResourceToolbarProps = {
-    search, pager: list, availableViews, view: "gantt",
+    search, searchDeclaration: input.search, modelMetadata: input.modelMetadata, pager: list, availableViews, view: "gantt",
     createLabel, onCreate, actions: toolbarActions, wrap: toolbarWrap,
     onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
     onViewChange: (availableViews?.length ?? 2) > 1 ? resourceView.setView : undefined,

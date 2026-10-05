@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ResourceToolbar, type ResourceToolbarProps } from "./ResourceToolbar";
 import { searchFixture } from "../views/resource/search/search-fixture.test-support";
 import { activeItems } from "../views/resource/search/active";
@@ -13,7 +13,8 @@ const status = { id: "status", label: "Status", group: { field: "status" } };
 function toolbar(props: Partial<ResourceToolbarProps> = {}) {
   return render(<ResourceToolbar pager={PAGER} search={searchFixture()} onViewChange={vi.fn()} {...props} />);
 }
-afterEach(cleanup);
+beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function groupSearch(options: Parameters<typeof searchFixture>[0]) {
   const search = searchFixture(options);
@@ -88,7 +89,7 @@ test("a changed catalog replaces stale custom field and granularity drafts", () 
   expect(addGroup).toHaveBeenCalledWith({ field: "date", granularity: "month" });
 });
 
-test("the compact row dispatches named filters and facets by catalog identity", async () => {
+test("shortcuts dispatches named filters and facets by catalog identity", async () => {
   const search = searchFixture({ catalog: {
     filters: [{ id: "mine", label: "Mine", filter: { owner: { exact: "viewer" } } }],
     facets: [{ field: "status", label: "Status", source: "scalar", options: [
@@ -96,13 +97,13 @@ test("the compact row dispatches named filters and facets by catalog identity", 
       { id: "bucket-blank", label: "Not given", filter: { status: { isNull: true } } },
     ] }],
   } });
-  toolbar({ search, filterRow: { quickFilterIds: ["mine"], facetIds: ["status"] } });
+  toolbar({ search, searchDeclaration: { shortcuts: [{ kind: "toggle", id: "mine" }, { kind: "facet", field: "status" }] } });
   expect(screen.queryByLabelText("Filter records")).toBeNull();
   expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   expect(screen.getByRole("combobox", { name: "Filter records" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Search options" }));
-  fireEvent.click(within(screen.getByLabelText("Filters")).getByRole("button", { name: "Mine" }));
+  fireEvent.click(within(screen.getByRole("toolbar", { name: "Search shortcuts" })).getByRole("button", { name: "Mine" }));
   expect(search.toggleFilter).toHaveBeenCalledWith("mine");
   fireEvent.click(screen.getByRole("combobox", { name: "Status" }));
   const option = await screen.findByRole("option", { name: "Not given" });
@@ -114,10 +115,9 @@ test("shipped and pinned favorites retain their toggles, rename and pin controls
   const preset = { id: "favorite:open", label: "Open records", pinned: true };
   const search = searchFixture({ catalog: { favorites: [preset] }, queryDirty: true,
     active: [{ id: "favorite:favorite:open", kind: "favorite", label: preset.label }], pinFavorite: vi.fn() });
-  toolbar({ search, filterRow: { quickFilterIds: [preset.id] } });
+  toolbar({ search, searchDeclaration: { shortcuts: [{ kind: "toggle", id: preset.id }] } });
   const button = screen.getByRole("button", { name: preset.label });
   expect(button.getAttribute("aria-pressed")).toBe("true");
-  expect(button.className).toContain("rounded-full");
   fireEvent.click(button); expect(search.toggleFavorite).toHaveBeenCalledWith(preset.id);
   fireEvent.click(screen.getByRole("button", { name: "Clear" }));
   expect(search.clearQuery).toHaveBeenCalledOnce();
@@ -134,19 +134,19 @@ test("chips use the active projection and dispatch to model commands", () => {
   expect(search.clear).toHaveBeenCalledWith("filter:open");
 });
 
-test.each([false, true])("one chip per group level removes only that level (compact %s)", (compact) => {
+test.each([false, true])("one chip per group level removes only that level (collapsed %s)", (collapsed) => {
   const created = { id: "created", label: "Created", group: { field: "created" },
     type: "date" as const, granularities: ["month", "year"] };
   const catalog = searchFixture({ catalog: { groups: [status, created], curatedGroups: [status] } }).catalog;
   function Content() {
     const resourceView = useResourceView();
     const search = useResourceSearch({ resourceView, catalog, groupingEnabled: true });
-    return <ResourceToolbar pager={PAGER} search={search} filterRow={compact ? {} : undefined} />;
+    return <ResourceToolbar pager={PAGER} search={search} searchDeclaration={collapsed ? { box: "collapsed" } : undefined} />;
   }
   render(<ResourceViewProvider scope="local" initialState={{ groupStack: [
     { field: "created", granularity: "month" }, status.group, { field: "created", granularity: "year" },
   ] }}><Content /></ResourceViewProvider>);
-  if (compact) fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  if (collapsed) fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   const chips = within(screen.getByRole("toolbar", { name: "Active search" }));
   expect(chips.getByRole("button", { name: "Remove Created · Month" })).toBeTruthy();
   expect(chips.getByRole("button", { name: "Remove Status" })).toBeTruthy();
@@ -172,16 +172,16 @@ test("providers without writable preferences keep the complete box reachable", (
   expect(screen.getAllByRole("button", { name: "Search options" })).toHaveLength(1);
 });
 
-test("a shipped favorite quick filter uses the provider's id, not a saved-view object", () => {
+test("a shipped favorite toggle shortcut uses the provider's id, not a saved-view object", () => {
   const search = searchFixture({ catalog: { favorites: [{ id: "view.open", preset: "view.open", label: "Open view" }] },
     active: [{ id: "favorite:view.open", kind: "favorite", label: "Open view" }] });
-  toolbar({ search, filterRow: { quickFilterIds: ["view.open"] } });
+  toolbar({ search, searchDeclaration: { shortcuts: [{ kind: "toggle", id: "view.open" }] } });
   fireEvent.click(screen.getByRole("button", { name: "Open view" }));
   expect(search.toggleFavorite).toHaveBeenCalledWith("view.open");
 });
 
 test("a facet label comes from the catalog even without a clause descriptor", () => {
-  toolbar({ filterRow: { facetIds: ["due_at"] }, search: searchFixture({ catalog: {
+  toolbar({ searchDeclaration: { shortcuts: [{ kind: "facet", field: "due_at" }] }, search: searchFixture({ catalog: {
     facets: [{ field: "due_at", label: "Due date", source: "declared", options: [
       { id: "today", label: "Today", value: "today", filter: { due_at: { exact: "today" } } },
     ] }],

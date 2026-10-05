@@ -507,7 +507,7 @@
   }
 }
 
-.resource-toolbar-filter-row > .resource-toolbar-query {
+.resource-toolbar:has([data-search-shortcuts]) > .resource-toolbar-query {
   grid-column: 1 / -1;
   grid-row: 2;
 }
