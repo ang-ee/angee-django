@@ -153,6 +153,14 @@ test("does not probe a date-looking field declared as a string", () => {
   expect(screen.getByText("2026-08-22T10:00:00Z")).toBeTruthy();
 });
 
+test("model-backed cells keep a Float named duration numeric", () => {
+  const { container } = render(<ListCellContent
+    column={{ field: "duration" }} row={{ duration: 2 }}
+    metadata={modelMetadata("duration", "Float")} />);
+  expect(container.textContent).toBe("2");
+  expect(container.querySelector("time")).toBeNull();
+});
+
 test("renders metadata enum labels in the normal list-cell path", () => {
   const resource = testDataResource("tests.Row", {
     fields: [{

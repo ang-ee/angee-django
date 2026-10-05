@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { ResourceQuery } from "@angee/metadata";
 import { testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { ToastProvider } from "../../feedback";
+import { AppRuntimeProvider } from "../../runtime";
+import { defaultWidgets } from "../../widgets";
 import { RowsListView } from "./RowsListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import type { ResourceViewFilter } from "./resource-view-model";
@@ -14,7 +16,33 @@ const rows = [
   { id: "3", name: "Beta", status: "active" },
 ];
 const columns = [{ field: "name", header: "Name" }, { field: "status", header: "Status" }];
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+test.each(["unregistered widgets", "registered widgets", "scalar defaults"] as const)(
+  "local rows display DateTime, Date and Float values with %s",
+  (mode) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+    const query = ResourceQuery.forRows({ fields: {
+      submitted: { scalar: "DateTime" }, due: { scalar: "Date" }, duration: { scalar: "Float" },
+    } });
+    render(<AppRuntimeProvider runtime={{ widgets: mode === "registered widgets" ? defaultWidgets : {} }}>
+      <ToastProvider>
+        <RowsListView scope="local" query={query}
+          rows={[{ id: "1", submitted: "2026-10-04T09:00:00Z", due: "2026-10-08", duration: 2 }]}
+          columns={[
+            { field: "submitted", header: "Submitted", widget: mode === "scalar defaults" ? undefined : "datetime" },
+            { field: "due", header: "Need by", widget: mode === "scalar defaults" ? undefined : "date" },
+            { field: "duration", header: "Duration" },
+          ]} />
+      </ToastProvider>
+    </AppRuntimeProvider>);
+    expect(screen.getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["Oct 4", "Oct 8", "2"]);
+  },
+);
 
 function fixture(filter: ResourceViewFilter) {
   render(<ToastProvider><ResourceViewProvider scope="local" initialState={{ filter }}>
