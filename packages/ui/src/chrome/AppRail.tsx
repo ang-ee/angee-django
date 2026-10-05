@@ -101,7 +101,7 @@ function AppRailBody({
 }: Omit<AppRailProps, "menuItems">): ReactElement {
   const t = useUiT();
   const rail = useDeveloperRail();
-  const { tree, pathname, match } = useChromePlace();
+  const { tree, pathname, match, railPlace: activePlace } = useChromePlace();
   const brand = useRuntimeBrand();
   const { confineTo } = useAppRuntime();
   const { railPreferences, setRailPreferences } = useAppRailPreferences();
@@ -118,8 +118,6 @@ function AppRailBody({
     railPreferences.expanded,
     largeViewport,
   );
-  // Developer mode lists hidden apps too.
-  const activePlace = useMemo(() => tree.railPlace(match, rail.enabled), [tree, match, rail.enabled]);
   const selectedAppId = match?.trail[0]?.id;
   const selectedSubAppId = match?.app?.parentNode ? match.app.id : undefined;
   const pageId = match?.item.id;

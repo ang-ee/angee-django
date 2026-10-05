@@ -41,7 +41,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  useNavigate,
+  redirect,
   useRouterState,
 } from "@tanstack/react-router";
 import {
@@ -89,7 +89,6 @@ import {
   resolveMenuRouteTargets,
   type ChromeMenuItem,
 } from "@angee/ui/chrome/menu-tree";
-import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
 import { enUiBundle } from "@angee/ui/i18n";
 import { defaultWidgets } from "@angee/ui/widgets/index";
 import type { ThemeContribution } from "@angee/ui/theme";
@@ -116,6 +115,7 @@ import {
   useRuntimeAuthState,
   useUserPreferences,
   type AuthState,
+  type UserPreferences,
 } from "./providers/auth";
 import { createViewAsProvider, useViewAsState, type ViewAsProvider } from "./providers/view-as";
 import {
@@ -135,9 +135,11 @@ import { developmentMode } from "@angee/ui/lib/development-mode";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
   compareCodePoint,
+  authRouteError,
   createAddonRouteNodes,
   createLayoutRoutes,
   layoutNamesForRoutes,
+  loadRouteIdentity,
 } from "./route-tree";
 
 export {
@@ -580,7 +582,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <HomeRedirect fallback={home} confined={confineTo !== undefined} />,
+    beforeLoad: async () => {
+      const identity = await loadRouteIdentity(refineAuthProvider, queryClient);
+      throw redirect({
+        href: homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}),
+        replace: true,
+      });
+    },
+    errorComponent: authRouteError(queryClient, refineAuthProvider),
   });
 
   const layoutRoutes = createLayoutRoutes({
@@ -871,31 +880,16 @@ function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
 }
 
-function HomeRedirect({ fallback, confined }: { fallback: string; confined: boolean }): ReactNode {
-  const menuTree = useChromeMenuTree();
-  const { preferences } = useUserPreferences();
-  const target = useMemo(() => {
-    if (confined) return fallback;
-    const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
-    if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
-      return preferredPath;
-    }
-    const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
-    if (!defaultItemId) return fallback;
-    const item = menuTree
-      .railMenuItems()
-      .find((node) => node.id === defaultItemId);
-    return (item && railDefaultTarget(item)) ?? fallback;
-  }, [confined, fallback, menuTree, preferences]);
-  return <Redirect to={target} />;
-}
-
-function Redirect({ to }: { to: string }): ReactNode {
-  const navigate = useNavigate();
-  useEffect(() => {
-    void navigate({ href: to });
-  }, [to, navigate]);
-  return null;
+/** Resolve the home preference against the composed navigation, before a route commits. */
+function homeTarget(fallback: string, confined: boolean, menuTree: MenuTree, preferences: UserPreferences): string {
+  if (confined) return fallback;
+  const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
+  if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
+    return preferredPath;
+  }
+  const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
+  const item = menuTree.railMenuItems().find((node) => node.id === defaultItemId);
+  return (item && railDefaultTarget(item)) ?? fallback;
 }
 
 /** Base and addon namespaces have disjoint ownership. */

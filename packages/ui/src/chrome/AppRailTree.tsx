@@ -1,5 +1,5 @@
 import { createContext, useContext, useId, useState, type ReactElement } from "react";
-import { Link, useLinkProps, useRouterState } from "@tanstack/react-router";
+import { useLinkProps, useRouterState } from "@tanstack/react-router";
 
 import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT, type UiTranslate } from "../i18n";
@@ -9,10 +9,12 @@ import { barVariants } from "../layouts/bar";
 import { Accordion } from "../ui/accordion";
 import { Badge, CountBadge } from "../ui/badge";
 import { Tooltip } from "../ui/tooltip";
+import { NavLink } from "../ui/nav-link";
 import { railLinkToggleProps } from "./app-rail-model";
 import { useDeveloperRail, type DeveloperRail } from "./DeveloperMode";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuNode } from "./menu-tree";
+import { useOptionalChromePlace } from "./refine-menu";
 
 const ActiveMenuItemContext = createContext<{ selected?: string; page?: string }>({});
 // The tree resolves developer mode once; every item reads it from here.
@@ -84,6 +86,7 @@ export function AppRailTree({
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
   const rail = useDeveloperRail();
+  const place = useOptionalChromePlace();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [openRootId, setOpenRootId] = useDerivedOverride<string | null>(
     defaultOpenRootId,
@@ -99,13 +102,13 @@ export function AppRailTree({
       <div className={styles.root({ className })}>
         {scope === "settings" ? (
           <div className={styles.header()}>
-            <Link
-              to="/"
+            <NavLink
+              href={place?.lastAppHref ?? "/"}
               aria-label={t("chrome.back")}
               className={styles.trigger()}
             >
               <Glyph name="chevron-left" aria-hidden="true" />
-            </Link>
+            </NavLink>
             <h2 className={styles.title()}>{t("chrome.settings")}</h2>
           </div>
         ) : null}
