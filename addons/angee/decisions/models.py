@@ -37,9 +37,8 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Publish the question's retained concern identities with its verdict."""
         with system_context(reason="decisions.change_concerns"):
-            links = system_queryset(self.records.model).filter(decision_id=self.pk)
-            return tuple(dict.fromkeys(reference for link in links
-                                       for reference in ChangeRelatedRecord.for_record(link.record_ref)))
+            links = system_queryset(self.records.model).filter(decision_id=self.pk).select_related("content_type")
+            return ChangeRelatedRecord.for_records(*(link.record_ref for link in links))
 
     class Meta:
         abstract = True

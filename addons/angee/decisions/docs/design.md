@@ -67,9 +67,15 @@ How the ontology maps to this addon.
   `decision_methods` tuple. Ask-time validation requires a declared method with
   no required arguments, rejects `delete`, and checks optional keyword
   `arguments`. Field values, readable foreign-key identities and editability are
-  validated when asking; multiple alternatives cannot overlap a field write.
+  validated when asking; state and server-owned fields cannot be written, and
+  declared per-field write permissions apply to the asking actor. A field action
+  of `{}` confirms its current value without writing; only an explicit `set`
+  changes it. Multiple alternatives cannot overlap a field write.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
+- **Readers:**
+  Decision content is readable only by its assignees, requester and administrators;
+  operating the asking run grants no decision read access.
 - **Answering:** `Decision.objects.decide(decision, chosen keys, actor)` is the one entry, for humans and agents
   alike. It records the verdict; it applies nothing itself. The asker applies the chosen alternatives' actions
   through the records' own owners and continues along their outcome.
@@ -78,6 +84,8 @@ How the ontology maps to this addon.
 - **Gate:** `Decision.objects.open_for(record)` is the one call other owners use.
 - **Withdrawing:** the asker closes its own open decision with an empty verdict, recorded with who stopped it.
   "Open" stays one rule: no verdict yet.
+  The card's choice and accepted-answer lock belong to its observed revision. A new revision
+  clears both; closing the card keeps focus on its outcome. Answers invalidate concerned records.
 - **No verdict decisions:** a decision is asked only when something needs judgement. The final action on a record
   (for example posting it) is the record's own action, not a decision.
 
@@ -85,6 +93,7 @@ UI, all in this addon's web fragment:
 
 - **Decision card:** the question, the concerned records as links, the alternatives with what each would change. One component, used in
   the inbox, in the record timeline and next to a record set.
+  The alternative's label describes a record-method action; the card does not display its internal method name.
 - **Field mark:** a form marks the fields named in the proposals of its record's open decisions; choosing the
   mark opens the card.
 - **List:** any list can show an attention badge and filter by it.

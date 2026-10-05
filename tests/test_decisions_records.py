@@ -5,6 +5,7 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db import models
 from django.test.utils import CaptureQueriesContext
 from pydantic import ValidationError as ContractError
 from rebac import actor_context, system_context
@@ -75,6 +76,39 @@ def test_empty_concerns_are_rejected(records):
         admit(records, [])
 
 
+def test_need_without_cutover_question_refuses_plainly():
+    need = apps.get_model("intake", "Need")()
+    with pytest.raises(ValidationError, match="no access question"):
+        need.decide_access("intake.approve")
+
+
+def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
+    from angee.base.refs import record_ref_for
+    from angee.graphql.events import ChangeRelatedRecord
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    with system_context(reason="test.batch_concerns"):
+        children = [MtiChild.objects.create(title=str(index)) for index in range(3)]
+        refs = [record_ref_for(MtiParent.objects.get(pk=child.pk)) for child in children]
+        with CaptureQueriesContext(connection) as captured:
+            result = ChangeRelatedRecord.for_records(*refs, *refs)
+    assert len(result) == 6
+    assert len(captured) == 1
+
+
+def test_relation_without_actor_scoping_is_a_contract_value_error():
+    from django.contrib.contenttypes.models import ContentType
+
+    class UnscopedEdge(models.Model):
+        target = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "mtidemo"
+
+    with pytest.raises(ValueError, match="actor scoping"):
+        RecordActions(fields={"target": {"set": "unscoped"}}).resolve(UnscopedEdge(), context={"actor": None})
+
+
 @pytest.mark.django_db(transaction=True)
 def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
     events = []
@@ -95,6 +129,16 @@ def test_null_is_rejected_for_a_required_field(records):
     record = records[3][0]
     with pytest.raises(ContractError, match="cannot be null"):
         admit(records, [record], proposal={record.sqid: {"fields": {"name": {"set": None}}}})
+
+
+def test_confirmation_has_no_write_and_owner_transfer_is_checked_at_admission(records):
+    record = records[3][0]
+    decision = admit(records, [record], proposal={record.sqid: {"fields": {"name": {}}}})
+    actions = RecordActions.model_validate(decision.proposal["alternatives"][0]["actions"][record.sqid])
+    assert actions.resolve(record, context={"actor": records[1]}) == {}
+    assert actions.model_dump()["fields"] == {"name": {}}
+    with pytest.raises(ValueError, match="owner"):
+        RecordActions(fields={"owner": {"set": records[1].sqid}}).resolve(record, context={"actor": records[1]})
 
 
 def test_admission_revalidates_mutated_proposals(records):

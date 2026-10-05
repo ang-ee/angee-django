@@ -155,6 +155,29 @@ def test_sweep_recovers_missed_answer_notification(review, monkeypatch):
     assert run.status == "succeeded"
 
 
+def test_terminal_failure_withdraws_an_open_sibling_question(review, register_step):
+    actor, people, _, question = review
+    from tests.workflow_steps import Echo, Reject
+
+    register_step(Echo)
+    register_step(Reject)
+    workflow = load_workflow({"nodes": {
+        "entry": {"step": "echo", "next": {"done": ["ask", "fail"]}},
+        "ask": {"step": question.key}, "fail": {"step": "reject"},
+    }}, actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor, subject=question.review_subject)
+    assert runner.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
+    step = system_queryset(StepRun).get(run=run, node_key="ask")
+    assert runner.execute(step.pk)
+    decision = questions(step)[0]
+    assert decision.is_open
+    assert runner.execute(system_queryset(StepRun).get(run=run, node_key="fail").pk)
+    decision.refresh_from_db()
+    assert decision.verdict == []
+    with pytest.raises(ValidationError, match="changed"):
+        decision.decide(actor=people[0], chosen=["approve"])
+
+
 @pytest.mark.parametrize("answered", [False, True])
 def test_cancel_withdraws_only_the_open_question(review, answered):
     actor, people, _, question = review

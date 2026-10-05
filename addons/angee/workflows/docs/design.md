@@ -54,12 +54,16 @@ How the ontology maps to this addon.
   askers supply alternatives. `StepRun.hold` exposes decision, run and error holds.
 - **Stopping:** one action on a run, offered in the timeline: cancel the run and withdraw its open decisions
   through the decisions owner.
+  Every terminal transition also withdraws open decisions, including failure.
   `stopped_at` ends error holds and their future plan without rewriting a
   previously recorded terminal failure. Retry is unavailable after stopping.
 - **Flags:** nothing in this addon. A step creates or deletes a tag assignment through the
   [tags addon](../../tags/) as it would any record.
 - **Timeline read:** `record_timeline(records: [{model, id}])` accepts one record or a set: its runs and their ancestors, each as the run graph that
   already exists (`schema.py`, the run graph types), extended with the step's records and decisions.
+  A selection is bounded to 100 input records and the 20 latest runs per record.
+  The eager probe excludes the native create route. With `include_runs: false`, the attention read supplies only run existence,
+  counts and the requested open-question fields; it never loads a graph.
 - **Linear order from a branching plan:** steps that ran, then the current steps, then planned steps; a planned
   step every path goes through is shown as certain, the others as one "may also" line.
   The existing definition planner intersects mandatory descendants across normal
@@ -67,14 +71,18 @@ How the ontology maps to this addon.
   promised normal future step. Terminal runs show no future plan.
   `ctx.note(message, tone="info")` retains a note on the step outcome.
 - **Long-lived runs:** pruning keeps a run tree's audit while any linked decision
-  is open. Deleting a touched record stops its readable run ancestry through the
-  engine after deletion commits and withdraws open questions. No decision timer
+  is open. Deleting a run's subject or a record it created or changed stops that
+  active run through the robust cancel task after deletion commits and withdraws
+  open questions. Read-only links and ancestors do not cause cancellation. No decision timer
   or retention service is added.
 
 UI, in this addon's web fragment:
 
 - **Record timeline:** one component with one input, a record or a set of records. It is a pane beside the
   content and can be placed left or right.
+  Peeks are passive and publish no pane. The eager contribution alone owns attention:
+  after initial placement, only a new open question ID on the same record forces it open.
+  Counts going down do not reopen it. Stop uses the runs page's confirmed action descriptor.
   - Beside a record: the vertical stepper described above, with decision cards inline.
   - Beside a record set (a list or a selection): the open decisions and active runs across those records, grouped,
     each linking to its record.

@@ -269,9 +269,8 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Invalidate the records this execution has worked on."""
         with system_context(reason="workflows.change_concerns"):
-            records = tuple(system_queryset(self.records.model).filter(run_id=self.pk))
-            return tuple(dict.fromkeys(reference for link in records
-                                       for reference in ChangeRelatedRecord.for_record(link.record_ref)))
+            records = system_queryset(self.records.model).filter(run_id=self.pk).select_related("content_type")
+            return ChangeRelatedRecord.for_records(*(link.record_ref for link in records))
 
     def __str__(self) -> str:
         """Identify an execution by its workflow and start time."""

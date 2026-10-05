@@ -41,9 +41,9 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                     raise ValidationError(str(error)) from error
                 for name, value in values.items():
                     setattr(record, name, value)
-                if actions.fields:
+                if values:
                     record.full_clean()
-                    updated = [*actions.fields]
+                    updated = [*values]
                     if any(field.name == "updated_at" for field in record._meta.fields):
                         updated.append("updated_at")
                     record.save(update_fields=updated)

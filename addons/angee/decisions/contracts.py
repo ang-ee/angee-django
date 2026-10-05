@@ -8,11 +8,17 @@ from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, ValidationInfo, model_validator
+from pydantic.experimental.missing_sentinel import MISSING
 from rebac import current_actor
+from rebac.schema.walker import field_gated_actions
 
 from angee.base.evidence import EvidenceFact, EvidenceReference
+from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id, public_id_for
+from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import canonical_record_model
+from angee.graphql.data.metadata import data_resource_contributions
+from angee.graphql.schema import schema_parts_for
 
 
 class DecisionRecordReference(EvidenceReference):
@@ -42,7 +48,7 @@ class DecisionContext(BaseModel):
 
 class SetValue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    set: JsonValue
+    set: JsonValue | MISSING = MISSING
 
 
 class CallMethod(BaseModel):
@@ -73,15 +79,28 @@ class RecordActions(BaseModel):
         model = self.target_model(record)
         if not isinstance(record, model):
             raise ValueError("Concern the concrete record named by the action model.")
+        resources = [item.native_resource
+                     for parts in schema_parts_for(apps.get_app_config(model._meta.app_label)).values()
+                     for surface in parts.mutation for item in data_resource_contributions(surface)
+                     if item.model is model and item.native_resource is not None]
         values = {}
         for name, operation in self.fields.items():
             try:
                 field = model._meta.get_field(name)
             except FieldDoesNotExist as error:
                 raise ValueError(f"Unknown field: {name}.") from error
+            if "set" not in operation.model_fields_set:
+                continue
+            if resources and not any(name in resource.updatable_fields for resource in resources):
+                raise ValueError(f"The record owner does not expose writes to {name}.")
             if (field.auto_created or not field.concrete or field.name != name
-                    or field.primary_key or not field.editable):
+                    or field.primary_key or not field.editable or isinstance(field, StateField)):
                 raise ValueError(f"Use an editable model field name: {field.name}.")
+            definition = effective_rebac_definition(model)
+            permission = f"write__{name}"
+            if ("actor" in context and definition and permission in field_gated_actions(definition, "write")
+                    and not record.with_actor(context["actor"]).has_access(permission)):
+                raise ValueError(f"The asking actor cannot write {name}.")
             if field.many_to_many or field.one_to_many:
                 raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
             value = operation.set
@@ -94,6 +113,8 @@ class RecordActions(BaseModel):
                     # Request construction validates shape; admission/application supply the read actor.
                     if "actor" not in context:
                         continue
+                    if not callable(getattr(field.related_model.objects, "with_actor", None)):
+                        raise ValueError(f"The related record for {name} does not support actor scoping.")
                     value = None if value is None else instance_from_public_id(
                         field.related_model, value,
                         queryset=field.related_model.objects.with_actor(context.get("actor", current_actor())),
@@ -173,6 +194,8 @@ class DecisionProposal(BaseModel):
         for alternative in selected:
             for identity, actions in alternative.actions.items():
                 for name in actions.fields:
+                    if "set" not in actions.fields[name].model_fields_set:
+                        continue
                     if (identity, name) in written:
                         raise ValueError(f"Choose only one value for {name.replace('_', ' ')}.")
                     written.add((identity, name))

@@ -2,6 +2,12 @@
 // the active translations; these are the defaults used when a key is missing.
 
 export const enUiMessages: Record<string, string> = {
+  "stepList.trigger": "Started",
+  "stepList.done": "Complete",
+  "stepList.current": "Current step",
+  "stepList.planned": "Planned",
+  "stepList.optional": "Optional",
+  "stepList.stopped": "Stopped",
   "statusbar.position": "{current} of {total}",
   "statusbar.editDates": "Edit dates for {label}",
   "statusbar.loading": "Loading status",

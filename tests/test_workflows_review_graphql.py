@@ -40,6 +40,7 @@ def linked_decision(execution, register_step, composed_permissions):
                     kind="review",
                     records=(reference,),
                     assignees=(assignee,),
+                    requester=owner,
                     proposal=DecisionProposal(
                         alternatives=[{"key": "accept", "label": "Accept", "outcome": "accepted"}]
                     ),
@@ -81,14 +82,16 @@ def schema():
     ).build("console")
 
 
-def test_step_owns_one_decision_and_operator_reads_it(schema, linked_decision):
+def test_only_admitted_participants_read_the_step_decision(schema, linked_decision):
     workflow, run, step, decision, owner, operator, stranger, assignee = linked_decision
     query = "{ steprun { id decision { id is_open permissions } } decisions { id } }"
-    for viewer in (owner, operator):
+    for viewer in (owner,):
         data = result_data(execute_schema(schema, query, user=viewer))
         assert data["steprun"][0]["decision"]["id"] == decision.sqid
         assert data["steprun"][0]["decision"]["is_open"]
         assert "act" not in data["steprun"][0]["decision"]["permissions"]
+    data = result_data(execute_schema(schema, query, user=operator))
+    assert data == {"steprun": [{"id": step.sqid, "decision": None}], "decisions": []}
     assert result_data(execute_schema(schema, query, user=stranger)) == {"steprun": [], "decisions": []}
     data = result_data(execute_schema(schema, query, user=assignee))
     assert data["steprun"] == [] and data["decisions"] == [{"id": decision.sqid}]

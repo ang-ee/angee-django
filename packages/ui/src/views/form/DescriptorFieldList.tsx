@@ -221,14 +221,14 @@ export function LabeledDescriptorField({
   return (
     <FieldRoot invalid={invalid}>
       {showLabel ? (
-        <FieldLabel
+        <div className="flex items-center gap-1"><FieldLabel
           id={groupLabel ? labelId : undefined}
           htmlFor={isCompositeField || groupLabel ? undefined : controlId}
           required={field.required && !readOnly}
         >
           {field.label ?? field.name}
-          <RecordFieldMarkButton field={field.name} label={field.label} />
         </FieldLabel>
+        <RecordFieldMarkButton field={field.name} label={field.label} /></div>
       ) : null}
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       {field.control ? (

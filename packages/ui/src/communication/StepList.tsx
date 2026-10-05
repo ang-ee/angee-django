@@ -3,6 +3,7 @@ import { cn } from "../lib/cn";
 import { StatusIcon } from "../ui/status-icon";
 import { RelativeTime } from "../fragments/RelativeTime";
 import { toneText, type Tone } from "../lib/tones";
+import { useUiT } from "../i18n";
 
 export interface StepListItem {
   id: string;
@@ -17,18 +18,20 @@ export interface StepListItem {
 
 /** Vertical steps with muted future paths and a connector to the next entry. */
 export function StepList({ items }: { items: readonly StepListItem[] }): ReactElement {
+  const t = useUiT();
   return <ol className="min-w-0">{items.map((item, index) => {
     const planned = item.state === "planned" || item.state === "optional";
-    const tone = planned || item.state === "stopped" ? "muted" : item.tone === "danger" ? "danger"
-      : item.state === "current" ? "warning" : item.state === "trigger" ? "info" : "success";
-    return <li key={item.id} className="grid min-w-0 gap-x-3" style={{ gridTemplateColumns: "1.25rem minmax(0,1fr)" }}>
+    const tone = (item.tone === "info" || item.tone === "success" || item.tone === "warning" || item.tone === "danger" ? item.tone
+      : item.tone ? "muted" : undefined) ?? (planned || item.state === "stopped" ? "muted"
+      : item.state === "current" ? "warning" : item.state === "trigger" ? "info" : "success");
+    return <li key={item.id} aria-current={item.state === "current" ? "step" : undefined} className="grid min-w-0 gap-x-3" style={{ gridTemplateColumns: "1.25rem minmax(0,1fr)" }}>
       <div className="flex flex-col items-center" aria-hidden>
         <StatusIcon tone={tone} icon={item.state === "stopped" ? "stop" : planned ? "circle" : item.state === "current" ? "help" : item.state === "trigger" ? "activity" : "check"} />
         {index < items.length - 1 ? <span className={cn("my-1 flex-1", planned ? "border-l border-dashed border-border-strong" : "w-px bg-border")} /> : null}
       </div>
       <div className={cn("min-w-0", index === items.length - 1 ? "pb-1" : "pb-5")}>
         <div className="flex min-w-0 items-start justify-between gap-2">
-          <p className={cn("min-w-0 text-13 leading-5 [overflow-wrap:anywhere]", planned ? "font-medium text-fg-muted" : "font-semibold text-fg")}>{item.title}</p>
+          <p className={cn("min-w-0 text-13 leading-5 [overflow-wrap:anywhere]", planned ? "font-medium text-fg-muted" : "font-semibold text-fg")}>{item.title}<span className="sr-only"> · {t(`stepList.${item.state}`)}</span></p>
           {item.timestamp ? <RelativeTime value={item.timestamp} className="shrink-0 pt-0.5 text-xs text-fg-muted" /> : null}
         </div>
         {item.outcome ? <p className={cn("text-13 font-medium leading-5", toneText(item.tone ?? "success"))}>{item.outcome}</p> : null}

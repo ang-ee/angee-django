@@ -8,6 +8,7 @@ import { RUN_MODEL, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { StepRuns } from "./StepRuns";
 import { RunGraph } from "./RunGraph";
+import { useRunCancelActions } from "./run-cancel";
 
 export function RunsPage() {
   return <RunsList />;
@@ -19,9 +20,7 @@ export function RunsList({ baseFilter, embedded = false }: {
 }) {
   const t = useWorkflowsT();
   const href = useRouteHref();
-  const [cancel] = useRecordActionMutation<ActionFieldName>("cancel_workflow_run", {
-    dataProviderName: "console", invalidateModels: RUN_MODELS,
-  });
+  const cancelActions = useRunCancelActions();
   const [reprocess] = useRecordActionMutation<ActionFieldName>("reprocess_workflow_run", {
     dataProviderName: "console", invalidateModels: RUN_MODELS, linkTo: RUN_MODEL,
   });
@@ -79,9 +78,7 @@ export function RunsList({ baseFilter, embedded = false }: {
         showWhen={(row) => row.outcome === "error"} />
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
-      <Action id="cancel" label={t("action.cancel_workflow_run")} placement="toolbar" primary danger
-        visibleWhen={(record) => record.can_cancel === true} run={cancel}
-        confirm={{ title: t("action.cancel_workflow_run"), body: t("action.cancelDescription"), danger: true }} />
+      {cancelActions.map((action) => <Action key={action.id} {...action} />)}
       <Action id="reprocess" label={t("action.reprocess_workflow_run")}
         visibleWhen={(record) => record.can_reprocess === true} run={reprocess}
         confirm={{ title: t("action.reprocess_workflow_run"), body: t("action.reprocessDescription") }} />

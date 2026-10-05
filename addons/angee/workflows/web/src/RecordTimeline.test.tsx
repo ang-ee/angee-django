@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { decisionFixture } from "@angee/decisions/testing";
 import { TimelineStory, type TimelineRequest } from "./RecordTimeline.stories";
+import { timelineFixture } from "./timeline-testing";
 
 beforeAll(() => {
   Element.prototype.getAnimations ??= () => [];
@@ -9,10 +11,9 @@ beforeAll(() => {
 });
 afterEach(() => cleanup());
 
-test("a completed run shows the current record state, workflow name, local time and run link", async () => {
-  render(<TimelineStory state="clean" recordState={{ label: "Posted", tone: "success" }} />);
-  expect(await screen.findByText("Posted")).toBeTruthy();
-  expect(screen.queryByText("Plan complete")).toBeNull();
+test("a completed run shows its outcome, workflow name, local time and run link", async () => {
+  render(<TimelineStory state="clean" />);
+  expect(await screen.findByText("Plan complete")).toBeTruthy();
   expect(screen.getByRole("heading", { name: /Record review/ })).toBeTruthy();
   expect(screen.getByText("Open run")).toBeTruthy();
   expect(document.querySelector('time[datetime="2026-10-03T10:00:00Z"]')).toBeTruthy();
@@ -25,7 +26,7 @@ test.each([
   render(<TimelineStory state={state} />);
   expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
   if (state === "error") expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-  if (state === "run") expect(screen.getByRole("button", { name: /Related record check/ })).toBeTruthy();
+  if (state === "run") expect(screen.getByText("Waiting for Related record check")).toBeTruthy();
 });
 
 test("answers inline with the observed revision and refreshes the stepper", async () => {
@@ -43,7 +44,7 @@ test("answers inline with the observed revision and refreshes the stepper", asyn
 
 test("only records with runs select the timeline initially", async () => {
   const view = render(<TimelineStory state="empty" />);
-  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:messaging.comments"));
+  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:agents.chat"));
   view.unmount();
   render(<TimelineStory />);
   await screen.findByText("Started manually by River");
@@ -84,15 +85,28 @@ test("a retry with possible duplicate effects uses the shared acknowledgement fo
   expect(requests.find(({ query }) => query.includes("retry_step_accepting_duplicate("))?.variables.id).toBe("wsr_review");
 });
 
-test("stop withdraws the card, removes future steps and refreshes the pane", async () => {
+test("stop confirms through the shared action before withdrawing questions", async () => {
   const requests: TimelineRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
   const card = await screen.findByRole("region", { name: "Confirm the name" });
+  expect((within(card).getByRole("button", { name: "Stop and do it manually" }) as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(within(card).getByRole("button", { name: "Stop and do it manually" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(requests.some(({ query }) => query.includes("cancel_workflow_run("))).toBe(false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Stop and do it manually" }));
   await screen.findByText("Withdrawn: stopped by River");
   expect(requests.find(({ query }) => query.includes("cancel_workflow_run("))?.variables.id).toBe("wfr_review");
   expect(screen.queryByText("May also: Check a related record")).toBeNull();
   expect(screen.queryByRole("button", { name: "Stop and do it manually" })).toBeNull();
+});
+
+test("answering refreshes the concerned form without a socket", async () => {
+  const requests: TimelineRequest[] = [];
+  render(<TimelineStory onRequest={(request) => requests.push(request)} />);
+  fireEvent.click(await screen.findByRole("radio", { name: /Use proposed name/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value,
+    JSON.stringify(requests.map(({ query }) => query.slice(0, 100)))).toBe("Reviewed notes"));
 });
 
 test("routine history folds while waiting and the record reference opens a peek", async () => {
@@ -108,12 +122,24 @@ test("routine history folds while waiting and the record reference opens a peek"
 test("form marks reveal and highlight the inline card through the right host", async () => {
   render(<TimelineStory />);
   await screen.findByRole("button", { name: "Unconfirmed: Name" });
+  expect(screen.getByRole("button", { name: "Unconfirmed: Name" }).closest("label")).toBeNull();
+  const current = screen.getByText("Review the record").closest("li")!;
+  expect(current.getAttribute("aria-current")).toBe("step");
+  expect(current.textContent).toContain("Current step");
   expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline");
   expect(screen.getByRole("region", { name: "Confirm the name" }).className).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Toggle timeline" }));
   expect(screen.queryByRole("region", { name: "Confirm the name" })).toBeNull();
   fireEvent.click(await screen.findByRole("button", { name: "Unconfirmed: Name" }));
   await waitFor(() => expect(document.querySelector('[data-decision="dcn_review"]')?.className).toContain("ring-2"));
+});
+
+test.each(["error", "unknown"] as const)("the %s run has its own explicit status and a neutral fallback", async (state) => {
+  render(<TimelineStory state={state} />);
+  if (state === "error") {
+    expect(await screen.findByText("A parallel branch failed.")).toBeTruthy();
+    expect(screen.queryByText("Running", { exact: true })).toBeNull();
+  } else expect(await screen.findByText("Unknown status")).toBeTruthy();
 });
 
 test("one component publishes to the left host", async () => {
@@ -131,4 +157,21 @@ test("selection groups open questions and held runs by record or question", asyn
   expect(screen.getAllByRole("region", { name: "Confirm the name" })).toHaveLength(1);
   expect(screen.getAllByText("Confirm the name").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+});
+
+test("question grouping distinguishes kinds that share a label", async () => {
+  const data = timelineFixture("set");
+  data.records[0]!.decisions.push(decisionFixture({ id: "dcn_other", kind: "other_kind", kind_label: "Confirm the name" }));
+  data.open_decision_count = 2;
+  render(<TimelineStory state="set" data={data} />);
+  fireEvent.click(await screen.findByRole("button", { name: "By question" }));
+  expect(screen.getAllByRole("heading", { level: 3, name: /Confirm the name/ })).toHaveLength(2);
+});
+
+test("an unknown note tone renders with the information treatment", async () => {
+  const data = timelineFixture();
+  data.records[0]!.runs[0]!.graph.nodes[7]!.step_run!.notes.push({ message: "A new note tone", tone: "future_tone" });
+  render(<TimelineStory data={data} />);
+  const note = await screen.findByText("A new note tone");
+  expect(note.closest('[role="status"]')?.classList.contains("bg-info-soft")).toBe(true);
 });

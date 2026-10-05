@@ -781,11 +781,11 @@ function BoundFieldRow({
       invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
-      <FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
+      <div className="flex items-center gap-1"><FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
-        <RecordFieldMarkButton field={field.name} label={field.label} />
       </FieldLabel>
+      <RecordFieldMarkButton field={field.name} label={field.label} /></div>
       <div
         className={cn(
           FIELD_CONTROL_CLASS,

@@ -25,17 +25,17 @@ export function InboxPage(): ReactElement {
       <Column field="verdict_label" header={t("inbox.verdict")} />
     </List>
     <Form resource={DECISION_MODEL} readOnly
-      formExtras={({ record, form }) => typeof record?.id === "string"
-        ? <DecisionDetails recordId={record.id} refresh={form.reload} /> : null}>
+      formExtras={({ record }) => typeof record?.id === "string"
+        ? <DecisionDetails recordId={record.id} /> : null}>
     </Form>
   </ResourceList>;
 }
 
-function DecisionDetails({ recordId, refresh }: Pick<RecordPanelContext, "recordId"> & { refresh: () => Promise<unknown> }): ReactElement {
+function DecisionDetails({ recordId }: Pick<RecordPanelContext, "recordId">): ReactElement {
   const t = useDecisionsT();
   const query = useAuthoredQuery(DecisionDocument, { id: recordId }, { models: DECISION_MODELS });
   if (query.isLoading) return <LoadingPanel />;
   const decision = query.data?.decisions_by_pk;
   if (!decision) return <ErrorBanner description={t("decision.unavailable")} />;
-  return <DecisionCard decision={decision} onAnswered={async () => { await query.refetch(); await refresh(); }} />;
+  return <DecisionCard decision={decision} />;
 }

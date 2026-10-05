@@ -8,8 +8,9 @@ import {
   createRouteHref, useChatter, usePrimaryPaneContent, JsonValueSchema,
 } from "@angee/ui";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
-import { useRecordTimelinePane } from "./timeline-pane";
+import { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
 import { timelineFixture, type TimelineState } from "./timeline-testing";
+import type { TimelineSelection } from "./RecordTimeline";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { attemptResourceFixture, recordResourceFixture, runResourceFixture, stepRunResourceFixture, watchResourceFixture } from "./testing";
 
@@ -37,12 +38,12 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ state = "decision", side = "right", collapsed = false, duplicateRisk = false, recordState, onRequest }: {
+export function TimelineStory({ state = "decision", side = "right", collapsed = false, duplicateRisk = false, data, onRequest }: {
   state?: TimelineState; side?: "left" | "right"; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
-  recordState?: { label: string; tone: "success" | "neutral" };
+  data?: TimelineSelection;
 }) {
   const schemas = useMemo(() => {
-    let current = timelineFixture(state);
+    let current = data ?? timelineFixture(state);
     if (duplicateRisk) current.records[0]!.runs[0]!.graph.nodes[7]!.step_run!.requires_duplicate_acknowledgement = true;
     const fixture = storySchema(async (_input, init) => {
       const request = v.parse(Request, JSON.parse(String(init?.body ?? "{}"))); onRequest?.(request);
@@ -53,20 +54,21 @@ export function TimelineStory({ state = "decision", side = "right", collapsed = 
         current = timelineFixture("decision");
         return jsonResponse({ data: { [action]: { ok: true, id: "wsr_review", message: "Retry requested.", validation_errors: {} } } });
       }
-      if (request.query.includes("record_timeline")) return jsonResponse({ data: { record_timeline: current } });
+      if (request.query.includes("record_timeline")) return jsonResponse({ data: { record_timeline: { ...current, has_runs: current.records.some((entry) => entry.runs.length > 0) } } });
       if (request.query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: { id: "usr_river", display_name: "River" } } });
-      return jsonResponse({ data: { notes_by_pk: { id: "nte_7", revision: 1, display_name: "Review notes", body: "A record to check.", permissions: ["write"] } } });
+      return jsonResponse({ data: { notes_by_pk: { id: "nte_7", revision: 1, display_name: current.open_decision_count ? "Review notes" : "Reviewed notes", body: "A record to check.", permissions: ["write"] } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
-  }, [state, duplicateRisk, onRequest]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceName="notes.Note" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
-    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} recordState={recordState} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
+  }, [state, duplicateRisk, data, onRequest]);
+  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
+    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
   </RoutedRuntimeFixture>;
 }
 
-function TimelineLayout({ set, side, recordState }: { set: boolean; side: "left" | "right"; recordState?: { label: string; tone: "success" | "neutral" } }) {
+function TimelineLayout({ set, side }: { set: boolean; side: "left" | "right" }) {
   const record = useMemo(() => set ? [{ model: "notes.Note", id: "nte_7" }, { model: "notes.Note", id: "nte_8" }] : { model: "notes.Note", id: "nte_7" }, [set]);
-  useRecordTimelinePane({ record, side, recordState });
+  useRecordTimelinePane({ record, side });
+  useRecordTimelineAttention(record, side);
   const { node } = usePrimaryPaneContent();
   const chatter = useChatter();
   return <div className="grid min-h-0 w-full bg-sheet" style={{ gridTemplateColumns: side === "left" ? "24rem minmax(0,1fr)" : "minmax(0,1fr) 24rem", height: "100vh" }}>

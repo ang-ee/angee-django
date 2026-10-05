@@ -31,19 +31,22 @@ class ChangeRelatedRecord:
     id: str
 
     @classmethod
-    def for_record(cls, record: RecordRef) -> tuple[ChangeRelatedRecord, ...]:
+    def for_records(cls, *records: RecordRef) -> tuple[ChangeRelatedRecord, ...]:
         """Include existing inherited views of a canonical concern identity."""
-        model = apps.get_model(record.model_label)
-        result = [cls(record.model_label, record.public_id)]
+        result = list(dict.fromkeys(cls(record.model_label, record.public_id) for record in records))
+        grouped: dict[type[models.Model], set[Any]] = {}
 
-        def children(parent: type[models.Model]) -> None:
+        def children(parent: type[models.Model], ids: set[Any]) -> None:
             for child in concrete_child_models(parent):
-                if child._base_manager.filter(pk=record.object_id).exists():
-                    result.append(cls(child._meta.label, public_id_for(child, record.object_id)))
-                    children(child)
+                grouped.setdefault(child, set()).update(ids)
+                children(child, ids)
 
-        children(model)
-        return tuple(result)
+        for record in dict.fromkeys(records):
+            children(apps.get_model(record.model_label), {record.object_id})
+        for child, ids in grouped.items():
+            present = child._base_manager.filter(pk__in=ids).values_list("pk", flat=True)
+            result.extend(cls(child._meta.label, public_id_for(child, pk)) for pk in present)
+        return tuple(dict.fromkeys(result))
 
 
 @dataclass(frozen=True, slots=True)

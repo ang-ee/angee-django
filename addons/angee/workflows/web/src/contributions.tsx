@@ -1,7 +1,7 @@
 import { useDecision } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import { useMemo, type ReactNode } from "react";
-import { ErrorBanner, MetaSection, TextLink, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { ErrorBanner, MetaSection, REFINE_CREATE_ID, TextLink, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 
 import { DecisionWaitingRunsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -32,12 +32,12 @@ export function DecisionRunOrigin() {
 export const recordTimelineTab: ContainerChild<ChatterTabContent> = {
   sequence: 40,
   content: {
-    icon: "versions", label: "Timeline",
+    icon: "versions", label: <TimelineLabel />,
     useCount: ({ view, route }) => {
       const record = useMemo(() => ({ model: route!.canonicalLabel!, id: view.sqid! }), [route?.canonicalLabel, view.sqid]);
       return useRecordTimelineAttention(record);
     },
-    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel)
+    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && view.sqid !== REFINE_CREATE_ID
       && !route?.canonicalLabel?.startsWith("workflows."),
     render: ({ view, route }) => view.sqid && route?.canonicalLabel
       ? <RecordTimeline record={{ model: route.canonicalLabel, id: view.sqid }} /> : null,
@@ -46,3 +46,5 @@ export const recordTimelineTab: ContainerChild<ChatterTabContent> = {
 
 /** The run a decision waits in, as a `decisions#origin` child. */
 export const decisionRunOrigin: ContainerChild<ReactNode> = { content: <DecisionRunOrigin /> };
+
+function TimelineLabel() { const t = useWorkflowsT(); return <>{t("timeline.title")}</>; }

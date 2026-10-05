@@ -1,10 +1,13 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enDecisionsMessages = {
+  "attention.title": "Attention",
+  "attention.needs": "Needs attention",
   "decision.withdrawn": "Withdrawn: stopped by {name}",
   "decision.operator": "an operator",
   "decision.chose": "Chose: {labels}",
   "decision.none": "None",
+  "decision.currentValue": "Keep the current value",
   "decision.requestedBy": "Asked by {name}",
   "decision.multipleAlternatives": "Alternatives, choose one or more",
   "decision.alternatives": "Alternatives, choose one",

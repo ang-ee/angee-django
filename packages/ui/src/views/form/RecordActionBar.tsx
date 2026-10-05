@@ -60,6 +60,7 @@ export function RecordActionBar({
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
+  const descriptionId = React.useId();
   const menu = React.useContext(ActionMenuContext);
   const chrome = useRecordChromeContextMaybe();
   const blocked = blockedByForm || menu?.blocked || chrome?.actionsBlocked || Boolean(preview.viewAs || preview.pending);
@@ -214,10 +215,11 @@ export function RecordActionBar({
         {toolbarActions.map((action, index) => (
           <React.Fragment key={action.id}><Button type="button" size="sm"
             variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-            disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
+            disabled={disabled(action)} aria-describedby={action.disabled && action.disabledReason ? `${descriptionId}-${action.id}` : undefined}
+            loading={pendingId === action.id} onClick={() => void runAction(action)}>
             {action.icon ? <Glyph name={action.icon} /> : null}
             {action.label}
-          </Button>{action.disabled && action.disabledReason ? <span className="text-xs text-fg-muted">{action.disabledReason}</span> : null}</React.Fragment>
+          </Button>{action.disabled && action.disabledReason ? <span id={`${descriptionId}-${action.id}`} className="text-xs text-fg-muted">{action.disabledReason}</span> : null}</React.Fragment>
         ))}
         {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
           {deleteTrigger}

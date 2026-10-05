@@ -114,9 +114,13 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
 
 
 def test_deleted_subject_stops_its_run(execution, subject):
-    actor, _ = execution
+    actor, sent = execution
     run = WorkflowRun.objects.start(workflow_for(actor), actor=actor, subject=subject)
     system_queryset(RunSubjectRecord).filter(pk=subject.pk).delete()
+    from angee.workflows.tasks import cancel
+
+    payload = next(payload for name, payload in sent if name == "workflows.cancel")
+    cancel(**payload["kwargs"])
 
     run.refresh_from_db()
     assert run.status == RunStatus.CANCELED

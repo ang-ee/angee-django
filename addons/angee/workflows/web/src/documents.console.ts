@@ -19,7 +19,7 @@ export const RecordTimelineDocument = graphql(`
       record_model record_id
       decisions { ...DecisionCardFields }
       runs {
-        id display_name status origin subject_model subject_id outcome_label created_at finished_at stopped_at output can_cancel
+        id display_name status origin subject_model subject_id outcome_label failure_reason created_at finished_at stopped_at output can_cancel
         run_as { display_name }
         version { workflow { display_name } }
         parent_step { id run { id } }
@@ -50,6 +50,15 @@ export const RecordTimelineDocument = graphql(`
         }
       }
       }
+    }
+  }
+`);
+
+export const RecordTimelineAttentionDocument = graphql(`
+  query RecordTimelineAttention($records: [TimelineRecordInput!]!) {
+    record_timeline(records: $records, include_runs: false) {
+      open_decision_count has_runs
+      records { record_model record_id decisions { id is_open proposal } }
     }
   }
 `);

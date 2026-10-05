@@ -7,6 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch
 from rebac import system_context
 from rebac.resources import model_for_resource_type
@@ -850,30 +851,57 @@ class RecordTimelineType:
 class RecordTimelineSelectionType:
     records: list[RecordTimelineType]
     open_decision_count: int
+    has_runs: bool
 
 
 @strawberry.type
 class RecordTimelineQuery:
     @strawberry_django.field
-    def record_timeline(self, info: strawberry.Info, records: list[TimelineRecordInput]) -> RecordTimelineSelectionType:
+    def record_timeline(
+        self, info: strawberry.Info, records: list[TimelineRecordInput], include_runs: bool = True,
+    ) -> RecordTimelineSelectionType:
         """One read for a record or selection, through the record and run owners."""
+        if len(records) > 100:
+            raise ValidationError("A timeline selection accepts at most 100 records.")
         actor = request_from_info(info).user
-        result = []
         concerned = []
         for reference in records:
             model = apps.get_model(reference.model)
             record = require_instance_for_id(model, str(reference.id), queryset=read_scoped_queryset(model, actor))
-            target = canonical_record_target(record)
             concerned.append(record)
+        targets = {canonical_record_target(record): record for record in concerned}
+        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=20)
+        runs = list(run_type_get_queryset(
+            run_query.order_by("-created_at", "-pk"),
+            WorkflowRunType, info,
+        ).select_related("parent_step").prefetch_related("records")) if include_runs else []
+        has_runs = bool(runs) if include_runs else run_query.exists()
+        decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related("records"))
+        by_run = {run.pk: run for run in runs}
+        result = []
+        for target, record in targets.items():
+            selected = {run.pk for run in runs if (
+                (run.subject_content_type_id, run.subject_object_id) == (target.content_type.pk, target.object_id)
+                or any((link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
+                       for link in run.records.all()))}
+            for run_id in tuple(selected):
+                run = by_run[run_id]
+                while run.parent_step_id and run.parent_step.run_id in by_run:
+                    run = by_run[run.parent_step.run_id]
+                    if run.pk in selected:
+                        break
+                    selected.add(run.pk)
             result.append(RecordTimelineType(
                 record_model=canonical_record_model(type(record))._meta.label,
                 record_id=PublicID(public_id_for(canonical_record_model(type(record)), target.object_id)),
-                runs=run_type_get_queryset(WorkflowRun.objects.with_actor(actor).about(record), WorkflowRunType, info),
-                decisions=Decision.objects.with_actor(actor).open_for(record),
+                runs=list(reversed([run for run in runs if run.pk in selected][:20])),
+                decisions=[decision for decision in decisions if any(
+                    (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
+                    for link in decision.records.all())],
             ))
         with system_context(reason="workflows.timeline.selection_attention"):
             count = Decision.objects.open_for(*concerned).count()
-        return RecordTimelineSelectionType(records=result, open_decision_count=count)
+        return RecordTimelineSelectionType(records=result, open_decision_count=count, has_runs=has_runs)
 
 schemas = {
     "console": {

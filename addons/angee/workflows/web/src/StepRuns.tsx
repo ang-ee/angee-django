@@ -80,7 +80,7 @@ export function StepRuns({ runId, nodeKeys }: {
 function StepDecision({ stepId }: { stepId: string }) {
   const query = useAuthoredQuery(StepDecisionDocument, { id: stepId }, { models: [STEP_RUN_MODEL, "decisions.Decision"] });
   const decision = query.data?.steprun_by_pk?.decision;
-  return decision ? <DecisionCard decision={decision} onAnswered={query.refetch} /> : null;
+  return decision ? <DecisionCard decision={decision} /> : null;
 }
 
 function StepAttempts({ stepId }: { stepId: string }) {

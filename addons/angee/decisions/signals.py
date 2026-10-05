@@ -1,4 +1,4 @@
-"""Notification after a decision's final verdict commits."""
+"""Notification inside the verdict transaction; external effects must wait for commit."""
 
 from django.dispatch import Signal
 

@@ -1,7 +1,6 @@
 // @rebac_package: workflows
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition decisions/decision {
     relation requesting_step: workflows/step_run // rebac:field=requesting_steps
-    permission waiter_read = requesting_step->operate
 }

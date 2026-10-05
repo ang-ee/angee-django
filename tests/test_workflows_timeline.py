@@ -5,6 +5,8 @@ from datetime import timedelta
 import pytest
 from django.core.exceptions import ValidationError
 from django.db.models.functions import Now
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.base.scoping import system_queryset
@@ -34,6 +36,83 @@ def timeline(schema, actor, records):
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
+
+
+@pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])
+def test_deletion_only_enqueues_active_runs_that_modify_the_record(review, register_step, operation, canceled):
+    actor, _, sent, question = review
+    target = vault_for(actor, name="Deletion target")
+
+    class Touch(question):
+        key = "deletion_touch"
+
+        def ask(self, ctx):
+            ctx.record(target, operation=operation)
+            return super().ask(ctx)
+
+    register_step(Touch)
+    workflow = load_workflow({"nodes": {"entry": {"step": Touch.key}}}, actor=actor)
+    run = start_run(workflow, actor=actor, subject=question.review_subject, input={})
+    run_until(run)
+    assert run.status == "waiting", [(s.status, s.output) for s in system_queryset(StepRun).filter(run=run)]
+    sent.clear()
+    system_queryset(type(target)).filter(pk=target.pk).delete()
+    cancellations = [payload["kwargs"]["run_id"] for name, payload in sent if name == "workflows.cancel"]
+    assert cancellations == ([run.pk] if canceled else [])
+
+
+def test_timeline_bounds_inputs_and_calls_the_set_owner_once(schema, review, monkeypatch):
+    actor, _, _, question = review
+    run, _ = start_review(review)
+    from angee.workflows.managers import WorkflowRunQuerySet
+
+    calls = []
+    original = WorkflowRunQuerySet.about
+
+    def about(self, records, **kwargs):
+        calls.append(records)
+        return original(self, records, **kwargs)
+
+    monkeypatch.setattr(WorkflowRunQuerySet, "about", about)
+    record = question.review_subject
+    assert timeline(schema, actor, [record, record])["records"][0]["runs"][0]["id"] == run.sqid
+    assert len(calls) == 1 and len(calls[0]) == 2
+    latest = [start_run(run.version.workflow, actor=actor, subject=record, input={}, request_key=f"bounded-{index}")
+              for index in range(22)]
+    result = timeline(schema, actor, [record])["records"][0]["runs"]
+    assert len(result) == 20 and result[-1]["id"] == latest[-1].sqid
+    assert run.sqid not in {item["id"] for item in result}
+    result = execute_schema(schema, "query($records:[TimelineRecordInput!]!) { record_timeline(records:$records) { open_decision_count } }",
+                            {"records": [{"model": record._meta.label, "id": record.sqid}] * 101}, user=actor)
+    assert result.errors and "at most 100" in result.errors[0].message
+
+
+def test_attention_read_does_not_load_the_run_graph(schema, review, monkeypatch):
+    actor, _, _, question = review
+    start_review(review)
+    from angee.workflows import schema as timeline_schema
+
+    def refuse_graph(*args, **kwargs):
+        raise AssertionError("The eager probe must not materialize runs")
+
+    monkeypatch.setattr(timeline_schema, "run_type_get_queryset", refuse_graph)
+    record = question.review_subject
+    result = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records:$records, include_runs:false) { has_runs open_decision_count
+        records { record_id runs { id } decisions { id is_open proposal } } }
+    }""", {"records": [{"model": record._meta.label, "id": record.sqid}]}, user=actor))["record_timeline"]
+    assert result["has_runs"] and result["open_decision_count"] == 1
+    assert result["records"][0]["runs"] == []
+
+
+def test_about_uses_separate_indexed_identity_queries(review):
+    actor, _, _, question = review
+    run, _ = start_review(review)
+    with CaptureQueriesContext(connection) as captured:
+        assert WorkflowRun.objects.with_actor(actor).about(question.review_subject).get().pk == run.pk
+    sql = "\n".join(query["sql"] for query in captured)
+    assert 'JOIN "test_workflows_step_record"' not in sql
+    assert '"content_type_id"' in sql and '"subject_content_type_id"' in sql
 
 
 def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trigger_setup, register_step):
@@ -187,7 +266,7 @@ def test_linear_plan_certain_join_and_optional_branches(review, register_step, s
 
 @pytest.mark.parametrize("retired_actor", [False, True])
 def test_open_question_and_attempts_survive_retention_then_record_deletion_withdraws(review, settings, retired_actor):
-    actor, _, _, question = review
+    actor, _, sent, question = review
     run, step = start_review(review)
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 1
     system_queryset(WorkflowRun).filter(pk=run.pk).update(created_at=Now() - timedelta(days=40))
@@ -197,6 +276,10 @@ def test_open_question_and_attempts_survive_retention_then_record_deletion_withd
         system_queryset(type(actor)).filter(pk=actor.pk).update(is_active=False)
     with system_context(reason="test delete reviewed record"):
         question.review_subject.delete()
+    from angee.workflows.tasks import cancel
+    for name, payload in sent:
+        if name == "workflows.cancel":
+            cancel(**payload["kwargs"])
     run.refresh_from_db()
     assert run.status == "canceled"
     decision = questions(step)[0]
@@ -204,7 +287,7 @@ def test_open_question_and_attempts_survive_retention_then_record_deletion_withd
     assert runner.wake_decisions() == 0
 
 
-def test_retention_keeps_a_failed_run_with_an_open_parallel_question(review, settings, register_step):
+def test_terminal_withdrawal_allows_retention_to_prune_the_failed_run(review, settings, register_step):
     class Fail(Step[None, None, None]):
         key = "timeline_parallel_failure"
         def run(self, ctx):
@@ -214,12 +297,11 @@ def test_retention_keeps_a_failed_run_with_an_open_parallel_question(review, set
         "entry": {"step": "echo", "next": {"done": ["review", "z_failure"]}},
         "review": {"step": "question"}, "z_failure": {"step": Fail.key},
     }})
-    assert run.status == "failed" and questions(step)[0].is_open
+    assert run.status == "failed" and not questions(step)[0].is_open
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 1
     system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=40))
-    assert WorkflowRun.objects.prune() == 0
-    assert system_queryset(StepAttempt).filter(step_run__run=run).exists()
-    assert system_queryset(WorkflowRun).get(pk=run.pk).prune_reason == "A decision is still open."
+    assert WorkflowRun.objects.prune() == 1
+    assert not system_queryset(StepAttempt).filter(step_run__run_id=run.pk).exists()
 
 
 def test_stop_error_hold_disables_retry_and_removes_the_future_plan(execution, register_step):

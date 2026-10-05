@@ -16,9 +16,9 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value
+from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value, Window
 from django.db.models.deletion import ProtectedError, RestrictedError
-from django.db.models.functions import Concat, Least, Now
+from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, system_context, to_subject_ref
@@ -342,17 +342,32 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         target = canonical_record_target(record)
         return self.filter(subject_content_type=target.content_type, subject_object_id=target.object_id)
 
-    def about(self, records: Any) -> Any:
+    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
+              limit: int | None = None) -> Any:
         """Runs that worked on readable records and all readable ancestors, oldest first."""
         if not isinstance(records, (list, tuple)):
             records = (records,)
-        predicate = Q(pk__in=[])
+        subjects = Q(pk__in=[])
+        targets = Q(pk__in=[])
         for record in records:
             target = canonical_record_target(record)
-            predicate |= Q(records__content_type=target.content_type, records__object_id=target.object_id)
-            predicate |= Q(subject_content_type=target.content_type, subject_object_id=target.object_id)
-        ids = set(self.filter(predicate).values_list("pk", flat=True))
-        frontier = ids.copy()
+            targets |= Q(content_type=target.content_type, object_id=target.object_id)
+            subjects |= Q(subject_content_type=target.content_type, subject_object_id=target.object_id)
+        links = system_queryset(apps.get_model("workflows", "StepRecord")).filter(targets)
+        if operations is not None:
+            links = links.filter(operation__in=operations)
+        subjects = self.filter(subjects)
+        if limit is not None:
+            subjects = subjects.annotate(_rank=Window(RowNumber(),
+                partition_by=["subject_content_type_id", "subject_object_id"], order_by=["-created_at", "-pk"])
+            ).filter(_rank__lte=limit)
+            links = links.values("content_type_id", "object_id", "run_id").annotate(
+                _created=Max("run__created_at"),
+            ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
+                                   order_by=[F("_created").desc(), F("run_id").desc()])).filter(_rank__lte=limit)
+        ids = set(subjects.values_list("pk", flat=True))
+        ids.update(self.filter(pk__in=links.values("run_id")).values_list("pk", flat=True))
+        frontier = ids.copy() if ancestors else set()
         while frontier:
             parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
                           .values_list("parent_step__run_id", flat=True))
@@ -562,13 +577,18 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError("The workflow run subject no longer exists.")
         return cast(RunSubject | None, subject)
 
-    def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "") -> None:
+    def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "",
+                     actor: Any = None) -> None:
         self.filter(pk=run.pk).update(
             status=status, outcome=outcome, output=strip_null_bytes(output),
             error=error,
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
         if status in RunStatus.terminal_values() and not run.is_terminal:
+            decisions = apps.get_model("decisions", "Decision").objects
+            with system_context(reason="workflows.terminal.withdraw"):
+                for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
+                    decisions.withdraw(decision, actor=actor or run.run_as)
             if (subject := self._lock_subject(run, required=False)) is not None:
                 subject.settle_run(self.get(pk=run.pk), status)
             if status != RunStatus.CANCELED:
@@ -599,16 +619,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 self.filter(pk=run.pk).update(stopped_at=Now(), updated_at=Now())
                 run.refresh_from_db(fields=["stopped_at"])
                 publish_change(run, action="update", update_fields=["stopped_at"])
-            with system_context(reason="workflows.stop.withdraw"):
-                decisions = apps.get_model("decisions", "Decision").objects
-                for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
-                    decisions.withdraw(decision, actor=actor)
             changed = run.step_runs.cancel_open()
             steps += changed
             if not run.is_terminal:
                 children += bool(index)
                 self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME,
-                                  output={})
+                                  output={}, actor=actor)
                 changed = 1
             if changed:
                 run.refresh_from_db()

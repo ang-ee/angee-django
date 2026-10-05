@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import type { CollapsiblePane } from "../page";
+import { developmentMode } from "../lib/development-mode";
 
 export type ChatterPaneController = Pick<CollapsiblePane, "collapsed" | "collapse" | "expand" | "toggle"> & {
   /** Native split panes publish their handle after the panel mounts. */
@@ -152,6 +153,12 @@ export function ChatterProvider({
     (owner: symbol, content: ChatterContent | null) => {
       const next = normalizeChatterContent(content);
       setContentState((current) => {
+        if (next && developmentMode()) {
+          for (const tab of next.tabs ?? []) {
+            if (current.some((entry) => entry.owner !== owner && entry.tabs?.some((other) => other.id === tab.id)))
+              throw new Error(`Two chatter owners publish tab ${tab.id}.`);
+          }
+        }
         const previous = current.find((entry) => entry.owner === owner);
         if (next) {
           if (previous && sameChatterContent(previous, next)) {
