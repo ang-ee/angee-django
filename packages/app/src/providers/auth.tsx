@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { QueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   keys,
   useGetIdentity,
@@ -277,8 +277,9 @@ export function createAngeeAuthProviderFromRequest(
  * session/preview identity query.
  * Its public session read gates the console-only preview projection.
  * `staleTime: Infinity` keeps warm navigations from
- * re-issuing it — refine's `useInvalidateAuthStore` (login/logout) refreshes
- * the entry, and a mid-session server expiry still surfaces at the data layer as
+ * re-issuing it — refine's `useInvalidateAuthStore` (login/logout and preference
+ * writes) refreshes the entry, a live preference delivery writes its document
+ * into it, and a mid-session server expiry still surfaces at the data layer as
  * an unauthorized data response asks the authoritative Django `current_user`
  * endpoint to confirm session loss before logout. This matters because one
  * Refine auth provider serves data providers with independent credentials.
@@ -290,9 +291,11 @@ const IDENTITY_QUERY_SETTINGS = {
   retry: false,
 } as const;
 
+const identityQueryKey = () => keys().auth().action("identity").get();
+
 export function identityQueryOptions(authProvider: RefineAuthProvider) {
   return {
-    queryKey: keys().auth().action("identity").get(),
+    queryKey: identityQueryKey(),
     queryFn: async (): Promise<AuthIdentity | null> =>
       ((await authProvider.getIdentity?.()) ?? null) as AuthIdentity | null,
     ...IDENTITY_QUERY_SETTINGS,
@@ -405,6 +408,7 @@ export function UserPreferencesProvider({
   const previewBlockedRef = useRef(previewBlocked);
   previewBlockedRef.current = previewBlocked;
   const { updatePreferences } = useUpdatePreferences({ dataProviderName });
+  const queryClient = useQueryClient();
   const userId = user?.id ?? null;
   const serverPreferences = user?.preferences ?? EMPTY_PREFERENCES;
   const updatePreferencesRef = useRef(updatePreferences);
@@ -431,8 +435,11 @@ export function UserPreferencesProvider({
       if (!preferences) return;
       queue.rebase(preferences);
       setSnapshot({ userId, preferences });
+      // The identity entry is the document readers outside React, such as the "/" route gate, resolve.
+      queryClient.setQueryData<AuthIdentity | null>(identityQueryKey(), (identity) =>
+        identity?.id === userId ? { ...identity, preferences } : identity);
     },
-    [queue, userId],
+    [queryClient, queue, userId],
   );
 
   useEffect(() => {
