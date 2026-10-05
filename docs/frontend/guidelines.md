@@ -236,8 +236,8 @@ shared UI copy through an addon bundle.
   preload the route under the router's `defaultPreload: "intent"`, and
   provider-less links stay native. Never pass `onNavigate` merely to call the
   router, or put a query-bearing href in TanStack `to`; use `navigate({ href })`,
-  the owner's `hrefLocation` (also for a redirect, which a preload can follow only
-  as location options), or the
+  the owner's `hrefLocation` (also for a redirect, which older routers preload
+  only from location options), or the
   [chrome href conversion](../../packages/ui/src/chrome/href-link-options.ts).
   Use `rel="external"` for server-served root-relative paths such as admin,
   media and logout so they load as documents.

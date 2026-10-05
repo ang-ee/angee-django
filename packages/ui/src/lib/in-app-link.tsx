@@ -15,8 +15,9 @@ export interface InAppPreloader {
 
 /**
  * An in-app href as router location options, its query parsed by the host's
- * search codec. Mirrors the href branch of TanStack's buildAndCommitLocation, so
- * paths that take no `href` (preloads, redirects) reach the same location.
+ * search codec: the location `navigate({ href })` reaches. Preloads and the
+ * redirects they follow use these options because router-core before 1.171.25
+ * reads `href` only when navigating, and the `^1` peer range admits it.
  */
 export function hrefLocation(router: AnyRouter, href: string): Pick<LinkOptions, "to" | "search" | "hash"> {
   const url = new URL(href, router.origin);

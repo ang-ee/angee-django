@@ -593,8 +593,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
       // Signed out: sign in and come back here, so the landing rule runs with this person's preferences.
       // A preload only resolves the landing target; it never sends anyone to sign in.
       if (identity === null && homeRequiresSignIn && !preload) throw redirect({ to: loginPath, search: { next: "/" } });
-      // Location options rather than `href`: a preload follows a redirect only
-      // through them, and would otherwise preload `/` again without end.
+      // Location options rather than `href`: older routers preload a redirect's
+      // target only from them, and would preload `/` again (see `hrefLocation`).
       throw redirect({
         ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}, declaredHome)),
         replace: true,
