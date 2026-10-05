@@ -104,7 +104,7 @@ function ThemeSpecimenChrome({ compact = false, logo, controls, children }: {
 
 /** Shared controls and data surfaces used to review every installed theme. */
 export function ThemeSpecimenSurface({ logo }: { logo?: ThemeCustomizationLogo } = {}): ReactNode {
-  return <ThemeSpecimenChrome logo={logo} controls={<><Button>Primary action</Button><Button variant="secondary">Secondary</Button></>}>
+  return <ThemeSpecimenChrome logo={logo} controls={<><Button variant="primary">Primary action</Button><Button variant="secondary">Secondary</Button></>}>
     <div className="grid gap-1"><span className="text-11 font-semibold uppercase tracking-wide text-fg-muted">Theme specimen</span><h2 className="text-22 font-semibold">Workspace overview</h2><p className="text-13 text-fg-muted">Typography, controls, status, fields and tabular surfaces use the active token contract.</p></div>
     <div className="flex flex-wrap items-center gap-2"><Button variant="ghost">Quiet action</Button><Badge tone="success">On track</Badge><Badge tone="warning">Needs review</Badge></div>
     <Card><CardHeader><CardTitle>Project details</CardTitle><CardDescription>Interactive fields remain inside this preview document.</CardDescription></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><Label>Project name<Input defaultValue="Northstar" /></Label><Label>Owner<Input defaultValue="Alex Morgan" /></Label><Checkbox defaultChecked>Send a weekly summary</Checkbox></CardContent></Card>
