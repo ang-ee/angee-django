@@ -47,7 +47,7 @@ test("only records with runs select the timeline initially", async () => {
   view.unmount();
   render(<TimelineStory />);
   await screen.findByText("Started manually by River");
-  expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline");
+  expect((await screen.findByTestId("timeline-right")).getAttribute("data-state")).toBe("false:workflows.timeline");
 });
 
 test("a first visit opens a collapsed pane only when a decision is waiting", async () => {
@@ -104,10 +104,12 @@ test("routine history folds while waiting and the record reference opens a peek"
 
 test("form marks reveal and highlight the inline card through the right host", async () => {
   render(<TimelineStory />);
-  fireEvent.click(await screen.findByRole("button", { name: "Check: Body" }));
+  await screen.findByRole("button", { name: "Unconfirmed: Name" });
   expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.timeline");
   expect(screen.getByRole("region", { name: "Confirm the name" }).className).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Unconfirmed: Name" }));
+  fireEvent.click(screen.getByRole("button", { name: "Toggle timeline" }));
+  expect(screen.queryByRole("region", { name: "Confirm the name" })).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "Unconfirmed: Name" }));
   await waitFor(() => expect(document.querySelector('[data-decision="dcn_review"]')?.className).toContain("ring-2"));
 });
 

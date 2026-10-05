@@ -33,6 +33,7 @@ def request_for(people, **changes):
             "kind": "note_review",
             "records": (subject,),
             "assignees": (reviewer,),
+            "requester": requester,
             "proposal": DecisionProposal(
                 alternatives=[
                     {"key": "complete", "label": "Complete", "outcome": "completed"},

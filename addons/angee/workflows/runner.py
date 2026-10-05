@@ -28,7 +28,15 @@ from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
-from angee.workflows.states import DONE_OUTCOME, ERROR_OUTCOME, AttemptResult, RunStatus, StepRunStatus, WaitingKind
+from angee.workflows.states import (
+    DONE_OUTCOME,
+    ERROR_OUTCOME,
+    AttemptResult,
+    RecordOperation,
+    RunStatus,
+    StepRunStatus,
+    WaitingKind,
+)
 from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _Settlement
 
 logger = logging.getLogger(__name__)
@@ -348,7 +356,7 @@ class Runner:
         if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the step record is required.")
         target = canonical_record_target(record)
-        if operation not in {"read", "created", "changed", "deleted", "called"}:
+        if operation not in RecordOperation.values:
             raise ValidationError("Unknown step record operation.")
         with self._fenced(step_run) as current:
             return current.records.model(

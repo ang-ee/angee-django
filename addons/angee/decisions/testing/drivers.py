@@ -5,10 +5,10 @@ from typing import Any
 
 from django.apps import apps
 
-from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionProposal, DecisionRequest
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
 
 
-def seed_decision(*, actor: Any, assignees: Sequence[Any], reference: Any, requester: Any = DEFAULT_REQUESTER) -> Any:
+def seed_decision(*, actor: Any, assignees: Sequence[Any], reference: Any, requester: Any = None) -> Any:
     return apps.get_model("decisions", "Decision").objects.ask(
         DecisionRequest(
             kind="review_reference",

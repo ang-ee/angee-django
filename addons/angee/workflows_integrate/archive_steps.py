@@ -16,7 +16,7 @@ from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_cla
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
 from angee.workflows.context import StepContext
 from angee.workflows.maps import MapItem
-from angee.workflows.reviews import DecisionStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Settlement, Step, StepMode
 
 
@@ -71,7 +71,6 @@ class ArchiveExecutionReporter:
 
 class ArchiveExtractor(ImplBase, ABC):
     """Registered vendor adapter for a storage container and target resource."""
-
     registry_setting = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
 
     target_resource: ClassVar[str] = ""
@@ -126,9 +125,7 @@ def _subject(ctx: Any) -> Any:
 
 def _proposal(extractor: type[ArchiveExtractor]) -> ArchiveProposal:
     return ArchiveProposal(
-        extractor=extractor.key,
-        label=extractor.display_label(),
-        target_resource=extractor.target_resource,
+        extractor=extractor.key, label=extractor.display_label(), target_resource=extractor.target_resource,
     )
 
 
@@ -265,6 +262,5 @@ class ArchiveSummary(Step[list[MapItem[ArchiveExecutionOutput]], list[MapItem[Ar
     outcomes = {"complete": "Complete", "partial": "Partial import"}
 
     def run(self, ctx: Any) -> Settlement:
-        return ctx.done(
-            ctx.input, outcome="partial" if any(item.outcome == "error" for item in ctx.input) else "complete"
-        )
+        return ctx.done(ctx.input, outcome="partial" if any(item.outcome == "error" for item in ctx.input)
+                        else "complete")

@@ -28,14 +28,14 @@ code executes under the actor's permissions. It must keep external effects out
 of database steps. Consumer settlements validate their own values; the runner
 records retry, timeout and diagnostic facts on attempts.
 
-[`DecisionStep`](reviews.py) asks exactly one decision retained by
+[`DecisionStep`](decision_steps.py) asks exactly one decision retained by
 `StepRun.decision`. `ctx.ask(request, state=...)` holds for its verdict and keeps
 continuation facts in the step's state. Override `ask(ctx)` to declare the
 question and `continue_with(ctx, decision, outcome)` only when typed output needs
 adapting. The built-in `ask_decision` resolves the symbolic `subject` key in
-configured actions and checks to the run's subject public identity.
+configured actions to the run's subject public identity.
 
-[`apply_proposals`](reviews.py) is the shared application path: as the run actor
+[`apply_proposals`](decision_steps.py) is the shared application path: as the run actor
 it sets fields through normal validated model saves, resolves relation sets through
 public identities, and invokes methods the model declares in `decision_methods`.
 It returns the sole selected outcome, or `done` for several distinct outcomes.

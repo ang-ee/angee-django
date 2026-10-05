@@ -8,7 +8,7 @@ from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relati
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.workflows.reviews import DecisionStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun
 from tests.conftest import create_user, execute_schema, result_data, vault_for

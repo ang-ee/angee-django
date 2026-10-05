@@ -35,6 +35,42 @@ from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, NoReturn, cast
 from urllib.parse import urlencode
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core import signing
+from django.core.exceptions import (
+    ObjectDoesNotExist,
+    SuspiciousFileOperation,
+    ValidationError,
+)
+from django.core.files.base import ContentFile
+from django.core.files.base import File as DjangoFile
+from django.db import IntegrityError, models, transaction
+from django.db.models import Q
+from django.db.models.signals import post_save
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.text import get_valid_filename
+from rebac import (
+    ActorLike,
+    NoActorResolvedError,
+    ObjectRef,
+    PermissionDenied,
+    current_actor,
+    require_permission,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+)
+from rebac.actors import is_sudo
+from rebac.backends import backend as rebac_backend
+from rebac.field_backing import resolve_field_backing
+from rebac.managers import RebacManager
+from rebac.resources import model_resource_type
+from rebac.schema.introspection import permission_sources
+
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
@@ -64,42 +100,6 @@ from angee.storage.uploads import (
     CappedReader,
     detect_mime,
     sha256_stream,
-)
-from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
-from django.core import signing
-from django.core.exceptions import (
-    ObjectDoesNotExist,
-    SuspiciousFileOperation,
-    ValidationError,
-)
-from django.core.files.base import ContentFile
-from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, transaction
-from django.db.models import Q
-from django.db.models.signals import post_save
-from django.urls import reverse
-from django.utils import timezone
-from django.utils.text import get_valid_filename
-from rebac.actors import is_sudo
-from rebac.backends import backend as rebac_backend
-from rebac.field_backing import resolve_field_backing
-from rebac.managers import RebacManager
-from rebac.resources import model_resource_type
-from rebac.schema.introspection import permission_sources
-
-from rebac import (
-    ActorLike,
-    NoActorResolvedError,
-    ObjectRef,
-    PermissionDenied,
-    current_actor,
-    require_permission,
-    system_context,
-    to_object_ref,
-    to_subject_ref,
 )
 
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
@@ -1224,7 +1224,6 @@ class File(OwnerMixin, AngeeDataModel):
     ``delete()`` soft-trashes; :meth:`purge` is the real delete.
     """
 
-    workflow_start_label = "Uploaded"
     runtime = True
     rebac_grantable = {"viewer": "share"}
     owner_container = "drive"

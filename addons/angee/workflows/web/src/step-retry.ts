@@ -8,7 +8,7 @@ import { RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
 /** Both execution views use the same retry and duplicate-effect acknowledgement. */
-export function useStepRetryActions(): readonly ActionDescriptor[] {
+export function useStepRetryActions(inline = false): readonly ActionDescriptor[] {
   const t = useWorkflowsT();
   const uiT = useUiT();
   const { widgets } = useAppRuntime();
@@ -24,9 +24,9 @@ export function useStepRetryActions(): readonly ActionDescriptor[] {
     required: ["acknowledge"],
   }, widgets, { translate: uiT }), [t, uiT, widgets]);
   return [{
-    id: "retry", label: t("action.retry_step"), placement: "toolbar", primary: true, run: retry,
+    id: "retry", label: t(inline ? "timeline.retry" : "action.retry_step"), placement: "toolbar", primary: !inline, run: retry,
     visibleWhen: (row) => row.can_retry === true && row.requires_duplicate_acknowledgement !== true,
-    confirm: { title: t("action.retry_step"), body: t("action.retryDescription") },
+    confirm: inline ? undefined : { title: t("action.retry_step"), body: t("action.retryDescription") },
   }, {
     id: "retry-duplicate", label: t("action.retry_step_accepting_duplicate"), placement: "toolbar",
     primary: true, danger: true, args: acknowledgement,

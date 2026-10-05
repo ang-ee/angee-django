@@ -8,16 +8,14 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
-from rebac import current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.data.hasura import with_filter_aliases
-from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -83,16 +81,6 @@ _RECORDS = hasura_model_resource(
 
 
 @strawberry.type
-class DecisionQuery:
-    @strawberry_django.field
-    def open_decisions(self, record_model: str, record_id: PublicID) -> list[DecisionType]:
-        model = apps.get_model(record_model)
-        actor = current_actor()
-        record = require_instance_for_id(model, str(record_id), queryset=read_scoped_queryset(model, actor))
-        return Decision.objects.with_actor(actor).open_for(record)
-
-
-@strawberry.type
 class DecisionMutation:
     @strawberry.mutation
     @action_guard("Could not decide.", camel_case_keys=False)
@@ -103,7 +91,7 @@ class DecisionMutation:
 
 
 schemas = {"console": {
-    "query": [_DECISIONS.query, _RECORDS.query, DecisionQuery],
+    "query": [_DECISIONS.query, _RECORDS.query],
     "mutation": [DecisionMutation],
     "subscription": [changes(Decision, field="decisionChanged")],
     "types": [DecisionType, DecisionRecordType, *_DECISIONS.types, *_RECORDS.types],

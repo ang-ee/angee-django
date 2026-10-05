@@ -4,11 +4,15 @@ from collections.abc import Sequence
 from inspect import Parameter, signature
 from typing import Any
 
+from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, ValidationInfo, model_validator
+from rebac import current_actor
 
 from angee.base.evidence import EvidenceFact, EvidenceReference
+from angee.base.identity import instance_from_public_id, public_id_for
+from angee.base.refs import canonical_record_model
 
 
 class DecisionRecordReference(EvidenceReference):
@@ -55,10 +59,6 @@ class RecordActions(BaseModel):
 
     def target_model(self, record: models.Model) -> type[models.Model]:
         """Keep canonical identity while naming a concrete action owner."""
-        from django.apps import apps
-
-        from angee.base.refs import canonical_record_model
-
         canonical = canonical_record_model(type(record))
         try:
             target = apps.get_model(self.model) if self.model else canonical
@@ -67,6 +67,64 @@ class RecordActions(BaseModel):
         if target._meta.abstract or canonical_record_model(target) is not canonical:
             raise ValueError("The action model must share the concerned record's canonical identity.")
         return target
+
+    def resolve(self, record: models.Model, *, context: dict[str, Any]) -> dict[str, Any]:
+        """Validate the action owner and decode writes through its model fields."""
+        model = self.target_model(record)
+        if not isinstance(record, model):
+            raise ValueError("Concern the concrete record named by the action model.")
+        values = {}
+        for name, operation in self.fields.items():
+            try:
+                field = model._meta.get_field(name)
+            except FieldDoesNotExist as error:
+                raise ValueError(f"Unknown field: {name}.") from error
+            if (field.auto_created or not field.concrete or field.name != name
+                    or field.primary_key or not field.editable):
+                raise ValueError(f"Use an editable model field name: {field.name}.")
+            if field.many_to_many or field.one_to_many:
+                raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
+            value = operation.set
+            try:
+                if field.is_relation:
+                    if value is not None and not isinstance(value, str):
+                        raise ValueError(f"Use a related record public id or null for {name}.")
+                    if value is None and not field.null:
+                        raise ValueError(f"The field {name} cannot be null.")
+                    # Request construction validates shape; admission/application supply the read actor.
+                    if "actor" not in context:
+                        continue
+                    value = None if value is None else instance_from_public_id(
+                        field.related_model, value,
+                        queryset=field.related_model.objects.with_actor(context.get("actor", current_actor())),
+                    )
+                    if value is None and operation.set is not None:
+                        raise ValueError(f"The related record for {name} is absent or unreadable.")
+                    if value is not None:
+                        context.get("related_records", []).append(value)
+                        field.run_validators(field.to_python(value.pk))
+                else:
+                    value = field.clean(value, record)
+            except (ValidationError, TypeError) as error:
+                raise ValueError(f"Invalid proposed value for {name}: {error}") from error
+            values[name] = value
+        if self.record:
+            call = self.record.call
+            if call == "delete" or call not in getattr(model, "decision_methods", ()):
+                raise ValueError(f"Undeclared decision method: {call}.")
+            bound = getattr(record, call, None)
+            if not callable(bound):
+                raise ValueError(f"Unknown decision method: {call}.")
+            parameters = tuple(signature(bound).parameters.values())
+            if any(parameter.default is Parameter.empty and parameter.kind not in {
+                Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD,
+            } for parameter in parameters):
+                raise ValueError(f"Decision method {call} takes required arguments.")
+            try:
+                signature(bound).bind(**self.record.arguments)
+            except TypeError as error:
+                raise ValueError(f"Invalid arguments for {call}: {error}") from error
+        return values
 
 
 class Alternative(BaseModel):
@@ -83,106 +141,28 @@ class DecisionProposal(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     multiple: bool = False
     alternatives: tuple[Alternative, ...] = Field(min_length=1)
-    checks: dict[str, tuple[str, ...]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_alternatives(self, info: ValidationInfo) -> "DecisionProposal":
-        from rebac import current_actor
-
-        from angee.base.identity import instance_from_public_id, public_id_for
-        from angee.base.refs import canonical_record_model
-
         keys = [alternative.key for alternative in self.alternatives]
         if len(keys) != len(set(keys)):
             raise ValueError("Alternative keys must be unique.")
         if info.context is None:
             return self
         records = {
-            public_id_for(model := canonical_record_model(type(record)), record.pk): record
+            public_id_for(canonical_record_model(type(record)), record.pk): record
             for record in info.context["records"]
         }
-        for identity, names in self.checks.items():
-            if identity not in records:
-                raise ValueError(f"Unknown concerned record: {identity}.")
-            for name in names:
-                try:
-                    canonical_record_model(type(records[identity]))._meta.get_field(name)
-                except FieldDoesNotExist as error:
-                    raise ValueError(f"Unknown field: {name}.") from error
         written: set[tuple[str, str]] = set()
         for alternative in self.alternatives:
             for identity, actions in alternative.actions.items():
                 if identity not in records:
                     raise ValueError(f"Unknown concerned record: {identity}.")
-                record = records[identity]
-                model = actions.target_model(record)
-                if not isinstance(record, model):
-                    raise ValueError("Concern the concrete record named by the action model.")
-                for name, operation in actions.fields.items():
-                    try:
-                        field = model._meta.get_field(name)
-                    except FieldDoesNotExist as error:
-                        raise ValueError(f"Unknown field: {name}.") from error
-                    if (field.auto_created or not field.concrete or field.name != name
-                            or field.primary_key or not field.editable):
-                        raise ValueError(f"Use an editable model field name: {field.name}.")
-                    if field.many_to_many or field.one_to_many:
-                        raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
+                actions.resolve(records[identity], context=info.context)
+                for name in actions.fields:
                     if self.multiple and (identity, name) in written:
                         raise ValueError(f"Multiple alternatives overlap on {name} of {identity}.")
                     written.add((identity, name))
-                    value = operation.set
-                    try:
-                        if field.is_relation:
-                            if value is not None and not isinstance(value, str):
-                                raise ValueError(f"Use a related record public id or null for {name}.")
-                            if value is None and not field.null:
-                                raise ValueError(f"The field {name} cannot be null.")
-                            if "actor" not in info.context:
-                                continue
-                            related = None if value is None else instance_from_public_id(
-                                field.related_model, value,
-                                queryset=field.related_model.objects.with_actor(
-                                    info.context.get("actor", current_actor()),
-                                ),
-                            )
-                            if value is not None and related is None:
-                                raise ValueError(f"The related record for {name} is absent or unreadable.")
-                            if related is not None:
-                                info.context.get("related_records", []).append(related)
-                                field.run_validators(related.pk)
-                        else:
-                            kind = field.get_internal_type()
-                            if value is not None and (
-                                isinstance(field, models.BooleanField) and type(value) is not bool
-                                or isinstance(field, models.IntegerField) and type(value) is not int
-                                or isinstance(field, (models.CharField, models.TextField))
-                                and not isinstance(value, str)
-                                or kind in {"FloatField", "DecimalField"} and (
-                                    type(value) not in {int, float, str} or isinstance(value, bool)
-                                )
-                            ):
-                                raise ValueError(f"Invalid value type for {name}.")
-                            field.clean(value, record)
-                    except (ValidationError, TypeError) as error:
-                        raise ValueError(f"Invalid proposed value for {name}: {error}") from error
-                if actions.record:
-                    call = actions.record.call
-                    if call == "delete" or call not in getattr(model, "decision_methods", ()):
-                        raise ValueError(f"Undeclared decision method: {call}.")
-                    method = getattr(model, call, None)
-                    if not callable(method):
-                        raise ValueError(f"Unknown decision method: {call}.")
-                    bound = getattr(record, call)
-                    parameters = tuple(signature(bound).parameters.values())
-                    if any(parameter.default is Parameter.empty and parameter.kind not in {
-                        Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD,
-                    } for parameter in parameters):
-                        raise ValueError(f"Decision method {call} takes required arguments.")
-                    try:
-                        signature(bound).bind(**actions.record.arguments)
-                    except TypeError as error:
-                        raise ValueError(f"Invalid arguments for {call}: {error}") from error
         return self
 
     def choose(self, chosen: Sequence[str]) -> tuple[Alternative, ...]:
@@ -196,13 +176,6 @@ class DecisionProposal(BaseModel):
         return tuple(alternative for alternative in self.alternatives if alternative.key in chosen)
 
 
-class _DefaultRequester:
-    """Omission uses the asking actor; explicit None allows self-assignment."""
-
-
-DEFAULT_REQUESTER = _DefaultRequester()
-
-
 class DecisionRequest(BaseModel):
     """One immutable question for one or more named assignees."""
 
@@ -211,7 +184,7 @@ class DecisionRequest(BaseModel):
     records: tuple[InstanceOf[models.Model], ...] = Field(min_length=1)
     assignees: tuple[Any, ...] = Field(min_length=1)
     proposal: DecisionProposal
-    requester: Any = DEFAULT_REQUESTER
+    requester: Any = None
     context: InstanceOf[DecisionContext] = Field(default_factory=DecisionContext)
 
     @model_validator(mode="after")

@@ -42,6 +42,7 @@ from angee.workflows.states import (
     ERROR_OUTCOME,
     NAME_MAX_LENGTH,
     AttemptResult,
+    RecordOperation,
     RunOrigin,
     RunRelation,
     RunStatus,
@@ -312,11 +313,6 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     def is_terminal(self) -> bool:
         """Whether this run has finished its lifecycle."""
         return self.status in RunStatus.terminal_values()
-
-    @property
-    def start_label(self) -> str:
-        """Use the subject owner's start verb, with the ordinary manual fallback."""
-        return getattr(self.subject_model_class, "workflow_start_label", "Started manually")
 
     @property
     def failure_reason(self) -> str | None:
@@ -749,8 +745,7 @@ class StepRecord(RecordRefMixin, AngeeDataModel):
     object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("content_type", "object_id")
     label = models.CharField(max_length=200, blank=True, default="")
-    operation = models.CharField(max_length=7, choices=[(name, name.capitalize()) for name in
-        ("read", "created", "changed", "deleted", "called")], default="read")
+    operation = models.CharField(max_length=7, choices=RecordOperation.choices, default=RecordOperation.READ)
     objects = StepRecordManager()
 
     def __str__(self) -> str:

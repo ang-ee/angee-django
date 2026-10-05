@@ -7,7 +7,7 @@ from rebac import actor_context
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.workflows.reviews import apply_proposals
+from angee.workflows.decision_steps import apply_proposals
 from tests.conftest import create_platform_admin, create_user
 
 
@@ -54,7 +54,7 @@ def test_unreadable_related_record_is_rejected_at_ask(targets):
 
 
 @pytest.mark.parametrize("actions", [
-    {"fields": {"name": {"set": 17}}},
+    {"fields": {"name": {"set": "x" * 81}}},
     {"fields": {"locked_value": {"set": "changed"}}},
     {"fields": {"proposaltarget": {"set": None}}},
     {"record": {"call": "save"}}, {"record": {"call": "delete"}},

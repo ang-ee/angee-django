@@ -13,7 +13,7 @@ from angee.decisions.signals import decision_answered
 from angee.iam.service_users import deactivate_service_user
 
 
-def wake_review(sender: Any, *, decision: Any, **kwargs: Any) -> None:
+def wake_decision(sender: Any, *, decision: Any, **kwargs: Any) -> None:
     """Let the workflow lock owner enqueue settled decision waiters after commit."""
     from angee.workflows.runner import runner
 
@@ -63,7 +63,7 @@ class WorkflowsConfig(AppConfig):
 
         checks.register(check_record_changed_models, checks.Tags.models)
         checks.register(check_run_subject_models, checks.Tags.models)
-        decision_answered.connect(wake_review, dispatch_uid="workflows.decision_answered")
+        decision_answered.connect(wake_decision, dispatch_uid="workflows.decision_answered")
         pre_delete.connect(stop_deleted_record_runs, dispatch_uid="workflows.deleted_record")
         post_delete.connect(
             deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),

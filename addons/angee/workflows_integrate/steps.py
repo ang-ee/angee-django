@@ -19,7 +19,7 @@ from angee.integrate.models import Bridge
 from angee.integrate.states import DiscrepancyKind, StreamPhase
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.context import StepContext
-from angee.workflows.reviews import DecisionStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Retryable, RetryPolicy, Settlement, Step, StepMode, Superseded
 
 
@@ -48,14 +48,9 @@ class StreamStageOutput(BaseModel):
     @classmethod
     def for_streams(cls, streams: list[Any], *, counts: dict[str, int]) -> StreamStageOutput:
         """Project unresolved truth through its manager for the admitted partitions."""
-        discrepancies = list(
-            apps.get_model("integrate", "SyncDiscrepancy")
-            .objects.unresolved()
-            .filter(
-                stream__in=streams,
-            )
-            .order_by("pk")
-        )
+        discrepancies = list(apps.get_model("integrate", "SyncDiscrepancy").objects.unresolved().filter(
+            stream__in=streams,
+        ).order_by("pk"))
         return cls(
             counts=counts,
             discrepancy_ids=[public_id_of(row) for row in discrepancies],
@@ -113,18 +108,14 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
             stream = open_stream(bridge, ctx.input.key, ctx.input.partition, adapter)
             page = advance_stream(stream, adapter, page_bound=ctx.input.page_bound)
         progress, resets = page.check_continuation(
-            previous=ctx.state.get("progress"),
-            resets=ctx.state.get("resets", 0),
+            previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
         )
         cycle_items = ctx.state.get("cycle_items", 0) + page.count
         if not page.exhausted:
             return ctx.next_page({"cycle_items": cycle_items, "progress": progress, "resets": resets})
-        return ctx.done(
-            StreamStageOutput.for_streams(
-                [page.stream],
-                counts={"page_items": page.count, "cycle_items": cycle_items},
-            )
-        )
+        return ctx.done(StreamStageOutput.for_streams(
+            [page.stream], counts={"page_items": page.count, "cycle_items": cycle_items},
+        ))
 
 
 class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
@@ -155,16 +146,14 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
                 page = advance_stream(stream, adapter, page_bound=ctx.config.rescan_bound)
         if page is not None:
             progress, resets = page.check_continuation(
-                previous=ctx.state.get("progress"),
-                resets=ctx.state.get("resets", 0),
+                previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
             )
             if not page.exhausted:
                 return ctx.next_page({"rescan_index": index, "progress": progress, "resets": resets})
         if index + 1 < len(streams):
             return ctx.next_page({"rescan_index": index + 1})
         output = StreamStageOutput.for_streams(
-            ctx.input.current_streams(bridge),
-            counts={"streams": len(streams)},
+            ctx.input.current_streams(bridge), counts={"streams": len(streams)},
         )
         if output.discrepancy_ids:
             return ctx.wait(until=ctx.now + timedelta(seconds=ctx.config.reconcile_seconds), state={"rescan_index": 0})
@@ -231,15 +220,8 @@ def _stream_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl]:
     try:
         with closing(bridge.backend) as adapter:
             yield adapter
-    except (
-        AdapterContractError,
-        ImproperlyConfigured,
-        PermissionDenied,
-        ValidationError,
-        Retryable,
-        Superseded,
-        SoftTimeLimitExceeded,
-    ):
+    except (AdapterContractError, ImproperlyConfigured, PermissionDenied, ValidationError,
+            Retryable, Superseded, SoftTimeLimitExceeded):
         raise
     except Exception as error:  # noqa: BLE001 -- adapters quarantine semantic errors in the page owner.
         raise Retryable("Stream transport failed.") from error

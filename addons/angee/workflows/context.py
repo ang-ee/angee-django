@@ -15,7 +15,7 @@ from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.workflows.runner import runner
-from angee.workflows.states import DONE_OUTCOME, RunRelation
+from angee.workflows.states import DONE_OUTCOME, NoteTone, RunRelation
 from angee.workflows.steps import Ask, Done, Fail, NextPage, Step, StepMode, Wait
 
 
@@ -170,30 +170,16 @@ class StepContext:
 
     def note(self, message: str, *, tone: str = "info") -> None:
         """Retain a reader-facing note with this attempt's successful outcome."""
-        if tone not in {"info", "success", "warning", "danger"} or not message.strip():
+        if tone not in NoteTone.values or not message.strip():
             raise ValidationError("A note needs a message and a supported tone.")
         self.pending_notes.append({"tone": tone, "message": message})
 
-    def start_run(
-        self,
-        workflow: Any,
-        *,
-        subject: Any = None,
-        input: Any = None,
-        request_key: str | None = None,
-        relation: str = str(RunRelation.OWNED),
-        version: Any = None,
-    ) -> Any:
+    def start_run(self, workflow: Any, *, subject: Any = None, input: Any = None,
+                  request_key: str | None = None, relation: str = str(RunRelation.OWNED), version: Any = None) -> Any:
         """Start one child through admission, deriving a retry-stable key when omitted."""
         return type(self.run).objects.start(
-            workflow,
-            actor=self.actor,
-            subject=subject,
-            input=input,
-            request_key=request_key,
-            parent_step=self.step_run,
-            relation=relation,
-            version=version,
+            workflow, actor=self.actor, subject=subject, input=input, request_key=request_key,
+            parent_step=self.step_run, relation=relation, version=version,
         )
 
     def cancel_run(self, run: Any) -> None:

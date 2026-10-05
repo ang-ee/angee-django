@@ -62,7 +62,7 @@ EXPECTED_VERBS = {
     "workflows.WorkflowRun.queryset": "about for_subject hold hold_owned retention_candidates",
     "decisions.Decision.manager": "ask decide withdraw",
     "decisions.Decision.queryset": (
-        "attention_expression open open_expression open_for records_with_open_decisions"
+        "attention_expression open open_expression open_for"
     ),
 }
 
@@ -70,7 +70,7 @@ EXPECTED_TYPES = {
     "awaits": "AwaitRun AwaitRunConfig AwaitRunInput",
     "context": "StepContext",
     "maps": "Map MapInput MapItem",
-    "reviews": "AskDecision DecisionConfig DecisionStep",
+    "decision_steps": "AskDecision DecisionConfig DecisionStep",
     "steps": "Ask Done EmptyOutput Fail NextPage RetryPolicy Retryable Step StepMode Superseded Wait",
 }
 

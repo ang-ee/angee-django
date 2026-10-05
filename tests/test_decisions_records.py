@@ -172,7 +172,7 @@ def test_invalid_answers_and_record_edits_leave_the_question_open(records):
 def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(records, owner, variable):
     issuer, reviewer, outsider, vaults, drives = records
     targets = vaults if owner == "vault" else drives
-    opened = admit(records, [targets[0]])
+    admit(records, [targets[0]])
     closed = admit(records, [targets[1]])
     Decision.objects.decide(closed.pk, actor=reviewer, revision=closed.revision, chosen=["confirm"])
     # An actor can read a record without being allowed to read its question.
@@ -206,14 +206,13 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
         "console",
     )
     where = "$where" if variable else "{has_open_decisions: {_eq: true}}"
-    declaration = ", $where: attention_records_bool_exp" if variable else ""
-    document = """query($model: String!, $id: ID! DECLARATION) {
+    declaration = "$where: attention_records_bool_exp" if variable else ""
+    document = """query(DECLARATION) {
       attention_records(where: WHERE) { id has_open_decisions }
       count: attention_records_aggregate(where: WHERE) { aggregate { count } }
       all_records: attention_records { id has_open_decisions }
-      open_decisions(record_model: $model, record_id: $id) { id proposal records { record_model record_id } }
-    }""".replace("DECLARATION", declaration).replace("WHERE", where)
-    variables = {"model": model._meta.label, "id": targets[0].sqid}
+    }""".replace("(DECLARATION)", f"({declaration})" if declaration else "").replace("WHERE", where)
+    variables = {}
     if variable:
         variables["where"] = {"_and": [{"has_open_decisions": {"_eq": True}}]}
     result = result_data(
@@ -226,13 +225,10 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     assert {row["id"]: row["has_open_decisions"] for row in result["all_records"]} == {
         record.sqid: record is not targets[1] for record in targets
     }
-    assert result["open_decisions"][0]["id"] == opened.sqid
     with actor_context(outsider):
         # Pinning the target actor must win over the ambient outsider.
         scoped = model.objects.with_actor(reviewer)
-        assert list(Decision.objects.records_with_open_decisions(scoped)) == [targets[0], targets[2]]
-    result = result_data(execute_schema(schema, document, {**variables, "id": targets[2].sqid}, user=reviewer))
-    assert result["open_decisions"] == []
+        assert list(scoped.filter(Decision.objects.attention_expression(scoped))) == [targets[0], targets[2]]
     assert hidden.is_open
     # A list that does not request attention never joins the question owner.
     with CaptureQueriesContext(connection) as captured:

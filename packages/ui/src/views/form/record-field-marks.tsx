@@ -1,12 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
+import type { Tone } from "../../lib/tones";
 import { Badge } from "../../ui/badge";
 
 export interface RecordFieldMark {
   field: string;
-  decision: string;
-  kind: "unconfirmed" | "check";
+  label: string;
+  tone: Tone;
+  onReveal: () => void;
 }
 export interface ActiveRecordForm {
   model: string;
@@ -18,9 +20,11 @@ interface MarkPublication {
   model: string;
   id: string;
   marks: readonly RecordFieldMark[];
-  reveal: (decision: string) => void;
 }
+type RevealedField = { model: string; id: string; field: string };
 const Bridge = createContext<{
+  revealed: RevealedField | null;
+  setRevealed: (field: RevealedField) => void;
   marks: readonly MarkPublication[];
   publish: (owner: symbol, marks: readonly MarkPublication[] | null) => void;
   form: ActiveRecordForm | null;
@@ -29,6 +33,7 @@ const Bridge = createContext<{
 
 /** Shared by the form and its pane; carries presentation only, never record values. */
 export function RecordFieldMarksProvider({ children }: { children: ReactNode }) {
+  const [revealed, setRevealed] = useState<RevealedField | null>(null);
   const [publications, setPublications] = useState(new Map<symbol, readonly MarkPublication[]>());
   const [forms, setForms] = useState(new Map<symbol, ActiveRecordForm>());
   const publish = useCallback((owner: symbol, marks: readonly MarkPublication[] | null) => {
@@ -39,7 +44,7 @@ export function RecordFieldMarksProvider({ children }: { children: ReactNode }) 
   }, []);
   const marks = useMemo(() => [...publications.values()].flat(), [publications]);
   const form = [...forms.values()].at(-1) ?? null;
-  const value = useMemo(() => ({ marks, publish, form, setForm }), [marks, form]);
+  const value = useMemo(() => ({ marks, publish, form, setForm, revealed, setRevealed }), [marks, form, revealed]);
   return <Bridge.Provider value={value}>{children}</Bridge.Provider>;
 }
 
@@ -52,6 +57,8 @@ export function useRecordFieldMarks(publications: readonly MarkPublication[]) {
     return () => publish?.(owner.current, null);
   }, [publish, publications]);
 }
+
+export function useRevealedRecordField() { return useContext(Bridge)?.revealed; }
 
 export function useActiveRecordForm() { return useContext(Bridge)?.form ?? null; }
 
@@ -72,8 +79,11 @@ export function useRecordFieldMark(field: string) {
     && item.model.toLowerCase() === record.canonicalResource.toLowerCase());
   const mark = publication?.marks.find((item) => item.field === field);
   const reveal = useCallback(() => {
-    if (mark) publication?.reveal(mark.decision);
-  }, [mark, publication]);
+    if (mark && publication) {
+      bridge?.setRevealed({ model: publication.model, id: publication.id, field });
+      mark.onReveal();
+    }
+  }, [bridge?.setRevealed, field, mark, publication]);
   return mark ? { ...mark, reveal } : null;
 }
 
@@ -81,10 +91,9 @@ export function useRecordFieldMark(field: string) {
 export function RecordFieldMarkButton({ field, label }: { field: string; label?: ReactNode }) {
   const mark = useRecordFieldMark(field);
   if (!mark) return null;
-  const text = mark.kind === "check" ? "Check" : "Unconfirmed";
   return <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0" onClick={(event) => {
     event.preventDefault(); mark.reveal();
-  }} aria-label={`${text}: ${typeof label === "string" ? label : field}`}>
-    <Badge tone={mark.kind === "check" ? "danger" : "warning"} density="compact">{text}</Badge>
+  }} aria-label={`${mark.label}: ${typeof label === "string" ? label : field}`}>
+    <Badge tone={mark.tone} density="compact">{mark.label}</Badge>
   </Button>;
 }

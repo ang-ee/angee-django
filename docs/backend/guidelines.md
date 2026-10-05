@@ -1634,7 +1634,7 @@ validated at the driver boundary.
   records one protected cause with its origin at start; retention cannot prune
   a cited cause before its effects, and a retained event protects its trigger.
 - **Reviews compose one decision per step.**
-  [`DecisionStep`](../../addons/angee/workflows/reviews.py) asks through
+  [`DecisionStep`](../../addons/angee/workflows/decision_steps.py) asks through
   `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
   The answer wakes the step after commit, with a tick sweep for missed delivery.
   The resumed body applies the chosen alternatives through record write owners

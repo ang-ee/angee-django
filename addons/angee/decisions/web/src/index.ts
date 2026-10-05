@@ -6,7 +6,7 @@ import { DECISION_MODEL } from "./documents.console";
 
 export { DECISION_MODEL } from "./documents.console";
 export { DecisionCard, type DecisionCardProps } from "./DecisionCard";
-export { fieldsToMark, decisionFieldMarks } from "./proposal";
+export { decisionFieldMarks } from "./proposal";
 export { useDecision } from "./origin";
 export { type Decision } from "./documents.console";
 
@@ -36,4 +36,4 @@ export default defineBaseAddon({
   i18n: { decisions: enDecisionsMessages },
 });
 
-export { decisionAttentionColumn, openDecisionFilter } from "./attention";
+export { decisionAttentionColumn, openDecisionFilter, useDecisionFieldMarks } from "./attention";

@@ -105,3 +105,22 @@ class AttemptResult(models.TextChoices):
     FAILED = "failed", "Failed"
     TIMED_OUT = "timed_out", "Timed out"
     SUPERSEDED = "superseded", "Superseded"
+
+
+class RecordOperation(models.TextChoices):
+    """The operations retained on step record links."""
+
+    READ = "read", "Read"
+    CREATED = "created", "Created"
+    CHANGED = "changed", "Changed"
+    DELETED = "deleted", "Deleted"
+    CALLED = "called", "Called"
+
+
+class NoteTone(models.TextChoices):
+    """The presentation tones retained with a step note."""
+
+    INFO = "info", "Info"
+    SUCCESS = "success", "Success"
+    WARNING = "warning", "Warning"
+    DANGER = "danger", "Danger"

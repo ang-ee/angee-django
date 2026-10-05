@@ -8,7 +8,7 @@ from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.workflows import schema as workflow_schema
-from angee.workflows.reviews import DecisionStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
@@ -308,7 +308,7 @@ def test_step_decisions_exact_filter_combines_with_status(schema, execution, reg
         def ask(self, ctx):
             return ctx.ask(
                 DecisionRequest(
-                    kind="review",
+                    kind="review", requester=ctx.actor,
                     records=(reference,),
                     assignees=(reviewer,),
                     proposal=DecisionProposal(

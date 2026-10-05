@@ -7,7 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import F, Prefetch, Q
+from django.db.models import F, Prefetch
 from rebac import system_context
 from rebac.resources import model_for_resource_type
 from strawberry import auto
@@ -120,7 +120,6 @@ class WorkflowRunType(RecordReferenceNode):
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
     origin: RunOrigin
-    start_label: str = strawberry_django.field(only=["subject_object_id", "subject_content_type_id", "version_id"])
     @strawberry_django.field(only=["input", "version_id"])
     def input(self, info: strawberry.Info) -> JSON:
         """Keep non-reference input while checking marked sources at read time."""
@@ -845,7 +844,6 @@ class RecordTimelineType:
     record_id: PublicID
     runs: list[WorkflowRunType]
     decisions: list[DecisionType]
-    open_decision_count: int
 
 
 @strawberry.type
@@ -861,22 +859,20 @@ class RecordTimelineQuery:
         """One read for a record or selection, through the record and run owners."""
         actor = request_from_info(info).user
         result = []
-        concerns = Q(pk__in=[])
+        concerned = []
         for reference in records:
             model = apps.get_model(reference.model)
             record = require_instance_for_id(model, str(reference.id), queryset=read_scoped_queryset(model, actor))
             target = canonical_record_target(record)
-            concerns |= Q(records__content_type=target.content_type, records__object_id=target.object_id)
-            with system_context(reason="workflows.timeline.attention"):
-                count = Decision.objects.open_for(record).count()
+            concerned.append(record)
             result.append(RecordTimelineType(
                 record_model=canonical_record_model(type(record))._meta.label,
                 record_id=PublicID(public_id_for(canonical_record_model(type(record)), target.object_id)),
                 runs=run_type_get_queryset(WorkflowRun.objects.with_actor(actor).about(record), WorkflowRunType, info),
-                decisions=Decision.objects.with_actor(actor).open_for(record), open_decision_count=count,
+                decisions=Decision.objects.with_actor(actor).open_for(record),
             ))
         with system_context(reason="workflows.timeline.selection_attention"):
-            count = Decision.objects.open().filter(concerns).distinct().count()
+            count = Decision.objects.open_for(*concerned).count()
         return RecordTimelineSelectionType(records=result, open_decision_count=count)
 
 schemas = {

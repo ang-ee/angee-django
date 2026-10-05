@@ -2,7 +2,7 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 export {
-  RecordFieldMarksProvider, useRecordFieldMarks, useActiveRecordForm,
+  RecordFieldMarksProvider, useRecordFieldMarks, useActiveRecordForm, useRevealedRecordField,
   type RecordFieldMark, type ActiveRecordForm,
 } from "./form/record-field-marks";
 

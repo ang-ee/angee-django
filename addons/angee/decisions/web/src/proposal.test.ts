@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import * as v from "valibot";
-import { fieldsToMark, ProposalSchema } from "./proposal";
+import { decisionFieldMarks, ProposalSchema } from "./proposal";
 
 const proposal = { multiple: true, alternatives: [
   { key: "rename", label: "Rename", outcome: "done", actions: { nte_1: { model: "knowledge.Note", fields: { title: { set: "Draft" }, body: { set: null } } } } },
@@ -9,11 +9,11 @@ const proposal = { multiple: true, alternatives: [
 ] };
 
 test("marks the union of alternative fields on open decisions for this record", () => {
-  expect(fieldsToMark([{ is_open: true, proposal }, { is_open: false, proposal }], "nte_1")).toEqual(["body", "title"]);
-  expect(fieldsToMark([{ is_open: false, proposal }], "nte_1")).toEqual([]);
+  expect(decisionFieldMarks([{ is_open: true, proposal }, { is_open: false, proposal }], "nte_1").map(({ field }) => field).sort()).toEqual(["body", "title"]);
+  expect(decisionFieldMarks([{ is_open: false, proposal }], "nte_1")).toEqual([]);
 });
 test("ignores malformed proposals and unrelated records", () => {
-  expect(fieldsToMark([{ is_open: true, proposal: [] }, { is_open: true, proposal }], "unknown")).toEqual([]);
+  expect(decisionFieldMarks([{ is_open: true, proposal: [] }, { is_open: true, proposal }], "unknown")).toEqual([]);
 });
 test("rejects empty and duplicate alternatives while preserving null sets", () => {
   expect(v.safeParse(ProposalSchema, { alternatives: [] }).success).toBe(false);

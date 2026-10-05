@@ -15,22 +15,18 @@ from dataclasses import dataclass, replace
 from functools import cache
 from typing import Any, ClassVar, NoReturn, cast, get_args
 
-from django.apps import apps
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.module_loading import import_string
-from django.utils.text import capfirst
 from django_choices_field import TextChoicesField
-from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
 from angee.base.jsonschema import (
     LocalSchemaReferences,
-    materialize_schema,
     schema_nodes,
     validation_issues,
     validator,
@@ -41,8 +37,6 @@ __all__ = [
     "FORM_SCHEMA_ANNOTATIONS",
     "FORM_SPEC_RELATION_VALIDATOR",
     "check_form_annotations",
-    "freeze_form_schema",
-    "materialize_form_schema",
     "ImplBase",
     "ImplChoice",
     "ImplClassField",
@@ -166,51 +160,7 @@ FORM_SPEC_RELATION_VALIDATOR = validator(_FORM_SPEC_RELATION_SCHEMA)
 FORM_SCHEMA_ANNOTATIONS = frozenset(
     {"title", "description", "widget", "relation", "options", "readOnly"}
 )
-"""Presentation annotations shared by config forms and frozen form snapshots."""
-
-_FORM_SCHEMA_KEYS = (
-    frozenset(Draft202012Validator.VALIDATORS)
-    | FORM_SCHEMA_ANNOTATIONS
-    | {
-        "$schema",
-        "$defs",
-        "$anchor",
-        "default",
-    }
-)
-_SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
-_FORM_MISSING = object()
-
-
-def materialize_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Compile a finite form schema using the shared annotation vocabulary."""
-    for node in schema_nodes(schema):
-        if node.keys() - _FORM_SCHEMA_KEYS:
-            raise ValidationError("Forms contain unsupported schema keywords or nested discriminators.")
-        if "$ref" in node and node.keys() - FORM_SCHEMA_ANNOTATIONS - {"$ref", "default"}:
-            raise ValidationError("Reference siblings must be form annotations.")
-        if "format" in node and node["format"] not in FormatChecker.checkers:
-            raise ValidationError(f"Unsupported form format: {node['format']}.")
-    result = materialize_schema(schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"})
-    nodes = list(schema_nodes(result))
-    for node in nodes:
-        check_form_annotations(node)
-    for node in nodes:
-        if "title" in node:
-            continue
-        relation = node.get("relation")
-        plural = False
-        if node.get("type") == "array" and isinstance(node.get("items"), dict):
-            relation = node["items"].get("relation")
-            plural = relation is not None
-        if relation is not None:
-            try:
-                model = apps.get_model(relation["resource"])
-            except (LookupError, ValueError) as error:
-                raise ValidationError(f"Unknown form relation target {relation['resource']!r}.") from error
-            node["title"] = capfirst(str(model._meta.verbose_name_plural if plural else model._meta.verbose_name))
-    return result
-
+"""Presentation annotations shared by config forms and workflow input schemas."""
 
 def _nullable_form_schema(schema: dict[str, Any]) -> dict[str, Any] | None:
     """The one concrete branch of the bounded nullable FormSpec union."""
@@ -249,39 +199,6 @@ def check_form_annotations(schema: dict[str, Any]) -> None:
             for option in options
         ):
             raise ValidationError("Field options require valid values and labels.")
-
-
-def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
-    """Freeze copied defaults, option enums and read-only values into a form schema."""
-    if not isinstance(schema, dict):
-        return
-    if "options" in schema:
-        schema["enum"] = [copy.deepcopy(option["value"]) for option in schema["options"]]
-    if initial is not _FORM_MISSING:
-        if "const" in schema and schema["const"] != initial:
-            raise ValidationError("An initial value cannot change a declared constant.")
-        schema["default"] = copy.deepcopy(initial)
-    value = schema.get("default", _FORM_MISSING)
-    if schema.get("readOnly"):
-        if value is _FORM_MISSING:
-            raise ValidationError("A readOnly field requires an initial value or declared default.")
-        schema["const"] = copy.deepcopy(value)
-    for name, child in schema.get("properties", {}).items():
-        freeze_form_schema(child, value.get(name, _FORM_MISSING) if isinstance(value, dict) else _FORM_MISSING)
-        if isinstance(child, dict) and child.get("readOnly") and name not in schema.get("required", []):
-            schema.setdefault("required", []).append(name)
-    for key in _SCHEMA_LISTS:
-        for child in schema.get(key, []):
-            freeze_form_schema(child, value)
-    if isinstance(value, list) and "items" in schema:
-        if not value:
-            return
-        # Per-row immutable values require per-row schemas, not one mutable shared item schema.
-        schema["prefixItems"] = [copy.deepcopy(schema["items"]) for _ in value]
-        for child, item in zip(schema["prefixItems"], value, strict=True):
-            freeze_form_schema(child, item)
-    elif "items" in schema:
-        freeze_form_schema(schema["items"])
 
 
 class _UnsupportedConfigSchema(ImproperlyConfigured):

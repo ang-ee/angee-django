@@ -13,9 +13,10 @@ from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.functions import NullIf
-from rebac import PermissionDenied, actor_context, current_actor, system_context
+from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
+from rebac.backends import backend
 
-from angee.base.actors import instance_actor
+from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, OptimisticLockMixin
@@ -58,16 +59,8 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
     }
 
     def file_task(
-        self,
-        *,
-        queue: Any,
-        title: str,
-        body: str,
-        party: Any,
-        client_creation_key: str,
-        due_date: Any = None,
-        estimate: float | None = None,
-        importance: str = "normal",
+        self, *, queue: Any, title: str, body: str, party: Any, client_creation_key: str,
+        due_date: Any = None, estimate: float | None = None, importance: str = "normal",
     ) -> Any:
         """File an actor-owned task and its need atomically, replaying the whole request."""
 
@@ -85,9 +78,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
 
         def insert() -> Any:
             task = task_model.objects.create(
-                **values,
-                created_by_id=scope,
-                client_creation_key=client_creation_key,
+                **values, created_by_id=scope, client_creation_key=client_creation_key,
                 creation_fingerprint=fingerprint,
             )
             self.capture(target=task, party=party, body=body, importance=importance)
@@ -95,10 +86,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
 
         with transaction.atomic():
             task, _created = task_model.objects.with_actor(actor).replay_or_insert(
-                scope,
-                client_creation_key,
-                fingerprint,
-                insert,
+                scope, client_creation_key, fingerprint, insert,
             )
             return task
 
@@ -379,12 +367,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     claimed_name = models.TextField(blank=True, default="", editable=False)
     claimed_email = models.TextField(blank=True, default="", editable=False)
     access_decision = models.ForeignKey(
-        "decisions.Decision",
-        null=True,
-        blank=True,
-        editable=False,
-        on_delete=models.PROTECT,
-        related_name="access_needs",
+        "decisions.Decision", null=True, blank=True, editable=False,
+        on_delete=models.PROTECT, related_name="access_needs",
     )
     admitted_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -466,11 +450,6 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
-        from rebac import to_object_ref
-        from rebac.backends import backend
-
-        from angee.base.actors import actor_user_id
-
         with system_context(reason="intake.need.access_question"):
             readers = backend().lookup_subjects(resource=to_object_ref(self), action="share", subject_type="auth/user")
             assignees = tuple(

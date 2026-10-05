@@ -12,7 +12,6 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     alternatives: [{ key: "accept", label: "Use proposed name", outcome: "accepted",
       actions: { nte_7: { fields: { display_name: { set: "Reviewed notes" } } } } },
       { key: "keep", label: "Keep what is on the record", outcome: "kept" }],
-    checks: { nte_7: ["body"] },
   } });
   const node = (key: string, label: string, rank: number, plan: string): Node => ({
     key, label, rank, plan, body_key: null, step_label: label, outcomes: [], item_counts: [], item_attempts: 0,
@@ -33,7 +32,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     id: "wfr_review", display_name: "Record review", status: "WAITING", origin: "MANUAL", outcome_label: "",
     version: { workflow: { display_name: "Record review" } },
     created_at: at, finished_at: null, stopped_at: null, output: {}, can_cancel: true, run_as: { display_name: "River" },
-    start_label: "Started manually", subject_model: null, subject_id: null,
+    subject_model: null, subject_id: null,
     parent_step: null, trigger_event: null, graph: { nodes, edges: [] },
   };
   if (state === "clean") {
@@ -52,10 +51,10 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     decision.is_open = false; decision.verdict = []; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
   }
   const entry: TimelineData[number] = {
-    record_model: "notes.Note", record_id: "nte_7", open_decision_count: decision.is_open && state !== "error" && state !== "run" ? 1 : 0,
+    record_model: "notes.Note", record_id: "nte_7",
     decisions: decision.is_open && state !== "error" && state !== "run" ? [decision] : [], runs: [run],
   };
-  if (state === "empty") { entry.runs = []; entry.decisions = []; entry.open_decision_count = 0; }
+  if (state === "empty") { entry.runs = []; entry.decisions = []; }
   if (state === "set") {
     const shared = entry.decisions[0]!;
     shared.records.push({ ...shared.records[0]!, id: "dcr_other", record_id: "nte_8" });
@@ -64,5 +63,5 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     ...entry, record_id: "nte_8",
     runs: timelineFixture("error").records[0]!.runs.map((run) => ({ ...run, id: "wfr_error" })),
   }] : [entry];
-  return { records, open_decision_count: entry.open_decision_count };
+  return { records, open_decision_count: entry.decisions.length };
 }

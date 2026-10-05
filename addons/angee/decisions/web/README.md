@@ -10,9 +10,8 @@ The inbox uses the resource owner's list, filter and routing components.
 The workflow owner's `RecordTimeline` embeds the same card beside a record or
 record set. Askers contribute origin information through `decisions#origin`.
 
-`fieldsToMark(decisions, recordId)` returns sorted unique field names from all
-alternatives' actions and checks for that record, using the server's `is_open`.
-`decisionFieldMarks` supplies the form bridge's unconfirmed and check marks.
+`decisionFieldMarks` supplies the form bridge's unconfirmed marks from open
+questions' alternative field writes.
 `decisionAttentionColumn()` and `openDecisionFilter` opt a list into the derived
 boolean attention badge and filter without requesting a count query.
 A free correction is a direct record edit followed by choosing an alternative

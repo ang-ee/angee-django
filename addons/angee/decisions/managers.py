@@ -19,7 +19,7 @@ from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import lock_if_supported, system_queryset
-from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.graphql.publishing import mute_changes, publish_change
 
@@ -40,9 +40,12 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
     def open(self) -> Any:
         return self.filter(verdict__isnull=True)
 
-    def open_for(self, record: Any) -> Any:
-        content_type, object_id = canonical_record_target(record)
-        return self.open().filter(records__content_type=content_type, records__object_id=object_id)
+    def open_for(self, *records: Any) -> Any:
+        concerns = Q(pk__in=[])
+        for record in records:
+            content_type, object_id = canonical_record_target(record)
+            concerns |= Q(records__content_type=content_type, records__object_id=object_id)
+        return self.open().filter(concerns).distinct()
 
     def attention_expression(self, queryset: Any) -> Exists:
         model = canonical_record_model(queryset.model)
@@ -53,9 +56,6 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
             records__content_type__model=model._meta.model_name,
             records__object_id=OuterRef("pk"),
         ))
-
-    def records_with_open_decisions(self, queryset: Any) -> Any:
-        return queryset.filter(self.attention_expression(queryset))
 
 
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
@@ -84,7 +84,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         if actor is None and not is_sudo():
             raise PermissionDenied("Actorless admission requires a named system context.")
         supplied = (*request.assignees, *((actor,) if actor is not None else ()), *(
-            (request.requester,) if request.requester is not DEFAULT_REQUESTER and request.requester is not None else ()
+            (request.requester,) if request.requester is not None else ()
         ))
         ids = [actor_user_id(to_subject_ref(person)) for person in supplied]
         users = system_queryset(get_user_model()).filter(pk__in=ids, is_active=True).in_bulk()
@@ -92,7 +92,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             raise PermissionDenied("An active user is required.")
         asking = users[actor_user_id(to_subject_ref(actor))] if actor is not None else None
         assignees = tuple(users[actor_user_id(to_subject_ref(person))] for person in request.assignees)
-        requester = asking if request.requester is DEFAULT_REQUESTER else (
+        requester = (
             users[actor_user_id(to_subject_ref(request.requester))] if request.requester is not None else None
         )
         related_records: list[Any] = []

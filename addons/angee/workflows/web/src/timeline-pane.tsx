@@ -1,6 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { useDecisionFieldMarks } from "@angee/decisions";
 import { ScrollArea, useChatter, useChatterContent, usePrimaryPane } from "@angee/ui";
 import { RecordTimeline, useRecordTimelineQuery, type RecordTimelineProps } from "./RecordTimeline";
+
+const NO_RECORDS: NonNullable<ReturnType<typeof useRecordTimelineQuery>["data"]>["record_timeline"]["records"] = [];
 
 /** Publish the same timeline through the console's existing pane hosts. */
 export function useRecordTimelinePane({ record, recordState, side }: RecordTimelineProps & { side: "left" | "right" }) {
@@ -17,6 +20,10 @@ export function useRecordTimelinePane({ record, recordState, side }: RecordTimel
 export function useRecordTimelineAttention(record: RecordTimelineProps["record"], side = "right") {
   const chatter = useChatter();
   const query = useRecordTimelineQuery(record);
+  const reveal = useCallback(() => {
+    chatter.setActiveTab("workflows.timeline"); chatter.setCollapsed(false);
+  }, [chatter.setActiveTab, chatter.setCollapsed]);
+  useDecisionFieldMarks(query.data?.record_timeline.records ?? NO_RECORDS, reveal);
   const hasRuns = query.data?.record_timeline?.records.some((entry) => entry.runs.length > 0);
   const count = query.data?.record_timeline?.open_decision_count ?? 0;
   useEffect(() => {

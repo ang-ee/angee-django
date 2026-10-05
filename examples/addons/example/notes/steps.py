@@ -11,8 +11,8 @@ from pydantic import BaseModel
 from angee.base.evidence import FactAuthority
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
 from angee.workflows.awaits import AwaitRunInput
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
-from angee.workflows.reviews import DecisionStep
 from angee.workflows.steps import Done, EmptyOutput, Step, Wait
 
 
@@ -70,7 +70,7 @@ class ReviewNotePublication(DecisionStep[NotePublicationOutput, NotePublicationO
         note = ctx.load(apps.get_model("notes", "Note"), ctx.input.id)
         return ctx.ask(
             DecisionRequest(
-                kind=self.kind,
+                kind=self.kind, requester=ctx.actor,
                 records=(note,),
                 assignees=(note.reviewer,),
                 proposal=DecisionProposal.model_validate(

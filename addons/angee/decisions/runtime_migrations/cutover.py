@@ -7,20 +7,36 @@ from django.db import migrations, models
 
 
 def applies(state):
-    """Discard old questions after their asking owners retire incoming links."""
+    """Discard legacy questions once incoming links have been retired by their owners."""
     decision = state.models.get(("decisions", "decision"))
-    if decision is None or "form_schema" not in decision.fields:
+    if decision is None or not {"form_schema", "step_run", "subject_object_id"}.intersection(decision.fields):
         return False
-    legacy = {"form_schema", "basis", "errors", "group", "index", "resolution", "resolved_by", "resolved_at"}
-    if not legacy.issubset(decision.fields):
+    if "form_schema" in decision.fields and not {
+        "form_schema", "basis", "errors", "group", "index", "resolution", "resolved_by", "resolved_at",
+    }.issubset(decision.fields):
         raise RuntimeError("The old decision schema is incomplete.")
     return not any(
-        field.is_relation and field.remote_field.model.lower() in {"decisions.decision", "decisions.decisiongroup"}
-        for (label, _), model in state.models.items()
-        if label != "decisions"
+        field.is_relation and isinstance(field.remote_field.model, str)
+        and field.remote_field.model.lower() in {"decisions.decision", "decisions.decisiongroup"}
+        for (label, _), model in state.models.items() if label != "decisions"
         for field in model.fields.values()
-        if isinstance(field.remote_field.model if field.is_relation else None, str)
     )
+
+
+class DeleteIfPresent(migrations.DeleteModel):
+    """Known legacy schemas had different companion tables."""
+
+    def state_forwards(self, app_label, state):
+        if (app_label, self.name_lower) in state.models:
+            super().state_forwards(app_label, state)
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        if (app_label, self.name_lower) in from_state.models:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        if (app_label, self.name_lower) in to_state.models:
+            super().database_backwards(app_label, schema_editor, from_state, to_state)
 
 
 class Migration(migrations.Migration):
@@ -31,16 +47,16 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.DeleteModel(
+        DeleteIfPresent(
             name="DecisionRecord",
         ),
-        migrations.DeleteModel(
+        DeleteIfPresent(
             name="DecisionEvidence",
         ),
-        migrations.DeleteModel(
+        DeleteIfPresent(
             name="Decision",
         ),
-        migrations.DeleteModel(
+        DeleteIfPresent(
             name="DecisionGroup",
         ),
         migrations.CreateModel(

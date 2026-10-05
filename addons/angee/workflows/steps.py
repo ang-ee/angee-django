@@ -90,11 +90,8 @@ class Done(_Settlement):
 
     def check(self, step: type[Step], *, config: Any = None) -> Done:
         outcome = step.parse_value(self.outcome, Outcome, "outcome")
-        if (
-            outcome == ERROR_OUTCOME
-            and outcome not in step.outcomes_for(config)
-            or outcome not in step.available_outcomes(config)
-        ):
+        if (outcome == ERROR_OUTCOME and outcome not in step.outcomes_for(config)
+                or outcome not in step.available_outcomes(config)):
             raise ValidationError(f"Step {step.key!r} does not offer success outcome {outcome!r}.")
         if outcome in step.empty_outcomes:
             return Done(outcome=outcome)
@@ -108,11 +105,8 @@ class Done(_Settlement):
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
         return rows.update(
-            **rows._cleared_wait(),
-            status=StepRunStatus.SUCCEEDED,
-            output=self.output,
-            outcome=self.outcome,
-            retries=0,
+            **rows._cleared_wait(), status=StepRunStatus.SUCCEEDED,
+            output=self.output, outcome=self.outcome, retries=0,
         )
 
 
@@ -179,16 +173,12 @@ class Fail(_Settlement):
         if attempt.retryable and retries < step_run.step.retry.max_attempts:
             return rows.to_waiting(
                 until=Now() + step_run.step.retry.delay_for(retries),
-                state=step_run.state,
-                retries=retries,
+                state=step_run.state, retries=retries,
             )
         error_field = apps.get_model("workflows", "StepAttempt")._meta.get_field("error")
         return rows.update(
-            **rows._cleared_wait(),
-            status=StepRunStatus.FAILED,
-            outcome=ERROR_OUTCOME,
-            output={"error": error_field.get_prep_value(self.error)},
-            retries=retries,
+            **rows._cleared_wait(), status=StepRunStatus.FAILED,
+            outcome=ERROR_OUTCOME, output={"error": error_field.get_prep_value(self.error)}, retries=retries,
         )
 
 

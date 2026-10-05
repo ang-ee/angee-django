@@ -10,6 +10,7 @@ import {
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { useRecordTimelinePane } from "./timeline-pane";
 import { timelineFixture, type TimelineState } from "./timeline-testing";
+import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { attemptResourceFixture, recordResourceFixture, runResourceFixture, stepRunResourceFixture, watchResourceFixture } from "./testing";
 
 export default { title: "Workflows/Record timeline", parameters: { layout: "fullscreen" }, excludeStories: ["TimelineStory"] };
@@ -30,6 +31,7 @@ const resource = testDataResource("notes.Note", {
   query: testResourceQuery({ fields: { id: testQueryField("id"), display_name: testQueryField("display_name"), body: testQueryField("body") } }),
 });
 const runtime = {
+  statusTones: WORKFLOW_STATUS_TONES,
   routeHref: createRouteHref([{ name: "notes.record", path: "/notes/$id" }, { name: "workflows.runs.record", path: "/workflows/runs/$id" }]),
   routesByResource: { "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } }, "workflows.WorkflowRun": { collection: "workflows.runs", record: { name: "workflows.runs.record", param: "id" } } },
 };
@@ -73,7 +75,7 @@ function TimelineLayout({ set, side, recordState }: { set: boolean; side: "left"
       {side === "right" ? <Button onClick={() => chatter.setCollapsed(!chatter.collapsed)}>Toggle timeline</Button> : null}
     </main>
     {side === "right" ? <aside data-testid="timeline-right" data-state={`${chatter.collapsed}:${chatter.activeTab}`} className="min-h-0 border-l border-border-subtle">
-      <ScrollArea className="h-full" viewportClassName="p-4">{chatter.content?.tabs?.map((tab) => <section key={tab.id} data-tab={tab.id}>{tab.children}</section>)}</ScrollArea>
+      <ScrollArea className="h-full" viewportClassName="p-4">{!chatter.collapsed && chatter.content?.tabs?.map((tab) => <section key={tab.id} data-tab={tab.id}>{tab.children}</section>)}</ScrollArea>
     </aside> : null}
   </div>;
 }

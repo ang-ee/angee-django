@@ -53,7 +53,8 @@ def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Pat
     assert all(not model["checks"] for model in composed["snapshot"].values())
     schema = build_schema(composed["schemas"]["console"])
     assert schema.query_type is not None
-    assert {"decisions", "decisions_by_pk", "decision_records", "open_decisions"} <= schema.query_type.fields.keys()
+    assert {"decisions", "decisions_by_pk", "decision_records"} <= schema.query_type.fields.keys()
+    assert "open_decisions" not in schema.query_type.fields
     assert schema.mutation_type is not None
     mutations = schema.mutation_type.fields
     assert "decide" in mutations

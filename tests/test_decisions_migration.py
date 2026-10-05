@@ -6,7 +6,7 @@ from django.db import connection, migrations, models
 from django.db.migrations.state import ModelState, ProjectState
 from django.utils import timezone
 
-from angee.decisions.runtime_migrations import independent_step_questions, single_questions
+from angee.decisions.runtime_migrations import cutover
 from angee.workflows.runtime_migrations import current_execution, independent_decisions
 from tests.conftest import create_platform_admin
 
@@ -61,23 +61,23 @@ def reverse_linked_state():
 
 def test_reverse_link_cutover_discards_questions_before_waiters():
     state = reverse_linked_state()
-    assert independent_step_questions.applies(state)
+    assert cutover.applies(state)
     assert not independent_decisions.applies(state)
-    for operation in independent_step_questions.Migration.operations:
+    for operation in cutover.Migration.operations:
         assert isinstance(operation, (migrations.DeleteModel, migrations.CreateModel))
         operation.state_forwards("decisions", state)
-    assert not independent_step_questions.applies(state)
+    assert not cutover.applies(state)
     assert independent_decisions.applies(state)
     assert not independent_decisions.applies(ProjectState.from_apps(apps))
 
 
 def test_cutover_is_schema_only_and_retires_the_complete_shape():
     state = grouped_state()
-    assert single_questions.applies(state)
-    for operation in single_questions.Migration.operations:
+    assert cutover.applies(state)
+    for operation in cutover.Migration.operations:
         assert not isinstance(operation, (migrations.RunPython, migrations.RunSQL, migrations.AlterField))
         operation.state_forwards("decisions", state)
-    assert not single_questions.applies(state)
+    assert not cutover.applies(state)
     assert ("decisions", "decisiongroup") not in state.models
     assert ("decisions", "decisionevidence") not in state.models
     assert "step_run" not in state.models["decisions", "decision"].fields
@@ -89,12 +89,12 @@ def test_cutover_waits_for_incoming_owner_links():
     state.models["workflows", "steprun"].fields["decision_group"] = models.ForeignKey(
         "decisions.DecisionGroup", null=True, on_delete=models.PROTECT,
     )
-    assert not single_questions.applies(state)
+    assert not cutover.applies(state)
     state.models["workflows", "steprun"].fields.pop("decision_group")
-    assert single_questions.applies(state)
+    assert cutover.applies(state)
     state.models["decisions", "decision"].fields.pop("basis")
     with pytest.raises(RuntimeError, match="incomplete"):
-        single_questions.applies(state)
+        cutover.applies(state)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -124,11 +124,11 @@ def test_postgresql_fresh_and_populated_question_cutover(composed_tables, shape,
                 old._base_manager.create(kind="old-answered", proposal={}, verdict=["accepted"],
                                          answered_by_id=actor.pk, answered_at=timezone.now())
             assert old._base_manager.count() == 2
-            operations = (single_questions if shape == "grouped" else independent_step_questions).Migration.operations
+            operations = cutover.Migration.operations
         else:
             for name in ("decisionrecord", "decisionevidence", "decision", "decisiongroup"):
                 state.remove_model("decisions", name)
-            operations = [operation for operation in single_questions.Migration.operations
+            operations = [operation for operation in cutover.Migration.operations
                           if isinstance(operation, migrations.CreateModel)]
         for operation in operations:
             before = state.clone()
@@ -163,7 +163,7 @@ def test_workflow_cutover_discards_waiters_instead_of_converting_them():
         operation.state_forwards("workflows", state)
     assert ("workflows", "steprun") not in state.models
     assert ("workflows", "workflowrun") not in state.models
-    assert single_questions.applies(state)
+    assert cutover.applies(state)
 
 
 @pytest.mark.django_db(transaction=True)

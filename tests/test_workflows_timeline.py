@@ -9,7 +9,7 @@ from rebac import actor_context, system_context
 
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.workflows.reviews import AskDecision, DecisionStep
+from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
@@ -28,7 +28,7 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 
 def timeline(schema, actor, records):
     return result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!) {
-      record_timeline(records:$records) { open_decision_count records { record_id open_decision_count
+      record_timeline(records:$records) { open_decision_count records { record_id
         decisions { id } runs { id parent_step { id run { id } } graph { nodes { key plan step_run {
           id hold notes { tone message } records { operation record_id } child_runs { id } } } } } } }
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
@@ -60,7 +60,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     run_until(run)
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { records { decisions { id } runs {
-        id start_label subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
+        id subject_model subject_id trigger_event { record_model record_id trigger { display_name } }
         graph { nodes { key rank step_run { hold records { record_model record_id }
           decision { id is_open records { record_model record_id } } } } }
       } } }
@@ -69,7 +69,6 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
         {"model": record._meta.label, "id": record.sqid},
     ]}, user=actor))["record_timeline"]["records"][0]
     result = data["runs"][0]
-    assert result["start_label"] == "Started manually"
     assert (result["subject_model"], result["subject_id"]) == (record._meta.label, record.sqid)
     assert result["trigger_event"]["record_id"] == record.sqid
     step = result["graph"]["nodes"][0]["step_run"]
@@ -94,8 +93,7 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     workflow = load_workflow({"nodes": {"ask": {"step": "ask_decision", "config": {
         "kind": "rename", "assignees": [people[0].sqid],
         "proposal": {"alternatives": [{"key": "rename", "label": "Rename", "outcome": "renamed",
-            "actions": {"subject": {"fields": {"name": {"set": "Chosen"}}}}}],
-            "checks": {"subject": ["name"]}},
+            "actions": {"subject": {"fields": {"name": {"set": "Chosen"}}}}}]},
     }}}, "results": [{"from": "ask", "when": ["renamed"], "as": "renamed"}]}, actor=actor)
     run = start_run(workflow, actor=actor, subject=target)
     run_until(run)
@@ -103,7 +101,6 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     assert step.hold == "decision"
     decision = step.decision
     assert target.sqid in decision.proposal["alternatives"][0]["actions"]
-    assert decision.proposal["checks"] == {target.sqid: ["name"]}
     decision.decide(actor=people[0], chosen=["rename"])
     run_until(run)
     target.refresh_from_db()

@@ -52,10 +52,9 @@ stays with the app's widgets rather than the decision renderer.
 Facts describe evidence; proposed fields live only in alternatives' actions.
 The models are `Decision` and `DecisionRecord`.
 
-`Decision.objects.open_for(record)` is a normal REBAC-scoped open queryset through
-concern links. `records_with_open_decisions(queryset)` filters records using
-`Exists` over all open questions concerning the readable records, pinned to the
-records' queryset actor. Attention counts questions for anyone; the question's
+`Decision.objects.open_for(*records)` is a normal REBAC-scoped open queryset through
+concern links. The attention expression uses `Exists` over all open questions
+concerning the readable records. Attention counts questions for anyone; the question's
 own read scope still governs cards and answers.
 
 Installed decisions contributes `has_open_decisions` to every Hasura model
@@ -63,14 +62,12 @@ resource through `ANGEE_GRAPHQL_RESOURCE_FILTERS`. Strawberry adds the annotatio
 only when selected, and the resource owner prepares its filter only when requested
 (including nested Boolean predicates). Lists that use neither pay no Decision
 permission compilation. There is no custom expression or separate scoping path.
-`open_decisions(record_model, record_id)` returns readable open questions for a
-readable record.
 
-The [web fragment](web/README.md) exports `DecisionCard`, `fieldsToMark`,
+The [web fragment](web/README.md) exports `DecisionCard`,
 `decisionFieldMarks`, `decisionAttentionColumn` and `openDecisionFilter`. Cards show each alternative and its per-record
 changes, select radio buttons or checkboxes, and display the chosen verdict and
 answer attribution after closure. The `decisions#origin` seam is supplied by
-askers. `fieldsToMark` unions field names in all alternatives of open questions.
+askers.
 
 Schema-only migrations drop and recreate the old decision tables. Existing
 decisions and workflow execution rows, including steps waiting on them, are

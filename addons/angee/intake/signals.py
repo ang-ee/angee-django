@@ -7,9 +7,10 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from rebac import PermissionDenied
+from rebac import PermissionDenied, system_context
 
 from angee.base.errors import DomainError
+from angee.decisions.signals import decision_answered
 from angee.messaging.events import message_ingested
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,6 @@ logger = logging.getLogger(__name__)
 def connect() -> None:
     """Listen for ingested messages without adding another messaging hook."""
 
-    from angee.decisions.signals import decision_answered
     decision_answered.connect(apply_access_answer, dispatch_uid="intake.apply_access_answer")
     message_ingested.connect(
         capture_channel_message,
@@ -60,7 +60,6 @@ def apply_access_answer(sender: Any, decision: Any, **kwargs: Any) -> None:
     if decision.kind != "intake.access":
         return
     need = apps.get_model("intake", "Need")
-    from rebac import system_context
     with system_context(reason="intake.answer.current_need"):
         rows = list(need.objects.filter(access_decision=decision))
     for row in rows:

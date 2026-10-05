@@ -1,6 +1,16 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enDecisionsMessages = {
+  "decision.withdrawn": "Withdrawn: stopped by {name}",
+  "decision.operator": "an operator",
+  "decision.chose": "Chose: {labels}",
+  "decision.none": "None",
+  "decision.requestedBy": "Asked by {name}",
+  "decision.multipleAlternatives": "Alternatives, choose one or more",
+  "decision.alternatives": "Alternatives, choose one",
+  "decision.editOnForm": "Edit on form",
+  "decision.mayAnswer": "May answer: {names}",
+
   "inbox.scope": "Decisions",
   "inbox.assigned": "Assigned to me",
   "inbox.canAct": "I can answer",
@@ -13,6 +23,7 @@ export const enDecisionsMessages = {
   "inbox.requester": "Requester",
   "inbox.verdict": "Verdict",
   "decision.invalidProposal": "This proposal is invalid.",
+  "decision.unconfirmed": "Unconfirmed",
   "decision.submit": "Confirm",
   "decision.conflict": "This decision has changed. Reload the page to review the current question.",
   "decision.unavailable": "This decision is unavailable.",

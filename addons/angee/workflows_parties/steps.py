@@ -17,7 +17,7 @@ from angee.decisions.contracts import (
     DecisionRequest,
 )
 from angee.parties.backends import ParsedAddress
-from angee.workflows.reviews import DecisionStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Settlement, Step
 
 

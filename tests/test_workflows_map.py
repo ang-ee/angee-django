@@ -14,7 +14,7 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.workflows import schema as workflow_schema
 from angee.workflows.maps import MapItem
-from angee.workflows.reviews import DecisionStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run

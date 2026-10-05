@@ -19,10 +19,4 @@ export const DecisionDocument = graphql(`
   }
 `);
 
-export const OpenDecisionsDocument = graphql(`
-  query OpenDecisions($model: String!, $id: ID!) {
-    open_decisions(record_model: $model, record_id: $id) { ...DecisionCardFields }
-  }
-`);
-
 export type Decision = DocumentType<typeof DecisionFields>;

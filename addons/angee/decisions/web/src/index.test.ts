@@ -2,7 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import { decisionFixture, decisionResourceFixture } from "@angee/decisions/testing";
 import { describe, expect, test } from "vitest";
 
-import decisions, { DECISION_MODEL, DecisionCard, fieldsToMark } from "./index";
+import decisions, { DECISION_MODEL, DecisionCard } from "./index";
 
 describe("decisions fragment", () => {
   test("satisfies the shared manifest contracts", () => expect(() => expectValidBaseAddon(decisions)).not.toThrow());
@@ -35,6 +35,5 @@ describe("decisions fragment", () => {
     // Independent waiters contribute origin links through the declared container.
     expect(decisions.containers).toEqual({ "decisions#origin": {} });
     expect(DecisionCard).toBeTypeOf("function");
-    expect(fieldsToMark([], "nte_7")).toEqual([]);
   });
 });

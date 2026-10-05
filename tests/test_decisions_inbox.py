@@ -21,6 +21,7 @@ def inbox(composed_tables):
             kind="review_note",
             records=(subject,),
             assignees=(reviewer,),
+            requester=requester,
             proposal=DecisionProposal(
                 alternatives=[
                     {"key": "accept", "label": "Accept", "outcome": "accepted"},
@@ -68,18 +69,16 @@ def test_public_mutation_records_only_chosen_keys_and_audit(inbox):
     assert row["is_open"] is False and row["verdict"] == ["accept"] and row["answered_at"]
 
 
-def test_native_can_act_filter_and_open_resource(inbox):
-    _, reviewer, _, subject, decision = inbox
+def test_native_can_act_and_open_filters(inbox):
+    _, reviewer, _, _, decision = inbox
     schema = addon_schema(decision_schema.schemas, "console")
     result = result_data(
         execute_schema(
             schema,
-            """query($model: String!, $id: ID!) {
+            """{
       decisions(where: {can_act: {_eq: true}, is_open: {_eq: true}}) { id }
-      open_decisions(record_model: $model, record_id: $id) { id }
     }""",
-            {"model": subject._meta.label, "id": subject.sqid},
             user=reviewer,
         )
     )
-    assert result == {"decisions": [{"id": decision.sqid}], "open_decisions": [{"id": decision.sqid}]}
+    assert result == {"decisions": [{"id": decision.sqid}]}

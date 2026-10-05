@@ -43,7 +43,7 @@ def _correction(original, values, reviewer, *, subject=None, binding_overrides=N
         )
     decision = Decision.objects.ask(
         DecisionRequest(
-            kind="correct-note",
+            kind="correct-note", requester=values["actor"],
             records=(values["target"] if subject is None else subject, original),
             assignees=(reviewer,),
             proposal=DecisionProposal(

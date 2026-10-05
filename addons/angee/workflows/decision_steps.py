@@ -8,7 +8,7 @@ from django.db import transaction
 from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
-from angee.base.identity import instance_from_public_id, public_id_of
+from angee.base.identity import public_id_of
 from angee.base.scoping import lock_if_supported
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRequest
 from angee.workflows.states import DONE_OUTCOME
@@ -35,25 +35,11 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                 record = lock_if_supported(
                     actions.target_model(reference).objects.with_actor(actor).for_write().filter(pk=reference.pk)
                 ).get()
-                for name, operation in actions.fields.items():
-                    field = record._meta.get_field(name)
-                    value = operation.set
-                    if field.many_to_one or field.one_to_one:
-                        if value is not None and not isinstance(value, str):
-                            raise ValidationError({name: "Use the related record public id or null."})
-                        value = (
-                            None
-                            if value is None
-                            else instance_from_public_id(
-                                field.remote_field.model,
-                                value,
-                                queryset=field.remote_field.model.objects.with_actor(actor),
-                            )
-                        )
-                        if value is None and operation.set is not None:
-                            raise ValidationError({name: "The proposed related record is inaccessible."})
-                    else:
-                        value = field.to_python(value)
+                try:
+                    values = actions.resolve(record, context={"actor": actor})
+                except ValueError as error:
+                    raise ValidationError(str(error)) from error
+                for name, value in values.items():
                     setattr(record, name, value)
                 if actions.fields:
                     record.full_clean()
@@ -64,9 +50,6 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                     if ctx is not None:
                         ctx.record(record, operation="changed")
                 if actions.record:
-                    if (actions.record.call == "delete"
-                            or actions.record.call not in getattr(type(record), "decision_methods", ())):
-                        raise ValidationError("The model no longer declares the proposed decision method.")
                     if ctx is not None:
                         ctx.record(record, operation="called")
                     getattr(record, actions.record.call)(**actions.record.arguments)
@@ -131,9 +114,6 @@ class AskDecision(DecisionStep[None, None, DecisionConfig]):
             if set(actions) - {"subject"}:
                 raise ValidationError("Configured actions use the symbolic subject key.")
             alternative["actions"] = {public_id_of(ctx.subject): value for value in actions.values()}
-        if set(proposal["checks"]) - {"subject"}:
-            raise ValidationError("Configured checks use the symbolic subject key.")
-        proposal["checks"] = {public_id_of(ctx.subject): fields for fields in proposal["checks"].values()}
         return ctx.ask(
             DecisionRequest(
                 kind=ctx.config.kind,

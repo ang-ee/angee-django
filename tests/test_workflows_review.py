@@ -10,7 +10,7 @@ from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.workflows.reviews import DecisionStep, apply_proposals
+from angee.workflows.decision_steps import DecisionStep, apply_proposals
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
