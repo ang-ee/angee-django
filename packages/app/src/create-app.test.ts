@@ -185,8 +185,24 @@ describe("createApp confinement", () => {
       public: { requireAuth: false },
     });
     expect(() => createApp({ ...input, confineTo: "unknown" })).toThrow(/Unknown menu root/);
-    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(/must belong/);
-    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/must belong/);
+    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(
+      'Home "/files" (createApp home) is outside menu root "requests", to which createApp confineTo confines the console.',
+    );
+    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/outside menu root "requests"/);
+  });
+
+  test("a shell home outside its perspective names the layers that set them and the fix", () => {
+    const [requests] = addons;
+    const input = testAppInput([{
+      ...requests!,
+      perspectives: { focus: { root: "requests", home: "requests.all" } },
+      shell: { perspective: "focus", home: "files.all" },
+    }], { console: { requireAuth: false }, public: { requireAuth: false } });
+    expect(() => createApp(input)).toThrow(
+      'Home "/files" (addon "requests") is outside menu root "requests", to which perspective "focus" (addon "requests") '
+      + 'confines the console. Set shell.home to a page under "requests" or stop selecting the perspective; '
+      + 'ANGEE_UI.shell can pin either.',
+    );
   });
 
   test("accepts a root and first child sharing the resource route", () => {

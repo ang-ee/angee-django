@@ -2,6 +2,7 @@ import { AppBootSkeleton } from "@angee/ui/layouts/AppBootSkeleton";
 import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
 import { useUiT } from "@angee/ui/i18n";
 import { Button } from "@angee/ui/ui/button";
+import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { AngeeApp } from "./create-app";
@@ -32,9 +33,16 @@ export async function bootApp<Schemas>({ target, loadSchemas, create }: BootAppI
       root.render(<MetadataLoadFailure retry={() => { void run().catch(reportError); }} />);
       return;
     }
-    // Invalid metadata and route collisions are programming errors. Let the
-    // caller and development overlay see them instead of offering fetch retry.
-    const app = create(schemas);
+    let app: AngeeApp;
+    try {
+      app = create(schemas);
+    } catch (error) {
+      // Invalid metadata, route collisions and shell misconfiguration are not
+      // fetch failures: show why the app cannot start, and still let the caller
+      // and development overlay see the error.
+      root.render(<StartFailure error={error} />);
+      throw error;
+    }
     root.unmount();
     app.mount(element);
   }
@@ -45,13 +53,42 @@ export async function bootApp<Schemas>({ target, loadSchemas, create }: BootAppI
 function MetadataLoadFailure({ retry }: { retry: () => void }) {
   const t = useUiT();
   return (
+    <BootFailure
+      title={t("app.loadFailed")}
+      description={t("app.loadFailedDescription")}
+      action={<Button type="button" size="sm" onClick={retry}>{t("app.retry")}</Button>}
+    />
+  );
+}
+
+/** The app's composition failed: name the cause, offer a reload once it is fixed. */
+function StartFailure({ error }: { error: unknown }) {
+  const t = useUiT();
+  return (
+    <BootFailure
+      title={t("app.startFailed")}
+      description={t("app.startFailedDescription")}
+      action={<Button type="button" size="sm" onClick={() => window.location.reload()}>{t("app.reload")}</Button>}
+    >
+      <pre className="m-0 max-h-[50dvh] overflow-auto whitespace-pre-wrap break-words rounded-8 bg-inset p-3 font-mono text-12 text-fg-muted">
+        {error instanceof Error ? error.message : String(error)}
+      </pre>
+    </BootFailure>
+  );
+}
+
+function BootFailure({ title, description, action, children }: {
+  title: string;
+  description: string;
+  action: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
     <div className="grid min-h-dvh place-items-center bg-canvas p-6 text-fg">
-      <ErrorBanner
-        className="w-full max-w-lg"
-        title={t("app.loadFailed")}
-        description={t("app.loadFailedDescription")}
-        actions={<Button type="button" size="sm" onClick={retry}>{t("app.retry")}</Button>}
-      />
+      <div className="grid w-full max-w-lg gap-3">
+        <ErrorBanner title={title} description={description} actions={action} />
+        {children}
+      </div>
     </div>
   );
 }

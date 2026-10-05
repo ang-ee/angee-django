@@ -10,6 +10,7 @@ let host: HTMLElement;
 afterEach(() => {
   host?.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function newHost() {
@@ -51,15 +52,21 @@ test("shows a neutral skeleton, then retries only a failed metadata load", async
   expect(mount).toHaveBeenCalledExactlyOnceWith(host);
 });
 
-test("propagates a createApp error without showing a fetch retry", async () => {
-  const create = vi.fn((): AngeeApp => { throw new Error("invalid metadata"); });
-  await expect(bootApp({
-    target: newHost(),
-    loadSchemas: async () => ({}),
-    create,
-  })).rejects.toThrow("invalid metadata");
+test("shows why a createApp error stops the app and still propagates it, without a fetch retry", async () => {
+  const create = vi.fn((): AngeeApp => { throw new Error("Home \"/files\" is outside menu root \"requests\"."); });
+  const reload = vi.spyOn(window.location, "reload").mockImplementation(() => {});
+  let boot!: Promise<void>;
+  await act(async () => {
+    boot = bootApp({ target: newHost(), loadSchemas: async () => ({}), create });
+    await expect(boot).rejects.toThrow("is outside menu root");
+  });
   expect(create).toHaveBeenCalledOnce();
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).toContain("Application could not start");
+  expect(host.textContent).toContain('Home "/files" is outside menu root "requests".');
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  expect(reload).toHaveBeenCalledOnce();
 });
 
 test("reports a create error after Retry without returning to fetch failure", async () => {
@@ -84,4 +91,5 @@ test("reports a create error after Retry without returning to fetch failure", as
   expect(create).toHaveBeenCalledOnce();
   expect(report).toHaveBeenCalledExactlyOnceWith(error);
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(screen.getByRole("alert").textContent).toContain("Application could not start");
 });
