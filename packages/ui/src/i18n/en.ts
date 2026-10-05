@@ -359,6 +359,7 @@ export const enUiMessages: Record<string, string> = {
   "list.noMatchingRecordsHint": "Clear the current query to see all records.",
   "list.allRecords": "All records",
   "list.emptyValue": "No value",
+  "list.blankValue": "Blank",
   "list.emptyRelation": "No {relation}",
   "list.unknownValue": "Unknown",
   "list.emptyGroup": "No records in this group.",

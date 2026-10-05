@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { UseAngeeGroupByResult } from "@angee/refine";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { enUiMessages } from "../../i18n";
 
 import {
   buildGroupedRenderModel,
@@ -36,7 +37,6 @@ function params(overrides: Partial<GroupedRenderParams> = {}): GroupedRenderPara
     modelMetadata: TEST_METADATA,
     emptyGroupMessage: "No records",
     emptySubgroupsMessage: "No subgroups",
-    emptyValueLabel: "Empty",
     emptyRelationLabel: (field) => `No ${field}`,
     allRecordsLabel: "All records",
     t: (key, vars) => {
@@ -85,6 +85,37 @@ function rootFixture() {
 }
 
 describe("buildGroupedRenderModel", () => {
+  test.each(["text", "choice"])("labels null and blank %s buckets separately without changing their drills", (kind) => {
+    const contract = ResourceQuery.forRows({ fields: {
+      status: kind === "choice"
+        ? { kind: "enum", values: [{ value: "" }, { value: "ACTIVE" }] }
+        : { scalar: "String" },
+    } }).contract;
+    const valueMap = kind === "choice" ? [{ from: "BLANK", to: "" }] : [];
+    contract.axes.status!.server = { input: "STATUS", key: "status", valueMap };
+    contract.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap };
+    const query = ResourceQuery.from(testDataResource("test.Row", { query: contract }));
+    const input = params({ query, groupStack: [{ field: "status" }],
+      t: (key) => enUiMessages[key] ?? key });
+    const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, input);
+    const results = new Map([[initial.groupScopes[0]!.key, result([
+      { key: { status: null }, count: 3 },
+      { key: { status: kind === "choice" ? "BLANK" : "" }, count: 2 },
+    ])]]);
+    const collapsed = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, input);
+    const headers = collapsed.items.filter((item) => item.kind === "groupHeader");
+    expect(headers.map(({ label, count }) => ({ label, count }))).toEqual([
+      { label: "No value", count: 3 }, { label: "Blank", count: 2 },
+    ]);
+    expect(new Set(headers.map(({ bucketKey }) => bucketKey)).size).toBe(2);
+    const expanded = buildGroupedRenderModel<Row>(results, EMPTY_LEAVES, EMPTY_ROWS, {
+      ...input, expandedKeys: new Set(headers.map(({ bucketKey }) => bucketKey)),
+    });
+    expect(expanded.leafScopes.map(({ filter }) => filter)).toEqual([
+      { status: { isNull: true } }, { status: { exact: "" } },
+    ]);
+  });
+
   test("grows the request frontier only through expanded resolved buckets", () => {
     const { rootKey, rootResult, bucketKey } = rootFixture();
     const expanded = buildGroupedRenderModel<Row>(

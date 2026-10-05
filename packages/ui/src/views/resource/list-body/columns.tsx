@@ -53,8 +53,8 @@ export function buildColumns<TRow extends Row>(
     definition.getGroupingValue = (row: TRow) => axis.identity(row);
     definition.meta = {
       ...definition.meta,
-      groupLabel: (row: TRow, emptyValueLabel: string, t: Parameters<typeof groupLabel>[4]) =>
-        groupLabel(axis.label(row), axis.spec, options.metadata ?? null, emptyValueLabel, t),
+      groupLabel: (row: TRow, t: Parameters<typeof groupLabel>[3]) =>
+        groupLabel(axis.label(row), axis.spec, options.metadata ?? null, t),
     };
   }
   return definitions;

@@ -72,7 +72,11 @@ function facetOptionLabel(
   metadata: ReturnType<typeof useModelMetadata>,
   t: ReturnType<typeof useUiT>,
 ): string {
-  return facet.axis.bucketIdentity({ key: option.key }) === null || metadata?.fields[facet.field]?.kind === "enum"
-    ? groupLabel(facet.axis.bucketLabel({ key: option.key }), { field: facet.field }, metadata, t("list.emptyValue"), t)
+  const relation = facet.axis.declaration.kind === "relation";
+  const value = relation
+    ? facet.axis.bucketIdentity({ key: option.key })
+    : facet.axis.bucketLabel({ key: option.key });
+  return !relation || value === null
+    ? groupLabel(value, { field: facet.field }, metadata, t)
     : option.label;
 }

@@ -22,7 +22,7 @@ export function GroupHeader<TRow extends Row>({
   const t = useUiT();
   const canExpand = row.getCanExpand();
   const expanded = row.getIsExpanded();
-  const label = groupedRowLabel(row, groupStack, t("list.emptyValue"), t);
+  const label = groupedRowLabel(row, groupStack, t);
   const rowCount = row.getLeafRows().length;
   const indent = { paddingLeft: `calc(0.75rem + ${row.depth * 1.25}rem)` };
   // The chevron only appears when the header is a toggle; the lead/trailing
@@ -84,32 +84,29 @@ export function tableGroupAxes<TRow extends object>(
 }
 
 export interface GroupingColumnMeta<TRow extends Row> {
-  groupLabel?: (row: TRow, emptyValueLabel: string, t: UiTranslate) => string;
+  groupLabel?: (row: TRow, t: UiTranslate) => string;
 }
 
 /** The native grouping column carries the presentation accessor for its axis. */
 export function groupedRowLabel<TRow extends Row>(
   row: TableRowModel<TRow>,
   groupStack: readonly ResourceViewGroup[],
-  emptyValueLabel: string,
   t: UiTranslate,
 ): string {
   const columnId = row.groupingColumnId;
   const cell = row.getAllCells().find((candidate) => candidate.column.id === columnId);
   const meta = cell?.column.columnDef.meta as GroupingColumnMeta<TRow> | undefined;
   const original = row.getLeafRows()[0]?.original ?? row.original;
-  if (meta?.groupLabel) return meta.groupLabel(original, emptyValueLabel, t);
+  if (meta?.groupLabel) return meta.groupLabel(original, t);
   const value = columnId ? row.getGroupingValue(columnId) : undefined;
   const group = groupStack[row.depth];
-  return group ? groupLabel(value, group, null, emptyValueLabel, t)
-    : value == null || value === "" ? emptyValueLabel : String(value);
+  return groupLabel(value, group ?? { field: columnId ?? "" }, null, t);
 }
 
 export function bucketValueLabels(
   bucket: AggregateBucket,
   groupStack: readonly ResourceViewGroup[],
   metadata: ModelMetadata | null,
-  emptyValueLabel: string,
   t: UiTranslate,
   emptyRelationLabel?: (field: string) => string,
   suppliedQuery?: ResourceQuery,
@@ -123,22 +120,22 @@ export function bucketValueLabels(
     const label = axis.bucketLabel(bucket);
     if (axis.declaration.kind === "relation") {
       return label == null || label === ""
-        ? emptyRelationLabel?.(group.field) ?? emptyValueLabel
+        ? emptyRelationLabel?.(group.field) ?? t("list.emptyValue")
         : String(label);
     }
-    return groupLabel(label, group, metadata, emptyValueLabel, t);
+    return groupLabel(label, group, metadata, t);
   });
 }
 
-/** Localized presentation only; identity and bucket extraction belong to GroupAxis. */
+/** Localize axis values, keeping null and blank scalar buckets distinct. */
 export function groupLabel(
   value: unknown,
   group: ResourceViewGroup,
   metadata: ModelMetadata | null,
-  emptyValueLabel: string,
   t: UiTranslate,
 ): string {
-  if (value == null || value === "") return emptyValueLabel;
+  if (value == null) return t("list.emptyValue");
+  if (value === "") return t("list.blankValue");
   const booleanKey = typeof value === "boolean"
     ? value
     : metadata?.fields[group.field]?.scalar === "Boolean" && (value === "true" || value === "false")
@@ -151,16 +148,14 @@ export function groupLabel(
   const dateField = metadata?.fields[group.field];
   const isDate = dateField?.scalar === "Date" || dateField?.scalar === "DateTime";
   if (!group.granularity && !isDate) return String(value);
-  return groupLabelFromKey(value, group, emptyValueLabel, t);
+  return groupLabelFromKey(value, group, t);
 }
 
 function groupLabelFromKey(
   value: unknown,
   group: ResourceViewGroup,
-  emptyValueLabel: string,
   t: UiTranslate,
 ): string {
-  if (value == null || value === "") return emptyValueLabel;
   const key = String(value);
   if (group.granularity === "quarter") {
     const match = /^(\d{4})-Q([1-4])$/.exec(key);
