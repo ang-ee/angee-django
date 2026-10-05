@@ -144,6 +144,8 @@ function AppRailBody({
     setRailPreferences({ ...railPreferences, expanded: !expanded });
   }, [expanded, railPreferences, setRailPreferences]);
   const footerToggleRef = useRef<HTMLButtonElement | null>(null);
+  // The chooser opens beside the rail, so expanding the rail never puts it under the popup.
+  const railRef = useRef<HTMLElement | null>(null);
   const focusFooterToggle = useRef(false);
   // Collapsing can unmount the activated link or header toggle; focus the
   // footer control shared by both modes.
@@ -176,6 +178,7 @@ function AppRailBody({
 
   return (
     <aside
+      ref={railRef}
       style={{ width }}
       className={cn(
         // Sticky + h-dvh pin the rail (and its footer toggle) to the viewport
@@ -195,7 +198,7 @@ function AppRailBody({
             <AppBrand name={singleApp.brand.name} mark={<Glyph name={singleApp.brand.mark} size={16} />}
               to={singleApp.root.target} compact={!expanded} />
           </Tooltip>
-        ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi"
+        ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi" anchor={railRef}
           onOpen={expandable && !expanded ? toggleExpanded : undefined} />}
         {expanded && !singleApp ? (
           <span className="min-w-0 flex-1 truncate text-13 font-semibold text-on-rail-hi">

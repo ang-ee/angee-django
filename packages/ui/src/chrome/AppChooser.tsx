@@ -52,6 +52,8 @@ export interface AppChooserItem {
 export interface AppChooserProps {
   activeId?: string;
   align?: PopoverPositionerProps["align"];
+  /** Position the chooser against this element instead of its trigger, e.g. the rail it opens from. */
+  anchor?: PopoverPositionerProps["anchor"];
   className?: string;
   defaultOpen?: boolean;
   items?: readonly AppChooserItem[];
@@ -74,6 +76,7 @@ export function AppChooser({ menuItems, ...props }: AppChooserProps): ReactEleme
 function AppChooserBody({
   activeId,
   align = "start",
+  anchor,
   className,
   defaultOpen = false,
   items,
@@ -126,7 +129,7 @@ function AppChooserBody({
         </PopoverTrigger>
       </Tooltip>
       <PopoverPortal>
-        <PopoverPositioner side={side} align={align} sideOffset={sideOffset}>
+        <PopoverPositioner anchor={anchor} side={side} align={align} sideOffset={sideOffset}>
           <PopoverContent
             role="dialog"
             aria-label={resolvedTriggerLabel}
