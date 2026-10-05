@@ -3112,7 +3112,7 @@ describe("FormView", () => {
       const title = screen.getByRole("textbox", { name: "Title" });
       const header = title.closest("header")!;
       const strip = screen.getByRole("tablist");
-      expect(header.className).toContain("gap-4");
+      expect(header.className).toContain("gap-y-4");
       expect(title.className).toContain("text-28");
       return { headerClasses: header.parentElement!.className, stripClasses: strip.className };
     };
