@@ -831,17 +831,18 @@ def task_requester_name() -> models.Subquery:
 
 
 def _requester_name_filter(queryset: models.QuerySet[Any]) -> models.Subquery:
-    """Filter on the requester's name as every reader of the task already sees it (never the email)."""
+    """Filter on the first request's shown name, never its email or a later request's name."""
 
     del queryset
     return task_requester_name()
 
 
 def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expression:
-    """Whether the request's actor filed the task: its first request's party is the actor's person (MTI child).
+    """Whether the first Need's party is the viewer's person (MTI child), regardless of later Needs.
 
     It compares the actor with itself only, so it reveals nothing about anyone else's requests;
-    an actor without a user matches nothing.
+    an actor without a user matches nothing. REBAC's broader requester relation
+    can include later approved requests; this filter only attributes the first.
     """
 
     user_id = actor_user_id(relation_actor(queryset))
@@ -859,7 +860,7 @@ class TaskIntakeFilters(models.Model):
     """Filter tasks by who filed them, the way the task shows it: intake's first request."""
 
     extends = "projects.Task"
-    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], Any]]] = {
+    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], models.Expression]]] = {
         "requester_name": _requester_name_filter,
         "requested_by_viewer": _requested_by_viewer_filter,
     }

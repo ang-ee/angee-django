@@ -915,7 +915,7 @@ def _declared_aliases(
 
 def _declared_filter_expressions(
     model: type[models.Model],
-) -> dict[str, Callable[[models.QuerySet[Any]], Any]]:
+) -> dict[str, Callable[[models.QuerySet[Any]], models.Expression]]:
     """Collect model-owned ``hasura_filter_expressions`` from the model and its extension bases.
 
     Each mapping names filter-only predicates as providers taking the target
@@ -927,7 +927,7 @@ def _declared_filter_expressions(
     replace another's predicate.
     """
 
-    expressions: dict[str, Callable[[models.QuerySet[Any]], Any]] = {}
+    expressions: dict[str, Callable[[models.QuerySet[Any]], models.Expression]] = {}
     for cls in reversed(model.__mro__):
         declaration = cls.__dict__.get("hasura_filter_expressions", {})
         if not isinstance(declaration, Mapping):
@@ -941,6 +941,22 @@ def _declared_filter_expressions(
                 )
             expressions[name] = provider
     return expressions
+
+
+def _check_filter_expression_names(
+    model: type[models.Model], names: Iterable[str], existing_filters: set[str],
+) -> None:
+    """Keep computed filters additive to model fields, resource filters and Hasura combinators."""
+
+    for name in sorted(names):
+        if name in {"_and", "_or", "_not"}:
+            raise ImproperlyConfigured(
+                f"{model._meta.label} filter expression {name!r} is a reserved Hasura combinator."
+            )
+        if _has_model_field(model, name):
+            raise ImproperlyConfigured(f"{model._meta.label} filter expression {name!r} shadows a model field.")
+        if name in existing_filters:
+            raise ImproperlyConfigured(f"{model._meta.label} filter expression {name!r} shadows a resource filter.")
 
 
 def _sortable_alias_expression(
@@ -1135,7 +1151,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     inspected on an empty queryset at composition; it must perform no row reads.
     Model ``hasura_filter_expressions`` mappings contribute the same filter-only
     predicates from extension bases, so an addon composing onto another addon's
-    model adds a filter its owner's resource never names.
+    model adds a filter its owner's resource never names. Both model declaration
+    seams must use new names, distinct from existing resource filters and Hasura
+    boolean combinators.
     """
 
     model_aliases, model_filter_aliases = _declared_aliases(model)
@@ -1168,6 +1186,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             **(field_id_decode or {}), model_name: str.lower, id_name: model.record_public_id_operand,
         }
     container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
+    # Caller-owned computed filters name themselves in filterable; extension
+    # declarations must not replace any filter the resource already owns.
+    _check_filter_expression_names(
+        model, expressions,
+        (set(filterable) | container_scopes) - set(filter_expressions or {}) - set(record_ref_filters or ()),
+    )
     filterable = tuple(dict.fromkeys((*filterable, *sorted(container_scopes), *model_filter_aliases,
                                       *declared_expressions, *(record_ref_filters or ()))))
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
@@ -1214,12 +1238,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     )
     if unknown := expressions.keys() - set(filterable):
         raise ImproperlyConfigured(f"Filter expressions must be declared filterable: {sorted(unknown)}")
-    for key in expressions:
-        try:
-            model._meta.get_field(key)
-        except FieldDoesNotExist:
-            continue
-        raise ImproperlyConfigured(f"Filter expression {key!r} shadows a model field.")
 
     def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
