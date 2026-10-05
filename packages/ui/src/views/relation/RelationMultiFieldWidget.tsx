@@ -3,8 +3,8 @@ import type { CrudFilter } from "@refinedev/core";
 
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
-import { relationIdList, type WidgetField } from "../../widgets/types";
-import { Many2ManyCellEdit, Many2ManyEdit } from "../../widgets/many2many";
+import { relationIdList, type WidgetField, type WidgetControlProps } from "../../widgets/types";
+import { Many2ManyEdit } from "../../widgets/many2many";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import type { RelationCreateConfig } from "./RelationPicker";
 import {
@@ -19,8 +19,7 @@ export interface RelationMultiFieldWidgetProps {
   /** Receives the picked related records' public ids (the `many2many` cell value). */
   onChange?: (value: readonly unknown[]) => void;
   readOnly?: boolean;
-  /** Compact picker presentation for editable table cells only. */
-  compact?: boolean;
+  controlProps?: WidgetControlProps;
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by the multi-picker. */
   filters?: readonly CrudFilter[];
@@ -46,7 +45,7 @@ export function RelationMultiFieldWidget({
   value,
   onChange,
   readOnly,
-  compact = false,
+  controlProps,
   relation,
   filters,
   create,
@@ -69,12 +68,12 @@ export function RelationMultiFieldWidget({
         }),
       ],
       label: ariaLabel,
+      controlProps,
     }),
-    [options, value, relation.labelField, ariaLabel],
+    [options, value, relation.labelField, ariaLabel, controlProps],
   );
-  const Edit = compact ? Many2ManyCellEdit : Many2ManyEdit;
   const control = (
-    <Edit
+    <Many2ManyEdit
       value={value ?? []}
       onChange={onChange}
       readOnly={readOnly}

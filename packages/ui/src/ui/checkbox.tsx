@@ -5,7 +5,7 @@ import {
 } from "@base-ui/react/checkbox";
 import { Glyph } from "../chrome/Glyph";
 import { tv, type VariantProps } from "../lib/variants";
-import { interactiveSurface } from "./widget-control";
+import { interactiveSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
 export const checkboxVariants = tv({
   slots: {
@@ -77,7 +77,7 @@ export type CheckboxProps = Omit<
   BaseCheckboxRootProps,
   "className" | "children" | "onCheckedChange"
 > &
-  CheckboxRecipeProps & {
+  CheckboxRecipeProps & Pick<WidgetControlSurfaceProps, "presentation"> & {
     children?: React.ReactNode;
     className?: string;
     onChange?: React.ChangeEventHandler<HTMLInputElement>;
@@ -88,6 +88,7 @@ export const Checkbox = React.forwardRef<HTMLElement, CheckboxProps>(
   function Checkbox(
     {
       size = "md",
+      presentation,
       invalid = false,
       indeterminate = false,
       className,
@@ -98,7 +99,8 @@ export const Checkbox = React.forwardRef<HTMLElement, CheckboxProps>(
     },
     ref,
   ) {
-    const styles = checkboxVariants({ size, invalid });
+    invalid = invalid || props["aria-invalid"] === true || props["aria-invalid"] === "true";
+    const styles = checkboxVariants({ size, ...widgetControlPresentationProps(presentation), invalid });
 
     function handleCheckedChange(
       checked: boolean,

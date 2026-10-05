@@ -72,7 +72,10 @@ describe("moneyWidget.edit", () => {
   it("preserves the exact decimal string and emits it unchanged", () => {
     const onChange = vi.fn();
     const { getByRole } = render(
-      createElement(moneyWidget.edit!, { value: "1234.567890", onChange }),
+      createElement(moneyWidget.edit!, {
+        value: "1234.567890", onChange,
+        field: { controlProps: { id: "amount", presentation: "cell" } },
+      }),
     );
     const input = getByRole("textbox") as HTMLInputElement;
     expect(input.value).toBe("1234.567890");

@@ -7,7 +7,7 @@ import { cn } from "../lib/cn";
 import { PORTALED_CONTROL_LAYER } from "../ui/popover";
 import { selectVariants } from "../ui/select";
 import { textRoleVariants } from "../ui/text";
-import { widgetControlSurface } from "../ui/widget-control";
+import { widgetControlSurface, widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
 import {
   canonicalOptionValue,
@@ -35,7 +35,9 @@ function ComboboxEdit({
   );
   const values = useMemo(() => options.map((option) => option.value), [options]);
   const selected = canonicalOptionValue(options, value) ?? null;
-  const styles = selectVariants();
+  const { presentation, ...controlProps } = field?.controlProps ?? {};
+  const cellProps = widgetControlPresentationProps(presentation);
+  const styles = selectVariants(cellProps);
 
   return (
     <BaseCombobox.Root
@@ -53,18 +55,17 @@ function ComboboxEdit({
     >
       <BaseCombobox.Trigger
         ref={controlRef}
-        {...field?.controlProps}
+        {...controlProps}
         aria-label={widgetLabel(field, t("combobox.label"))}
         className={styles.trigger({
-          className: cn(
-            widgetControlSurface({
-              focus: "visible",
-              surface: "inset",
-              readOnly,
-              disabled: "data",
-            }),
-            "rounded-6",
-          ),
+          className: widgetControlSurface({
+            focus: "visible",
+            surface: "inset",
+            ...cellProps,
+            invalid: controlProps["aria-invalid"],
+            readOnly,
+            disabled: "data",
+          }),
         })}
       >
         <BaseCombobox.Value>
@@ -75,7 +76,7 @@ function ComboboxEdit({
             </span>
           )}
         </BaseCombobox.Value>
-        <BaseCombobox.Icon className={styles.icon()}>
+        <BaseCombobox.Icon data-widget-affordance="" className={styles.icon()}>
           <Glyph name="chevron-down" />
         </BaseCombobox.Icon>
       </BaseCombobox.Trigger>

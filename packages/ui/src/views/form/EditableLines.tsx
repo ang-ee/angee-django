@@ -21,6 +21,7 @@ import {
 } from "@dnd-kit/sortable";
 import {
   defaultWidgetForModelField,
+  filterFieldType,
   useSchemaFieldMetadata,
   type DataResourceLinesMetadata,
   type ModelFieldMetadata,
@@ -33,7 +34,8 @@ import { cn } from "../../lib/cn";
 import { useDndKitSensors } from "../../lib/dnd";
 import { titleCase } from "../../lib/titleCase";
 import { Button } from "../../ui/button";
-import { relationValueId } from "../../widgets/types";
+import { tableVariants } from "../../ui/table";
+import { relationValueId, type WidgetControlProps } from "../../widgets/types";
 import {
   CLIENT_LINE_KEY,
   duplicateLineRow,
@@ -101,6 +103,8 @@ export interface EditableLineSupplementalColumn {
   key: string;
   header: React.ReactNode;
   minWidth?: number;
+  /** Computed amount columns align right by default. */
+  align?: "left" | "right";
   render: (
     row: Row,
     parentRow: Row | null,
@@ -115,12 +119,17 @@ interface LineColumn {
   relation: RelationFieldInfo | null;
   relationMulti: RelationFieldInfo | null;
   header: string;
+  numeric: boolean;
 }
 
-const CELL_CLASS = "min-w-0";
-const HANDLE_CLASS =
-  "grid size-8 shrink-0 cursor-grab place-content-center rounded-6 text-fg-subtle " +
-  "hover:bg-inset hover:text-fg touch-none select-none active:cursor-grabbing " +
+const TABLE_STYLES = tableVariants({ interactive: true });
+const HEADER_CLASS = TABLE_STYLES.head({ className: "flex min-w-0 items-center" });
+const CELL_CLASS = TABLE_STYLES.cell({ className: "min-w-0 h-auto py-1" });
+const CELL_PRESENTATION = { presentation: "cell" } as const;
+const ROW_ACTION_CLASS =
+  "grid size-7 shrink-0 place-content-center rounded-6 text-fg-subtle opacity-30 " +
+  "group-hover/line:opacity-100 group-focus-within/line:opacity-100 " +
+  "hover:bg-inset hover:text-fg " +
   "focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-40";
 
 /**
@@ -233,9 +242,9 @@ export function EditableLines({
     ...supplementalColumns.map((column) => column.minWidth ?? 128),
   ];
   const gridStyle = {
-    gridTemplateColumns: `32px ${widths.map((width) => `minmax(${width}px, 1fr)`).join(" ")} 68px`,
+    gridTemplateColumns: `40px ${widths.map((width) => `minmax(${width}px, 1fr)`).join(" ")} 68px`,
   };
-  const minWidth = widths.reduce((total, width) => total + width, 100 + 18 + 8 * (widths.length + 1));
+  const minWidth = widths.reduce((total, width) => total + width, 108);
 
   return (
     <div className="min-w-0">
@@ -252,27 +261,25 @@ export function EditableLines({
         </div>
       ) : null}
       <div className="overflow-x-auto">
-        <div className="grid gap-2" style={{ minWidth }}>
-          {fields.length > 0 ? (
-            <div
-              className="grid items-center gap-2 border border-transparent px-2 text-xs font-medium uppercase tracking-wide text-fg-muted"
-              style={gridStyle}
-              aria-hidden
-            >
-              <span />
-              {columns.map((column) => (
-                <span key={column.field.name} className="truncate">
-                  {column.header}
-                </span>
-              ))}
-              {supplementalColumns.map((column) => (
-                <span key={column.key} className="truncate">
-                  {column.header}
-                </span>
-              ))}
-              <span />
-            </div>
-          ) : null}
+        <div role="table" aria-label={t("lines.section")} className="text-13" style={{ minWidth }}>
+          <div role="row" className="grid items-center" style={gridStyle}>
+            <span role="columnheader" className={TABLE_STYLES.head()}>
+              <span className="sr-only">{t("lines.reorder")}</span>
+            </span>
+            {columns.map((column) => (
+              <span role="columnheader" key={column.field.name} className={cn(HEADER_CLASS, column.numeric && "justify-end text-right")}>
+                <span className="truncate">{column.header}</span>
+              </span>
+            ))}
+            {supplementalColumns.map((column) => (
+              <span role="columnheader" key={column.key} className={cn(HEADER_CLASS, column.align !== "left" && "justify-end text-right")}>
+                <span className="truncate">{column.header}</span>
+              </span>
+            ))}
+            <span role="columnheader" className={TABLE_STYLES.head()}>
+              <span className="sr-only">{t("list.actions")}</span>
+            </span>
+          </div>
 
           <DndContext
             sensors={sensors}
@@ -283,9 +290,11 @@ export function EditableLines({
               items={fields.map((row) => row.rhfKey)}
               strategy={verticalListSortingStrategy}
             >
-              <div className="grid gap-1">
+              <div role="rowgroup">
                 {fields.length === 0 ? (
-                  <p className="px-2 py-3 text-13 text-fg-muted">{t("lines.empty")}</p>
+                  <div role="row" className={TABLE_STYLES.row()}>
+                    <p role="cell" aria-colspan={widths.length + 2} className="px-3 py-2 text-fg-muted">{t("lines.empty")}</p>
+                  </div>
                 ) : (
                   fields.map((row, index) => (
                     <LineRow
@@ -312,26 +321,27 @@ export function EditableLines({
                     />
                   ))
                 )}
+                {readOnly ? null : (
+                  <div role="row" className={TABLE_STYLES.row()}>
+                    <div role="cell" aria-colspan={widths.length + 2}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 w-full justify-start rounded-none px-3 text-fg-muted"
+                        onClick={() => append(emptyLineRow(fields.length, config) as never)}
+                      >
+                        <Glyph name="plus" size={16} />
+                        {t("lines.add")}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </SortableContext>
           </DndContext>
-
-          {footer ? <div>{footer(rows)}</div> : null}
-
-          {readOnly ? null : (
-            <div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => append(emptyLineRow(fields.length, config) as never)}
-              >
-                <Glyph name="plus" size={16} />
-                {t("lines.add")}
-              </Button>
-            </div>
-          )}
         </div>
+        {footer ? <div style={{ minWidth }} className="pt-2">{footer(rows)}</div> : null}
       </div>
     </div>
   );
@@ -375,38 +385,48 @@ function LineRow({
   onRemove: () => void;
 }): React.ReactElement {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id });
+    useSortable({ id, disabled: readOnly });
   const { role: _dragRole, ...dragAttributes } = attributes;
+  const controlId = React.useId();
   return (
     <div
       ref={setNodeRef}
+      role="row"
       style={{ ...gridStyle, ...sortableTransformStyle(transform, transition) }}
-      className={cn(
-        "grid items-start gap-2 rounded-8 border border-transparent px-2 py-1.5",
-        "hover:border-border-subtle hover:bg-inset/40",
+      className={TABLE_STYLES.row({ className: cn(
+        "group/line grid min-h-9 items-center cursor-default",
         isDragging && "z-10 border-border-focus bg-sheet shadow-lg",
-      )}
+      ) })}
     >
-      <button
-        type="button"
-        aria-label={t("lines.reorder")}
-        className={HANDLE_CLASS}
-        disabled={readOnly}
-        {...(readOnly ? {} : dragAttributes)}
-        {...(readOnly ? {} : listeners)}
-      >
-        <Glyph name="grip-vertical" size={16} />
-      </button>
+      <div role="cell" className="px-1 py-1">
+        {readOnly ? null : (
+          <button
+            type="button"
+            aria-label={t("lines.reorder")}
+            className={cn(ROW_ACTION_CLASS, "cursor-grab touch-none select-none active:cursor-grabbing")}
+            {...dragAttributes}
+            {...listeners}
+          >
+            <Glyph name="grip-vertical" size={16} />
+          </button>
+        )}
+      </div>
 
-      {columns.map((column) => (
-        <div key={column.field.name} className={CELL_CLASS}>
+      {columns.map((column) => {
+        const messages = rowMessages(rowError, column.field.name);
+        const controlProps: WidgetControlProps = {
+          ...CELL_PRESENTATION,
+          id: `${controlId}-${column.field.name}`,
+          "aria-invalid": messages.length > 0 || undefined,
+        };
+        return <div role="cell" key={column.field.name} className={cn(CELL_CLASS, column.numeric && "text-right tabular-nums")}>
           <Controller
             control={control}
             name={`${name}.${index}.${column.field.name}`}
             render={({ field: controller }) =>
               column.relationMulti ? (
                 <RelationMultiFieldWidget
-                  compact
+                  controlProps={controlProps}
                   value={Array.isArray(controller.value) ? controller.value : []}
                   onChange={controller.onChange}
                   readOnly={readOnly}
@@ -416,6 +436,7 @@ function LineRow({
                 />
               ) : column.relation ? (
                 <RelationFieldWidget
+                  controlProps={controlProps}
                   controlRef={controller.ref}
                   value={relationValueId(controller.value) || null}
                   onChange={controller.onChange}
@@ -430,11 +451,13 @@ function LineRow({
                 />
               ) : (
                 <FieldDescriptorControl
+                  controlProps={controlProps}
                   controlRef={controller.ref}
                   field={column.descriptor}
                   row={row}
                   parentRow={parentRow}
                   value={controller.value}
+                  messages={messages}
                   readOnly={readOnly}
                   onChange={controller.onChange}
                   onRowChange={onRowChange}
@@ -442,28 +465,28 @@ function LineRow({
               )
             }
           />
-          {rowMessages(rowError, column.field.name).map((message, messageIndex) => (
+          {messages.map((message, messageIndex) => (
             <p key={messageIndex} className="mt-1 text-xs text-danger-text">
               {message}
             </p>
           ))}
-        </div>
-      ))}
+        </div>;
+      })}
 
       {supplementalColumns.map((column) => (
-        <div key={column.key} className={CELL_CLASS}>
+        <div role="cell" key={column.key} className={cn(CELL_CLASS, column.align !== "left" && "text-right tabular-nums")}>
           {column.render(row ?? {}, parentRow ?? null, index, { formIsDirty })}
         </div>
       ))}
 
       {readOnly ? (
-        <span />
+        <span role="cell" />
       ) : (
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div role="cell" className="flex shrink-0 items-center gap-0.5 px-1 py-1">
           <button
             type="button"
             aria-label={t("lines.duplicate")}
-            className={HANDLE_CLASS}
+            className={ROW_ACTION_CLASS}
             onClick={onDuplicate}
           >
             <Glyph name="copy" size={15} />
@@ -471,7 +494,7 @@ function LineRow({
           <button
             type="button"
             aria-label={t("lines.remove")}
-            className={HANDLE_CLASS}
+            className={ROW_ACTION_CLASS}
             onClick={onRemove}
           >
             <Glyph name="trash" size={15} />
@@ -508,6 +531,7 @@ function lineColumns(
         relation: customWidget ? null : relationFieldInfoForField(field, schemaMetadata),
         relationMulti: customWidget ? null : relationListFieldInfoForField(field, schemaMetadata),
         header,
+        numeric: filterFieldType(field.name, field) === "number" || widget === "money" || widget === "integer" || widget === "float",
       };
     });
 }

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type DataResourceLinesMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets, type WidgetRenderProps } from "../../widgets";
 import { EditableLines } from "./EditableLines";
+import type { ValidationErrors } from "./validation-errors";
 
 const LINES = {
   field: "lines",
@@ -61,23 +62,29 @@ function Host({
   footer,
   inspectContext = false,
   compact = false,
+  readOnly = false,
+  empty = false,
+  rowErrors,
 }: {
   inspectContext?: boolean;
   compact?: boolean;
+  readOnly?: boolean;
+  empty?: boolean;
+  rowErrors?: readonly ValidationErrors[];
   footer?: (rows: readonly Record<string, unknown>[]) => React.ReactNode;
 }): React.ReactElement {
   const form = useForm<Record<string, unknown>>({
     defaultValues: {
-      lines: [
+      lines: empty ? [] : [
         { id: "one", label: "Widget", quantity: 2, amount_subtotal: "20.00", position: 0 },
         { id: "two", label: "Gadget", quantity: 5, amount_subtotal: "25.00", position: 1 },
       ],
     },
   });
   const contextWidget = {
-    read: ({ row, parentRow }: WidgetRenderProps) => (
+    read: ({ row, parentRow, field }: WidgetRenderProps) => (
       <span>
-        {String((row as { label: string }).label)} / {String((parentRow as { company: string }).company)}
+        {String((row as { label: string }).label)} / {String((parentRow as { company: string }).company)} / {field?.controlProps?.presentation}
       </span>
     ),
   };
@@ -98,6 +105,8 @@ function Host({
         lines={lines}
         parentRow={{ company: "Acme" }}
         footer={footer}
+        readOnly={readOnly}
+        rowErrors={rowErrors}
         primaryFields={compact ? ["label"] : undefined}
         supplementalColumns={compact ? [{
           key: "subtotal",
@@ -215,8 +224,8 @@ describe("EditableLines", () => {
 
   test("passes the live child and owning document to a registered widget", () => {
     render(<Host inspectContext />);
-    expect(screen.getByText("Widget / Acme")).toBeTruthy();
-    expect(screen.getByText("Gadget / Acme")).toBeTruthy();
+    expect(screen.getByText("Widget / Acme / cell")).toBeTruthy();
+    expect(screen.getByText("Gadget / Acme / cell")).toBeTruthy();
   });
   test("renders one editable cell row per seeded line, hiding the position column", () => {
     render(<Host />);
@@ -230,6 +239,36 @@ describe("EditableLines", () => {
     expect(screen.getByText("Quantity")).toBeTruthy();
     expect(screen.getAllByRole("textbox", { name: "Label" })).toHaveLength(2);
     expect(screen.getAllByRole("textbox", { name: "Quantity" })).toHaveLength(2);
+    const table = within(screen.getByRole("table"));
+    const rows = table.getAllByRole("row");
+    expect(rows).toHaveLength(4);
+    expect(within(rows[0]!).getAllByRole("columnheader").map((header) => header.textContent))
+      .toEqual(["Reorder line", "Label", "Quantity", "Actions"]);
+    expect(within(rows[1]!).getAllByRole("cell")).toHaveLength(4);
+    expect(within(rows.at(-1)!).getByRole("button", { name: "Add line" })).toBeTruthy();
+    expect(table.getByRole("columnheader", { name: "Quantity" }).className).toContain("text-right");
+    expect(table.getAllByRole("textbox", { name: "Label" })[0]!.className).toContain("h-btn-sm");
+  });
+
+  test("keeps the header and final add row when empty, and uses the same table for plain read-only values", () => {
+    const view = render(<Host empty />);
+    expect(screen.getByRole("columnheader", { name: "Label" })).toBeTruthy();
+    expect(within(screen.getAllByRole("row").at(-1)!).getByRole("button", { name: "Add line" })).toBeTruthy();
+    view.unmount();
+    render(<Host readOnly />);
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    expect(screen.getByRole("cell", { name: "Widget" })).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reorder line" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add line" })).toBeNull();
+  });
+
+  test("retains invalid cell chrome and messages in the plain presentation", () => {
+    render(<Host rowErrors={[{ fieldErrors: { quantity: ["Must be positive"] }, formErrors: [] }]} />);
+    const input = screen.getAllByRole("textbox", { name: "Quantity" })[0]!;
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.parentElement?.className).toContain("border-danger");
+    expect(screen.getByText("Must be positive")).toBeTruthy();
   });
 
   test("keeps advanced values available behind details and renders read-only projections", () => {
@@ -237,6 +276,7 @@ describe("EditableLines", () => {
 
     expect(screen.queryByText("Quantity")).toBeNull();
     expect(screen.getByText("Subtotal")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Subtotal" }).className).toContain("text-right");
     expect(screen.getByText("20.00")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Show line details" }));
     expect(screen.getByText("Quantity")).toBeTruthy();
@@ -267,5 +307,7 @@ describe("EditableLines", () => {
   test("renders the composer's footer with the live rows", () => {
     render(<Host footer={(rows) => <div>lines: {rows.length}</div>} />);
     expect(screen.getByText("lines: 2")).toBeTruthy();
+    expect(screen.getByRole("table").contains(screen.getByText("lines: 2"))).toBe(false);
+    expect(screen.getByRole("button", { name: "Add line" }).compareDocumentPosition(screen.getByText("lines: 2")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

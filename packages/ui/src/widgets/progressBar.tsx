@@ -54,6 +54,7 @@ function ProgressBarEdit({
         onValueChange={(next) => onChange?.(normaliseSliderProgress(next))}
       />
       <NumberField
+        presentation={field?.controlProps?.presentation}
         value={progress}
         min={0}
         max={100}
@@ -61,6 +62,7 @@ function ProgressBarEdit({
         snapOnStep
         className="w-20 shrink-0"
         inputProps={{
+          ...field?.controlProps,
           "aria-label": widgetLabel(field, "Progress"),
           inputMode: "numeric",
         }}

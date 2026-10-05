@@ -29,6 +29,7 @@ function DateEdit({
 
   return (
     <DatePopover
+      controlProps={field?.controlProps}
       triggerRef={controlRef}
       selected={date}
       label={label}

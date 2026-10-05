@@ -36,6 +36,7 @@ function SlugEdit({
 }: WidgetRenderProps<string>): ReactElement {
   return (
     <Input
+      {...field?.controlProps}
       ref={controlRef}
       value={value ?? ""}
       readOnly={readOnly}

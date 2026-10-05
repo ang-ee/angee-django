@@ -7,6 +7,7 @@ import {
 import { useModelMetadata } from "@angee/metadata";
 
 import type { RelationOption } from "../../widgets/RelationField";
+import type { WidgetControlProps } from "../../widgets/types";
 import {
   formFieldsFromMetadata,
   type RelationFieldInfo,
@@ -42,6 +43,7 @@ export interface RelationFieldWidgetProps {
   placeholder?: string;
   "aria-label"?: string;
   controlRef?: Ref<HTMLButtonElement>;
+  controlProps?: WidgetControlProps;
 }
 
 /**
@@ -76,6 +78,7 @@ function EditableRelationFieldWidget(
   placeholder,
   "aria-label": ariaLabel,
   controlRef,
+  controlProps,
 }: RelationFieldWidgetProps,
 ): ReactElement {
   const picker = useRelationPickerOptions(relation, {
@@ -105,6 +108,7 @@ function EditableRelationFieldWidget(
 
   return (
     <RelationPicker
+      {...controlProps}
       controlRef={controlRef}
       value={value}
       onChange={onChange}

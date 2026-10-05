@@ -2,6 +2,9 @@ import type { ReactElement, ReactNode, Ref } from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { Calendar } from "../ui/calendar";
+import { inputVariants } from "../ui/input";
+import { widgetControlPresentationProps } from "../ui/widget-control";
+import type { WidgetControlProps } from "./types";
 import {
   PopoverContent,
   PopoverPortal,
@@ -28,6 +31,7 @@ export interface DatePopoverProps {
   /** Rendered under the calendar — a clear button, a time input, etc. */
   footer?: ReactNode;
   triggerRef?: Ref<HTMLButtonElement>;
+  controlProps?: WidgetControlProps;
 }
 
 /**
@@ -46,19 +50,28 @@ export function DatePopover({
   onSelectDate,
   footer,
   triggerRef,
+  controlProps,
 }: DatePopoverProps): ReactElement {
+  const { presentation, ...triggerProps } = controlProps ?? {};
   const navigationAnchor = selected ?? new Date();
   const startMonth = new Date(navigationAnchor.getFullYear() - 100, 0, 1);
   const endMonth = new Date(navigationAnchor.getFullYear() + 100, 11, 1);
   return (
     <PopoverRoot open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
+        {...triggerProps}
         ref={triggerRef}
-        className="inline-flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-6 border border-border bg-inset px-2 text-left text-13 text-fg outline-none transition-colors hover:border-border-strong focus-visible:border-border-focus focus-visible:focus-ring"
+        className={inputVariants({
+          focus: "visible",
+          surface: "inset",
+          ...widgetControlPresentationProps(presentation),
+          invalid: controlProps?.["aria-invalid"],
+          class: "inline-flex min-w-0 items-center justify-between gap-2 text-left",
+        })}
         aria-label={ariaLabel}
       >
         <span className="min-w-0 truncate">{label}</span>
-        <Glyph name="calendar" className="shrink-0 text-fg-muted" />
+        <span data-widget-affordance="" className="shrink-0 text-fg-muted"><Glyph name="calendar" /></span>
       </PopoverTrigger>
       <PopoverPortal>
         <PopoverPositioner sideOffset={4} align="start">

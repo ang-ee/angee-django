@@ -1,10 +1,24 @@
 import { useState, type KeyboardEvent, type ReactElement } from "react";
 
-import { cn } from "../lib/cn";
+import { tv } from "../lib/variants";
 import { Chip, RemovableChip } from "../ui/chip";
 import { textRoleVariants } from "../ui/text";
+import { inputVariants } from "../ui/input";
+import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
+
+const tagInputVariants = tv({
+  extend: inputVariants,
+  base: "flex flex-wrap items-center gap-1 py-1",
+  variants: {
+    size: {
+      sm: "h-auto min-h-btn-sm",
+      md: "h-auto min-h-input-h",
+      lg: "h-auto min-h-input-h-lg",
+    },
+  },
+});
 
 function TagInputEdit({
   value,
@@ -14,6 +28,7 @@ function TagInputEdit({
   controlRef,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
   const tags = normaliseTags(value);
+  const { presentation, ...controlProps } = field?.controlProps ?? {};
   const [draft, setDraft] = useState("");
 
   function commit(input = draft): void {
@@ -42,9 +57,11 @@ function TagInputEdit({
 
   return (
     <div
-      className={cn(
-        "flex min-h-input-h w-full flex-wrap items-center gap-1 rounded-6 border border-border bg-sheet px-1.5 py-1 text-13 text-fg focus-within:border-border-focus focus-within:focus-ring",
-      )}
+      className={tagInputVariants({
+        focus: "within",
+        ...widgetControlPresentationProps(presentation),
+        invalid: controlProps["aria-invalid"],
+      })}
     >
       {tags.map((tag, index) => (
         <RemovableChip
@@ -58,6 +75,7 @@ function TagInputEdit({
         </RemovableChip>
       ))}
       <input
+        {...controlProps}
         ref={controlRef}
         value={draft}
         className="h-5 min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"

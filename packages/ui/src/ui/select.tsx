@@ -22,7 +22,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE, PORTALED_CONTROL_LAYER } from "./popover";
-import { widgetControlSurface } from "./widget-control";
+import { widgetControlSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
 export const selectVariants = tv({
   slots: {
@@ -127,6 +127,7 @@ export const SelectPositioner = React.forwardRef<
 SelectPositioner.displayName = "SelectPositioner";
 
 export type SelectTriggerProps = Omit<BaseSelectTriggerProps, "className"> &
+  Pick<WidgetControlSurfaceProps, "presentation"> &
   Pick<SelectRecipeProps, "size" | "invalid" | "readOnly"> & {
     className?: string;
   };
@@ -135,25 +136,23 @@ export const SelectTrigger = React.forwardRef<
   HTMLButtonElement,
   SelectTriggerProps
 >(function SelectTrigger(
-  { className, size = "md", invalid = false, readOnly = false, ...props },
+  { className, size = "md", presentation, invalid = false, readOnly = false, "aria-invalid": ariaInvalid, ...props },
   ref,
 ) {
-  const styles = selectVariants({ size, invalid, readOnly });
-  // Re-assert the trigger's bare `rounded-6` after the owner chrome (whose base is
-  // `rounded-6`); the radius-unification stage converges both to one token.
-  const triggerClass = cn(
-    widgetControlSurface({
-      focus: "visible",
-      surface: "inset",
-      invalid,
-      readOnly,
-      disabled: "data",
-    }),
-    "rounded-6",
-  );
+  invalid = invalid || ariaInvalid === true || ariaInvalid === "true";
+  const styles = selectVariants({ size, ...widgetControlPresentationProps(presentation), invalid, readOnly });
+  const triggerClass = widgetControlSurface({
+    focus: "visible",
+    surface: "inset",
+    ...widgetControlPresentationProps(presentation),
+    invalid,
+    readOnly,
+    disabled: "data",
+  });
   return (
     <BaseSelect.Trigger
       ref={ref}
+      aria-invalid={invalid || undefined}
       className={styles.trigger({ className: cn(triggerClass, className) })}
       {...props}
     />
@@ -195,6 +194,7 @@ export const SelectIcon = React.forwardRef<
   return (
     <BaseSelect.Icon
       ref={ref}
+      data-widget-affordance=""
       className={styles.icon({ className })}
       {...props}
     >
@@ -360,6 +360,7 @@ export type SelectProps = Omit<
   "children" | "items" | "value" | "defaultValue" | "onValueChange"
 > &
   Pick<SelectRecipeProps, "size" | "invalid"> & {
+    presentation?: WidgetControlSurfaceProps["presentation"];
     options?: readonly SelectChoice[];
     placeholder?: React.ReactNode;
     value?: string;
@@ -370,6 +371,7 @@ export type SelectProps = Omit<
     "aria-labelledby"?: string;
     id?: string;
     "aria-describedby"?: string;
+    "aria-invalid"?: React.AriaAttributes["aria-invalid"];
     triggerRef?: React.Ref<HTMLButtonElement>;
     onValueChange?: (
       value: string,
@@ -385,11 +387,13 @@ export const Select = function Select({
   className,
   contentClassName,
   size = "md",
+  presentation,
   invalid = false,
   readOnly = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
+  "aria-invalid": ariaInvalid,
   id,
   triggerRef,
   onValueChange,
@@ -430,7 +434,9 @@ export const Select = function Select({
         ref={triggerRef}
         id={id}
         size={size}
+        presentation={presentation}
         invalid={invalid}
+        aria-invalid={ariaInvalid}
         readOnly={readOnly}
         className={className}
         aria-label={ariaLabel}

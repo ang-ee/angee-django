@@ -7,9 +7,9 @@ import {
 } from "react";
 import { json as jsonLanguage } from "@codemirror/lang-json";
 import { EditorView } from "@codemirror/view";
-import { cn } from "../lib/cn";
 import { useUiT } from "../i18n";
 import { Code, CodeBlock } from "../ui/code";
+import { widgetControlSurface, widgetControlPresentationProps } from "../ui/widget-control";
 import { useCodeMirrorEditor } from "./codemirror-editor";
 import type { JsonValue } from "./json-value";
 import { widgetLabel } from "./label";
@@ -21,9 +21,6 @@ type JsonParseResult =
 
 // The language + soft-wrap for the JSON editor; the shared hook adds the chrome.
 const JSON_EXTENSIONS = [jsonLanguage(), EditorView.lineWrapping];
-
-const EDITOR_SHELL =
-  "overflow-hidden rounded-6 border border-border bg-sheet focus-within:focus-ring";
 
 function JsonEdit({
   value,
@@ -79,7 +76,13 @@ function JsonEdit({
     <div>
       <div
         ref={hostRef}
-        className={cn(EDITOR_SHELL, !readOnly && !valid && "border-danger")}
+        className={widgetControlSurface({
+          focus: "within",
+          ...widgetControlPresentationProps(field?.controlProps?.presentation),
+          readOnly,
+          invalid: !valid || field?.controlProps?.["aria-invalid"],
+          className: "overflow-hidden",
+        })}
       />
       {!readOnly && !valid ? (
         <p className="mt-1 text-12 text-danger-text" role="alert">

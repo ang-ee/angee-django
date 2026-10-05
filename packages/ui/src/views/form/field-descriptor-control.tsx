@@ -90,7 +90,7 @@ export function FieldDescriptorControl(props: FieldDescriptorControlProps): Reac
   if (relation && (!field.widget || field.widget === "many2one")) return <RelationFieldWidget
     value={relationValueId(props.value) || null} onChange={props.onChange} onCommit={props.onCommit}
     readOnly={props.readOnly || props.disabled} relation={relation} filters={field.filters} where={props.where}
-    aria-label={typeof field.label === "string" ? field.label : field.name} controlRef={props.controlRef} />;
+    aria-label={typeof field.label === "string" ? field.label : field.name} controlRef={props.controlRef} controlProps={props.controlProps} />;
   const Component = props.readOnly ? widget.read : (widget.edit ?? widget.read);
   const mode = Component === widget.read ? "read" : "edit";
   // Draft validity belongs to the mounted editor; temporary disabling keeps it.

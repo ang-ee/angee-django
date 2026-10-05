@@ -17,6 +17,8 @@ import { tv, type VariantProps } from "../lib/variants";
 import {
   WIDGET_CONTROL_DATA_READONLY_CLASS,
   widgetControlSurface,
+  widgetControlPresentationProps,
+  type WidgetControlSurfaceProps,
 } from "./widget-control";
 
 export const numberFieldVariants = tv({
@@ -105,7 +107,8 @@ export type NumberFieldGroupProps = Omit<
   BaseNumberFieldGroupProps,
   "className"
 > &
-  Pick<NumberFieldRecipeProps, "invalid" | "readOnly" | "size"> & {
+  Pick<NumberFieldRecipeProps, "invalid" | "readOnly" | "size"> &
+  Pick<WidgetControlSurfaceProps, "presentation"> & {
     className?: string;
   };
 
@@ -113,13 +116,14 @@ export const NumberFieldGroup = React.forwardRef<
   HTMLDivElement,
   NumberFieldGroupProps
 >(function NumberFieldGroup(
-  { className, invalid = false, readOnly = false, size = "md", ...props },
+  { className, invalid = false, readOnly = false, size = "md", presentation, ...props },
   ref,
 ) {
-  const styles = numberFieldVariants({ invalid, readOnly, size });
+  const styles = numberFieldVariants({ invalid, readOnly, size, ...widgetControlPresentationProps(presentation) });
   const groupClass = widgetControlSurface({
     focus: "within",
     surface: "sheet",
+    ...widgetControlPresentationProps(presentation),
     invalid,
     readOnly,
     disabled: "data",
@@ -139,6 +143,7 @@ export type NumberFieldInputProps = Omit<
   "className" | "size"
 > &
   NumberFieldRecipeProps & {
+    presentation?: WidgetControlSurfaceProps["presentation"];
     className?: string;
   };
 
@@ -146,10 +151,10 @@ export const NumberFieldInput = React.forwardRef<
   HTMLInputElement,
   NumberFieldInputProps
 >(function NumberFieldInput(
-  { align = "end", className, invalid = false, size = "md", ...props },
+  { align = "end", className, invalid = false, size = "md", presentation, ...props },
   ref,
 ) {
-  const styles = numberFieldVariants({ align, invalid, size });
+  const styles = numberFieldVariants({ align, invalid, size, ...widgetControlPresentationProps(presentation) });
   return (
     <BaseNumberField.Input
       ref={ref}
@@ -186,6 +191,7 @@ export const NumberFieldIncrement = React.forwardRef<
     <BaseNumberField.Increment
       ref={ref}
       aria-label={t("numberField.increment")}
+      data-widget-affordance=""
       className={styles.stepper({ className })}
       {...props}
     >
@@ -221,6 +227,7 @@ export const NumberFieldDecrement = React.forwardRef<
     <BaseNumberField.Decrement
       ref={ref}
       aria-label={t("numberField.decrement")}
+      data-widget-affordance=""
       className={styles.stepper({ className })}
       {...props}
     >
@@ -289,6 +296,7 @@ export const NumberFieldScrubAreaCursor = React.forwardRef<
 NumberFieldScrubAreaCursor.displayName = "NumberFieldScrubAreaCursor";
 
 export type NumberFieldProps = Omit<NumberFieldRootProps, "children"> &
+  Pick<WidgetControlSurfaceProps, "presentation"> &
   Pick<NumberFieldRecipeProps, "align"> & {
     decrementClassName?: string;
     decrementLabel?: string;
@@ -321,11 +329,14 @@ export const NumberField = React.forwardRef<HTMLDivElement, NumberFieldProps>(
       readOnly = false,
       showStepper = true,
       size = "md",
+      presentation,
       ...props
     },
     ref,
   ) {
     const t = useUiT();
+    size = widgetControlPresentationProps(presentation).size ?? size;
+    invalid = invalid || inputProps?.["aria-invalid"] === true || inputProps?.["aria-invalid"] === "true";
     const { className: inputPropsClassName, ...restInputProps } =
       inputProps ?? {};
 
@@ -339,6 +350,7 @@ export const NumberField = React.forwardRef<HTMLDivElement, NumberFieldProps>(
         {...props}
       >
         <NumberFieldGroup
+          presentation={presentation}
           className={groupClassName}
           invalid={invalid}
           readOnly={readOnly}

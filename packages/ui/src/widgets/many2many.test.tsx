@@ -3,7 +3,7 @@
 import { fireEvent, render, screen, cleanup, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { Many2ManyCellEdit, many2manyWidget } from "./many2many";
+import { many2manyWidget } from "./many2many";
 
 afterEach(cleanup);
 
@@ -38,9 +38,9 @@ describe("many2manyWidget", () => {
 
 
 test("edits multiple relations in one control, including removing stored ids outside the option list", async () => {
-  const Edit = Many2ManyCellEdit;
+  const Edit = many2manyWidget.edit;
   const onChange = vi.fn();
-  const field = { label: "Categories", options: [
+  const field = { label: "Categories", controlProps: { id: "categories", presentation: "cell" as const }, options: [
     { value: "primary", label: "Primary" },
     { value: "secondary", label: "Secondary" },
     { value: "off", label: "Disabled", disabled: true },

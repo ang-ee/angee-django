@@ -62,9 +62,10 @@ const lines = {
 
 const patchWidget = {
   read: ({ value }: WidgetRenderProps) => <span>{String(value ?? "")}</span>,
-  edit: ({ value, onChange, onRowChange }: WidgetRenderProps) => (
+  edit: ({ value, onChange, onRowChange, field }: WidgetRenderProps) => (
     <div className="grid gap-1.5">
       <Input
+        {...field?.controlProps}
         aria-label="Line label"
         value={String(value ?? "")}
         onChange={(event) => onChange?.(event.target.value)}

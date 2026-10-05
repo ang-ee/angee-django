@@ -15,6 +15,7 @@ function SwitchEdit({
 }: WidgetRenderProps<boolean>): ReactElement {
   return (
     <Switch
+      {...field?.controlProps}
       ref={controlRef}
       checked={Boolean(value)}
       disabled={readOnly}

@@ -9,6 +9,7 @@ import {
   WIDGET_CONTROL_DATA_READONLY_CLASS,
   widgetControlSurface,
   widgetControlSurfaceVariants,
+  widgetControlPresentationProps,
 } from "./widget-control";
 
 export const inputVariants = tv({
@@ -102,14 +103,16 @@ export type InputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
   "className" | "color" | "size"
 > &
-  Pick<InputRecipeProps, "size" | "invalid" | "readOnly"> & {
+  Pick<InputRecipeProps, "size" | "invalid" | "readOnly" | "presentation"> & {
     className?: string;
   };
 
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Input(
   {
     size = "md",
+    presentation,
     invalid = false,
+    "aria-invalid": ariaInvalid,
     readOnly = false,
     type = "text",
     className,
@@ -117,13 +120,14 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
   },
   ref,
 ) {
+  invalid = invalid || ariaInvalid === true || ariaInvalid === "true";
   return (
     <input
       ref={ref}
       type={type}
       readOnly={readOnly}
       aria-invalid={invalid || undefined}
-      className={cn(inputVariants({ size, invalid, readOnly }), className)}
+      className={cn(inputVariants({ size, ...widgetControlPresentationProps(presentation), invalid, readOnly }), className)}
       {...props}
     />
   );

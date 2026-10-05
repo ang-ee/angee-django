@@ -641,7 +641,7 @@ function FormSectionTabs({
       {tabStrip}
       {sections.map((section) => (
         <Tabs.Panel key={section.key} value={section.key}>
-          <SectionHeading label={section.label} count={section.badge} className="mb-3" />
+          {/* The tab names its panel; any inner heading belongs to its content. */}
           <FormSection
             section={{ ...section, label: undefined }}
             renderField={renderField}
