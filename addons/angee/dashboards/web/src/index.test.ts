@@ -13,6 +13,13 @@ describe("dashboards addon seams", () => {
     })]));
   });
 
+  test("tops the rail ahead of apps composed before it", () => {
+    const earlier = defineAddon({ id: "notes", menus: { notes: { label: "Notes" } } });
+
+    expect(composeAddons([earlier, dashboards], canonicalizer).menus.map((item) => item.id))
+      .toEqual(["dashboards", "notes"]);
+  });
+
   test("composes an addon-owned widget kind into the dashboard registry", () => {
     const kind = {
       id: "example.pending-decisions",

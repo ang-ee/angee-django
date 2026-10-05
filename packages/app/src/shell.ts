@@ -6,7 +6,7 @@ export { DEPLOYMENT_LAYER_ID };
 
 /** Shell facts a product addon declares; a dependent overrides its dependencies field by field. */
 export interface ShellDeclaration {
-  /** Where `/` lands: a route name or an absolute path. */
+  /** Where `/` lands unless the person saved a home page or rail default: a route name or an absolute path. */
   home?: string;
   brand?: RuntimeBrand;
   /** The selected perspective id; `null` keeps the full console. */

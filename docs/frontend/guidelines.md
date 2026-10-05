@@ -211,6 +211,10 @@ shared UI copy through an addon bundle.
   applies last. Hosts pass no product facts. Rail, login, public mark and
   document title read the brand through `useRuntimeBrand`; shell components
   hard-code no identity. See [`resolveShell`](../../packages/app/src/shell.ts).
+  `/` signs in like the `console` layout, then lands by [`landingTarget`](../../packages/ui/src/chrome/app-rail-model.ts):
+  the person's saved home page, their rail default, the declared home, the
+  first app of their ordered rail (top-level `sequence` orders it by default),
+  then Settings. Never add a landing flag or fall back to route order.
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native

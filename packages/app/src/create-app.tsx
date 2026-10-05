@@ -63,7 +63,6 @@ import {
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
-  HOME_PATH_PREFERENCE_KEY,
   createRouteHref,
   type AppRuntime,
   type ComposedContainers,
@@ -79,8 +78,7 @@ import {
   useRefineNotificationProvider,
 } from "@angee/ui/feedback/index";
 import { InAppLinkProvider, routerNavigator } from "@angee/ui/lib";
-import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
-import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
+import { landingTarget } from "@angee/ui/chrome/app-rail-model";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ViewAsBanner } from "@angee/ui/chrome/ViewAs";
 import { LoadingPanel } from "@angee/ui/fragments/index";
@@ -112,6 +110,7 @@ import {
   UserPreferencesProvider,
   createAngeeAuthProvider,
   identityQueryOptions,
+  useAuth,
   useLogoutAction,
   useRuntimeAuthState,
   useUserPreferences,
@@ -137,6 +136,7 @@ import {
   compareCodePoint,
   createAddonRouteNodes,
   createLayoutRoutes,
+  layoutAuthGuard,
   layoutNamesForRoutes,
 } from "./route-tree";
 
@@ -466,11 +466,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
   );
-  const home =
-    (homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined) ??
-    (confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
-    routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path ??
-    "/";
+  const declaredHome = homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined;
+  // Where a person without preferences lands; also where an unavailable page sends them.
+  const home = landingTarget(navigationTree, {}, declaredHome) ?? "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
     ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
@@ -580,7 +578,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <HomeRedirect fallback={home} confined={confineTo !== undefined} />,
+    // `/` signs in like the default layout, so a signed-out visit returns here after login.
+    ...layoutAuthGuard("console", input.layouts, refineAuthProvider, queryClient, loginPath),
+    component: () => <HomeRedirect declaredHome={declaredHome} />,
   });
 
   const layoutRoutes = createLayoutRoutes({
@@ -871,29 +871,20 @@ function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
 }
 
-function HomeRedirect({ fallback, confined }: { fallback: string; confined: boolean }): ReactNode {
+/** `/` waits for the person's sign-in and preferences, then lands where `landingTarget` says. */
+function HomeRedirect({ declaredHome }: { declaredHome: string | undefined }): ReactNode {
+  const { status } = useAuth();
   const menuTree = useChromeMenuTree();
   const { preferences } = useUserPreferences();
-  const target = useMemo(() => {
-    if (confined) return fallback;
-    const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
-    if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
-      return preferredPath;
-    }
-    const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
-    if (!defaultItemId) return fallback;
-    const item = menuTree
-      .railMenuItems()
-      .find((node) => node.id === defaultItemId);
-    return (item && railDefaultTarget(item)) ?? fallback;
-  }, [confined, fallback, menuTree, preferences]);
-  return <Redirect to={target} />;
+  const target = landingTarget(menuTree, preferences, declaredHome);
+  return status === "resolving" || target === null ? null : <Redirect to={target} />;
 }
 
 function Redirect({ to }: { to: string }): ReactNode {
   const navigate = useNavigate();
   useEffect(() => {
-    void navigate({ href: to });
+    // Replace `/`, so Back leaves the app instead of landing again.
+    void navigate({ href: to, replace: true });
   }, [to, navigate]);
   return null;
 }

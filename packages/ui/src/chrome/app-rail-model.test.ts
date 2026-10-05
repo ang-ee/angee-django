@@ -1,7 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import type { MouseEvent } from "react";
 
+import { HOME_PATH_PREFERENCE_KEY } from "../runtime";
 import {
+  landingTarget,
   railLinkToggleProps,
   moveRailItem,
   orderedRailItems,
@@ -10,6 +12,8 @@ import {
   resolvedRailExpanded,
   sameRailOrder,
 } from "./app-rail-model";
+import { APP_RAIL_PREFERENCES_KEY } from "./app-rail-preferences";
+import { MenuTree } from "./menu-tree";
 
 const ITEMS = [
   { id: "notes", target: "/notes" },
@@ -41,6 +45,23 @@ describe("app rail model", () => {
   test("resolves default targets", () => {
     expect(railDefaultTarget({ target: " /notes " })).toBe("/notes");
     expect(railDefaultTarget({ target: "#" })).toBeNull();
+  });
+
+  test("lands on the saved home, the rail default, the declared home, the ordered rail, then Settings", () => {
+    const settings = { id: "platform", group: "platform" as const, to: "/platform/graph" };
+    // Settings is declared first and a hidden app second: neither is the first rail app.
+    const tree = MenuTree.from([settings, { id: "hidden", to: "/hidden", hidden: true }, { id: "notes", to: "/notes" }, { id: "ops", to: "/ops" }]);
+    const rail = (value: object) => ({ [APP_RAIL_PREFERENCES_KEY]: value });
+
+    expect(landingTarget(tree, { [HOME_PATH_PREFERENCE_KEY]: "/dashboards/7", ...rail({ defaultItemId: "ops" }) }, "/declared"))
+      .toBe("/dashboards/7");
+    expect(landingTarget(tree, { [HOME_PATH_PREFERENCE_KEY]: "relative", ...rail({ defaultItemId: "ops" }) }, "/declared"))
+      .toBe("/ops");
+    expect(landingTarget(tree, rail({ order: ["ops"], defaultItemId: "missing" }), "/declared")).toBe("/declared");
+    expect(landingTarget(tree, rail({ order: ["ops"] }))).toBe("/ops");
+    expect(landingTarget(tree, {})).toBe("/notes");
+    expect(landingTarget(MenuTree.from([settings]), {})).toBe("/platform/graph");
+    expect(landingTarget(MenuTree.from([]), {})).toBeNull();
   });
 
   test("toggles only on a plain second click of the current page's link", () => {

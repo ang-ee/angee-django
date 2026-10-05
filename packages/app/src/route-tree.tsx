@@ -60,18 +60,12 @@ export function createLayoutRoutes({
   }
   for (const layoutName of layoutNames) {
     const providers = layoutProviders.filter((provider) => provider.layout === layoutName);
-    const requireAuth = layoutRequiresAuth(layoutName, layouts);
     layoutRoutes.set(
       layoutName,
       createRoute({
         getParentRoute: () => rootRoute,
         id: refineLayoutRouteId(layoutName),
-        ...(requireAuth
-          ? {
-              beforeLoad: authBeforeLoad(authProvider, queryClient, loginPath),
-              errorComponent: authRouteError(queryClient, authProvider),
-            }
-          : {}),
+        ...layoutAuthGuard(layoutName, layouts, authProvider, queryClient, loginPath),
         component: () => (
           <RefineLayoutRoute
             layoutName={layoutName}
@@ -220,11 +214,18 @@ export function PassthroughChrome({ children }: { children: ReactNode }): ReactN
   return <>{children}</>;
 }
 
-function layoutRequiresAuth(
+/** The sign-in guard of a declared layout's routes; none for a public or undeclared layout. */
+export function layoutAuthGuard(
   layoutName: string,
   layouts: Record<string, RefineLayoutConfig>,
-): boolean {
-  return layouts[layoutName]?.requireAuth ?? layoutName !== "public";
+  authProvider: RefineAuthProvider,
+  queryClient: QueryClient,
+  loginPath: string,
+) {
+  const layout = layouts[layoutName];
+  return layout && (layout.requireAuth ?? layoutName !== "public")
+    ? { beforeLoad: authBeforeLoad(authProvider, queryClient, loginPath), errorComponent: authRouteError(queryClient, authProvider) }
+    : {};
 }
 
 export function authBeforeLoad(

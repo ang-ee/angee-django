@@ -633,6 +633,67 @@ describe("createApp auth routing", () => {
       host.remove();
     }
   });
+
+  test("a signed-out visit to / signs in to come back to /, not to the declared home", async () => {
+    history.replaceState(null, "", "/");
+    const app = createApp({
+      ...testAppInput([{ id: "desk", routes: [
+        { name: "auth.login", path: "/sign-in", layout: "public", component: EmptyPage },
+        { name: "desk.home", path: "/desk", component: EmptyPage },
+      ] }], {
+        public: { chrome: TestChrome, requireAuth: false, schema: "public" },
+        console: { chrome: TestChrome, requireAuth: true },
+      }),
+      home: "desk.home",
+      loginPath: "/sign-in",
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(window.location.pathname).toBe("/sign-in"));
+      expect(new URLSearchParams(window.location.search).get("next")).toBe("/");
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test.each([
+    { case: "no preferences", preferences: {}, lands: "/notes" },
+    { case: "their own rail order", preferences: { "chrome.rail": { order: ["ops"] } }, lands: "/ops" },
+    { case: "their rail default", preferences: { "chrome.rail": { order: ["ops"], defaultItemId: "notes" } }, lands: "/notes" },
+    { case: "their saved home page", preferences: { homePath: "/platform/graph" }, lands: "/platform/graph" },
+  ])("a signed-in visit to / waits for sign-in and lands by $case", async ({ preferences, lands }) => {
+    const user = { id: "ada", username: "ada", firstName: "Ada", lastName: "", email: "", isStaff: false, isActive: true, preferences, roleRefs: [] };
+    const fetch: typeof globalThis.fetch = async () => Response.json({ data: { __typename: "Query", current_user: user } });
+    history.replaceState(null, "", "/");
+    // Settings is composed first; it is still not where a person lands.
+    const app = createApp({
+      ...testAppInput([
+        { id: "platform", routes: [{ name: "platform.graph", path: "/platform/graph", component: EmptyPage }],
+          menus: [{ id: "platform", route: "platform.graph", group: "platform" }] },
+        { id: "notes", routes: [{ name: "notes.home", path: "/notes", component: EmptyPage }], menus: [{ id: "notes", route: "notes.home" }] },
+        { id: "ops", routes: [{ name: "ops.home", path: "/ops", component: EmptyPage }], menus: [{ id: "ops", route: "ops.home" }] },
+      ], { console: { chrome: TestChrome, requireAuth: true } }),
+      schemas: {
+        public: { url: "https://example.test/graphql/public/", fetch },
+        console: { url: "https://example.test/graphql/console/", fetch },
+      },
+    });
+    expect(app.explain.effective.home).toBe("/notes");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const length = history.length;
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(window.location.pathname).toBe(lands));
+      expect(history.length).toBe(length);
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
 });
 
 describe("createApp route menu refs", () => {
