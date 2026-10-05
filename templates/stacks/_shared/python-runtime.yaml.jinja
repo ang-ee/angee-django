@@ -24,4 +24,6 @@
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
 {% if ingress_domain_value == "localhost" %}{% else %}      ANGEE_PUBLIC_ORIGIN: "https://{{ ingress_domain_value }}"
 {% endif %}{% if uv_cache_dir %}      UV_CACHE_DIR: "{{ uv_cache_dir }}"
+{% endif %}{% if sentry_dsn %}      SENTRY_DSN: "{{ sentry_dsn }}"
+      SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"
 {% endif %}

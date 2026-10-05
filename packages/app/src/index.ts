@@ -7,6 +7,7 @@
 // App composition root + the rendered-addon seam.
 export * from "./create-app";
 export * from "./boot-app";
+export type { ErrorReportingInput } from "./error-reporting";
 
 // Addon composition API (headless manifest authoring + folding).
 export * from "./define-addon";

@@ -55,6 +55,7 @@ import {
 import {
   createRoot,
   type Root,
+  type RootOptions,
 } from "react-dom/client";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
@@ -203,7 +204,8 @@ type NormalizedAngeeAppSchemaConfig =
 
 export interface AngeeApp {
   router: AnyRouter;
-  mount(target: string | Element): Root;
+  /** Render the app; `options` carries React root error handlers such as error reporting's. */
+  mount(target: string | Element, options?: RootOptions): Root;
   /** Which layer set the shell and each menu node, and why pages are hidden or unavailable. */
   explain: CompositionExplanation;
 }
@@ -665,13 +667,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
   return {
     router,
     explain,
-    mount(target: string | Element): Root {
+    mount(target: string | Element, options?: RootOptions): Root {
       const element =
         typeof target === "string" ? document.querySelector(target) : target;
       if (!element) {
         throw new Error(`createApp().mount: no element matched ${String(target)}`);
       }
-      const root = createRoot(element);
+      const root = createRoot(element, options);
       root.render(
         <StrictMode>
           <RouterProvider router={router} />

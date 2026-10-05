@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -76,6 +77,10 @@ from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
+
+# Settings reloads in the suite compose through ProjectContract, which starts
+# Sentry for a configured DSN; a developer's exported DSN never receives test errors.
+os.environ.pop("SENTRY_DSN", None)
 
 
 @pytest.fixture

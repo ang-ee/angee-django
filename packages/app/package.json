@@ -115,6 +115,7 @@
     "@graphql-codegen/cli": "^7.1.3",
     "@graphql-codegen/client-preset": "^6.0.1",
     "@refinedev/core": "^5.0.12",
+    "@sentry/react": "^11.4.0",
     "graphql": "^16.14.0",
     "i18next": "^26.3.2",
     "nuqs": "^2.5.0"
