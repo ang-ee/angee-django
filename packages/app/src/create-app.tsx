@@ -63,7 +63,6 @@ import {
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
-  HOME_PATH_PREFERENCE_KEY,
   createRouteHref,
   type AppRuntime,
   type ComposedContainers,
@@ -79,8 +78,7 @@ import {
   useRefineNotificationProvider,
 } from "@angee/ui/feedback/index";
 import { InAppLinkProvider, hrefLocation, routerNavigator, routerPreloader } from "@angee/ui/lib";
-import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
-import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
+import { landingTarget } from "@angee/ui/chrome/app-rail-model";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ViewAsBanner } from "@angee/ui/chrome/ViewAs";
 import { LoadingPanel } from "@angee/ui/fragments/index";
@@ -139,6 +137,7 @@ import {
   createAddonRouteNodes,
   createLayoutRoutes,
   layoutNamesForRoutes,
+  layoutAuthGuard,
   loadRouteIdentity,
 } from "./route-tree";
 import { shellFieldSource } from "./shell";
@@ -469,11 +468,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
   );
-  const home =
-    (homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined) ??
-    (confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
-    routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path ??
-    "/";
+  const declaredHome = homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined;
+  // Where a person without preferences lands; also where an unavailable page sends them. A host with
+  // routes but no rail (a minimal test host) still lands on its first page.
+  const home = landingTarget(navigationTree, {}, declaredHome)
+    ?? routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path
+    ?? "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
     ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
@@ -583,15 +583,20 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   const rootRoute = createRootRoute({ component: RootOutlet });
 
+  // A signed-out visit to "/" signs in first only when the page it lands on requires it.
+  const homeRequiresSignIn = Object.keys(layoutAuthGuard(homeRoute?.layout ?? "console", input.layouts, refineAuthProvider, queryClient, loginPath)).length > 0;
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    beforeLoad: async () => {
+    beforeLoad: async ({ preload }) => {
       const identity = await loadRouteIdentity(refineAuthProvider, queryClient);
+      // Signed out: sign in and come back here, so the landing rule runs with this person's preferences.
+      // A preload only resolves the landing target; it never sends anyone to sign in.
+      if (identity === null && homeRequiresSignIn && !preload) throw redirect({ to: loginPath, search: { next: "/" } });
       // Location options rather than `href`: a preload follows a redirect only
       // through them, and would otherwise preload `/` again without end.
       throw redirect({
-        ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {})),
+        ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}, declaredHome)),
         replace: true,
       });
     },
@@ -895,16 +900,10 @@ function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
 }
 
-/** Resolve the home preference against the composed navigation, before a route commits. */
-function homeTarget(fallback: string, confined: boolean, menuTree: MenuTree, preferences: UserPreferences): string {
+/** Where `/` lands: the declared home inside a confined shell, otherwise `landingTarget`'s order for this person. */
+function homeTarget(fallback: string, confined: boolean, menuTree: MenuTree, preferences: UserPreferences, declaredHome: string | undefined): string {
   if (confined) return fallback;
-  const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
-  if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
-    return preferredPath;
-  }
-  const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
-  const item = menuTree.railMenuItems().find((node) => node.id === defaultItemId);
-  return (item && railDefaultTarget(item)) ?? fallback;
+  return landingTarget(menuTree, preferences, declaredHome) ?? fallback;
 }
 
 /** Base and addon namespaces have disjoint ownership. */

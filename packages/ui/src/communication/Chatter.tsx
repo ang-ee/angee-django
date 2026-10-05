@@ -129,14 +129,14 @@ export function Chatter({
         variant="card"
         className="flex min-h-0 flex-1 flex-col"
       >
-        <Tabs.List className="grid shrink-0 min-w-0 grid-flow-col auto-cols-fr overflow-hidden px-2 pt-2">
+        <Tabs.List className="flex shrink-0 min-w-0 overflow-x-auto px-2 pt-2">
           {resolvedTabs.map((tab) => (
             <Tabs.Tab
               key={tab.id}
               value={tab.id}
               onClick={() => setActiveTab(tab.id)}
               icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
-              className="h-8 min-w-0 px-1 text-13 font-medium"
+              className="h-8 min-w-fit flex-1 px-2 text-13 font-medium"
             >
               <span
                 className={cn(tab.icon && "chatter-tab-label")}
@@ -146,7 +146,7 @@ export function Chatter({
               </span>
               {tab.icon ? <span className="sr-only">{tab.label}</span> : null}
               {typeof tab.count === "number" ? (
-                <Tabs.Count>{tab.count}</Tabs.Count>
+                <Tabs.Count className="shrink-0">{tab.count}</Tabs.Count>
               ) : null}
             </Tabs.Tab>
           ))}

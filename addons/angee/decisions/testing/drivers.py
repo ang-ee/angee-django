@@ -1,45 +1,28 @@
-"""Real decision admission for browser journeys and management-shell setup."""
+"""Real question admission for browser journeys and management shells."""
 
 from collections.abc import Sequence
 from typing import Any
 
 from django.apps import apps
-from pydantic import Field
 
-from angee.base.identity import public_id_of
-from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionContext, DecisionRecordReference, DecisionRequest
-from angee.decisions.forms import Action
-from angee.decisions.states import Verdict
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
 
 
-class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
-    """Accept with a defaulted note and the retained, read-only record identity."""
-
-    note: str = "Reviewed"
-    reference: str = Field(json_schema_extra={"readOnly": True})
-
-
-class Reject(Action, key="reject", label="Reject", verdict=Verdict.REJECTED, outcome="rejected"):
-    """Reject with a nonempty explanation."""
-
-    reason: str = Field(min_length=3)
-
-
-def seed_group(*, actor: Any, assignees: Sequence[Any], reference: Any, requester: Any = DEFAULT_REQUESTER) -> Any:
-    """Admit a real inbox question using its declared action pair.
-
-    Call from a management shell with existing people and a record readable by
-    every participant. No test app or test tables are required on that host.
-    The frozen form remains usable by the normal ``decide`` action.
-    The returned group contains one decision.
-    """
-    return apps.get_model("decisions", "Decision").objects.admit_group([
+def seed_decision(*, actor: Any, assignees: Sequence[Any], reference: Any, requester: Any = None) -> Any:
+    return apps.get_model("decisions", "Decision").objects.ask(
         DecisionRequest(
-            kind="review_reference", subject=reference, assignees=tuple(assignees), requester=requester,
-            actions=(Accept, Reject),
-            context=DecisionContext(references=(DecisionRecordReference(
-                model=reference._meta.label, id=public_id_of(reference), label=str(reference),
-            ),)),
-            initial={"accept": {"reference": public_id_of(reference)}},
+            kind="review_reference",
+            records=(reference,),
+            assignees=tuple(assignees),
+            requester=requester,
+            proposal=DecisionProposal.model_validate(
+                {
+                    "alternatives": (
+                        {"key": "accept", "label": "Accept", "outcome": "accepted"},
+                        {"key": "reject", "label": "Reject", "outcome": "rejected"},
+                    )
+                }
+            ),
         ),
-    ], actor=actor)
+        actor=actor,
+    )

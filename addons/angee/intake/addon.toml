@@ -18,3 +18,8 @@ demo = [
   { path = "resources/demo/010_messaging.channel.yaml", depends_on = ["integrate:resources/master/010_integrate.vendor.yaml", "iam:resources/demo/010_iam.user.yaml", "work:resources/demo/010_work.queue.yaml"] },
   { path = "resources/demo/020_intake.need.yaml", depends_on = ["work:resources/demo/020_projects.task.yaml", "projects:resources/demo/010_projects.project.yaml"] },
 ]
+
+[[migrations]]
+name = "cutover"
+app_label = "intake"
+module = "runtime_migrations.cutover"

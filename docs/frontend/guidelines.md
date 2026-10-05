@@ -211,6 +211,10 @@ shared UI copy through an addon bundle.
   applies last. Hosts pass no product facts. Rail, login, public mark and
   document title read the brand through `useRuntimeBrand`; shell components
   hard-code no identity. See [`resolveShell`](../../packages/app/src/shell.ts).
+  `/` signs in like the `console` layout, then lands by [`landingTarget`](../../packages/ui/src/chrome/app-rail-model.ts):
+  the person's saved home page, their rail default, the declared home, the
+  first app of their ordered rail (top-level `sequence` orders it by default),
+  then Settings. Never add a landing flag or fall back to route order.
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native
@@ -536,8 +540,12 @@ shared UI copy through an addon bundle.
   ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
   are untouched — and reuses the same `<Group>` declarations, so no field metadata is
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+  Body tabs (lines, explicit body tabs, then labelled groups) and contributed record
+  tabs share one strip in that order; header fields and stacked groups stay visible.
+  Overview appears only on forms without body tabs. `defaultRecordTab` and controlled
+  `recordTab` address either kind; field reveal selects its owning body tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
-  above the title and its lead body before the overview's groups. A domain-owned
+  above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the overview's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget
   with the addon. Add `fill` when it should use the measured hero width; the
   widget receives `field.fill` and `field.containerWidth`. Do not repeat that
@@ -585,11 +593,14 @@ shared UI copy through an addon bundle.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
-- **Human decision subjects opt into the generic tab.** Compose
-  [`decisionRecordTab()`](../../addons/angee/decisions/web/src/RecordDecisions.tsx)
-  as a `<model>#sections` child under your own id (`"<addon>.decisions"`);
-  [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
-  subject identity, while each subject addon owns successor admission.
+- **Records use one timeline pane.** Workflows contributes `RecordTimeline`
+  to `record#aside`; pages choose left or right with `useRecordTimelinePane`.
+  The same `DecisionCard` serves the inbox, record and record-set timeline.
+  Forms consume the shared field-mark bridge; marks reveal the corresponding
+  card. Lists may opt into the decisions attention column and filter.
+  Eager attention selects the timeline for records with runs and opens it for
+  waiting decisions; the tab count uses the same read. Run, step and question
+  change feeds retain concern identities for scoped invalidation, without polling.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
@@ -646,10 +657,9 @@ shared UI copy through an addon bundle.
 - A widget that consumes a fixed array of object fields declares
   `acceptsRowTemplate: true` in its widget definition. The FormSpec projector
   passes the parsed `rowTemplate` only through that seam and rejects a selected
-  widget that cannot accept it; compose the shared `rows` widget for decision
-  forms with fixed-size tables. Decision-specific presentation is a
-  `decisions#content` child built with `decisionContent(kind, Component)`, one
-  per kind; the inbox owns the form and its React Hook Form context.
+  widget that cannot accept it; compose the shared `rows` widget for fixed-size
+  tables. The exported `DecisionCard` renders concerned records, proposal
+  alternatives, evidence, and the chosen verdict for any question.
 - Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
@@ -726,7 +736,7 @@ the `ContainerKinds` interface, so a `#aside` child carries
 `ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
 `#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
 There are no per-kind constructor functions; an addon helper returns a plain
-child (`recordPagesTab()`, `decisionContent(kind, Component)`). A new
+child (`recordPagesTab()`, `decisionRecordTab()`). A new
 container name is added by declaration merging, as
 [IAM](../../addons/angee/iam/web/src/ShareAccess.tsx) does:
 
@@ -780,9 +790,7 @@ framework's placeholder chatter tabs this way:
 An addon declares a container of its own by naming an address on its own node,
 with no children or with its own: `"messaging.channels#toolbar": {}`. Two
 entry keys apply only there. `unique: "key"` makes every child carry a `key`
-and fails two children with one key: `decisions#content` renders one
-presentation per decision kind
-([decisions](../../addons/angee/decisions/web/src/index.ts)). `models: true`
+and fails two children with one key. `models: true`
 makes the container model-scoped: IAM declares `iam#access-roles`, and
 [proposals](../../addons/angee/proposals/web/src/record-rounds.tsx) adds
 children at `proposals.Round#access-roles`; the owner passes the record's
@@ -895,8 +903,8 @@ The `form`, `resource` and `record` containers also take model addresses. The
 declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
 and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
 Addons own theirs, such as `messaging.channels#toolbar`,
-`parties.overview#items`, `appearance.settings#tools`, `decisions#content`,
-`decisions#origin` and `iam#access-visibility`.
+`parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
+and `iam#access-visibility`.
 
 ### Chatter
 

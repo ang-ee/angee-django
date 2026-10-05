@@ -23,6 +23,8 @@ export interface RelationFieldWidgetProps {
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by this relation picker. */
   filters?: readonly CrudFilter[];
+  /** Hasura condition supplied by the field's owner; combined with native search filters. */
+  where?: Record<string, unknown>;
   /**
    * Explicit inline-create configuration for the picker. Overrides the default
    * derived from the related model's metadata (offered when it has a create
@@ -67,6 +69,7 @@ function EditableRelationFieldWidget(
   readOnly,
   relation,
   filters,
+  where,
   create,
   searchFields,
   selectedOption,
@@ -79,6 +82,7 @@ function EditableRelationFieldWidget(
     value,
     selectedOption,
     filters,
+    where,
     searchFields,
   });
 

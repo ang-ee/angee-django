@@ -93,9 +93,9 @@ class ActionResult:
         names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
         no argument) surfaces at form level. Other exceptions and validation errors
         with only non-field messages leave the map empty. ``DomainError`` and
-        ``ValidationError`` codes are preserved when defined. Explicit form-level
-        validation messages supply the banner; target preflights and errors without
-        a field map keep the generic summary without leaking diagnostics.
+        ``ValidationError`` codes are preserved when defined. All validation
+        messages supply the banner, regardless of their keys. Target preflights
+        and other exceptions keep the generic summary.
         """
 
         validation_errors = (
@@ -103,8 +103,8 @@ class ActionResult:
             if isinstance(error, ValidationError) else None
         )
         message = summary
-        if validation_errors is not None and not isinstance(error, ActionTargetUnavailable):
-            message = "; ".join(cast(dict[str, list[str]], validation_errors).get(NON_FIELD_ERRORS, ())) or summary
+        if isinstance(error, ValidationError) and not isinstance(error, ActionTargetUnavailable):
+            message = "; ".join(error.messages) or summary
         return cls(
             ok=False,
             message=message,

@@ -372,7 +372,19 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
 
 
 class InferenceModelManager(AngeeManager):
-    """Manager owning the upsert of model rows from a provider's catalogue."""
+    """Manager owning catalogue sync and selection of authorized deployments."""
+
+    def usable(self, actor: Any, role: str, *, uses: Collection[InferenceModelUse]) -> tuple[Any, ...]:
+        """Return readable, approved, callable models with catalogue defaults first."""
+
+        models = []
+        for model in self.with_actor(actor).select_related("provider").order_by("-is_default", "pk"):
+            try:
+                model.require_usable(actor, role, uses=uses)
+            except (PermissionDenied, InferenceModelUnavailable):
+                continue
+            models.append(model)
+        return tuple(models)
 
     def sync_from_provider(self, provider: Any) -> int:
         """Upsert one row per model the provider advertises (non-destructive).

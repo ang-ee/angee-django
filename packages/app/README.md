@@ -9,8 +9,9 @@ generated metadata before composition. `create` receives the loaded schemas and
 returns the app to mount. See the [frontend guidelines](../../docs/frontend/guidelines.md).
 
 Products declare the shell. An addon's `shell: { home, brand, perspective }`
-names where `/` lands, its `{ name, mark }` identity (the mark a registered
-glyph) and the selected perspective; `perspectives: { id: { root, home? } }`
+names the product's home (where `/` lands unless the person chose otherwise,
+per the [frontend guidelines](../../docs/frontend/guidelines.md)), its
+`{ name, mark }` identity (the mark a registered glyph) and the selected perspective; `perspectives: { id: { root, home? } }`
 declares named confinements. A perspective projects its menu root into the rail
 and command palette and redirects console routes owned by other roots to home
 with replacement. Unowned console routes (account, profile, preferences) remain
@@ -22,8 +23,8 @@ Shell facts layer along `dependsOn`, which the composed runtime fills from
 `addon.toml`: among the addons declaring a shell, the one no other declarer
 depends on is the product, and its own fields override its dependencies' field
 by field. Unrelated products, or unrelated ancestors setting one field, fall
-back to the framework default (no brand, no perspective, the first console
-route) and record why in `composed.shell.diagnostics`. The deployment's
+back to the framework default (no brand, no perspective, no declared home) and
+record why in `composed.shell.diagnostics`. The deployment's
 `ANGEE_UI` setting (`{ shell, perspectives }`) applies last; `perspective: null`
 keeps the full console. `createApp`'s `home` and `confineTo` inputs and the
 top-level `brand` field remain as deprecated overrides. Addons cannot claim the

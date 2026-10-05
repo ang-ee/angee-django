@@ -14,7 +14,6 @@ import { FormGrid } from "../../ui/form-layout";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Tabs } from "../../ui/tabs";
 import { Collapsible } from "../../ui/collapsible";
-import { renderGlyph } from "../../chrome/Glyph";
 import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
@@ -40,13 +39,13 @@ import {
   recordRepresentationValue,
   resolveField,
   titleText,
-  visibleSections,
   type FormSectionModel,
   type FormValues,
 } from "./form-view-model";
-import type { FormViewSurface, RecordToolbarContext } from "./form-view-surface";
+import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
+import { RecordFieldMarkButton } from "./record-field-marks";
 
 const TITLE_TEXT_CLASS =
   "block w-full min-w-0 break-words text-28 font-semibold leading-9 text-fg";
@@ -147,14 +146,20 @@ export function FormViewRecordHeader({
   } = surface;
   const headerValues = useWatch({
     control: form.control,
-    disabled: !titleField?.resolve && !statusField?.resolve,
+    disabled: !titleField?.resolve && !statusField?.resolve && !statusField?.showWhen,
   }) as FormValues;
   const currentTitleField = titleField
     ? resolveField(titleField, headerValues)
     : undefined;
-  const currentStatusField = statusField
+  const resolvedStatusField = statusField
     ? resolveField(statusField, headerValues)
     : undefined;
+  const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
+    && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
+    ? resolvedStatusField : undefined;
+  const statusbar = currentStatusField && fieldWidgetId(currentStatusField) === "statusbar";
+  const statusOnTitleRow = statusbar && !compact;
+  const compactStatus = statusbar && compact;
   const titleRelation = currentTitleField
     ? relationByField.get(currentTitleField.name)
     : undefined;
@@ -186,52 +191,37 @@ export function FormViewRecordHeader({
       </header>
     );
   }
+  const statusMark = currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null;
+  const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
+    compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
+    statusOnTitleRow ? "flex-auto justify-end" : "w-full",
+  )}>
+    <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
+      compactStatus ? (
+        typeof controller.value === "string" && controller.value ? <Badge
+          tone={statusTone(controller.value)} density="compact" shape="pill" className="justify-self-start"
+        >{optionLabel(currentStatusField.options, controller.value)}</Badge> : <span aria-hidden />
+      ) : <FieldDescriptorControl
+        controlRef={controller.ref}
+        field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
+        value={controller.value}
+        row={displayRecord ?? undefined}
+        readOnly={fieldReadOnly(currentStatusField)}
+        onChange={(next) => {
+          startFieldInteraction(currentStatusField.name);
+          clearServerFieldError(currentStatusField.name);
+          controller.onChange(next);
+          afterFieldChange(currentStatusField, next);
+        }}
+        onCommit={() => commitFieldInteraction(currentStatusField.name)}
+      />
+    } />
+    {statusOnTitleRow ? statusMark : null}
+  </div>{!statusOnTitleRow ? statusMark : null}</> : null;
   return (
-    <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
-      {currentStatusField && compact && fieldWidgetId(currentStatusField) === "statusbar" ? (
-        <Controller
-          control={form.control}
-          name={currentStatusField.name}
-          render={({ field: controller }) => {
-            const value = typeof controller.value === "string"
-              ? controller.value
-              : "";
-            return value ? (
-              <Badge
-                tone={statusTone(value)}
-                density="compact"
-                shape="pill"
-                className="justify-self-start"
-              >
-                {optionLabel(currentStatusField.options, value)}
-              </Badge>
-            ) : <span aria-hidden />;
-          }}
-        />
-      ) : currentStatusField ? (
-        <div ref={statusContainerRef} className="flex min-w-0 w-full flex-wrap items-center gap-3">
-          <Controller
-            control={form.control}
-            name={currentStatusField.name}
-            render={({ field: controller }) => (
-              <FieldDescriptorControl
-                controlRef={controller.ref}
-                field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
-                value={controller.value}
-                row={displayRecord ?? undefined}
-                readOnly={fieldReadOnly(currentStatusField)}
-                onChange={(next) => {
-                  startFieldInteraction(currentStatusField.name);
-                  controller.onChange(next);
-                  afterFieldChange(currentStatusField, next);
-                }}
-                onCommit={() => commitFieldInteraction(currentStatusField.name)}
-              />
-            )}
-          />
-        </div>
-      ) : null}
-      <div className="min-w-0 flex-1 self-start">
+    <header className={cn(statusOnTitleRow ? "flex flex-wrap items-start gap-x-6 gap-y-4" : "grid", compact ? "gap-1" : !statusOnTitleRow && "gap-4")}>
+      {!statusOnTitleRow ? status : null}
+      <div className={cn("min-w-0 flex-1 self-start", statusOnTitleRow && "basis-64")}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="min-w-0 flex-1">
         {title !== undefined ? (
@@ -299,6 +289,7 @@ export function FormViewRecordHeader({
           </h1>
         )}
           </div>
+          {currentTitleField ? <RecordFieldMarkButton field={currentTitleField.name} label={currentTitleField.label} /> : null}
           {titlePlacementField && displayRecord ? <FieldDescriptorControl
             field={titlePlacementField}
             value={displayRecord[titlePlacementField.name]}
@@ -316,7 +307,8 @@ export function FormViewRecordHeader({
         {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         {contextLine ? <div className="mt-1 break-words text-xs text-fg-muted">{contextLine}</div> : null}
       </div>
-      {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
+      {statusOnTitleRow ? status : null}
+      {extra ? <div className={cn(compact && "pt-1", statusOnTitleRow && "w-full")}>{extra}</div> : null}
     </header>
   );
 }
@@ -325,28 +317,24 @@ export function FormViewOverview({
   surface,
   layout,
   groupLayout,
-  bodyTabs,
-  linesTabLabel,
+  tabStrip,
   linePrimaryFields,
   lineSupplementalColumns,
   lineRelationFilters,
-  context,
 }: {
   surface: FormViewSurface;
   layout: "stacked" | "tabs";
   groupLayout: "stacked" | "paired";
-  bodyTabs?: readonly { id: string; label: React.ReactNode; render: (context: RecordToolbarContext) => React.ReactNode }[];
-  linesTabLabel?: React.ReactNode;
+  tabStrip: React.ReactNode;
   linePrimaryFields?: readonly string[];
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   lineRelationFilters?: EditableLinesProps["relationFilters"];
-  context: RecordToolbarContext;
 }): React.ReactElement {
   const {
     t,
     form,
-    hasConditionalFields,
     sections,
+    bodyTabSections,
     linesActive,
     linesResource,
     linesField,
@@ -415,41 +403,13 @@ export function FormViewOverview({
       return <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />;
     });
   };
-  const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
-    if (layout !== "tabs") {
-      return renderOverviewSections(list);
-    }
-    const stacked = list.filter((section) => section.label == null || section.collapsible);
-    const groupTabs = list.filter(
-      (section) =>
-        section.label != null
-        && !section.collapsible
-        && (section.fields.length > 0 || section.render !== undefined),
-    );
-    const tabbedSections: FormSectionModel[] = [
-      ...(editableLines ? [{ key: "editable-lines", label: linesTabLabel ?? t("lines.section"), fields: [], render: () => editableLines }] : []),
-      ...(bodyTabs ?? []).map((tab) => ({ key: tab.id, label: tab.label, fields: [], render: () => tab.render(context) })),
-      ...groupTabs,
-    ];
-    return (
-      <>
-        {renderOverviewSections(stacked)}
-        {tabbedSections.length > 0 ? (
-          <FormSectionTabs
-            sections={tabbedSections} renderField={renderField} control={form.control}
-            requestedFocusPath={requestedFocusPath} lineField={linesField}
-          />
-        ) : null}
-      </>
-    );
-  };
-
   return (
     <>
       {currentBodyField ? (
         <section className="grid gap-2">
           {currentBodyField.label ? (
-            <SectionHeading as="h2" label={currentBodyField.label} />
+            <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label} />
+              <RecordFieldMarkButton field={currentBodyField.name} label={currentBodyField.label} /></div>
           ) : null}
           <Controller
             control={form.control}
@@ -475,15 +435,11 @@ export function FormViewOverview({
         </section>
       ) : null}
       <div className="grid gap-6">
-        {hasConditionalFields ? (
-          <ConditionalSections
-            control={form.control}
-            sections={sections}
-            renderSections={renderSections}
-          />
-        ) : (
-          renderSections(sections)
-        )}
+        {renderOverviewSections(bodyTabSections.length > 0
+          ? sections.filter((section) => section.label == null || section.collapsible) : sections)}
+        {bodyTabSections.length > 0 ? <FormSectionTabs surface={surface} tabStrip={tabStrip}
+          sections={bodyTabSections.map((section) => section.key === "editable-lines"
+            ? { ...section, render: () => editableLines } : section)} renderField={renderField} /> : null}
       </div>
       {layout !== "tabs" && editableLines ? (
         <section className="grid gap-3">
@@ -656,60 +612,33 @@ function FormSection({
 }
 
 function FormSectionTabs({
+  surface,
   sections,
   renderField,
-  control,
-  requestedFocusPath,
-  lineField,
+  tabStrip,
 }: {
+  surface: FormViewSurface;
   sections: readonly FormSectionModel[];
   renderField: (field: FieldDescriptor) => React.ReactNode;
-  control: Control<FormValues>;
-  requestedFocusPath: string | null;
-  lineField: string | null;
+  tabStrip: React.ReactNode;
 }): React.ReactElement {
-  const [active, setActive] = React.useState(sections[0]?.key);
+  const { form: { control }, requestedFocusPath, linesField: lineField, setActiveRecordTab } = surface;
   const trackedFields = sections.flatMap((section) => section.fields.map((field) => field.name));
   if (lineField) trackedFields.push(lineField);
   const { errors, submitCount } = useFormState({ control, name: trackedFields });
   const handledSubmitCount = React.useRef(submitCount);
   React.useEffect(() => {
-    const focus = requestedFocusPath;
-    if (focus) {
-      const target = sections.find((section) =>
-        section.fields.some((field) => focus === field.name || focus.startsWith(`${field.name}.`))
-        || (section.key === "editable-lines" && lineField && (focus === lineField || focus.startsWith(`${lineField}.`))),
-      );
-      if (target) setActive(target.key);
-      return;
-    }
     if (handledSubmitCount.current === submitCount) return;
     handledSubmitCount.current = submitCount;
     const errored = sections.find((section) =>
       section.fields.some((field) => get(errors, field.name) !== undefined)
       || (section.key === "editable-lines" && lineField && get(errors, lineField) !== undefined),
     );
-    if (errored) setActive(errored.key);
-  }, [errors, lineField, requestedFocusPath, sections, submitCount]);
-  const value = sections.some((section) => section.key === active)
-    ? active
-    : sections[0]?.key;
+    if (errored) setActiveRecordTab(errored.key);
+  }, [errors, lineField, requestedFocusPath, sections, setActiveRecordTab, submitCount]);
   return (
-    <Tabs value={value} onValueChange={setActive} variant="card">
-      <Tabs.List>
-        {sections.map((section) => (
-          <Tabs.Tab
-            key={section.key}
-            value={section.key}
-            icon={renderGlyph(section.icon)}
-          >
-            {section.label}
-            {section.badge != null ? (
-              <Tabs.Count>{section.badge}</Tabs.Count>
-            ) : null}
-          </Tabs.Tab>
-        ))}
-      </Tabs.List>
+    <>
+      {tabStrip}
       {sections.map((section) => (
         <Tabs.Panel key={section.key} value={section.key}>
           <SectionHeading label={section.label} count={section.badge} className="mb-3" />
@@ -721,21 +650,8 @@ function FormSectionTabs({
           />
         </Tabs.Panel>
       ))}
-    </Tabs>
+    </>
   );
-}
-
-function ConditionalSections({
-  control,
-  sections,
-  renderSections,
-}: {
-  control: Control<FormValues>;
-  sections: readonly FormSectionModel[];
-  renderSections: (list: readonly FormSectionModel[]) => React.ReactNode;
-}): React.ReactNode {
-  const values = useWatch({ control }) as FormValues;
-  return renderSections(visibleSections(sections, values));
 }
 
 function BoundFieldRow({
@@ -777,10 +693,11 @@ function BoundFieldRow({
       invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
-      <FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
+      <div className="flex items-center gap-1"><FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
+      <RecordFieldMarkButton field={field.name} label={field.label} /></div>
       <div
         className={cn(
           FIELD_CONTROL_CLASS,

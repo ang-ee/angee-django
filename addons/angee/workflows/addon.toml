@@ -6,3 +6,13 @@ description = "Immutable workflow graphs and actor-scoped execution"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
 depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions"]
+
+[[migrations]]
+name = "independent_decisions"
+app_label = "workflows"
+module = "runtime_migrations.independent_decisions"
+
+[[migrations]]
+name = "current_execution"
+app_label = "workflows"
+module = "runtime_migrations.current_execution"

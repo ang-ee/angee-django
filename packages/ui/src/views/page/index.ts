@@ -215,6 +215,7 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     label: props.label,
     ...(props.icon !== undefined ? { icon: props.icon } : {}),
     ...(props.disabled !== undefined ? { disabled: props.disabled } : {}),
+    ...(props.disabledReason !== undefined ? { disabledReason: props.disabledReason } : {}),
     ...(props.danger !== undefined ? { danger: props.danger } : {}),
     ...(props.placement !== undefined ? { placement: props.placement } : {}),
     ...(props.primary !== undefined ? { primary: props.primary } : {}),

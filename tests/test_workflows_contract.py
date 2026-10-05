@@ -8,7 +8,6 @@ from django.utils import timezone
 from pydantic import BaseModel, field_serializer
 
 from angee.workflows.context import StepContext
-from angee.workflows.reviews import ReviewStep
 from angee.workflows.steps import Fail, NextPage, RetryPolicy, Step, StepMode, resolve_step
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 
@@ -166,30 +165,3 @@ def test_context_acknowledgement_belongs_to_its_claimed_attempt():
     assert not ctx.retry_acknowledged
     ctx.attempt.acknowledged_by_id = 5
     assert ctx.retry_acknowledged
-
-
-def test_generic_models_preserve_review_basis_override_precedence():
-    """Generic contracts and explicit review bases retain their native inheritance."""
-
-    class Value(BaseModel):
-        value: int
-
-    class Alternative(BaseModel):
-        label: str
-
-    class Typed(ReviewStep[Value, Value, Value, Value]):
-        input_model = output_model = config_model = basis_model = Alternative
-
-    class Inherited(Typed):
-        pass
-
-    class Explicit(Inherited):
-        basis_model = Alternative
-
-    class Untyped(ReviewStep[None, None, None, None]):
-        pass
-
-    for step in (Typed, Inherited, Explicit):
-        assert (step.input_model, step.output_model, step.config_model) == (Value, Value, Value)
-    assert Typed.basis_model is Inherited.basis_model is Explicit.basis_model is Alternative
-    assert (Untyped.input_model, Untyped.output_model, Untyped.config_model, Untyped.basis_model) == (None,) * 4

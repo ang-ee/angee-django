@@ -34,7 +34,7 @@ rows:
             input: {from: [review, validate]}
         results:
           - {from: publish}
-          - {from: review, when: [rejected, expired, superseded]}
+          - {from: review, when: [rejected]}
   - xref: note_review_batch
     fields:
       key: note-review-batch
@@ -69,8 +69,6 @@ rows:
             next:
               published: result
               rejected: result
-              expired: result
-              superseded: result
               done: result
               error: result
               canceled: result

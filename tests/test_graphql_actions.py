@@ -84,7 +84,7 @@ def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixtu
     with caplog.at_level("ERROR", logger=actions_module.__name__):
         validation = register("validation")
     assert validation.ok is False
-    assert validation.message == "Could not register the review."
+    assert validation.message == "Exceeds the limit."
     assert validation.validation_errors == {"amount": ["Exceeds the limit."]}
     assert not caplog.records
 
@@ -196,7 +196,7 @@ def test_action_guard_keeps_validation_refusal_codes_in_band(
     assert result.data == {
         "updateAccess": {
             "ok": False,
-            "message": "Access change refused.",
+            "message": "; ".join(error.messages),
             "code": code,
             "validationErrors": validation_errors,
         },
@@ -239,7 +239,7 @@ def test_action_result_from_error_maps_field_validation_errors() -> None:
     result = ActionResult.from_error(error, "Fix the line.")
 
     assert result.ok is False
-    assert result.message == "Fix the line."
+    assert result.message == "Must be positive.; Required."
     # Keys are camel-cased to match the GraphQL argument names the form binds to.
     assert result.validation_errors == {
         "unitPrice": ["Must be positive."],
@@ -278,7 +278,7 @@ def test_action_result_from_error_falls_back_to_message_only() -> None:
 
     non_field = ActionResult.from_error(ValidationError("Whole thing is wrong."), "Bad request.")
     assert non_field.ok is False
-    assert non_field.message == "Bad request."
+    assert non_field.message == "Whole thing is wrong."
     assert non_field.code is None
     assert non_field.validation_errors is None
 

@@ -7,12 +7,14 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.functions import Coalesce, NullIf
-from rebac import PermissionDenied, actor_context, current_actor, system_context
+from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
+from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id, instance_actor
@@ -21,9 +23,7 @@ from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.scoping import bind_actor, system_queryset
-from angee.decisions.contracts import DecisionRequest
-from angee.decisions.forms import Action
-from angee.decisions.states import Verdict
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +40,6 @@ class NeedAccessAction(models.TextChoices):
 
     INTAKE_APPROVE = "intake.approve", "Approve"
     INTAKE_DENY = "intake.deny", "Deny"
-
-
-class ApproveNeedAccess(
-    Action, key=NeedAccessAction.INTAKE_APPROVE, label=NeedAccessAction.INTAKE_APPROVE.label, verdict=Verdict.COMPLETED,
-):
-    """Approve the request's account, with an optional explanation."""
-
-    reason: str = ""
-
-
-class DenyNeedAccess(
-    Action, key=NeedAccessAction.INTAKE_DENY, label=NeedAccessAction.INTAKE_DENY.label, verdict=Verdict.REJECTED,
-):
-    """Decline access without changing the request's account."""
-
-    reason: str = ""
 
 
 class NeedQuerySet(AngeeQuerySet):
@@ -354,7 +338,6 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "ned_"
-    access_actions = (ApproveNeedAccess, DenyNeedAccess)
     # The requester's name is a sort axis through the linked party: an empty
     # name and an unreadable party both tie as NULL through the shared guard.
     hasura_aliases = {
@@ -387,6 +370,14 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     access_decision = models.ForeignKey(
         "decisions.Decision", null=True, blank=True, editable=False,
         on_delete=models.PROTECT, related_name="access_needs",
+    )
+    admitted_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.PROTECT,
+        related_name="+",
     )
     importance = StateField(choices_enum=NeedImportance, default=NeedImportance.NORMAL)
     body = models.TextField(blank=True, default="")
@@ -437,44 +428,57 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         )
 
     @property
-    def access_verdict(self) -> str | None:
-        """Project the readable seat's outcome without storing a second verdict."""
+    def requester_access_granted(self) -> bool:
+        """The request owner has applied approval to this account."""
+        return self.admitted_user_id is not None
+
+    @property
+    def access_verdict(self) -> list[str] | None:
         return self.access_decision.verdict if self.access_decision is not None else None
 
     @property
-    def access_resolution(self) -> dict[str, Any] | None:
-        """Project the readable seat's tagged answer."""
-        return self.access_decision.resolution if self.access_decision is not None else None
+    def access_answered_by_id(self) -> Any:
+        """Project the readable decision's answerer identity for server-side consumers."""
+        return self.access_decision.answered_by_id if self.access_decision is not None else None
 
     @property
-    def access_resolved_by_id(self) -> Any:
-        """Project the readable seat's resolver identity for server-side consumers."""
-        return self.access_decision.resolved_by_id if self.access_decision is not None else None
+    def access_answered_by(self) -> Any:
+        """Project the readable decision's answerer."""
+        return self.access_decision.answered_by if self.access_decision is not None else None
 
     @property
-    def access_resolved_by(self) -> Any:
-        """Project the readable seat's resolver."""
-        return self.access_decision.resolved_by if self.access_decision is not None else None
-
-    @property
-    def access_resolved_at(self) -> Any:
-        """Project the readable seat's retained answer time."""
-        return self.access_decision.resolved_at if self.access_decision is not None else None
+    def access_answered_at(self) -> Any:
+        """Project the readable decision's retained answer time."""
+        return self.access_decision.answered_at if self.access_decision is not None else None
 
     def _new_access_decision(self) -> Any:
-        """Admit a system-requested seat whose live assignees are target sharers."""
+        """Ask one question assigned to the target's current sharers."""
         with system_context(reason="intake.need.access_question"):
-            decisions = apps.get_model("decisions", "Decision").objects
-            if self.access_decision_id is not None and self.access_decision.group.settled_at is not None:
-                group = decisions.reask(
-                    self.access_decision.group_id, actor=None, actions=self.access_actions, errors={},
-                )
-            else:
-                group = decisions.admit_group((DecisionRequest(
-                    kind="intake.access", subject=self, assignees=None,
-                    actions=self.access_actions, requester=None, supersede=True,
-                ),), actor=None, policy="first")
-            return group.decisions.get(index=0)
+            readers = backend().lookup_subjects(resource=to_object_ref(self), action="share", subject_type="auth/user")
+            assignees = tuple(
+                get_user_model().objects.filter(pk__in=[actor_user_id(ref) for ref in readers], is_active=True)
+            )
+            return apps.get_model("decisions", "Decision").objects.ask(
+                DecisionRequest(
+                    kind="intake.access",
+                    records=(self,),
+                    assignees=assignees,
+                    requester=None,
+                    proposal=DecisionProposal.model_validate(
+                        {
+                            "alternatives": (
+                                {
+                                    "key": NeedAccessAction.INTAKE_APPROVE,
+                                    "label": "Approve access",
+                                    "outcome": "approved",
+                                },
+                                {"key": NeedAccessAction.INTAKE_DENY, "label": "Deny access", "outcome": "denied"},
+                            )
+                        }
+                    ),
+                ),
+                actor=None,
+            )
 
     @property
     def target(self) -> Any:
@@ -520,7 +524,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         """Validate assignment, reset its old decision, and follow atomically.
 
         The access verbs supply ``_access_decision`` after admitting or answering
-        their decision, so assignment persistence does not replace that seat.
+        their decision, so assignment persistence does not replace that question.
         Mixed edits stamp audit and revision once through the actor before the
         assignment-only ``save_base`` persists the authorized relation change.
         """
@@ -583,9 +587,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             if assignment_changed and not elevated:
                 if previous is not None and not self.has_access("share"):
                     raise PermissionDenied("Changing a request's assignment requires need share permission.")
-                assignment_fields = {
-                    name for attname in values for name in (attname, attname.removesuffix("_id"))
-                }
+                assignment_fields = {name for attname in values for name in (attname, attname.removesuffix("_id"))}
                 separate_assignment = (
                     previous is None or update_fields is None or update_fields - assignment_fields - {"updated_at"}
                 )
@@ -612,10 +614,14 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             else:
                 super().save(**kwargs)
             if previous is None or reset_decision:
-                # The row must exist before its decision's subject can reference it.
+                # The row must exist before its decision can concern it.
                 # This owner-controlled FK write is part of the same save/revision.
                 self.access_decision = self._new_access_decision()
-                system_queryset(type(self)).filter(pk=self.pk).update(access_decision=self.access_decision)
+                self.admitted_user = None
+                system_queryset(type(self)).filter(pk=self.pk).update(
+                    access_decision=self.access_decision,
+                    admitted_user=None,
+                )
             if reset_decision:
                 apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(self.target)
             if assignment_changed and values["task_id"] is not None and values["party_id"] is not None:
@@ -659,10 +665,51 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             self.party = party
         return user
 
-    def decide_access(self, action: str, reason: str = "", expected_revision: int | None = None) -> Any:
+    def decide_access(self, action: str, expected_revision: int | None = None) -> Any:
         """Link the account and delegate the final answer to the decisions owner."""
 
-        return self._decide_access(action, {"reason": reason}, expected_revision=expected_revision)
+        if action not in NeedAccessAction.values:
+            raise ValidationError({"action": "Choose approve or deny."})
+        actor = instance_actor(self)
+        if not self.with_actor(actor).has_access("write") or not self.target.with_actor(actor).has_access("share"):
+            raise PermissionDenied("Deciding request access requires need write and target share.")
+        # The question FK is redacted for actors without share permission.
+        if self.access_decision_id is None:
+            raise ValidationError({"action": "This need has no access question; create a new access request."})
+        # Both entrypoints lock the decision first, then its asking owner.
+        with actor_context(actor), transaction.atomic():
+            decision = apps.get_model("decisions", "Decision").objects.sudo(
+                reason="intake.answer.lock",
+            ).locked_get(pk=self.access_decision_id)
+            locked = type(self).objects.sudo(reason="intake.answer.need").locked_get(pk=self.pk)
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.access_decision_id != decision.pk:
+                raise ValidationError({"revision": "The access question has changed; reload it."})
+            if (not locked.with_actor(actor).has_access("write")
+                    or not locked.target.with_actor(actor).has_access("share")):
+                raise PermissionDenied("Deciding request access requires need write and target share.")
+            if not decision.is_open:
+                if decision.verdict == [action]:
+                    self.refresh_from_db()
+                    return locked.admitted_user
+                if decision.verdict == [NeedAccessAction.INTAKE_APPROVE]:
+                    raise ValidationError({"action": "Approved access is final."})
+                decision = locked._new_access_decision()
+                type(self).objects.filter(pk=locked.pk).update(access_decision=decision)
+            decision = decision.decide(actor=actor, chosen=[action], revision=decision.revision)
+        self.refresh_from_db()
+        return self.admitted_user
+
+    def apply_access_answer(self, decision: Any) -> Any:
+        """Consume this question only while it remains this request's current one."""
+        if not decision.verdict:
+            return None
+        return self._decide_access(
+            decision.verdict[0],
+            decision=decision,
+            decision_revision=decision.revision,
+        )
 
     @transaction.atomic
     def admit_requester(self, user: models.Model) -> Any:
@@ -674,7 +721,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             party = apps.get_model("parties", "Party").objects.for_user(user)
         self.party = party
         self.save(update_fields=("party", "updated_at"))
-        approved = self.decide_access(NeedAccessAction.INTAKE_APPROVE)
+        approved = self.decide_access(str(NeedAccessAction.INTAKE_APPROVE))
         if approved is None or not self.target.thread_reader_allowed(user):
             raise PermissionDenied("The admitted requester must be able to read the record.")
         with system_context(reason="intake.need.admit_requester.follow"):
@@ -689,7 +736,7 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         self.save(update_fields=("party", "updated_at"))
 
     def reset_access(self, *, confirmed: bool, expected_revision: int) -> Any:
-        """Retain requester identity and supersede its access answer atomically.
+        """Retain requester identity and ask a fresh independent access question.
 
         A fresh pending decision revokes decision-backed requester access. Account
         credentials and the previous decision's audit history remain with their
@@ -706,22 +753,28 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             ):
                 raise PermissionDenied("Resetting access requires need write and target share.")
             locked.require_revision(expected_revision)
-            locked.access_decision = locked._new_access_decision()
+            decision = locked._new_access_decision()
+            locked.admitted_user = None
             locked.save(
-                _access_decision=True, expected_revision=expected_revision,
-                update_fields=("access_decision", "updated_at"),
+                _access_decision=True,
+                expected_revision=expected_revision,
+                update_fields=("admitted_user", "updated_at"),
             )
+            system_queryset(type(self)).filter(pk=locked.pk).update(access_decision=decision)
             apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(locked.target)
         self.refresh_from_db()
         return self
 
     def _decide_access(
-        self, action: str, values: dict[str, Any], *,
-        expected_revision: int | None = None, decision: Any = None, decision_revision: int | None = None,
+        self,
+        action: str,
+        *,
+        expected_revision: int | None = None,
+        decision: Any = None,
+        decision_revision: int | None = None,
     ) -> Any:
         """Orchestrate both request and inbox entrypoints under the same request lock."""
-        action_model = next((model for model in self.access_actions if model.key == action), None)
-        if action_model is None:
+        if action not in NeedAccessAction.values:
             raise ValidationError({"action": "Choose approve or deny."})
         actor = instance_actor(self)
         with actor_context(actor), transaction.atomic():
@@ -739,13 +792,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 if locked.access_decision_id != decision.pk:
                     raise ValidationError({"revision": "The access question has changed; reload it."})
                 locked.access_decision.require_revision(decision_revision)
-            verdict = action_model.verdict
-            if locked.access_verdict == verdict:
-                if action == NeedAccessAction.INTAKE_DENY:
-                    return None
-                return locked._account_for_party(locked.party_id)
-            if locked.access_verdict == Verdict.COMPLETED:
-                raise ValidationError({"action": "Approved access is final."})
+            if decision is None or locked.access_verdict != [action]:
+                raise ValidationError({"action": "Apply the request's current answer."})
             user = None
             if action == NeedAccessAction.INTAKE_APPROVE:
                 try:
@@ -754,16 +802,11 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                     raise
                 except DomainError as error:
                     raise ValidationError({"conflict": error.code}) from error
-            if not locked.access_decision.is_open:
-                locked.access_decision = locked._new_access_decision()
-            decision = locked.access_decision
-            apps.get_model("decisions", "Decision").objects.decide(
-                decision.pk, actor=actor, revision=decision.revision,
-                action=action, values=values,
-            )
+            locked.admitted_user = user
             locked.save(
-                _access_decision=True, expected_revision=expected_revision,
-                update_fields=("party", "access_decision"),
+                _access_decision=True,
+                expected_revision=expected_revision,
+                update_fields=("party", "access_decision", "admitted_user"),
             )
             if (
                 action == NeedAccessAction.INTAKE_APPROVE
@@ -1049,33 +1092,3 @@ class ChannelIntake(models.Model):
             return None
         need_model = apps.get_model("intake", "Need")
         return need_model.objects.capture_from_message(message, queue=self.intake_queue)
-
-
-class DecisionIntake(models.Model):
-    """Bind intake seats to their request for live, declared sharer authority."""
-
-    extends = "decisions.Decision"
-    hasura_filterable_fields = ("intake_need__task",)
-    intake_need = models.ForeignKey(
-        "intake.Need", null=True, blank=True, editable=False,
-        on_delete=models.SET_NULL, related_name="access_decisions",
-    )
-
-    class Meta:
-        abstract = True
-
-    def decide(self, *, actor: Any, revision: int, action: str, values: dict[str, Any]) -> Any:
-        """Keep inbox answers inside intake's authorized account-linking transaction."""
-        if self.intake_need_id is None:
-            return super().decide(actor=actor, revision=revision, action=action, values=values)
-        need = self.intake_need.with_actor(actor)
-        need._decide_access(action, values, decision=self, decision_revision=revision)
-        return need.access_decision
-
-    def save(self, **kwargs: Any) -> None:
-        """Bind the domain's subject once, during the decision owner's admission."""
-        if self._state.adding and self.kind == "intake.access":
-            if self.subject_content_type.model_class() is not apps.get_model("intake", "Need"):
-                raise ValidationError("An intake access decision must name a need.")
-            self.intake_need_id = self.subject_object_id
-        super().save(**kwargs)

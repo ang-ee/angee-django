@@ -1,4 +1,4 @@
-import { ModelMetadataProvider, defineAngeeSchemaMetadata, schemaFieldMetadataFromAngeeSchemaMetadata, type AngeeSchemaMetadata, } from "@angee/metadata";
+import { ModelMetadataProvider, defineAngeeSchemaMetadata, refineResourcesFromAngeeSchemaMetadata, schemaFieldMetadataFromAngeeSchemaMetadata, type AngeeSchemaMetadata, } from "@angee/metadata";
 import {
   useMemo, type ComponentProps, type ReactNode } from "react";
 import {
@@ -149,7 +149,7 @@ export function RuntimeFixture({
       <Refine
         dataProvider={dataProvider}
         liveProvider={liveProvider}
-        resources={resources}
+        resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
         routerProvider={routed ? tanStackRouterProvider : undefined}
         options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
       >

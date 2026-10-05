@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -131,10 +131,10 @@ def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
     return model.objects.start(workflow, actor=actor, **kwargs)
 
 
-def decide(decision: Any, *, actor: Any, action: str, values: dict[str, Any] | None = None) -> Any:
+def decide(decision: Any, *, actor: Any, chosen: Sequence[str]) -> Any:
     """Submit the caller's observed revision through the real decisions owner."""
     return type(decision).objects.decide(
-        decision.pk, actor=actor, revision=decision.revision, action=action, values={} if values is None else values,
+        decision.pk, actor=actor, revision=decision.revision, chosen=chosen,
     )
 
 

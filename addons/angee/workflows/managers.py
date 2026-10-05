@@ -16,9 +16,9 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value
+from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value, Window
 from django.db.models.deletion import ProtectedError, RestrictedError
-from django.db.models.functions import Concat, Least, Now
+from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, system_context, to_subject_ref
@@ -95,7 +95,6 @@ class Cancellation:
 
     canceled: bool
     steps: int
-    reviews: int = 0
     children: int = 0
 
     @property
@@ -105,9 +104,6 @@ class Cancellation:
         if self.steps:
             noun = "step" if self.steps == 1 else "steps"
             changes.append(f"{self.steps} open {noun} canceled")
-        if self.reviews:
-            noun = "review" if self.reviews == 1 else "reviews"
-            changes.append(f"{self.reviews} pending {noun} closed")
         if self.children:
             noun = "run" if self.children == 1 else "runs"
             changes.append(f"{self.children} child {noun} canceled")
@@ -346,6 +342,39 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         target = canonical_record_target(record)
         return self.filter(subject_content_type=target.content_type, subject_object_id=target.object_id)
 
+    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
+              limit: int | None = None) -> Any:
+        """Runs that worked on readable records and all readable ancestors, oldest first."""
+        if not isinstance(records, (list, tuple)):
+            records = (records,)
+        subjects = Q(pk__in=[])
+        targets = Q(pk__in=[])
+        for record in records:
+            target = canonical_record_target(record)
+            targets |= Q(content_type=target.content_type, object_id=target.object_id)
+            subjects |= Q(subject_content_type=target.content_type, subject_object_id=target.object_id)
+        links = system_queryset(apps.get_model("workflows", "StepRecord")).filter(targets)
+        if operations is not None:
+            links = links.filter(operation__in=operations)
+        subjects = self.filter(subjects)
+        if limit is not None:
+            subjects = subjects.annotate(_rank=Window(RowNumber(),
+                partition_by=["subject_content_type_id", "subject_object_id"], order_by=["-created_at", "-pk"])
+            ).filter(_rank__lte=limit)
+            links = links.values("content_type_id", "object_id", "run_id").annotate(
+                _created=Max("run__created_at"),
+            ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
+                                   order_by=[F("_created").desc(), F("run_id").desc()])).filter(_rank__lte=limit)
+        ids = set(subjects.values_list("pk", flat=True))
+        ids.update(self.filter(pk__in=links.values("run_id")).values_list("pk", flat=True))
+        frontier = ids.copy() if ancestors else set()
+        while frontier:
+            parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
+                          .values_list("parent_step__run_id", flat=True))
+            frontier = set(self.filter(pk__in=parents).values_list("pk", flat=True)) - ids
+            ids.update(frontier)
+        return self.filter(pk__in=ids).order_by("created_at", "pk").distinct()
+
     @contextmanager
     def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
         """Lock one run and dispatch once for the outermost hold after commit.
@@ -414,11 +443,11 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         )
 
 
-class WorkflowRunEvidenceQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+class StepRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Keep retained admission references immutable until their run is pruned."""
 
 
-WorkflowRunEvidenceManager = AngeeManager.from_queryset(WorkflowRunEvidenceQuerySet)
+StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)
 
 
 class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
@@ -521,7 +550,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 if existing is None:
                     raise
                 return replay(existing)
-            evidence_model = apps.get_model("workflows", "WorkflowRunEvidence")
+            evidence_model = apps.get_model("workflows", "StepRecord")
             evidence_model.objects.bulk_create(
                 evidence_model(run=run, content_type=source.content_type, object_id=source.object_id)
                 for source in sorted(targets, key=lambda item: (item.content_type.pk, item.object_id))
@@ -548,13 +577,18 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError("The workflow run subject no longer exists.")
         return cast(RunSubject | None, subject)
 
-    def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "") -> None:
+    def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "",
+                     actor: Any = None) -> None:
         self.filter(pk=run.pk).update(
             status=status, outcome=outcome, output=strip_null_bytes(output),
             error=error,
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
         if status in RunStatus.terminal_values() and not run.is_terminal:
+            decisions = apps.get_model("decisions", "Decision").objects
+            with system_context(reason="workflows.terminal.withdraw"):
+                for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
+                    decisions.withdraw(decision, actor=actor or run.run_as)
             if (subject := self._lock_subject(run, required=False)) is not None:
                 subject.settle_run(self.get(pk=run.pk), status)
             if status != RunStatus.CANCELED:
@@ -574,23 +608,28 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             abandoned = self.filter(parent_step__run=parent, relation=RunRelation.OWNED).exclude(pk__in=awaited)
             for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
                 with self.hold_owned(child_id) as children:
-                    self._cancel_locked(children)
+                    self._cancel_locked(children, actor=parent.run_as)
 
-    def _cancel_locked(self, runs: list[Any]) -> Cancellation:
+    def _cancel_locked(self, runs: list[Any], *, actor: Any) -> Cancellation:
         """Cancel open rows in an already-held tree without rewriting terminal facts."""
-        steps = reviews = children = 0
+        steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            changed, closed = run.step_runs.cancel_open()
-            steps, reviews = steps + changed, reviews + closed
+            if run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED):
+                self.filter(pk=run.pk).update(stopped_at=Now(), updated_at=Now())
+                run.refresh_from_db(fields=["stopped_at"])
+                publish_change(run, action="update", update_fields=["stopped_at"])
+            changed = run.step_runs.cancel_open()
+            steps += changed
             if not run.is_terminal:
                 children += bool(index)
-                self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={})
+                self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME,
+                                  output={}, actor=actor)
                 changed = 1
-            if changed or closed:
+            if changed:
                 run.refresh_from_db()
                 publish_change(run, action="update", update_fields=None)
-        return Cancellation(canceled, steps, reviews, children)
+        return Cancellation(canceled, steps, children)
 
     def cancel_on_commit(self, run: Any, actor: Any) -> None:
         """Deliver an authorized cancellation after this transaction releases its locks.
@@ -610,10 +649,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
         if not system_queryset(self.model).filter(pk=run.pk).exists():
             return Cancellation(False, 0)
-        run.require_access("write", actor)
+        actor = run.require_access("write", actor)
         try:
             with self.hold_owned(run.pk, timeout=timeout) as runs:
-                return self._cancel_locked(runs)
+                return self._cancel_locked(runs, actor=actor or runs[0].run_as)
         except OperationalError as error:
             if _sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
@@ -655,6 +694,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     try:
                         with transaction.atomic(), ExitStack() as continuation_locks:
                             ids = [run.pk for run in runs]
+                            if apps.get_model("decisions", "Decision").objects.filter(
+                                requesting_steps__run_id__in=ids,
+                            ).open().exists():
+                                raise ProtectedError("A decision is still open.", runs)
                             continuation_ids = self.filter(
                                 parent_step__run_id__in=ids, relation=RunRelation.CONTINUATION,
                             ).order_by("pk").values_list("pk", flat=True)
@@ -663,18 +706,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                             if any(run is None or not run.is_terminal for run in [*runs, *continuations]):
                                 raise ProtectedError("A descendant is still running.", runs)
                             steps = runs[0].step_runs.model.objects.filter(run_id__in=ids)
-                            groups: dict[int, Any] = {}
-                            for step in steps.exclude(decision_group_id=None).select_related("decision_group"):
-                                for group in step.decision_group.rounds():
-                                    groups.setdefault(group.pk, group)
                             # Internal wait references must not protect rows in the same deleted tree.
                             steps.update(awaited_run=None)
                             for run in reversed(runs):
                                 self.filter(pk=run.pk).delete()
-                            for group in groups.values():
-                                if not group.is_deletable:
-                                    raise ProtectedError("Decision evidence must remain retained.", [group])
-                                group.delete()
                         count += len(runs)
                     except (ProtectedError, RestrictedError) as error:
                         self.filter(pk=run_id).update(
@@ -859,22 +894,22 @@ class StepRunQuerySet(AngeeQuerySet):
             attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
+        publish_change(step_run, action="update", update_fields=None)
 
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
-        kind: WaitingKind = cast(WaitingKind, WaitingKind.TIME), reason: str = "",
-        decision_group_id: Any = None,
+        kind: WaitingKind = cast(WaitingKind, WaitingKind.TIME), reason: str = "", decision_id: Any = None,
     ) -> int:
         """Park running rows, preserving retries unless a failure consumed one."""
-        if kind == WaitingKind.OPERATOR and not reason:
+        if kind == WaitingKind.ERROR and not reason:
             raise ValueError("An operator wait requires its reason.")
         return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY)).update(
             **(self._cleared_wait() | {
-                "waiting_kind": kind, "wake_at": until, "wait_reason": reason if kind == WaitingKind.OPERATOR else "",
+                "waiting_kind": kind, "wake_at": until, "wait_reason": reason if kind == WaitingKind.ERROR else "",
             }),
             status=StepRunStatus.WAITING, state=F("state") if state is None else state, outcome="",
             retries=F("retries") if retries is None else retries,
-            decision_group_id=F("decision_group_id") if decision_group_id is None else decision_group_id,
+            decision_id=F("decision_id") if decision_id is None else decision_id,
         )
 
     def to_ready(
@@ -890,23 +925,17 @@ class StepRunQuerySet(AngeeQuerySet):
             page_index=F("page_index") + 1 if next_page else F("page_index"),
         )
 
-    def cancel_open(self) -> tuple[int, int]:
-        """Return canceled step and pending-review counts, preserving completed evidence."""
+    def cancel_open(self) -> int:
+        """Cancel open steps while leaving their questions and answers intact."""
         opened = self.exclude(status__in=StepRunStatus.terminal_values())
         list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
         attempts = self.model._meta.get_field("attempts").related_model
-        decisions = apps.get_model("decisions", "Decision").objects
-        reviews = 0
-        for group_id in opened.exclude(decision_group_id=None).order_by("decision_group_id").values_list(
-            "decision_group_id", flat=True,
-        ):
-            reviews += decisions.cancel_group(group_id)
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
         apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
-        changed = opened.update(
-            **self._cleared_wait(), status=StepRunStatus.CANCELED,
+        return opened.update(
+            **self._cleared_wait(),
+            status=StepRunStatus.CANCELED,
         )
-        return changed, reviews
 
     def due(self) -> Any:
         """Return time or record waits whose optional database deadline has arrived."""
@@ -921,11 +950,15 @@ class StepRunQuerySet(AngeeQuerySet):
             pending = pending.filter(content_type_id=content_type_id, object_id=object_id)
         return self.filter(Exists(pending), status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD)
 
-    def settled_decisions(self) -> Any:
-        """Select decision waiters whose retained group has durably settled."""
+    def answered_decisions(self) -> Any:
+        """Wake an answered step without joining its question into the row lock."""
+        answered = system_queryset(apps.get_model("decisions", "Decision")).filter(
+            pk=OuterRef("decision_id"),
+        ).exclude(verdict__isnull=True)
         return self.filter(
+            Exists(answered),
             status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_group__settled_at__isnull=False,
+            decision_id__isnull=False,
         )
 
     def terminal_runs(self) -> Any:

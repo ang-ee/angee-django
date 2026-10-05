@@ -536,6 +536,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.update_name == "update_integrations_by_pk"
     assert metadata.roots.delete_name == "delete_integrations_by_pk"
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
+        "has_open_decisions",
         "display_name",
         "runtime_status",
         "lifecycle",

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import OperationalError, connection, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
@@ -25,11 +25,18 @@ from rebac.actors import is_sudo
 from angee.base.errors import exception_text
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
-from angee.workflows.states import DONE_OUTCOME, ERROR_OUTCOME, AttemptResult, RunStatus, StepRunStatus, WaitingKind
+from angee.workflows.states import (
+    DONE_OUTCOME,
+    ERROR_OUTCOME,
+    AttemptResult,
+    RecordOperation,
+    RunStatus,
+    StepRunStatus,
+    WaitingKind,
+)
 from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _Settlement
 
 logger = logging.getLogger(__name__)
@@ -93,7 +100,8 @@ class Runner:
         step_run: Any = None,
         settlement: _AttemptRecord | None = None,
         *,
-        artifacts: list[Any] | None = None,
+        records: list[Any] | None = None,
+        notes: list[dict[str, str]] | None = None,
     ) -> None:
         """Settle, plan and publish once, keeping successful body writes on data errors.
 
@@ -110,8 +118,17 @@ class Runner:
                 if settlement is not None:
                     with transaction.atomic():
                         step_runs.settle(step_run, settlement)
-                        if not isinstance(settlement.settlement, Fail) and artifacts:
-                            step_run.artifacts.bulk_create(artifacts)
+                        if not isinstance(settlement.settlement, Fail):
+                            if records:
+                                for record in records:
+                                    record_model = type(record)
+                                    record_model.objects.get_or_create(
+                                        run_id=record.run_id, step_run_id=record.step_run_id,
+                                        content_type_id=record.content_type_id, object_id=record.object_id,
+                                        operation=record.operation, defaults={"label": record.label},
+                                    )
+                            if notes:
+                                step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
                 # A preserved IO sibling may settle after failure. Its evidence
                 # changes, but the terminal run and graph plan stay untouched.
                 if not run.is_terminal:
@@ -235,7 +252,8 @@ class Runner:
                         publish_change(run, action="update", update_fields=None)
                 if settlement is not None:
                     self.advance(
-                        run, step_run, settlement, artifacts=ctx.pending_artifacts if ctx is not None else None,
+                        run, step_run, settlement, records=ctx.pending_records if ctx is not None else None,
+                        notes=ctx.pending_notes if ctx is not None else None,
                     )
             if settlement is None:
                 assert ctx is not None
@@ -250,7 +268,7 @@ class Runner:
     def _failure(failure: Exception) -> _AttemptRecord:
         return _AttemptRecord.failure(
             exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            retryable=isinstance(failure, (Retryable, RetryableDecisionError)) or (
+            retryable=isinstance(failure, (Retryable,)) or (
                 isinstance(failure, OperationalError)
                 and _sqlstate(failure) in RETRYABLE_SQLSTATES
             ),
@@ -282,7 +300,7 @@ class Runner:
             try:
                 with self._fenced(ctx.step_run) as current:
                     self.advance(
-                        current.run, current, settlement, artifacts=ctx.pending_artifacts,
+                        current.run, current, settlement, records=ctx.pending_records, notes=ctx.pending_notes,
                     )
                     return True
             except Superseded:
@@ -332,15 +350,18 @@ class Runner:
         with self._fenced(step_run):
             pass
 
-    def artifact(self, step_run: Any, record: Any, *, label: str, actor: Any) -> Any:
+    def record(self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
         readable = read_scoped_queryset(type(record), actor)
         if not readable.filter(pk=record.pk).exists():
-            raise PermissionDenied("Read access to the artifact record is required.")
+            raise PermissionDenied("Read access to the step record is required.")
         target = canonical_record_target(record)
+        if operation not in RecordOperation.values:
+            raise ValidationError("Unknown step record operation.")
         with self._fenced(step_run) as current:
-            return current.artifacts.model(
-                step_run=current, content_type=target.content_type, object_id=target.object_id, label=label,
+            return current.records.model(
+                run=current.run, step_run=current, content_type=target.content_type,
+                object_id=target.object_id, label=label, operation=operation,
             )
 
     def tick(self) -> dict[str, int]:
@@ -357,11 +378,11 @@ class Runner:
             candidates = candidates.filter(awaited_run_id=run_id)
         return self._each_candidate(candidates, self._wake)
 
-    def wake_decisions(self, group_id: Any = None) -> int:
+    def wake_decisions(self, decision_id: Any = None) -> int:
         """Signal and sweep share the run-lock owner and commit-time dispatch."""
-        candidates = self.step_model.objects.settled_decisions()
-        if group_id is not None:
-            candidates = candidates.filter(decision_group_id=group_id)
+        candidates = self.step_model.objects.answered_decisions()
+        if decision_id is not None:
+            candidates = candidates.filter(decision_id=decision_id)
         return self._each_candidate(candidates, self._wake)
 
     def wake_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> int:
@@ -404,7 +425,7 @@ class Runner:
         run.step_runs.filter(pk=step_run.pk).count_redispatch()
         if step_run.dispatches + 1 >= settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
             run.step_runs.filter(pk=step_run.pk).to_waiting(
-                kind=WaitingKind.OPERATOR, reason="Task delivery exhausted its retry allowance.",
+                kind=WaitingKind.ERROR, reason="Task delivery exhausted its retry allowance.",
             )
             self.advance(run)
 
@@ -422,7 +443,7 @@ class Runner:
         except ImproperlyConfigured as failure:
             step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
             run.step_runs.filter(pk=step_run.pk).to_waiting(
-                kind=WaitingKind.OPERATOR,
+                kind=WaitingKind.ERROR,
                 reason="The step implementation is unavailable; restore its registration before retrying.",
             )
         self.advance(run)

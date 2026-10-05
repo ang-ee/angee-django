@@ -2,8 +2,66 @@ import { graphql } from "@angee/gql/console";
 
 export const RUN_MODEL = "workflows.WorkflowRun";
 export const STEP_RUN_MODEL = "workflows.StepRun";
-export const STEP_EVIDENCE_MODELS = ["workflows.StepAttempt", "workflows.StepArtifact"] as const;
+export const STEP_EVIDENCE_MODELS = ["workflows.StepAttempt", "workflows.StepRecord"] as const;
 export const RUN_MODELS = [RUN_MODEL, STEP_RUN_MODEL, "workflows.StepWatch", ...STEP_EVIDENCE_MODELS] as const;
+
+export const StepDecisionDocument = graphql(`
+  query StepDecision($id: String!) {
+    steprun_by_pk(id: $id) { decision { ...DecisionCardFields } }
+  }
+`);
+
+export const RecordTimelineDocument = graphql(`
+  query RecordTimeline($records: [TimelineRecordInput!]!) {
+    record_timeline(records: $records) {
+      open_decision_count
+      records {
+      record_model record_id
+      decisions { ...DecisionCardFields }
+      runs {
+        id display_name status origin subject_model subject_id outcome_label failure_reason created_at finished_at stopped_at output can_cancel
+        run_as { display_name }
+        version { workflow { display_name } }
+        parent_step { id run { id } }
+        trigger_event { record_model record_id changed_at trigger { display_name } }
+        graph {
+          edges { source outcome target taken }
+          nodes {
+            key label step_label rank body_key plan outcomes { outcome label }
+            item_counts { status count } item_attempts
+            step_run {
+              id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
+              attempt page_index map_total map_settled created_at updated_at
+              can_retry requires_duplicate_acknowledgement
+              awaited_run { id display_name status }
+              child_runs { id display_name status }
+              records { id label operation record_model record_id }
+              decision { ...DecisionCardFields }
+              map_steps {
+                id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
+                can_retry requires_duplicate_acknowledgement updated_at
+                awaited_run { id display_name status }
+                child_runs { id display_name status }
+                records { id label operation record_model record_id }
+                decision { ...DecisionCardFields }
+              }
+            }
+          }
+        }
+      }
+      }
+    }
+  }
+`);
+
+export const RecordTimelineAttentionDocument = graphql(`
+  query RecordTimelineAttention($records: [TimelineRecordInput!]!) {
+    record_timeline(records: $records, include_runs: false) {
+      open_decision_count has_runs
+      records { record_model record_id decisions { id is_open proposal } }
+    }
+  }
+`);
 
 export const WorkflowRunGraphDocument = graphql(`
   query WorkflowRunGraph($id: String!) {
@@ -42,8 +100,8 @@ export const RevokeWorkflowTriggerGrantDocument = graphql(`
 `);
 
 export const DecisionWaitingRunsDocument = graphql(`
-  query DecisionWaitingRuns($group: String!) {
-    steprun(where: { decision_group: { _eq: $group }, status: { _eq: "waiting" } }, order_by: [{ rank: asc }, { map_index: asc }]) {
+  query DecisionWaitingRuns($decision: String!) {
+    steprun(where: { decision: { _eq: $decision }, status: { _eq: "waiting" } }, order_by: [{ rank: asc }, { map_index: asc }]) {
       id node_label map_index is_mapped
       run { id display_name }
     }

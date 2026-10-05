@@ -39,22 +39,20 @@ test("node-scoped step evidence keeps the run filter and selects parent plus ite
 
 test("step checkpoint and linked decisions compose the existing form and list", async () => {
   const requests: RunRequest[] = [];
-  render(<RunStory steps={[stepRunFixture({ decision_group: { id: "dcg_review" } })]}
+  render(<RunStory steps={[stepRunFixture({ decision: { id: "dcn_review" } })]}
     onRequest={(request) => requests.push(request)} />);
   const step = await openStep();
   expect(await within(step).findByText("Checkpoint")).toBeTruthy();
   await waitFor(() => expect(step.textContent).toContain("page-2"));
   fireEvent.click(within(step).getByRole("tab", { name: "Decisions" }));
-  expect(await within(step).findByText("review")).toBeTruthy();
-  expect(requests.find(({ query }) => /\bdecisions\s*\(/.test(query))?.variables.where).toEqual({ _and: [
-    { group__step_run: { _eq: "wsr_inspect" } },
-  ] });
+  expect(await within(step).findByText("Review")).toBeTruthy();
+  expect(requests.find(({ query }) => query.includes("StepDecision"))?.variables.id).toBe("wsr_inspect");
 });
 
-test("steps without a decision group hide the Decisions tab", async () => {
+test("steps always offer their scoped Decisions tab", async () => {
   render(<RunStory />);
   const step = await openStep();
-  expect(within(step).queryByRole("tab", { name: "Decisions" })).toBeNull();
+  expect(within(step).getByRole("tab", { name: "Decisions" })).toBeTruthy();
   expect(await within(step).findByText("Created")).toBeTruthy();
   expect((await within(step).findAllByText("Page 2")).length).toBeGreaterThan(0);
 });
@@ -132,10 +130,10 @@ test("retained evidence links readable records and marks redacted records", asyn
     { id: "wre_readable", record_model: "notes.Note", record_id: "nte_7" },
     { id: "wre_hidden", record_model: null, record_id: null },
   ]} onRequest={(request) => requests.push(request)} />);
-  fireEvent.click(await screen.findByRole("tab", { name: "Evidence" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Records" }));
   expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
   expect(await screen.findByText("Record unavailable")).toBeTruthy();
-  expect(requests.find(({ query }) => query.includes("workflowrunevidence("))?.variables.where)
+  expect(requests.find(({ query }) => query.includes("steprecord("))?.variables.where)
     .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
 });
 
@@ -183,10 +181,15 @@ test("reprocess confirms then navigates to the returned replacement through the 
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
-  render(Waiting.render());
-  const dialog = await action("Cancel run");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel run" }));
+  const requests: RunRequest[] = [];
+  render(<RunStory waiting onRequest={(request) => requests.push(request)} />);
+  const label = "Stop and do it manually";
+  const dialog = await action(label);
+  expect(within(dialog).getByText("Request cancellation of this run.")).toBeTruthy();
+  expect(requests.some(({ query }) => query.includes("cancel_workflow_run("))).toBe(false);
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
   expect(await screen.findByText("Open work canceled; the retained run is unchanged.")).toBeTruthy();
+  expect(requests.filter(({ query }) => query.includes("cancel_workflow_run(")).map(({ variables }) => variables.id)).toEqual(["wfr_review"]);
 });
 
 test("step rows are paged in execution order without per-row detail queries", async () => {
@@ -241,7 +244,7 @@ test("map facts distinguish ordinary steps, item zero, and empty map parents", a
   expect(within(parent).queryByText("Map index")).toBeNull();
 });
 
-test("selected step opens in the shared drawer with attempts and artifacts", async () => {
+test("selected step opens in the shared drawer with attempts and records", async () => {
   render(Recovery.render());
   const step = await openStep();
   expect(await within(step).findByRole("heading", { name: "Inspect source" })).toBeTruthy();
@@ -256,7 +259,7 @@ test("selected step opens in the shared drawer with attempts and artifacts", asy
   expect(await within(attempt).findByText("TimeoutError: operation expired")).toBeTruthy();
   fireEvent.click(within(attempt).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Step Attempt" })).toBeNull());
-  fireEvent.click(within(step).getByRole("tab", { name: "Artifacts" }));
+  fireEvent.click(within(step).getByRole("tab", { name: "Records" }));
   expect((await screen.findByRole("link", { name: "Retained note" })).getAttribute("href")).toBe("/notes/nte_7");
 });
 

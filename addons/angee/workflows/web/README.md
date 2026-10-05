@@ -17,7 +17,7 @@ over event volume; that decision currently blocks this subscription seam.
 Runs retain the backend's origin, outcomes, attempt evidence, wait reasons, and
 record references. The backend supplies execution rank and mapped-step identity;
 the shared resource list pages the ordered steps and opens one selected step in
-the framework drawer. Attempts and artifacts are child collections. Metadata owns
+the framework drawer. Attempts and step records are child collections. Metadata owns
 record names, labels and navigation; the JSON widget displays inputs and outputs.
 
 Declared `Action`s send cancel, reprocess, retry, and explicitly acknowledged
@@ -30,9 +30,16 @@ Trigger enablement uses the same action confirmation surface to show prospective
 principal grants and workflow run readers from the server's authorized preview.
 
 Workflows contributes the waiting run as a `decisions#origin` child. Records gain
-a separate Workflows chatter tab (`record#aside/workflows.runs`) scoped by model
-label and public ID. The existing activity feed takes no contributed entries, so
-these runs are not merged into that feed.
+one timeline chatter tab (`record#aside/workflows.timeline`). `RecordTimeline`
+accepts `record: {model, id} | readonly {model, id}[]`. It shows the trigger, done
+steps, inline decisions, error/run holds and the certain future steps, with other
+future branches in one may-also line. Long routine history folds while waiting.
+References use the native record peek. Open field marks reveal and highlight the
+same card beside the form. The set view groups open questions and held runs by
+record or question. `useRecordTimelinePane({record, side: "left" | "right"})`
+chooses the existing primary-pane or chatter host.
+Timeline retry shares the step drawer's action descriptors and typed
+acknowledgement when an external effect could repeat.
 Routed `ResourceList` declarations own collection state, filters, grouping, paging
 and the `Form` record frame. Catalogue versions and the shared runs list render in
 record tabs; contextual run collections reuse that same runs declaration.

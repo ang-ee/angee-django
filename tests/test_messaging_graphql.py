@@ -88,6 +88,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert metadata.roots.update_name == "update_messages_by_pk"
     assert metadata.roots.delete_name == "delete_messages_by_pk"
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
+        "has_open_decisions",
         "platform",
         "created_at",
         "id",

@@ -1778,6 +1778,14 @@ class FileAttachmentManager(AngeeManager):
             content_type=target.content_type, object_id=target.object_id, file__is_trashed=False,
         ).select_related("file")
 
+    def with_same_content(self, file: Any, record: models.Model) -> models.QuerySet[Any]:
+        """Readable edges of this record type carrying the same verified bytes."""
+        target = canonical_record_target(record)
+        return self.get_queryset().filter(
+            content_type=target.content_type, file__content_hash=file.content_hash,
+            file__upload_state=UploadState.READY, file__is_trashed=False,
+        ) if file.content_hash and file.upload_state == UploadState.READY else self.none()
+
     def has_record_arm(self, target: CanonicalRecordTarget) -> bool:
         """Read the effective REBAC schema's storage attachment capability."""
 

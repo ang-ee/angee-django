@@ -890,9 +890,10 @@ and current contracts before applying a historical example to a new deployment.
   Preserve those files and generate incremental migrations after the next build;
   [`RuntimeMigrations`](../../angee/compose/migrations.py) preserves existing
   materialized bodies when their declarations are removed.
-  Stacks whose migration graph depends on `workflows_ocr` must stop at this floor:
-  the history-only app is absent from newer code. Resolving historical imports
-  alone does not validate dependency labels or establish a forward upgrade path.
+  The composer now registers retained migration-only labels even when their source
+  addon is absent, including `workflows_ocr`. This keeps dependencies loadable but
+  does not restore historical Python imports or authorize data retirement. Verify
+  those imports and the owner's declared forward cutover against the recorded graph.
 - **Never empty `runtime/*/migrations` on a stack whose database is carried forward.**
   Gitignored migrations can still be applied history; recreating their names or
   numbering can cause Django to apply existing schema again. Durable deployments
@@ -1635,17 +1636,14 @@ validated at the driver boundary.
   access has gone. Paging carries the checkpoint into a fresh claim. A run
   records one protected cause with its origin at start; retention cannot prune
   a cited cause before its effects, and a retained event protects its trigger.
-- **Reviews compose the independent decisions lifecycle.**
-  [`ReviewStep`](../../addons/angee/workflows/reviews.py) freezes typed basis,
-  asks seats, and applies settled answers as the run actor. Decisions owns
-  admission, evidence readability, answer parsing and resolver authority.
-  A rejected application rolls back and re-asks the retained questions with
-  field errors; retry after another failure retains the settled group. The
-  decision signal wakes through the run-lock owner after commit, with a tick
-  sweep as recovery. The configured review requires a `disputed` route when
-  its `all` policy can receive differing actions. Workflow-owned permission
-  and resource extensions expose the waiter's execution path without coupling
-  decisions back to workflows.
+- **Reviews compose one decision per step.**
+  [`DecisionStep`](../../addons/angee/workflows/decision_steps.py) asks through
+  `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
+  The answer wakes the step after commit, with a tick sweep for missed delivery.
+  The resumed body applies the chosen alternatives through record write owners
+  as the run actor. A failure rolls the body back, retains the answer and appears
+  as an error hold for retry. Non-workflow askers apply synchronously inside the
+  verdict transaction; refused application rolls the answer back.
 - **Conditional queryset updates send no model signals.** Workflow owners
   explicitly call `publish_change` after their writes. Dispatch locks ready
   rows with `skip_locked` and uses `enqueue_task` to send after commit; callers
@@ -1858,6 +1856,6 @@ optimized `allowed_visibility` projection share those conditions and native
 permission scopes. Hidden domain facts stay inside the projection query.
 Message writers must still preserve publication invariants under the task lock.
 
-Decision admission, answers and successor questions belong to the
-[decisions manager](../../addons/angee/decisions/managers.py). Subject addons
-compose its retained lifecycle; controls consume the owning verb's eligibility.
+Decision admission, answers and withdrawal belong to the
+[decisions manager](../../addons/angee/decisions/managers.py). Asking owners
+consume its verdict; controls consume the owning verb's eligibility.

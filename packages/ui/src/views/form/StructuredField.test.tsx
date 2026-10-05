@@ -52,7 +52,7 @@ describe("structured FormSpec widgets", () => {
     expect(group.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText("Review the records.").id);
     expect(screen.queryByText(/records:/)).toBeNull();
     const listLabel = screen.getAllByText("Lines")[0]!;
-    expect(listLabel.parentElement?.parentElement?.className).toContain("md:col-span-2");
+    expect(listLabel.closest(".md\\:col-span-2")).not.toBeNull();
 
     focusRef.mock.calls.at(-1)?.[0]?.focus();
     expect(document.activeElement).toBe(title);

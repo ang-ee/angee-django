@@ -18,7 +18,7 @@ from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode, Superseded
 from angee.workflows.testing.drivers import load_workflow
-from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, Workflow, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.workflow_steps import Echo, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
@@ -32,7 +32,7 @@ def retained_step(run, key="entry"):
 def terminal_fields(run):
     """Observe the run fields that terminal cleanup must leave immutable."""
     return system_queryset(WorkflowRun).filter(pk=run.pk).values(
-        "status", "outcome", "output", "error", "finished_at", "updated_at",
+        "status", "outcome", "output", "error", "finished_at",
     ).get()
 
 
@@ -189,7 +189,7 @@ def test_effect_marker_controls_retryable_body_failures(execution, register_step
     assert runner.execute(step.pk)
     step.refresh_from_db()
     assert step.status == StepRunStatus.WAITING
-    assert step.waiting_kind == ("time" if idempotent else "operator")
+    assert step.waiting_kind == ("time" if idempotent else "error")
     if idempotent:
         assert runner.wake() == 1
     else:
@@ -268,7 +268,7 @@ def test_effect_marker_history_survives_wait_but_ends_at_page_completion(executi
         assert runner.wake() == 1
     assert runner.execute(step.pk)
     step.refresh_from_db()
-    assert step.waiting_kind == ("operator" if continuation == "wait" else "time")
+    assert step.waiting_kind == ("error" if continuation == "wait" else "time")
     if continuation == "wait":
         with pytest.raises(ValidationError, match="duplicate"):
             StepRun.objects.retry_step(step, actor=actor)
@@ -290,7 +290,7 @@ def test_expired_attempt_rejects_every_context_fence_before_reaping(execution, r
         def run(self, ctx):
             with system_context(reason="test elapsed committed IO deadline"):
                 StepRun.objects.filter(pk=ctx.step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
-            operations = (ctx.begin_effect, ctx.heartbeat, ctx.raise_if_canceled, lambda: ctx.artifact(ctx.run))
+            operations = (ctx.begin_effect, ctx.heartbeat, ctx.raise_if_canceled, lambda: ctx.record(ctx.run))
             for operation in operations:
                 with pytest.raises(Superseded):
                     operation()
@@ -303,7 +303,7 @@ def test_expired_attempt_rejects_every_context_fence_before_reaping(execution, r
     step = retained_step(run)
     assert runner.execute(step.pk) is False
     assert len(checked) == 4
-    assert not system_queryset(StepArtifact).filter(step_run=step).exists()
+    assert not system_queryset(StepRecord).filter(step_run=step).exists()
     attempt = system_queryset(StepAttempt).get(step_run=step)
     assert attempt.effect_started_at is None and attempt.finished_at is None
     assert runner.reap() == 1
@@ -411,9 +411,9 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
         mode = StepMode.IO
 
         def run(self, ctx):
-            evidence = ctx.artifact(ctx.run, label="Result evidence")
+            evidence = ctx.record(ctx.run, label="Result evidence")
             assert evidence.pk is None
-            assert not system_queryset(StepArtifact).filter(step_run=ctx.step_run).exists()
+            assert not system_queryset(StepRecord).filter(step_run=ctx.step_run).exists()
             if result == "failed":
                 return ctx.fail("The work failed")
             if result == "superseded":
@@ -426,7 +426,7 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step = retained_step(run)
     assert runner.execute(step.pk) is (result != "superseded")
-    assert system_queryset(StepArtifact).filter(step_run=step).count() == (1 if result == "succeeded" else 0)
+    assert system_queryset(StepRecord).filter(step_run=step).count() == (1 if result == "succeeded" else 0)
     if result == "superseded":
         assert len(publications) == after_cancel[0]
 

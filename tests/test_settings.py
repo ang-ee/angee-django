@@ -1756,7 +1756,7 @@ def test_bare_settings_use_addon_owned_defaults(settings):
     assert settings.REBAC_STRICT_MODE is True
     assert settings.CELERY_WORKER_PREFETCH_MULTIPLIER == 1
     steps = settings.ANGEE_WORKFLOW_STEP_CLASSES
-    assert steps["review"] == "angee.workflows.reviews.Review"
+    assert steps["ask_decision"] == "angee.workflows.decision_steps.AskDecision"
     assert steps["map"] == "angee.workflows.maps.Map"
     assert steps["await_run"] == "angee.workflows.awaits.AwaitRun"
     assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10

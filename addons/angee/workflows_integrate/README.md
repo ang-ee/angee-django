@@ -29,8 +29,9 @@ needed: steps resolve `ctx.subject` through the engine's declared subject owner.
 Coverage uses two steps with the same explicit partition set. `integrate_rescan`
 performs bounded rescan/baseline recovery per partition and waits on a deadline
 while discrepancies remain. `integrate_conflicts` asks one decision per conflict;
-its apply phase checks current discrepancy truth and re-asks within the native
-review `max_rounds`. Resolving a conflict belongs to the discrepancy owner; a
+its continuation checks current discrepancy truth. Unresolved discrepancies fail
+the step; after a direct domain resolution, operator retry consumes the retained
+answers without asking again. Resolving a conflict belongs to the discrepancy owner; a
 review answer only asks to recheck it. Put conflict review before the rescan wait
 or on a parallel graph branch so an unresolved conflict can reach review.
 
@@ -44,11 +45,12 @@ Run-wide budgets remain the named gap in the [workflows README](../workflows/REA
 
 `archive_import_file` and `archive_import_drive` share one graph. Registered
 `ArchiveExtractor` implementations recognize a readable storage subject,
-the archive review freezes their identities and collects target IDs, and the
-workflow `map` runs one IO attempt per confirmed mapping. Extractors own their
-vendor parsing and idempotent target ingest. Each attempt reports progress
+the gate asks one question with an alternative per actor-writable candidate
+target plus skip, and the workflow `map` runs one IO attempt per confirmed
+mapping. Extractors own parsing and idempotent target ingest. Each attempt reports progress
 through `ArchiveExecutionReporter.heartbeat()`; the workflow retains source
-and target artifacts.
+and target step records. No compatible candidate takes `unsupported`; the
+installed resource needs no target configuration patch or answer input form.
 
 `ArchiveExtractor` owns the `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES` registry;
 its addon declares that base through `ANGEE_IMPL_REGISTRIES`.

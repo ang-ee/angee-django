@@ -1,36 +1,76 @@
 # Decisions
 
-A decision asks people a question through a frozen form. Each decision is one
-seat with its own assignees, requester, actions, and evidence. Groups settle
-according to their registered policy; a closed answer remains an audit fact.
+A decision asks one question about one or more records. Its proposal offers fixed
+alternatives: their labels, record actions and continuation outcomes. Human and
+service users answer through the same entry point. A nullable verdict records the
+chosen keys with `answered_by` and `answered_at`. Withdrawal records an empty
+verdict with who stopped it; no verdict is the sole open-state rule.
 
-Human admission requires existing read access to the subject and evidence. It creates
-no grants. The requester cannot act on their own request unless they hold the
-administrative role, and every resolver must remain an active person.
-System admission may leave assignees delegated to a consumer's live `eligible`
-permission, but only when a current domain actor can answer; the administrative
-override does not establish eligibility. Such seats retain no extra
-evidence without explicit readers. A group can be re-asked after settlement;
-its earlier answer stays final and the successor group links through
-`reasked_from`. Every resolved answer retains its resolver and resolution time.
-The shared base evidence owner checks frozen references at admission. An action
-class owns its `key`, typed Pydantic form and verdict; the decisions addon
-registers it and its group policies through the base implementation registry.
+`Decision.objects.ask(DecisionRequest(...), actor=actor)` admits one question.
+Requests declare `kind`, saved `records`, `assignees`, `proposal`, and optional
+`requester` and `context`. Omission makes the asking actor the requester;
+explicit `None` allows self-assignment. Assignees must be active, and at least
+one must be permitted to answer. Requesters cannot answer their own questions
+without the administrative role. Admission requires standing read access to
+concerns and context references for the asking actor, requester and assignees.
+It creates no grants. Concern links use canonical model identities.
 
-The inline action form (`useActionForm`) owns the answer form and its React Hook
-Form context. Actors answer on the decision page: the answer fields render inline beside the subject's peek, and
-Decide sits in the record toolbar. A consumer contributes
-one `decisionContent(kind, Component)` presentation per decision kind as a
-`decisions#content` child; its retained basis and context arrive as read-only
-payloads for the consumer to parse. A waiting addon contributes a separate
-origin link without making decisions depend on that waiter.
+`DecisionProposal` is the Pydantic contract for the stored JSON:
 
-Any waiting owner can retain a group reference and observe its settlement
-signal, with a sweep over settled groups as its durable recovery path. Decisions
-own admission, deciding, expiry, cancellation, supersession, and evidence
-protection independently of the waiter. Re-asked groups form a protected chain
-so a retained round remains available to the waiter and to authorized run
-operators through the workflow permission extension.
-The GraphQL decision exposes `permissions` for `act`; its `decide` mutation
-dispatches through the decision instance so a consumer can wrap the answer in
-its own transaction.
+```json
+{"multiple": false, "alternatives": [
+  {"key": "confirm", "label": "Use proposed name", "outcome": "confirmed",
+   "actions": {"<record id>": {"fields": {"name": {"set": "Proposed name"}}}}},
+  {"key": "keep", "label": "Keep what is on the record", "outcome": "confirmed"}
+]}
+```
+
+At least one alternative and unique keys are required. Action identities must be
+among the concerns. Field names must be editable scalar fields on their canonical
+models; relation sets use readable public identities or null. Values and field
+editability are validated when asking. Multiple alternatives cannot write the
+same field of the same record. A record action may call only a method named by
+the model's class-level `decision_methods` tuple, taking no required arguments;
+optional keyword `arguments` are checked against its signature. `delete` is
+never permitted. JSON null values are retained.
+
+`Decision.objects.decide(decision, actor=actor, chosen=keys, revision=revision)`
+validates distinct offered keys and the single/multiple choice rule, stores the
+verdict in authored order, increments the optimistic revision and emits
+`decision_answered` inside the answer transaction. Non-workflow askers apply there,
+so refusal rolls the verdict back. Workflow subscribers schedule their wake after
+commit and apply when the step resumes. The Python revision is optional; the card's
+GraphQL mutation requires its observed revision. Invalid choices write nothing.
+Decisions execute no proposal actions. The asker consumes the answer through the
+records' owners. Free correction means editing the record and then choosing the
+alternative that keeps its current values.
+
+`DecisionContext` supplies a short reason, typed facts and evidence references for the card.
+The question and answer controls precede compact supporting facts. Facts may
+declare a registered read widget and its sibling row context, so formatting
+stays with the app's widgets rather than the decision renderer.
+Facts describe evidence; proposed fields live only in alternatives' actions.
+The models are `Decision` and `DecisionRecord`.
+
+`Decision.objects.open_for(*records)` is a normal REBAC-scoped open queryset through
+concern links. The attention expression uses `Exists` over all open questions
+concerning the readable records. Attention counts questions for anyone; the question's
+own read scope still governs cards and answers.
+
+Installed decisions contributes `has_open_decisions` to every Hasura model
+resource through `ANGEE_GRAPHQL_RESOURCE_FILTERS`. Strawberry adds the annotation
+only when selected, and the resource owner prepares its filter only when requested
+(including nested Boolean predicates). Lists that use neither pay no Decision
+permission compilation. There is no custom expression or separate scoping path.
+
+The [web fragment](web/README.md) exports `DecisionCard`,
+`decisionFieldMarks`, `decisionAttentionColumn` and `openDecisionFilter`. Cards show each alternative and its per-record
+changes, select radio buttons or checkboxes, and display the chosen verdict and
+answer attribution after closure. The `decisions#origin` seam is supplied by
+askers.
+
+Schema-only migrations drop and recreate the old decision tables. Existing
+decisions and workflow execution rows, including steps waiting on them, are
+discarded. Incoming legacy links retire first; `StepRun.decision` belongs to the
+workflow owner. There is no data conversion or compatibility layer. Fresh hosts
+generate initial migrations from the current models.

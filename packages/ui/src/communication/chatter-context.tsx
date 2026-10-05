@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import type { CollapsiblePane } from "../page";
+import { developmentMode } from "../lib/development-mode";
 
 export type ChatterPaneController = Pick<CollapsiblePane, "collapsed" | "collapse" | "expand" | "toggle"> & {
   /** Native split panes publish their handle after the panel mounts. */
@@ -41,8 +42,8 @@ export interface ChatterContextValue {
   activeTab: ChatterTabId;
   /** Record a user or route-selected tab as the persistent shell intent. */
   setActiveTab: (tab: ChatterTabId) => void;
-  /** Select initial asynchronous content only before the shell has explicit tab intent. */
-  setInitialActiveTab: (tab: ChatterTabId) => void;
+  /** Suggest asynchronous content; urgent attention may force it without recording user intent. */
+  setInitialActiveTab: (tab: ChatterTabId, force?: boolean) => void;
   content: ChatterContent | null;
   setContent: (owner: symbol, content: ChatterContent | null) => void;
   /**
@@ -96,8 +97,8 @@ export function ChatterProvider({
     explicitTabIntentRef.current = true;
     setActiveTabState(tab);
   }, []);
-  const setInitialActiveTab = useCallback((tab: ChatterTabId) => {
-    if (!explicitTabIntentRef.current) setActiveTabState(tab);
+  const setInitialActiveTab = useCallback((tab: ChatterTabId, force = false) => {
+    if (force || !explicitTabIntentRef.current) setActiveTabState(tab);
   }, []);
   const [contentState, setContentState] = useState<
     readonly (ChatterContent & { owner: symbol })[]
@@ -152,6 +153,12 @@ export function ChatterProvider({
     (owner: symbol, content: ChatterContent | null) => {
       const next = normalizeChatterContent(content);
       setContentState((current) => {
+        if (next && developmentMode()) {
+          for (const tab of next.tabs ?? []) {
+            if (current.some((entry) => entry.owner !== owner && entry.tabs?.some((other) => other.id === tab.id)))
+              throw new Error(`Two chatter owners publish tab ${tab.id}.`);
+          }
+        }
         const previous = current.find((entry) => entry.owner === owner);
         if (next) {
           if (previous && sameChatterContent(previous, next)) {

@@ -28,6 +28,7 @@ import { DrawerOverlay } from "./DrawerOverlay";
 import { PrimaryPaneProvider, usePrimaryPaneContent } from "./primary-pane-context";
 import { StatuslineProvider } from "./Statusline";
 import { Workbench } from "./Workbench";
+import { RecordFieldMarksProvider } from "../views/form/record-field-marks";
 
 type PaneToggleController = Pick<CollapsiblePane, "collapsed" | "toggle">;
 
@@ -38,7 +39,7 @@ export interface ConsoleLayoutProps {
 
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
   return <ChromePlaceProvider><ChatterProvider defaultCollapsed><BreadcrumbLabelProvider>
-    <ConsoleLayoutBody {...props} />
+    <RecordFieldMarksProvider><ConsoleLayoutBody {...props} /></RecordFieldMarksProvider>
   </BreadcrumbLabelProvider></ChatterProvider></ChromePlaceProvider>;
 }
 

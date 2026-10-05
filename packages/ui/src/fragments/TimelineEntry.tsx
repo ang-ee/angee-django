@@ -6,7 +6,7 @@ import { textRoleVariants } from "../ui/text";
 import { RelativeTime } from "./RelativeTime";
 
 export interface TimelineEntryProps
-  extends Omit<React.LiHTMLAttributes<HTMLLIElement>, "title"> {
+  extends Omit<React.HTMLAttributes<HTMLElement>, "title"> {
   title: React.ReactNode;
   timestamp: Date | string | null | undefined;
   body?: unknown;
@@ -36,7 +36,7 @@ export function TimelineEntry({
       {...props}
     >
       <div className="flex min-w-0 items-start justify-between gap-2">
-        <p className="truncate text-13 font-semibold text-fg">{title}</p>
+        <p className="min-w-0 text-13 font-semibold text-fg [overflow-wrap:anywhere]">{title}</p>
         <RelativeTime
           value={timestamp}
           className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}

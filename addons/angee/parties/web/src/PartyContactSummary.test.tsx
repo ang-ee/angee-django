@@ -42,10 +42,9 @@ describe("PartyContactSummary", () => {
 
   test("renders the loaded party identity without another data owner", () => {
     render(<PartyContactSummary party={party} />);
-    expect(screen.getByRole("region", { name: "party.contact.summary" })).toBeTruthy();
+    const line = screen.getByLabelText("party.contact.summary");
     expect(screen.getByText("Example Organization")).toBeTruthy();
-    expect(screen.getByText(/151 Main St/)).toBeTruthy();
-    expect(screen.getByText("contact@example.test")).toBeTruthy();
-    expect(screen.getByText("+1 555 0100")).toBeTruthy();
+    expect(line.textContent).toMatch(/151 Main St/);
+    expect(line.textContent).toContain(" · contact@example.test · +1 555 0100");
   });
 });

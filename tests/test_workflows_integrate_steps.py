@@ -9,9 +9,8 @@ from django.db.models.functions import Now
 from pydantic import ValidationError
 from rebac import system_context
 
-from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
-from angee.decisions.testing.models import Decision, DecisionGroup
+from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import ConflictKeep, DiscrepancyKind, StreamKind, StreamPhase
 from angee.integrate.streams import (
@@ -52,14 +51,18 @@ def cycle(execution, register_step, monkeypatch):
             return transport.identity_reads
 
         def streams(self, *, deadline=None):
-            return tuple(StreamDefinition("records", partition=partition, kind=StreamKind.RECORD_REPLICA)
-                         for partition in transport.partitions)
+            return tuple(
+                StreamDefinition("records", partition=partition, kind=StreamKind.RECORD_REPLICA)
+                for partition in transport.partitions
+            )
 
         def record(self, stream, offset):
             key = f"{stream.partition}:{offset}"
             return RecordChange(
-                external_key=key, source_payload={"offset": offset},
-                source_hash=f"source-{offset}", local_hash=local_hashes.get(key, ""),
+                external_key=key,
+                source_payload={"offset": offset},
+                source_hash=f"source-{offset}",
+                local_hash=local_hashes.get(key, ""),
             )
 
         def extract(self, stream, page_bound, *, deadline=None):
@@ -76,7 +79,8 @@ def cycle(execution, register_step, monkeypatch):
             end = min(transport.size, offset + page_bound)
             return StreamPage(
                 records=tuple(self.record(stream, index) for index in range(offset, end)),
-                cursor={"offset": end}, exhausted=end == transport.size,
+                cursor={"offset": end},
+                exhausted=end == transport.size,
             )
 
         def read_keys(self, stream, keys):
@@ -100,14 +104,21 @@ def cycle(execution, register_step, monkeypatch):
             node["config"] = config
         workflow = load_workflow(
             {"nodes": {"entry": node}, "results": [{"from": "entry"}]},
-            key=bridge.sync_workflow_key, actor=administrator, subject_model=bridge._meta.label,
+            key=bridge.sync_workflow_key,
+            actor=administrator,
+            subject_model=bridge._meta.label,
         )
         workflow.grant_record_access("starter", bridge.owner)
         return WorkflowRun.objects.start(workflow, actor=bridge.owner, subject=bridge, input=value)
 
     return SimpleNamespace(
-        bridge=bridge, adapter=Adapter(bridge), transport=transport, start=start,
-        extracted=extracted, applied=applied, rescanned=rescanned,
+        bridge=bridge,
+        adapter=Adapter(bridge),
+        transport=transport,
+        start=start,
+        extracted=extracted,
+        applied=applied,
+        rescanned=rescanned,
     )
 
 
@@ -128,7 +139,10 @@ def conflict(cycle, stream, offset):
     with system_context(reason="test retained sync conflict"):
         link = RecordLink.objects.observe(stream, f"{stream.partition}:{offset}")
         return SyncDiscrepancy.objects.record(
-            stream, link=link, kind=DiscrepancyKind.CONFLICT, code=f"conflict_{offset}",
+            stream,
+            link=link,
+            kind=DiscrepancyKind.CONFLICT,
+            code=f"conflict_{offset}",
             source_hash=f"source-{offset}",
         )
 
@@ -185,17 +199,28 @@ def test_lost_lease_resumes_after_the_committed_cursor(cycle, monkeypatch):
     assert system_queryset(RecordRevision).count() == 2
     # Settlement counts acknowledge outputs; the first page committed independently.
     assert run.output["counts"]["cycle_items"] == 1
-    assert list(system_queryset(StepAttempt).filter(step_run=row).order_by("number").values_list(
-        "result", flat=True,
-    )) == ["timed_out", "succeeded"]
+    assert list(
+        system_queryset(StepAttempt)
+        .filter(step_run=row)
+        .order_by("number")
+        .values_list(
+            "result",
+            flat=True,
+        )
+    ) == ["timed_out", "succeeded"]
 
 
 def test_map_keeps_each_partition_cursor_and_collects_its_counts(cycle):
     cycle.transport.partitions = ("east", "west")
-    run = cycle.start(StreamStage, {"items": [
-        {"key": "records", "partition": partition, "page_bound": 1}
-        for partition in cycle.transport.partitions
-    ]}, mapped=True)
+    run = cycle.start(
+        StreamStage,
+        {
+            "items": [
+                {"key": "records", "partition": partition, "page_bound": 1} for partition in cycle.transport.partitions
+            ]
+        },
+        mapped=True,
+    )
 
     run_until(run)
 
@@ -230,12 +255,17 @@ def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
         with system_context(reason="test due sync identities"):
             for offset in range(2):
                 SyncDiscrepancy.objects.record(
-                    stream, link=RecordLink.objects.get(stream=stream, external_key=f"{partition}:{offset}"),
-                    kind=DiscrepancyKind.SEMANTIC, code=f"retry_{offset}", source_hash=f"source-{offset}",
+                    stream,
+                    link=RecordLink.objects.get(stream=stream, external_key=f"{partition}:{offset}"),
+                    kind=DiscrepancyKind.SEMANTIC,
+                    code=f"retry_{offset}",
+                    source_hash=f"source-{offset}",
                 )
-    run = cycle.start(Rescan, {"streams": [
-        {"key": "records", "partition": partition} for partition in cycle.transport.partitions
-    ]}, config={"rescan_bound": 1})
+    run = cycle.start(
+        Rescan,
+        {"streams": [{"key": "records", "partition": partition} for partition in cycle.transport.partitions]},
+        config={"rescan_bound": 1},
+    )
 
     assert runner.execute(step_row(run).pk)
     assert cycle.rescanned == [("east", ("east:0",))]
@@ -262,8 +292,11 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
         cycle.transport.identity_reads = False
         with system_context(reason="test rescan baseline fallback"):
             SyncDiscrepancy.objects.record(
-                stream, link=RecordLink.objects.get(stream=stream, external_key=":0"),
-                kind=DiscrepancyKind.SEMANTIC, code="retry_baseline", source_hash="source-0",
+                stream,
+                link=RecordLink.objects.get(stream=stream, external_key=":0"),
+                kind=DiscrepancyKind.SEMANTIC,
+                code="retry_baseline",
+                source_hash="source-0",
             )
     else:
         SyncStream.objects.request_resync(stream)
@@ -299,48 +332,37 @@ def test_rescan_waits_for_conflicts_without_applying_them(cycle):
     assert discrepancy.is_open
 
 
-def test_conflicts_ask_each_seat_and_reask_until_domain_resolution(cycle):
+def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
     advance_stream(stream, cycle.adapter)
     conflicts = [conflict(cycle, stream, index) for index in range(2)]
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
     row = step_row(run)
-    assert row.waiting_kind == "decision"
-    seats = list(system_queryset(Decision).filter(group_id=row.decision_group_id).order_by("pk"))
-    assert len(seats) == 2
-    assert {seat.basis["discrepancy"] for seat in seats} == {public_id_of(item) for item in conflicts}
-    for seat in seats:
-        decide(seat, actor=cycle.bridge.owner, action="recheck_sync_conflict")
+    decision = system_queryset(Decision).get(pk=row.decision_id)
+    assert decision.records.with_actor(cycle.bridge.owner).count() == 2 and row.waiting_kind == "decision"
+    decide(decision, actor=cycle.bridge.owner, chosen=[str(record.sqid) for record in conflicts])
     run_until(run)
-    current = step_row(run)
-    assert current.state["review_round"] == 2 and current.decision_group_id != row.decision_group_id
+    assert run.status == "failed"
     assert system_queryset(SyncDiscrepancy).unresolved().count() == 2
-
     for discrepancy in conflicts:
         SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=ConflictKeep.REMOTE)
-    for seat in system_queryset(Decision).filter(group_id=current.decision_group_id):
-        decide(seat, actor=cycle.bridge.owner, action="recheck_sync_conflict")
+    StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
     run_until(run)
-
     assert run.status == "succeeded" and run.output["discrepancy_ids"] == []
-    assert system_queryset(DecisionGroup).count() == 2
+    assert system_queryset(Decision).count() == 1
 
 
-def test_unresolved_conflicts_exhaust_native_review_rounds(cycle):
+def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
     advance_stream(stream, cycle.adapter)
     conflict(cycle, stream, 0)
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
-
-    for _ in range(ConflictReview.max_rounds):
-        seat = system_queryset(Decision).get(group_id=step_row(run).decision_group_id)
-        decide(seat, actor=cycle.bridge.owner, action="recheck_sync_conflict")
-        run_until(run)
-
-    assert run.status == "failed"
-    assert system_queryset(DecisionGroup).count() == ConflictReview.max_rounds
+    decision = system_queryset(Decision).get(pk=step_row(run).decision_id)
+    decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
+    run_until(run)
+    assert run.status == "failed" and system_queryset(Decision).count() == 1
     assert system_queryset(SyncDiscrepancy).unresolved().count() == 1
 
 
@@ -353,9 +375,14 @@ def test_coverage_rejects_duplicate_partitions():
 @pytest.mark.parametrize("fault", ["stalled", "reset"])
 def test_sync_steps_stop_stalled_pages_and_repeated_baseline_resets(cycle, step, fault):
     """Both drivers must terminate malformed continuation rather than page forever."""
-    cycle.transport.pages = [CursorInvalid(), CursorInvalid()] if fault == "reset" else [
-        StreamPage((), {}, exhausted=False), StreamPage((), {}, exhausted=False),
-    ]
+    cycle.transport.pages = (
+        [CursorInvalid(), CursorInvalid()]
+        if fault == "reset"
+        else [
+            StreamPage((), {}, exhausted=False),
+            StreamPage((), {}, exhausted=False),
+        ]
+    )
     if step is Rescan:
         open_stream(cycle.bridge, "records", "", cycle.adapter)
     value = {"key": "records"} if step is StreamStage else {"streams": [{"key": "records"}]}
@@ -392,5 +419,6 @@ def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
     assert run.status == "succeeded"
     assert cycle.applied == ["record", "record"]
     assert list(system_queryset(RecordRevision).order_by("number").values_list("source_hash", flat=True)) == [
-        "first", "second",
+        "first",
+        "second",
     ]

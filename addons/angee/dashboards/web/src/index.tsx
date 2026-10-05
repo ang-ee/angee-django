@@ -1,8 +1,5 @@
 import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
-import {
-  type BaseMenuItem,
-  type DashboardDefinition,
-} from "@angee/ui";
+import { type DashboardDefinition } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Gauge, LayoutDashboard } from "lucide-react";
 
@@ -86,19 +83,11 @@ const routes: readonly BaseAddonRoute[] = [
   },
 ];
 
-const menus: readonly BaseMenuItem[] = [
-  {
-    id: "dashboards",
-    label: "Dashboards",
-    icon: "dashboards",
-    route: "dashboards.index",
-  },
-];
-
 const dashboards = defineBaseAddon({
   id: "dashboards",
   routes,
-  menus,
+  // A low sequence tops the rail: without a declared home or a person's own order, `/` lands here.
+  menus: { dashboards: { label: "Dashboards", icon: "dashboards", route: "dashboards.index", sequence: 10 } },
   i18n: { dashboards: enDashboardsMessages },
   dashboards: [overview],
   icons: {

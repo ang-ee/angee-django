@@ -39,20 +39,18 @@ class IntakeCampaign(IntakeAccessCase):
             for name in ("Relationship", "RelationshipRegistry")
         )
 
-    def test_denial_supersession_retains_answer_and_approval_is_final(self):
+    def test_reconsideration_retains_answer_and_approval_is_final(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         before = self.tuples()
-        need.decide_access("intake.deny", reason="First answer")
+        need.decide_access("intake.deny")
         denied = need.access_decision
-        receipt = (denied.resolution, denied.resolved_by_id, denied.resolved_at)
-        self.assertEqual(denied.verdict, "rejected")
-        need.decide_access("intake.approve", reason="Reconsidered")
-        self.assertEqual(need.access_verdict, "completed")
+        receipt = (denied.verdict, denied.answered_by_id, denied.answered_at)
+        self.assertEqual(denied.verdict, ["intake.deny"])
+        need.decide_access("intake.approve")
+        self.assertEqual(need.access_verdict, ["intake.approve"])
         self.assertNotEqual(denied.pk, need.access_decision_id)
         denied.refresh_from_db()
-        self.assertEqual((denied.resolution, denied.resolved_by_id, denied.resolved_at), receipt)
-        self.assertIsNone(denied.superseded_by_id)
-        self.assertEqual(need.access_decision.group.reasked_from_id, denied.group_id)
+        self.assertEqual((denied.verdict, denied.answered_by_id, denied.answered_at), receipt)
         approved_id, revision = need.access_decision_id, need.revision
         self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
         self.assertEqual((need.access_decision_id, need.revision), (approved_id, revision))
@@ -62,33 +60,31 @@ class IntakeCampaign(IntakeAccessCase):
 
     def test_pending_approval_uses_assigned_party_even_when_email_names_another_account(self):
         need = self.as_user(self.need(email=self.writer.email, party=self.party(self.reader)))
-        self.assertEqual(need.access_verdict, "pending")
+        self.assertEqual(need.access_verdict, None)
         before = self.tuples()
         linked = need.decide_access("intake.approve")
         self.assertEqual(linked.pk, self.reader.pk)
-        self.assertEqual(need.access_verdict, "completed")
+        self.assertEqual(need.access_verdict, ["intake.approve"])
         self.assertEqual(need.party_id, self.party(self.reader).pk)
         self.assertEqual(self.tuples(), before)
 
-    def test_party_replacement_and_clear_supersede_without_rewriting_prior_approval(self):
+    def test_party_replacement_and_clear_preserve_prior_decisions(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         need.decide_access("intake.approve")
         for replacement in (self.party(self.writer), None):
             previous = need.access_decision
-            resolution = previous.resolution
-            was_pending = previous.is_pending
+            resolution = previous.verdict
+            was_pending = previous.is_open
             need.party = replacement
             need.save(update_fields=("party",))
             need.refresh_from_db()
             previous.refresh_from_db()
-            self.assertEqual(need.access_verdict, "pending")
+            self.assertEqual(need.access_verdict, None)
             if was_pending:
-                self.assertEqual(previous.superseded_by_id, need.access_decision_id)
+                self.assertTrue(previous.is_open)
             else:
-                self.assertIsNone(previous.superseded_by_id)
-                self.assertEqual(need.access_decision.group.reasked_from_id, previous.group_id)
-            self.assertEqual(previous.resolution, resolution)
-            self.assertIsNone(need.access_resolved_at)
+                self.assertEqual(previous.verdict, resolution)
+            self.assertIsNone(need.access_answered_at)
 
     def test_only_current_sharers_read_decisions_and_list_projections_batch_once(self):
         rows = [self.need() for _ in range(6)]
@@ -96,12 +92,12 @@ class IntakeCampaign(IntakeAccessCase):
         for user, allowed in ((self.owner, True), (self.writer, False), (self.reader, False), (self.admin, True)):
             with self.subTest(user=user.username):
                 self.assertEqual(seats.objects.as_user(user).filter(pk=rows[0].access_decision_id).exists(), allowed)
-                query = "{ intake_needs { access_verdict access_resolution access_resolved_at } }"
+                query = "{ intake_needs { access_verdict access_answered_at } }"
                 self.graphql(query, {}, user=user)
                 with CaptureQueriesContext(connection) as queries:
                     data = self.graphql(query, {}, user=user)["intake_needs"]
                 self.assertEqual(len(data), 6)
-                self.assertTrue(all(row["access_verdict"] == ("PENDING" if allowed else None) for row in data))
+                self.assertTrue(all(row["access_verdict"] == (None if allowed else None) for row in data))
                 if allowed:
                     reads = [q for q in queries if f'FROM "{seats._meta.db_table}"' in q["sql"]]
                     self.assertEqual(len(reads), 1)
@@ -298,7 +294,7 @@ class CaptureCampaign(TransactionTestCase):
                     (message,) = self.Message.objects.ingest([parsed], channel=channel)
                 need = self.Need._base_manager.get(source_message=message)
                 self.assertIsNotNone(need.task_id)
-                self.assertEqual(need.access_verdict, "pending")
+                self.assertEqual(need.access_verdict, None)
                 self.assertEqual(need.party_id is not None, case == "existing")
                 self.assertEqual(users._base_manager.filter(email=email).count(), int(existing is not None))
 
@@ -327,7 +323,7 @@ class CaptureCampaign(TransactionTestCase):
             self.assertIsNone(need.project_id)
             self.assertEqual(need.task.estimate, 4)
             self.assertEqual(need.claimed_name, "Request author")
-            self.assertEqual(need.access_verdict, "pending")
+            self.assertEqual(need.access_verdict, None)
         self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
 
     def test_email_capture_requires_confirmed_sender_link_and_replays_once(self):

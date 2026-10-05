@@ -21,8 +21,6 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
-from angee.decisions.forms import Action
-from angee.decisions.states import Verdict
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
     CorrectionBinding,
@@ -658,55 +656,33 @@ class ExtractionManager(EvidenceManager):
             raise ValidationError("The successor changed retained identity or authority.")
         return successor
 
-    def _correction_basis(self, decision: Any, *, actor: Any) -> tuple[Any, Any]:
-        """Resolve the immutable decision basis and its exact revision parent.
-
-        Canonicalize only the decision match; access uses the retained concrete target.
-        """
-        basis = decision.basis
-        if not isinstance(basis, dict):
-            raise ValidationError("The correction decision basis must be an object.")
-        original = self.model._base_manager.filter(sqid=basis.get("extraction_id")).first()
-        if (
-            original is None
-            or type(basis.get("extraction_revision")) is not int
-            or (basis["extraction_revision"] != original.revision)
-        ):
-            raise ValidationError("The decision names another extraction revision.")
-        raw = basis.get("correction_binding")
-        if raw is not None and (
-            not isinstance(raw, dict)
-            or any(type(raw.get(key)) is not str for key in (
-                "authority_extraction_id", "revision_parent_extraction_id",
-            ))
-            or any(type(raw.get(key)) is not int for key in (
-                "authority_extraction_revision", "revision_parent_extraction_revision",
-            ))
-        ):
-            raise ValidationError("The decision has an invalid correction binding.")
-        parent = (
-            original
-            if raw is None
-            else self.model._base_manager.filter(
-                sqid=raw.get("revision_parent_extraction_id"),
-                revision=raw.get("revision_parent_extraction_revision"),
-            ).first()
-        )
-        if parent is None or (
-            raw is not None and raw != CorrectionBinding(original.reference, parent.reference).payload()
-        ):
-            raise ValidationError("The decision has an invalid correction binding.")
+    def _correction_records(self, decision: Any, *, actor: Any, binding: CorrectionBinding) -> tuple[Any, Any]:
+        """Check the caller-owned authority and revision parent against concern links."""
+        if any(type(ref.public_id) is not str or type(ref.revision) is not int or ref.revision < 1
+               for ref in (binding.authority, binding.revision_parent)):
+            raise ValidationError("The decision caller supplied an invalid correction binding.")
+        original = self.model.objects.with_actor(actor).filter(
+            sqid=binding.authority.public_id, revision=binding.authority.revision,
+        ).first()
+        parent = self.model.objects.with_actor(actor).filter(
+            sqid=binding.revision_parent.public_id, revision=binding.revision_parent.revision,
+        ).first()
+        if original is None or parent is None:
+            raise ValidationError("The correction names an absent or inaccessible extraction revision.")
         self._require_correction_parent(original, parent)
+        revision_target = canonical_record_target(original)
+        if not decision.records.with_actor(actor).filter(
+            content_type=revision_target.content_type, object_id=revision_target.object_id,
+        ).exists():
+            raise ValidationError("The decision concerns another extraction revision.")
         target = original.target
-        canonical_target = canonical_record_target(target) if target is not None else None
-        if canonical_target is None or (decision.subject_content_type_id, str(decision.subject_object_id)) != (
-            canonical_target.content_type.pk,
-            str(canonical_target.object_id),
-        ):
+        canonical = canonical_record_target(target) if target is not None else None
+        if canonical is None or not decision.records.with_actor(actor).filter(
+            content_type=canonical.content_type, object_id=canonical.object_id,
+        ).exists():
             raise ValidationError("The correction decision names another target.")
-        for record in (original, parent, target):
-            if not record.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Correction evidence and its target must remain readable.")
+        if not target.with_actor(actor).has_access("read"):
+            raise PermissionDenied("The correction target must remain readable.")
         return original, parent
 
     def revise_from_decision(
@@ -715,35 +691,25 @@ class ExtractionManager(EvidenceManager):
         *,
         actor: Any,
         result: Mapping[str, Any],
-        actions: Sequence[type[Action]],
         expected_action: str,
-        expected_resolution_action: str,
+        expected_choice: str,
         identity_mapping: Mapping[str, str] | None = None,
         retired_identities: Mapping[str, str] | None = None,
         confirmed_paths: Sequence[str] = (),
+        binding: CorrectionBinding,
     ) -> Any:
-        """Retain an authorized correction from a settled, revalidated Decisions answer.
-
-        ``expected_action`` is the decision kind. Its ``basis`` freezes
-        extraction_id/extraction_revision and optional CorrectionBinding.payload().
-        The caller supplies its declared action types and interprets that answer.
-        """
+        """Retain a correction for a chosen alternative and caller-owned revision binding."""
         decisions = self.model._meta.apps.get_model("decisions.Decision")
         with transaction.atomic():
-            resolved = decisions.objects.resolution(decision_id, actor=actor, actions=actions)
-            decision = resolved.decision
+            decision = decisions.objects.with_actor(actor).get(pk=decision_id)
             if (
                 decision.kind != expected_action
-                or decision.verdict != Verdict.COMPLETED
-                or resolved.action is None
-                or (resolved.action.key != expected_resolution_action)
+                or decision.verdict != [expected_choice]
             ):
-                raise ValidationError("The correction decision has another resolution action.")
-            original, parent = self._correction_basis(decision, actor=actor)
+                raise ValidationError("The correction decision has another chosen alternative.")
+            original, parent = self._correction_records(decision, actor=actor, binding=binding)
             self._require_target_write(original.target, actor)
-            self._correction_basis(decision, actor=resolved.resolver)
             self.authorized_document_sources(original, actor=actor)
-            self.authorized_document_sources(original, actor=resolved.resolver)
             mapping = dict(
                 identity_mapping
                 or original.implicit_identity_correspondence(
@@ -765,7 +731,7 @@ class ExtractionManager(EvidenceManager):
                 "revision_parent_extraction_id": str(parent.sqid),
                 "revision_parent_extraction_revision": parent.revision,
                 "decision_id": str(decision.sqid),
-                "decision_resolved_by": public_id_of(resolved.resolver),
+                "decision_answered_by": public_id_of(decision.answered_by),
                 "corrected_paths": paths,
                 "result_digest": canonical_json_sha256(result),
             }
@@ -828,9 +794,8 @@ class ExtractionManager(EvidenceManager):
         successor: Any,
         *,
         actor: Any,
-        actions: Sequence[type[Action]],
         expected_action: str,
-        expected_resolution_action: str,
+        expected_choice: str,
         decision: Any = None,
     ) -> tuple[Any, Any]:
         """Revalidate the exact decision and direct successor retained by a correction."""
@@ -845,16 +810,21 @@ class ExtractionManager(EvidenceManager):
             and (not isinstance(decision, decisions) or decision.pk != successor.correction_decision_id)
         ):
             raise ValidationError("The reviewed correction is not the direct retained successor.")
-        resolved = decisions.objects.resolution(successor.correction_decision_id, actor=actor, actions=actions)
-        original, parent = self._correction_basis(resolved.decision, actor=actor)
-        self._correction_basis(resolved.decision, actor=resolved.resolver)
+        retained = decisions.objects.with_actor(actor).get(pk=successor.correction_decision_id)
+        original = self.model.objects.with_actor(actor).get(
+            sqid=correction.original_extraction_id, revision=correction.original_revision,
+        )
+        parent = self.model.objects.with_actor(actor).get(
+            sqid=correction.revision_parent_extraction_id, revision=correction.revision_parent_revision,
+        )
+        original, parent = self._correction_records(
+            retained, actor=actor, binding=CorrectionBinding(original.reference, parent.reference),
+        )
         if (
-            resolved.action is None
-            or str(resolved.decision.sqid) != correction.decision_id
-            or resolved.decision.verdict != Verdict.COMPLETED
-            or resolved.action.key != expected_resolution_action
+            str(retained.sqid) != correction.decision_id
+            or retained.verdict != [expected_choice]
             or (
-                resolved.decision.kind != expected_action
+                retained.kind != expected_action
                 or successor.outcome["kind"] != ExtractionStatus.SUCCEEDED
                 or successor.lineage_id != parent.lineage_id
                 or successor.revision != parent.revision + 1
@@ -867,4 +837,4 @@ class ExtractionManager(EvidenceManager):
             )
         ):
             raise ValidationError("The reviewed correction is not the direct retained successor.")
-        return original, resolved.decision
+        return original, retained

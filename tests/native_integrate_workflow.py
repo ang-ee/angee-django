@@ -111,7 +111,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
         self.assertNotEqual(padded, canonical)
         context = SimpleNamespace(
             subject=self.source, input=ArchiveMappingUnit(extractor="test_drive", target=padded), actor=reader,
-            heartbeat=Mock(), begin_effect=Mock(), artifact=Mock(), done=Mock(side_effect=lambda value, **_: value),
+            heartbeat=Mock(), begin_effect=Mock(), record=Mock(), done=Mock(side_effect=lambda value, **_: value),
         )
         context.load = MethodType(StepContext.load, context)
         self.assertTrue(self.target.with_actor(reader).has_access("read"))
@@ -149,15 +149,9 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 with system_context(reason="archive review assertion"):
                     gate = run.step_runs.get(node_key="gate")
                     self.assertEqual(gate.waiting_kind, "decision")
-                    decision = apps.get_model("decisions.Decision").objects.get(group_id=gate.decision_group_id)
-                    expected = decision.basis["proposals"][0]
-                    self.assertEqual(decision.basis["proposals"], [expected])
-                decide(decision, actor=self.actor, action="apply_archive_mappings", values={
-                    "mappings": [{
-                        "extractor": expected["extractor"], "label": expected["label"],
-                        "target": str(self.target.sqid),
-                    }],
-                })
+                    decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
+                    self.assertEqual(gate.state["mappings"][str(self.target.sqid)][0]["extractor"], f"test_{suffix}")
+                decide(decision, actor=self.actor, chosen=[str(self.target.sqid)])
                 run_until(run)
                 with system_context(reason="archive result assertion"):
                     run.refresh_from_db()
@@ -169,7 +163,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
                     self.assertEqual(mapped.output[0]["output"]["result"], {
                         "source": str(subject.sqid), "target": str(self.target.sqid),
                     })
-                    self.assertEqual(mapped.map_rows().get().artifacts.count(), 1)
+                    self.assertEqual(mapped.map_rows().get().records.count(), 1)
 
     def test_unrecognized_source_finishes_without_review(self):
         with actor_context(self.actor):
@@ -198,8 +192,8 @@ class ArchiveWorkflowTests(TransactionTestCase):
         run_until(run)
         with system_context(reason="skip archive review"):
             gate = run.step_runs.get(node_key="gate")
-            decision = apps.get_model("decisions.Decision").objects.get(group_id=gate.decision_group_id)
-        decide(decision, actor=self.actor, action="skip_archive")
+            decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
+        decide(decision, actor=self.actor, chosen=["skip"])
         run_until(run)
         with system_context(reason="skip archive result"):
             run.refresh_from_db()
@@ -221,14 +215,8 @@ class ArchiveWorkflowTests(TransactionTestCase):
             run_until(run)
             with system_context(reason="partial archive review"):
                 gate = run.step_runs.get(node_key="gate")
-                decision = apps.get_model("decisions.Decision").objects.get(group_id=gate.decision_group_id)
-                proposals = decision.basis["proposals"]
-            decide(decision, actor=self.actor, action="apply_archive_mappings", values={
-                "mappings": [
-                    {"extractor": row["extractor"], "label": row["label"], "target": str(self.target.sqid)}
-                    for row in proposals
-                ],
-            })
+                decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
+            decide(decision, actor=self.actor, chosen=[str(self.target.sqid)])
             run_until(run)
             with system_context(reason="partial archive results"):
                 run.refresh_from_db()
@@ -236,7 +224,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 mapped = run.step_runs.get(node_key="import_units")
                 self.assertEqual(mapped.map_total, 2)
                 self.assertEqual([item["outcome"] for item in mapped.output], ["error", "completed"])
-                self.assertEqual(mapped.map_rows().filter(outcome="completed").get().artifacts.count(), 1)
+                self.assertEqual(mapped.map_rows().filter(outcome="completed").get().records.count(), 1)
 
     def test_mixed_target_resources_route_without_a_decision(self):
         with actor_context(self.actor):
@@ -255,4 +243,4 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 run.refresh_from_db()
                 self.assertEqual((run.status, run.outcome), ("succeeded", "unsupported"))
                 gate = run.step_runs.get(node_key="gate")
-                self.assertIsNone(gate.decision_group_id)
+                self.assertFalse(gate.decision_id is not None)

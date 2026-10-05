@@ -4,21 +4,19 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from angee.base.evidence import FactAuthority
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
-from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionRecordReference, DecisionRequest
-from angee.decisions.forms import Action
-from angee.decisions.managers import ResolvedDecision
-from angee.decisions.states import Verdict
+from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
 from angee.workflows.context import StepContext
 from angee.workflows.maps import MapItem
-from angee.workflows.reviews import ReviewStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Settlement, Step, StepMode
 
 
@@ -36,15 +34,6 @@ class ArchiveProbeOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     proposals: list[ArchiveProposal]
-
-
-class ArchiveMappingRow(BaseModel):
-    """A fixed extractor row whose target the reviewer supplies."""
-
-    model_config = ConfigDict(extra="forbid")
-    extractor: str = Field(json_schema_extra={"readOnly": True})
-    label: str = Field(json_schema_extra={"readOnly": True})
-    target: str
 
 
 class ArchiveMappingUnit(BaseModel):
@@ -66,18 +55,6 @@ class ArchiveGateConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     assignee: str = ""
-
-
-class ApplyArchiveMappings(Action, key="apply_archive_mappings", label="Import archive",
-                           verdict=Verdict.COMPLETED, outcome="mapped"):
-    """Submit fixed extractor rows with one target per row."""
-
-    mappings: list[ArchiveMappingRow] = Field(min_length=1, json_schema_extra={"widget": "rows"})
-
-
-class SkipArchive(Action, key="skip_archive", label="Skip archive",
-                  verdict=Verdict.REJECTED, outcome="skipped"):
-    """Leave the source untouched."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,59 +159,72 @@ class ArchiveProbe(Step[None, ArchiveProbeOutput, None]):
                 raise TypeError(f"{extractor.__name__}.recognizes() must return bool.")
             if recognized:
                 proposals.append(_proposal(extractor))
-        ctx.artifact(subject, "Archive source")
-        return ctx.done(ArchiveProbeOutput(proposals=proposals),
-                        outcome="recognized" if proposals else "unrecognized")
+        ctx.record(subject, "Archive source")
+        return ctx.done(ArchiveProbeOutput(proposals=proposals), outcome="recognized" if proposals else "unrecognized")
 
 
-class ArchiveGate(ReviewStep[ArchiveProbeOutput, list[ArchiveMappingUnit], ArchiveGateConfig, ArchiveProbeOutput]):
-    """Freeze recognized rows, then validate each reviewed target before fan-out."""
+class ArchiveGate(DecisionStep[ArchiveProbeOutput, list[ArchiveMappingUnit], ArchiveGateConfig]):
+    """Choose one readable writable target for the recognized archive."""
 
     key = "archive_gate"
-    label = "Map archive targets"
-    actions = (ApplyArchiveMappings, SkipArchive)
-    outcomes = {"unsupported": "Incompatible archive targets"}
+    label = "Confirm archive targets"
+    outcomes = {"mapped": "Mapped", "skipped": "Skipped", "unsupported": "Missing or incompatible targets"}
 
     def ask(self, ctx: Any) -> Settlement:
         subject = _subject(ctx)
         proposals = ctx.input.proposals
-        if _validate_proposals(proposals) is None:
+        resource = _validate_proposals(proposals)
+        if resource is None:
             return ctx.done([], outcome="unsupported")
-        assignee = (ctx.load(apps.get_model("iam.User"), ctx.config.assignee)
-                    if ctx.config.assignee else ctx.actor)
-        rows = [dict(extractor=item.extractor, label=item.label, target="") for item in proposals]
-        source = DecisionRecordReference(model=subject._meta.label, id=public_id_of(subject))
-        return ctx.ask(DecisionRequest(
-            kind="map-archive", subject=subject, assignees=(assignee,), requester=None,
-            actions=self.actions, basis=ctx.input,
-            context=DecisionContext(references=(source,), facts=(DecisionFact(
-                pointer="/proposals", label="Recognized archive types",
-                value=[proposal.model_dump(mode="json") for proposal in proposals],
-                authority="source", subject=source,
-            ),)),
-            initial={"apply_archive_mappings": {"mappings": rows}},
-        ))
+        targets = list(apps.get_model(resource).objects.with_actor(ctx.actor).for_write().order_by("pk"))
+        if not targets:
+            return ctx.done([], outcome="unsupported")
+        mappings = {
+            public_id_of(target): [
+                ArchiveMappingUnit(extractor=item.extractor, target=public_id_of(target)).model_dump()
+                for item in proposals
+            ]
+            for target in targets
+        }
+        assignee = ctx.load(apps.get_model("iam.User"), ctx.config.assignee) if ctx.config.assignee else ctx.actor
+        return ctx.ask(
+            DecisionRequest(
+                kind="map-archive",
+                records=(subject, *targets),
+                assignees=(assignee,),
+                requester=None,
+                proposal=DecisionProposal.model_validate(
+                    {
+                        "alternatives": (
+                            *(
+                                {"key": public_id_of(target), "label": str(target), "outcome": "mapped"}
+                                for target in targets
+                            ),
+                            {"key": "skip", "label": "Skip archive", "outcome": "skipped"},
+                        )
+                    }
+                ),
+                context=DecisionContext(
+                    facts=(
+                        DecisionFact(
+                            pointer="/mappings",
+                            label="Archive targets",
+                            value=cast(JsonValue, mappings),
+                            authority=FactAuthority.SOURCE,
+                        ),
+                    )
+                ),
+            ),
+            state={"mappings": mappings},
+        )
 
-    def apply(self, ctx: Any, settled: list[ResolvedDecision]) -> Settlement:
-        answer = settled[0]
-        action = answer.action
-        assert action is not None
-        if isinstance(action, SkipArchive):
+    def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Settlement:
+        if outcome == "skipped":
             return ctx.done([], outcome="skipped")
-        assert isinstance(action, ApplyArchiveMappings)
-        proposals = answer.basis.proposals
-        target_resource = _validate_proposals(proposals)
-        if target_resource is None:
-            raise ValidationError("Archive mapping requires one shared target resource.")
-        if len(action.mappings) != len(proposals):
-            raise ValidationError("Archive mapping must preserve every proposed row.")
-        mappings = []
-        for proposal, row in zip(proposals, action.mappings, strict=True):
-            if (row.extractor, row.label) != (proposal.extractor, proposal.label) or not row.target:
-                raise ValidationError("Archive mapping changed a proposed extractor or omitted its target.")
-            target = ctx.load(apps.get_model(target_resource), row.target)
-            ctx.artifact(target, "Archive import target")
-            mappings.append(ArchiveMappingUnit(extractor=row.extractor, target=row.target))
+        resource = _validate_proposals(ctx.input.proposals)
+        mappings = [ArchiveMappingUnit.model_validate(item) for item in ctx.state["mappings"][decision.verdict[0]]]
+        for item in mappings:
+            ctx.record(ctx.load(apps.get_model(resource), item.target), "Archive import target")
         return ctx.done(mappings, outcome="mapped")
 
 
@@ -258,9 +248,10 @@ class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
         ctx.heartbeat()
         ctx.begin_effect()
         result = extractor().execute(subject, target_id, ArchiveExecutionReporter(ctx))
-        ctx.artifact(target, "Imported archive target")
-        return ctx.done(ArchiveExecutionOutput(extractor=unit.extractor, target=target_id, result=result),
-                        outcome="completed")
+        ctx.record(target, "Imported archive target")
+        return ctx.done(
+            ArchiveExecutionOutput(extractor=unit.extractor, target=target_id, result=result), outcome="completed"
+        )
 
 
 class ArchiveSummary(Step[list[MapItem[ArchiveExecutionOutput]], list[MapItem[ArchiveExecutionOutput]], None]):

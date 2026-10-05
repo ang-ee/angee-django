@@ -1355,7 +1355,10 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         assert field in oauth_client_type
         assert field in oauth_client_insert
         assert field in oauth_client_set
-    oauth_client_oidc_extension = _sdl_block(console_sdl, "extend type OAuthClientType")
+    oauth_client_oidc_extension = "\n".join(
+        _sdl_block(block, "extend type OAuthClientType")
+        for block in console_sdl.split("\n\n") if block.startswith("extend type OAuthClientType")
+    )
     for field in ("jwks_uri", "login_enabled", "link_on_email_match", "create_on_login"):
         assert field in oauth_client_oidc_extension
         assert field in oauth_client_insert

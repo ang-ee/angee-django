@@ -65,8 +65,7 @@ class Map(Step[MapInput, list[MapItem[Any]], None]):
     def output_schema_for(cls, body_step: type[Step]) -> dict[str, Any]:
         """Project the body type, including its declared empty-output outcomes.
 
-        Typed review collectors use ``MapItem[ReviewOutput | EmptyOutput]``:
-        an expired or superseded review has no applied output model instance.
+        Bodies with declared empty outcomes collect ``MapItem[Output | EmptyOutput]``.
         """
         model = body_step.output_model or Any
         if body_step.output_model is not None and body_step.empty_outcomes - {ERROR_OUTCOME}:

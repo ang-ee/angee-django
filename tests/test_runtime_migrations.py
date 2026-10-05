@@ -139,6 +139,27 @@ def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_mi
     assert "old_name" not in state.models["resources", "legacy"].fields
 
 
+@pytest.mark.parametrize(("installed", "opt_in", "expected"), [
+    (False, True, True), (False, False, False), (True, True, False), (True, False, True),
+])
+def test_uninstalled_cutover_requires_opt_in_and_never_enables_capabilities(
+    runtime_migration_probe, settings, installed, opt_in, expected,
+):
+    materializer, addon, _, _, source_root = runtime_migration_probe
+    write_addon_manifest(addon, migrations=({
+        "name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy",
+        "uninstalled_only": opt_in,
+    },))
+    (source_root / "autoconfig.py").write_text('raise AssertionError("uninstalled autoconfig loaded")\n')
+    (source_root / "models.py").write_text('raise AssertionError("uninstalled models loaded")\n')
+    settings.ANGEE_ADDON_DIRS = (source_root.parent.parent,)
+    if not installed:
+        materializer.addons = ()
+    written = materializer.materialize(apps=None)
+    assert bool(written) is expected
+    assert not any(config.name == addon.name for config in apps.get_app_configs())
+
+
 def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
     source_path.write_text(

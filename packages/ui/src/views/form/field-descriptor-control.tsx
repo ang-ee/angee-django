@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 
 import {
   useResolvedWidget,
@@ -7,7 +8,10 @@ import {
   type WidgetField,
   type WidgetRenderProps,
   type WidgetFocusTarget,
+  relationValueId,
 } from "../../widgets";
+import { fieldsWithMetadataDefaults, relationFieldInfoForDescriptor } from "../resource/model-metadata-defaults";
+import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { textWidget } from "../../widgets/text";
 import { useUiT } from "../../i18n";
 import {
@@ -44,6 +48,10 @@ const FALLBACK_TEXT_WIDGET: WidgetDefinition = {
 };
 
 export interface FieldDescriptorControlProps {
+  /** Resolve the field's standard form widget from this model's metadata. */
+  resource?: string;
+  /** Hasura condition narrowing a metadata-backed relation's server search. */
+  where?: Record<string, unknown>;
   field: FieldDescriptor & {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
     objectTemplate?: readonly FormSpecFieldDescriptor[];
@@ -73,12 +81,20 @@ export interface FieldDescriptorControlProps {
  * and options the same way wherever an addon renders mutation inputs.
  */
 export function FieldDescriptorControl(props: FieldDescriptorControlProps): React.ReactElement {
-  const widgetId = fieldWidgetId(props.field);
+  const model = useModelMetadata(props.resource ?? "");
+  const schema = useSchemaFieldMetadata();
+  const field = props.resource ? { ...props.field, ...fieldsWithMetadataDefaults([props.field], model, schema)[0] } : props.field;
+  const relation = props.resource ? relationFieldInfoForDescriptor(field, model, schema) : null;
+  const widgetId = fieldWidgetId(field);
   const widget = useResolvedWidget(widgetId) ?? FALLBACK_TEXT_WIDGET;
+  if (relation && (!field.widget || field.widget === "many2one")) return <RelationFieldWidget
+    value={relationValueId(props.value) || null} onChange={props.onChange} onCommit={props.onCommit}
+    readOnly={props.readOnly || props.disabled} relation={relation} filters={field.filters} where={props.where}
+    aria-label={typeof field.label === "string" ? field.label : field.name} controlRef={props.controlRef} />;
   const Component = props.readOnly ? widget.read : (widget.edit ?? widget.read);
   const mode = Component === widget.read ? "read" : "edit";
   // Draft validity belongs to the mounted editor; temporary disabling keeps it.
-  return <FieldDescriptorControlInstance key={`${widgetId}:${mode}`} {...props} Component={Component} />;
+  return <FieldDescriptorControlInstance key={`${widgetId}:${mode}`} {...props} field={field} Component={Component} />;
 }
 
 function FieldDescriptorControlInstance({

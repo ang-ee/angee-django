@@ -1,6 +1,6 @@
 import {
   Avatar, Badge, Card, CardContent, CardFooter, CardHeader, InlineEmpty, Skeleton, SkeletonText, TextLink,
-  avatarInitials, useRouteHref, useStatusTone, type StringIdRow,
+  avatarInitials, useRouteHref, useStatusTone, type JsonValue, type StringIdRow,
 } from "@angee/ui";
 import type { ReactElement } from "react";
 
@@ -12,9 +12,10 @@ export interface CurrentAccessRow extends StringIdRow {
   permissions: readonly string[];
   claimed_name: string;
   claimed_email: string | null;
-  access_verdict: string | null;
+  access_verdict: JsonValue | null;
+  requester_access_granted: boolean;
   party: { id: string; display_name: string } | null;
-  access_decision: { id: string; verdict: string; is_open: boolean } | null;
+  access_decision: { id: string; verdict: JsonValue | null; is_open: boolean } | null;
 }
 
 export function TaskAccessCardSkeleton(): ReactElement {
@@ -52,16 +53,17 @@ export function TaskAccessDecisions({
   return <div className="grid gap-3">{needs.map((need) => {
     const name = need.claimed_name || need.party?.display_name || t("access.requester");
     const email = need.claimed_email;
-    const verdict = need.access_verdict?.toUpperCase();
-    const state = STATE_COPY[verdict === "COMPLETED" ? "approved"
-      : verdict === "REJECTED" ? "denied"
-        : need.access_decision?.is_open ? "pending" : "unavailable"];
+    const verdict = Array.isArray(need.access_verdict) ? need.access_verdict : null;
+    const stateKey = verdict?.includes("intake.approve") ? "approved"
+      : verdict?.includes("intake.deny") ? "denied"
+        : need.access_decision?.is_open ? "pending" : "unavailable";
+    const state = STATE_COPY[stateKey];
     return <Card key={need.id}>
       <CardHeader className="flex-row flex-wrap items-center gap-2">
         <Avatar size="sm" initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
-        <Badge shape="pill" tone={statusTone(need.access_verdict, { REJECTED: "danger" })}>
+        <Badge shape="pill" tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>
           {t(state.pill)}
         </Badge>
       </CardHeader>

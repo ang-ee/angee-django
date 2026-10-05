@@ -41,7 +41,9 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context, current_actor
 from rebac.mixins import RebacModelBase
 
+from angee.base.actors import instance_actor
 from angee.base.fields import StateField
+from angee.base.identity import public_id_of
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HierarchyMixin
 from angee.base.models import AngeeDataModel, AngeeManager
@@ -258,6 +260,20 @@ class Party(AuditMixin, AngeeDataModel):
                 dirty.append(name)
         if dirty:
             self.save(update_fields=[*dirty, "updated_at"])
+
+    decision_methods = ("apply_identity",)
+
+    def apply_identity(
+        self, *, expected_facts_hash: str = "", proposed: Mapping[str, Any] | None = None,
+        choices: Mapping[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Apply a proposed identity through the directory's conflict-checking owner."""
+        if proposed is None or choices is None or not expected_facts_hash:
+            raise ValidationError("An identity application needs its proposed values, choices and facts hash.")
+        return type(self).objects.apply_identity(
+            party_id=public_id_of(self), expected_facts_hash=expected_facts_hash,
+            proposed=proposed, choices=choices, actor=instance_actor(self),
+        )
 
     def identity_differs(self, current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
         """Compare proposed native identity values with a retained read projection."""

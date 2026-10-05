@@ -26,6 +26,28 @@ test("a related-only model with no target rows is fail-closed", () => {
   }, "workflows.StepRun", "wsr_unrelated")).toBe(false);
 });
 
+test("a related-only feed refreshes its record interest without subscribing to that record's model", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["timeline", "note"],
+    meta: { angeeModels: ["workflows.WorkflowRun"], angeeRelatedModels: ["workflows.WorkflowRun"],
+      angeeRecords: [{ model: "notes.Note", id: "nte_current" }] },
+    queryFn: async () => ++reads,
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  await vi.advanceTimersByTimeAsync(0);
+  live.push({ model: "workflows.WorkflowRun", id: "wfr_other", relatedRecords: [{ model: "notes.Note", id: "nte_other" }] });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(reads).toBe(1);
+  live.push({ model: "workflows.WorkflowRun", id: "wfr_current", relatedRecords: [{ model: "notes.Note", id: "nte_current" }] });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(reads).toBe(2);
+  live.clear(); unsubscribe(); cache.clear();
+});
+
 test("an unrelated row event does not starve an exact record's pending first request", async () => {
   const cache = client();
   const first = pending<number>();

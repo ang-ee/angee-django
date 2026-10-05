@@ -1,5 +1,9 @@
 import type { MouseEvent } from "react";
 
+import { HOME_PATH_PREFERENCE_KEY, type RuntimeUserPreferences } from "../runtime";
+import { readAppRailPreferences } from "./app-rail-preferences";
+import type { MenuTree } from "./menu-tree";
+
 export type RailDropPlacement = "before" | "after";
 
 export interface RailLinkToggleProps {
@@ -122,6 +126,28 @@ export function railDefaultTarget(
   const target = item.target?.trim() ?? "";
   if (!target || target === "#") return null;
   return target;
+}
+
+/**
+ * Where a person lands at `/`: their saved home page, their rail's default app,
+ * the product's declared home, the first app of their ordered rail, then the
+ * first Settings page; null when the menu offers nowhere to go.
+ */
+export function landingTarget(
+  tree: MenuTree,
+  preferences: RuntimeUserPreferences,
+  declaredHome?: string,
+): string | null {
+  const homePath = preferences[HOME_PATH_PREFERENCE_KEY];
+  if (typeof homePath === "string" && homePath.startsWith("/")) return homePath;
+  const rail = readAppRailPreferences(preferences);
+  const items = tree.railMenuItems();
+  const preferred = items.find((item) => item.id === rail.defaultItemId);
+  return (preferred && railDefaultTarget(preferred))
+    ?? declaredHome
+    ?? orderedRailItems(items, rail.order).map(railDefaultTarget).find((target) => target !== null)
+    ?? tree.settingsEntry()?.target
+    ?? null;
 }
 
 export function sameRailOrder(

@@ -196,6 +196,21 @@ describe("useActionResultRun", () => {
     expect(mocks.toast.danger).toHaveBeenCalledWith({ title: "No eligible record." });
   });
 
+  test("shows refusals under any key without repeating a complete banner", async () => {
+    const { result } = renderHook(() => useActionResultRun(), { wrapper });
+    await act(async () => {
+      await result.current(async () => ({ ok: false, message: "Action refused.",
+        validationErrors: { operation: ["Answer the question first."], target: ["Choose an account."] } }));
+    });
+    expect(mocks.toast.danger).toHaveBeenLastCalledWith({ title: "Action refused.",
+      description: "Answer the question first.; Choose an account." });
+    await act(async () => {
+      await result.current(async () => ({ ok: false, message: "Choose an account.",
+        validationErrors: { target: ["Choose an account."] } }));
+    });
+    expect(mocks.toast.danger).toHaveBeenLastCalledWith({ title: "Choose an account." });
+  });
+
   test("a missing payload toasts the no-result title", async () => {
     const { result } = renderHook(() => useActionResultRun(), { wrapper });
 

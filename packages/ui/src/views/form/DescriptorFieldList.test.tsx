@@ -10,7 +10,7 @@ import { AppRuntimeProvider } from "../../runtime";
 import { ToastProvider } from "../../feedback";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { RelationPicker } from "../relation/RelationPicker";
-import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
+import { DescriptorFieldList, LabeledDescriptorField, type DescriptorField } from "./DescriptorFieldList";
 import { deserializeFormSpec } from "./form-spec";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
@@ -45,6 +45,18 @@ function FormHarness<TValues extends Values = Values>({
 afterEach(cleanup);
 
 describe("DescriptorFieldList", () => {
+  test("relation metadata preserves an explicitly declared registry widget", () => {
+    const edit: WidgetDefinition["edit"] = ({ onChange }) => <button onClick={() => onChange?.("chosen")}>Custom choice</button>;
+    const onChange = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: { custom: { read: edit, edit } } }}>
+      <LabeledDescriptorField field={{ name: "target", label: "Target", widget: "custom",
+        relation: { resource: "notes.Note", labelField: "display_name" } }}
+        value={null} onChange={onChange} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Custom choice" }));
+    expect(onChange).toHaveBeenCalledWith("chosen");
+  });
+
   test("structured values containing target remain atomic native form values", async () => {
     const submit = vi.fn();
     const fields = deserializeFormSpec({ properties: { config: {

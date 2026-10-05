@@ -196,6 +196,7 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             profile=OpenAIModelProfile(
                 supports_thinking=True,
                 supports_json_schema_output=True,
+                native_output_requires_schema_in_instructions=True,
                 default_structured_output_mode="native",
                 openai_chat_supports_max_completion_tokens=(self._max_tokens_param() == "max_completion_tokens"),
             ),

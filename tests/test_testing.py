@@ -63,11 +63,11 @@ def test_shared_models_preserve_source_grant_contract(model) -> None:
 def test_decision_resources_register_once_from_central_models() -> None:
     """Decision tests use one concrete registration independent of workflow test models."""
     assert {model.__name__ for model in apps.get_models() if model._meta.app_label == "decisions"} == {
-        "Decision", "DecisionEvidence", "DecisionGroup",
+        "Decision", "DecisionRecord",
     }
     assert all(
         apps.get_model("decisions", name).__module__ == decisions_models.__name__
-        for name in ("Decision", "DecisionEvidence", "DecisionGroup")
+        for name in ("Decision", "DecisionRecord")
     )
 
 

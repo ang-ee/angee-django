@@ -38,6 +38,7 @@ from angee.workflows.bindings import (
 )
 from angee.workflows.maps import Map
 from angee.workflows.states import (
+    DONE_OUTCOME,
     ERROR_OUTCOME,
     INPUT_SOURCE,
     ITEM_SOURCE,
@@ -502,6 +503,56 @@ class Definition(BaseModel):
         graph = {key: sorted(sources) for key, sources in self.graph.items()}
         return {key: rank for rank, key in enumerate(TopologicalSorter(graph).static_order())}
 
+    def plan(self, rows: Any, *, terminal: bool = False) -> dict[str, str]:
+        """Linear timeline: executed, current, then post-dominators of all live paths.
+
+        An outcome with no target is an end, including an explicit result on a
+        branching node. Error routes are excluded from the unchosen future.
+        """
+        rows = {row.node_key: row for row in rows if not row.is_mapped}
+        states = {}
+        current = []
+        for key in self.nodes:
+            row = rows.get(key)
+            if row is None or row.status == StepRunStatus.SKIPPED:
+                states[key] = "not_run"
+            elif row.status in {StepRunStatus.READY, StepRunStatus.RUNNING, StepRunStatus.WAITING} or (
+                row.status == StepRunStatus.FAILED and self.unrouted_failure([row]) and not terminal
+            ):
+                states[key] = "current"
+                current.append(key)
+            else:
+                states[key] = "done"
+        if terminal:
+            return states
+        reachable = set()
+        mandatory: dict[str, set[str]] = {}
+        for key in sorted(self.nodes, key=self.ranks.__getitem__, reverse=True):
+            node = self.nodes[key]
+            try:
+                outcome_keys = set(self.step(key).available_outcomes(node.parsed_config))
+            except ImproperlyConfigured:
+                # A removed implementation cannot prevent inspection of the frozen graph.
+                outcome_keys = set(node.next) | {DONE_OUTCOME}
+            paths = [set().union(*(mandatory[target] for target in node.targets(outcome)))
+                     for outcome in outcome_keys if outcome != ERROR_OUTCOME]
+            mandatory[key] = {key} | (set.intersection(*paths) if paths else set())
+        frontier = current[:]
+        while frontier:
+            key = frontier.pop()
+            for outcome in self.nodes[key].next:
+                if outcome == ERROR_OUTCOME:
+                    continue
+                for target in self.nodes[key].targets(outcome):
+                    if target not in reachable:
+                        reachable.add(target)
+                        frontier.append(target)
+        certain = set().union(*(mandatory[key] for key in current))
+        for key in reachable:
+            if states[key] == "not_run":
+                states[key] = "certain" if key in certain else "optional"
+        return states
+
     @cached_property
     def entries(self) -> list[str]:
         """Return nodes with no predecessor, including incomplete drafts."""
@@ -886,8 +937,13 @@ class Definition(BaseModel):
 
     def retry_allowed(self, key: str) -> bool:
         """In-place recovery must not replay a failure already routed through error."""
-        parent, separator, _ = key.partition(".")
-        return ("failed" if separator else ERROR_OUTCOME) not in self.nodes[parent].next
+        parent = key.partition(".")[0]
+        return self.failure_port(key) not in self.nodes[parent].next
+
+    @staticmethod
+    def failure_port(key: str) -> str:
+        """A map body reports failure through its parent's failed port."""
+        return "failed" if "." in key else ERROR_OUTCOME
 
     def ready_nodes(self, rows: Iterable[StepRow], *, map_concurrency: int = 10) -> list[PlannedNode]:
         """Plan missing rows once all sources settle, propagating skips in one pass.

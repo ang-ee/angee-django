@@ -1,127 +1,69 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
-
-import { Conflict, Inbox, InvalidAttempt, Open, PendingWithoutFacts, ReadOnly, Settled, SettledWithoutFacts, SiblingClosed } from "./InboxPage.stories";
+import { afterEach, beforeAll, expect, test } from "vitest";
+import { Inbox, Open, Multiple, ReadOnly, Closed, Conflict, InvalidAttempt } from "./InboxPage.stories";
 
 beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(cleanup);
 
-async function chooseAction(label: string) {
-  fireEvent.click(await screen.findByRole("combobox", { name: "Action" }));
-  const option = await screen.findByRole("option", { name: label });
-  fireEvent.pointerDown(option, { pointerType: "mouse" });
-  fireEvent.click(option);
-  await waitFor(() => expect(screen.getByRole("combobox", { name: "Action" }).textContent).toContain(label));
-}
+test("the inbox card links concerned records and lists proposed field and record actions", async () => {
+  render(Open.render());
+  expect(await screen.findByRole("button", { name: /Review notes/ })).toBeTruthy();
+  expect(screen.getByText("Display Name")).toBeTruthy();
+  expect(screen.getByText("Proposed name")).toBeTruthy();
+  expect(screen.queryByText("archive")).toBeNull();
+  expect(await screen.findByRole("radio", { name: /Accept and archive/ })).toBeTruthy();
+});
 
-describe("decision stories with native router, queries, and generated mutations", () => {
-  test("pending records link the subject, promote Decide, and hide settlement facts", async () => {
-    render(Open.render());
-    const action = await screen.findByRole("combobox", { name: "Action" });
-    // One Decide (getByRole rejects duplicates) in the record toolbar, ahead of the inline answer fields.
-    expect(screen.getByRole("button", { name: "Decide" }).compareDocumentPosition(action)
-      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
-    expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
-    for (const label of ["Subject model", "notes.Note", "nte_7", "Expires", "Resolved by", "Resolved at", "Closed reason"]) {
-      expect(screen.queryByText(label)).toBeNull();
-    }
-  });
+test("records an answer using the shared generated mutation and renders its retained values", async () => {
+  render(Inbox.render());
+  fireEvent.click(await screen.findByRole("link", { name: "Open Review" }));
+  fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull());
+  expect(screen.getByText("Chose: Accept and archive")).toBeTruthy();
+  expect(screen.queryByRole("radio")).toBeNull();
+});
 
-  test("context loads seats and links their assignees", async () => {
-    render(Open.render());
-    fireEvent.click(await screen.findByRole("tab", { name: "Context" }));
-    expect((await screen.findByRole("link", { name: "Reviewer" })).getAttribute("href"))
-      .toBe("/iam/users/usr_reviewer");
-  });
+test("a closed card shows its chosen answer without an editing path", async () => {
+  render(Closed.render());
+  expect(await screen.findByText("Chose: Accept and archive")).toBeTruthy();
+  expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
+});
 
-  test("settled records omit empty facts and retain populated settlement facts", async () => {
-    const { unmount } = render(SettledWithoutFacts.render());
-    await screen.findByText(/Already reviewed/);
-    for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.queryByText(label)).toBeNull();
-    unmount();
-    render(Settled.render());
-    await screen.findByText(/Already reviewed/);
-    expect(screen.getAllByRole("heading", { name: "Decision" })).toHaveLength(1);
-    for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.getByText(label)).toBeTruthy();
-  });
+test("a reader sees alternatives with no submitting path", async () => {
+  render(ReadOnly.render());
+  expect(await screen.findByText("Accept and archive")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
 
-  test("pending decisions show kind and status once, with a heading over their assignees", async () => {
-    render(PendingWithoutFacts.render());
-    await screen.findByRole("heading", { name: "Review" });
-    expect(screen.queryByText("Requester")).toBeNull();
-    expect(screen.queryByText("Kind")).toBeNull();
-    expect(screen.queryByText("Status")).toBeNull();
-    expect(screen.getAllByRole("heading", { name: "Review" })).toHaveLength(1);
-    expect(screen.getAllByRole("heading", { name: "Decision" })).toHaveLength(1);
-    // The GraphQL enum member name reads back through its option label.
-    expect(screen.queryByText("PENDING")).toBeNull();
-    expect(screen.getByText("Assignees")).toBeTruthy();
-  });
+test("a stale snapshot reports the native conflict", async () => {
+  render(Conflict.render());
+  fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(await screen.findByText("This decision has changed. Reload the page to review the current question.")).toBeTruthy();
+});
 
-  test("a sibling-settled seat shows its closed reason as its status", async () => {
-    render(SiblingClosed.render());
-    expect((await screen.findAllByText("Sibling settled")).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("listitem", { name: "Pending" })).toBeNull();
-  });
+test("invalid answers retain their field errors and leave the card answerable", async () => {
+  render(InvalidAttempt.render());
+  fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(await screen.findByText(/Choose an offered alternative/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Confirm" })).toBeTruthy();
+});
 
-  test("opens an inbox seat, validates its action branch, and records the answer through the real transport", async () => {
-    render(Inbox.render());
-    fireEvent.click(await screen.findByRole("link", { name: "Open Review" }));
-    expect(document.querySelectorAll("main")).toHaveLength(1);
-    expect(await screen.findByRole("heading", { name: "Review" })).toBeTruthy();
-    // Actors answer inline on the decision page; there is no Decide dialog.
-    expect((await screen.findByRole("textbox", { name: "Note" }) as HTMLInputElement).value).toBe("Read");
-    expect(screen.queryByRole("textbox", { name: "Reference" })).toBeNull();
-    await chooseAction("Reject");
-    fireEvent.change(screen.getByRole("textbox", { name: /Reason/ }), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: "Decide" }));
-    expect(await screen.findByText("Enter at least 3 characters.")).toBeTruthy();
-    expect(screen.getByRole("textbox", { name: /Reason/ }).getAttribute("aria-invalid")).toBe("true");
-    fireEvent.change(screen.getByRole("textbox", { name: /Reason/ }), { target: { value: "Needs another review" } });
-    fireEvent.click(screen.getByRole("button", { name: "Decide" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Decide" })).toBeNull());
-    expect((await screen.findAllByText("Rejected")).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/Needs another review/)).toBeTruthy();
-    expect(screen.getByText("Resolved at")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: /Reason/ })).toBeNull();
-  });
 
-  test("a conflicting snapshot stops the inline answer and asks for a reload", async () => {
-    render(Conflict.render());
-    fireEvent.click(await screen.findByRole("button", { name: "Decide" }));
-    expect(await screen.findByText("This decision has changed. Reload the page to review the current question.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Decide" }).hasAttribute("disabled")).toBe(true);
-  });
-
-  test("loads a retained settlement without an editing or submitting path", async () => {
-    render(Settled.render());
-    expect(await screen.findByText(/Already reviewed/)).toBeTruthy();
-    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("button", { name: "Decide" })).toBeNull();
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Action" })).toBeNull();
-    expect(screen.getByText("Note")).toBeTruthy();
-    expect(screen.getByText("Reference")).toBeTruthy();
-  });
-
-  test("retains the answer draft and refreshes the revision after a rejected attempt", async () => {
-    render(InvalidAttempt.render());
-    fireEvent.change(await screen.findByRole("textbox", { name: "Note" }), { target: { value: "Draft answer" } });
-    fireEvent.click(screen.getByRole("button", { name: "Decide" }));
-    expect(await screen.findByText("Add the missing detail.")).toBeTruthy();
-    expect((screen.getByRole("textbox", { name: "Note" }) as HTMLInputElement).value).toBe("Draft answer");
-    fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "Corrected answer" } });
-    fireEvent.click(screen.getByRole("button", { name: "Decide" }));
-    expect(await screen.findByText(/Corrected answer/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Decide" })).toBeNull();
-  });
-
-  test("hides the deciding action when the backend denies acting on an open seat", async () => {
-    render(ReadOnly.render());
-    expect(await screen.findByRole("heading", { name: "Review" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
-    expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
-  });
+test("multiple alternatives use checkboxes and retain both chosen keys", async () => {
+  render(Multiple.render());
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Keep what is on the record" }));
+  expect(screen.getByRole("checkbox", { name: /Accept/ }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByRole("checkbox", { name: "Keep what is on the record" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull());
+  expect(screen.getByText("Chose: Accept and archive; Keep what is on the record")).toBeTruthy();
+  expect(screen.queryByRole("checkbox")).toBeNull();
 });

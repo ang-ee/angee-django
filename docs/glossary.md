@@ -239,13 +239,13 @@ Runner-only retry and diagnostic facts belong to the attempt record.
 **Result** — what a workflow run reports, selected and projected from its
 declared producer bindings by `Definition`.
 
-**Review step** — one node that freezes a question, waits for a decision group,
-and applies its answers as the run actor. Each answer retains its resolver.
+**Decision step** — one node that asks one question, holds for its verdict,
+and applies the chosen alternatives as the run actor. `StepRun.decision` owns
+the link. An application error holds the step for retry.
 
-**Run-input evidence** — the subject and every input field declared as a record
-reference in the pinned schema, admitted only when the run actor can read it.
-Shared `DerivedFrom` edges retain the source identities; the run's read
-projection redacts references a current reader cannot access.
+**Step record** — one `StepRecord` link retaining the record and the operation
+read, created, changed, deleted or called. Admission inputs use the same relation
+with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
 `angee.base.evidence`'s standing-read check. Decisions, run inputs and
@@ -253,20 +253,19 @@ extraction retain their own edges to this shared source identity.
 
 ## Decisions
 
-**Decision** — a retained question put to people, with a frozen form and a final
-answer or closure. Its lifecycle belongs to `angee.decisions`, independently of
-any waiting owner.
+**Decision** — one immutable question concerning records, with a proposal of
+alternatives and a nullable verdict. The asker consumes the answer.
 
-**Kind** — the decision's content key, identifying the question's presentation.
+**Kind** — the question content key used for its presentation.
 
-**Action** — a named answer offered by a decision, with a Pydantic form and a
-terminal verdict.
+**Proposal** — alternatives with labels, per-record actions and continuation
+outcomes; `multiple` permits several choices.
 
-**Decision group** — related decisions that settle together under one policy.
-Waiting owners retain a reference to the group and observe its outcome.
+**Verdict** — chosen alternative keys, answerer and answer time. No verdict means
+open; an empty verdict means the asking owner withdrew the question.
 
-**Seat** — one requested decision with its own assignees, requester, actions,
-basis, and context. Any authorized assignee can supply that seat's answer.
+**Attention** — a readable record has at least one open decision, whoever may
+answer. It is derived and pays no query cost when a list does not request it.
 
 **Inbox** — the person's readable decisions, filtered by assignment or requester
 to distinguish questions they can answer from questions they issued.

@@ -81,18 +81,6 @@ class WorkflowRun(sources.WorkflowRun):
         rebac_resource_type = "workflows/run"
 
 
-class WorkflowRunEvidence(sources.WorkflowRunEvidence):
-    """Concrete admission evidence for native workflow source tests."""
-
-    class Meta(sources.WorkflowRunEvidence.Meta):
-        """Django options for the shared run evidence test table."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_run_evidence"
-        rebac_resource_type = "workflows/run_evidence"
-
-
 class StepRun(sources.StepRun):
     """Concrete node execution used by source-addon tests."""
 
@@ -117,16 +105,16 @@ class StepAttempt(sources.StepAttempt):
         rebac_resource_type = "workflows/step_attempt"
 
 
-class StepArtifact(sources.StepArtifact):
+class StepRecord(sources.StepRecord):
     """Concrete artifact used by source-addon tests."""
 
-    class Meta(sources.StepArtifact.Meta):
+    class Meta(sources.StepRecord.Meta):
         """Django options for the shared artifact test table."""
 
         abstract = False
         app_label = "workflows"
-        db_table = "test_workflows_artifact"
-        rebac_resource_type = "workflows/step_artifact"
+        db_table = "test_workflows_record"
+        rebac_resource_type = "workflows/step_record"
 
 
 class StepWatch(sources.StepWatch):

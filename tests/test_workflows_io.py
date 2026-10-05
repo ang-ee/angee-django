@@ -18,7 +18,7 @@ from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode, Superseded
 from angee.workflows.testing.drivers import load_workflow, observe, register_steps, run_until
-from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, Workflow, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
 
@@ -329,7 +329,7 @@ def test_operator_retry_records_duplicate_acceptance_on_only_the_new_attempt(exe
         StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
     assert runner.reap() == 1
     waiting = step_row(run)
-    assert waiting.waiting_kind == "operator" and waiting.wait_reason
+    assert waiting.waiting_kind == "error" and waiting.wait_reason
     with pytest.raises(ValidationError, match="duplicate"):
         StepRun.objects.retry_step(waiting, actor=actor)
     with pytest.raises(PermissionDenied):
@@ -401,7 +401,7 @@ def test_operator_wait_can_retry_even_when_the_node_declares_an_error_edge(execu
     with system_context(reason="test operator wait after lost delivery"):
         StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
     assert runner.redispatch() == 1
-    assert step_row(run).waiting_kind == "operator"
+    assert step_row(run).waiting_kind == "error"
 
     ready = StepRun.objects.retry_step(row, actor=actor)
 
@@ -422,7 +422,7 @@ def test_artifact_requires_record_read_access_and_retains_shared_reference(execu
         mode = StepMode.IO
 
         def run(self, ctx):
-            ctx.artifact(record, "Evidence")
+            ctx.record(record, "Evidence")
             return ctx.done(ctx.input)
 
     register_step(ArtifactIO)
@@ -430,7 +430,7 @@ def test_artifact_requires_record_read_access_and_retains_shared_reference(execu
     workflow.grant_record_access("starter", actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(step_row(run).pk)
-    artifacts = StepArtifact.objects.with_actor(actor).filter(step_run__run=run)
+    artifacts = StepRecord.objects.with_actor(actor).filter(step_run__run=run)
     if readable:
         artifact = artifacts.get()
         assert artifact.label == "Evidence" and artifact.record_ref.public_id == record.public_id
@@ -538,7 +538,7 @@ def test_reaper_retains_missing_implementation_cause_and_requests_operator_help(
     assert runner.reap() == 1
 
     waiting = step_row(run)
-    assert waiting.status == StepRunStatus.WAITING and waiting.waiting_kind == "operator"
+    assert waiting.status == StepRunStatus.WAITING and waiting.waiting_kind == "error"
     assert "registration" in waiting.wait_reason
     attempt = system_queryset(StepAttempt).get(step_run=step_run)
     assert attempt.result == "timed_out" and RemovedIO.key in attempt.error

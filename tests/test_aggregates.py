@@ -460,7 +460,9 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
         "update",
         "delete",
     )
-    assert {name for name, field in metadata.query.fields.items() if field.filter} == {"id", "word_count", "name"}
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {
+        "has_open_decisions", "id", "word_count", "name",
+    }
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {"word_count", "name"}
     assert metadata.aggregate_fields == ("id", "word_count")
     assert set(metadata.query.axes) == {"name"}
@@ -878,7 +880,9 @@ def test_final_alias_keeps_model_source_for_readable_publisher_fields() -> None:
     display_name = {field.name: field for field in metadata.fields}["display_name"]
 
     assert display_name.model_field_name == "name"
-    assert {name for name, field in metadata.query.fields.items() if field.filter} == {"id", "display_name"}
+    assert {name for name, field in metadata.query.fields.items() if field.filter} == {
+        "has_open_decisions", "id", "display_name",
+    }
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {"display_name"}
     assert metadata_module.readable_model_field_names(metadata) >= {"name"}
 

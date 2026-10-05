@@ -14,6 +14,13 @@ import {
 afterEach(() => cleanup());
 
 describe("ChatterProvider", () => {
+  test("rejects two publishers of the same tab id", () => {
+    let bridge: ReturnType<typeof useChatter> | null = null;
+    render(<ChatterProvider><CaptureBridge onRender={(value) => { bridge = value; }} /></ChatterProvider>);
+    const tab = { id: "timeline", label: "Timeline", children: null };
+    act(() => bridge!.setContent(Symbol("first"), { tabs: [tab] }));
+    expect(() => act(() => bridge!.setContent(Symbol("second"), { tabs: [tab] }))).toThrow("Two chatter owners");
+  });
   test("treats an empty tab contribution as no published content", () => {
     render(
       <ChatterProvider>

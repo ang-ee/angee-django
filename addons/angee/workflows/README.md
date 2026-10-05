@@ -28,15 +28,47 @@ code executes under the actor's permissions. It must keep external effects out
 of database steps. Consumer settlements validate their own values; the runner
 records retry, timeout and diagnostic facts on attempts.
 
-[`ReviewStep`](reviews.py) asks through the independent decisions addon and
-applies settled answers in a worker as the run actor. Each answer carries its
-resolver and frozen basis. Rejected application starts another review round;
-`ReviewStep.max_rounds` bounds re-asks, while each decision's `max_attempts`
-bounds invalid submissions to that seat. Other failures retain the answers for
-operator recovery. Decision admission
-requires standing evidence access and creates no grants. The built-in `review`
-uses this same contract for configured seats. Under `all`, differing actions
-take an explicitly routed `disputed` branch.
+[`DecisionStep`](decision_steps.py) asks exactly one decision retained by
+`StepRun.decision`. `ctx.ask(request, state=...)` holds for its verdict and keeps
+continuation facts in the step's state. Override `ask(ctx)` to declare the
+question and `continue_with(ctx, decision, outcome)` only when typed output needs
+adapting. The built-in `ask_decision` resolves the symbolic `subject` key in
+configured actions to the run's subject public identity.
+
+[`apply_proposals`](decision_steps.py) is the shared application path: as the run actor
+it sets fields through normal validated model saves, resolves relation sets through
+public identities, and invokes methods the model declares in `decision_methods`.
+It returns the sole selected outcome, or `done` for several distinct outcomes.
+Application and continuation share the worker's body transaction;
+failure rolls back record actions and retains final answers for operator retry.
+No automatic replacement question is asked. Repeated delivery still requires
+idempotent declared methods. Selected alternatives apply in authored order;
+multiple alternatives cannot overlap the same record's field write.
+
+The default continuation emits the decision public identity and chosen keys.
+`ctx.decision(id)` loads a retained decision from this run with normal read scope.
+Run operators inherit decision read through the step link, without answer grants.
+Pruning releases the step link and retains the question and verdict.
+
+`ctx.record(record, operation="read", label="")` stages one `StepRecord` for a
+read, created, changed, deleted or called record. `ctx.load` also records reads.
+Admission inputs use the same relation with no step. `step.records` and
+`WorkflowRun.objects.about(record_or_records)` provide both directions, including
+readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
+The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
+timer, record-change and map scheduling remain internal wait mechanics.
+
+`record_timeline(records: [{model, id}])` is the single authorized GraphQL read.
+It returns per-record graphs, open readable decisions and all-open attention
+counts, plus a deduplicated selection count. Run graph plans classify done,
+current, certain, optional and not-run nodes. Guaranteed normal paths determine
+certain steps; other reachable future steps fold into one may-also entry.
+Stop cancels the run tree and withdraws its open decisions with `[]`, the stopper
+and time, leaving domain records alone. Open questions retain their run tree's
+audit regardless of age; deleting a touched record stops its runs and withdraws
+their questions after deletion commits.
+`stopped_at` closes an error hold and its future plan while preserving the
+run's terminal failure audit; its steps cannot be retried after stopping.
 
 The [`permission schema`](permissions.zed) lets starters discover and read the
 workflows they may start, without editing them. Run readers see the pinned topology
@@ -44,7 +76,7 @@ and actor-readable execution summaries without requiring workflow or version rea
 Run actors can cancel and
 reprocess their own runs. Monitoring other runs and reading unpublished drafts
 requires workflow monitoring access, including read-only Studio inspection. Draft edits and
-publication require workflow write access. Execution rows and artifacts are engine-owned;
+publication require workflow write access. Execution rows and record links are engine-owned;
 the console exposes execution reads, monitor-readable draft authoring metadata,
 and writer-only save and publish operations, alongside explicit operator actions through the
 shared GraphQL resource and action owners.
@@ -82,7 +114,7 @@ current delegation authority. Enabled triggers stored before this provenance was
 recorded must be enabled again before human-published versions can run.
 It also checks the actor's standing read access to the subject and each
 record-reference field in the frozen admitted input schema. The run retains
-one canonical `WorkflowRunEvidence` edge per source; ordinary input fields do
+one canonical `StepRecord` edge per source with no step; ordinary input fields do
 not create edges. Readers can inspect these references through the run resource,
 with identities and relation-marked input values redacted when their current
 record access is gone. Failed steps retain a reader-facing message in their
@@ -107,8 +139,8 @@ effect requires operator acknowledgement unless the step declares
 `effect_idempotent`. A recorded effect takes precedence over `Retryable`;
 retries and time waits retain every attempt's effect marker for the current page.
 Dispatch exhaustion waits for operator recovery, preserving the body's checkpoint.
-Context operations stage readable artifact references until a successful
-settlement; failed and superseded attempts retain no artifact evidence.
+Context operations stage readable record links until a successful
+settlement; failed and superseded attempts retain no staged record links.
 The first claim stores a random idempotency token. Each page uses
 `token:page_index`, retaining its key across retries and time waits;
 `ctx.next_page` starts the next page with a new suffix and retry allowance.
@@ -121,7 +153,7 @@ terminal status, outcome, output and error.
 Delivery is at least once; step implementations must tolerate repeated execution.
 
 **Named gap: run budgets.** The rebuilt engine bounds individual attempts,
-dispatch recovery and review rounds, but has no owner for an overall run budget
+dispatch recovery, but has no owner for an overall run budget
 or deadline. Workflows that need an aggregate time, page or resource budget still
 need that engine contract; step bounds do not establish a run-wide limit.
 

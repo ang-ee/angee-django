@@ -11,7 +11,6 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
-from angee.decisions.forms import compile_form
 from angee.storage.archives import (
     ArchiveError,
     BoundedReader,
@@ -20,7 +19,6 @@ from angee.storage.archives import (
     stage_subtree,
 )
 from angee.workflows_integrate.archive_steps import (
-    ApplyArchiveMappings,
     ArchiveExtractor,
 )
 
@@ -88,14 +86,6 @@ def test_registry_uses_canonical_storage_models_and_stable_keys():
         ArchiveExtractor.resolve_class("missing")
 
 
-def test_review_form_freezes_each_proposed_extractor_but_allows_target_choice():
-    schema = compile_form((ApplyArchiveMappings,), initial={
-        "apply_archive_mappings": {"mappings": [
-            {"extractor": "first", "label": "First", "target": ""},
-            {"extractor": "second", "label": "Second", "target": ""},
-        ]},
-    })
-    rows = schema["oneOf"][0]["properties"]["mappings"]["prefixItems"]
-    assert [row["properties"]["extractor"]["const"] for row in rows] == ["first", "second"]
-    assert [row["properties"]["label"]["const"] for row in rows] == ["First", "Second"]
-    assert all("const" not in row["properties"]["target"] for row in rows)
+def test_archive_gate_targets_are_discovered_instead_of_static_config():
+    from angee.workflows_integrate.archive_steps import ArchiveGateConfig
+    assert set(ArchiveGateConfig.model_fields) == {"assignee"}

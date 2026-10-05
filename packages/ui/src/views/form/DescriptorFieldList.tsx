@@ -15,6 +15,7 @@ import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
+import { RecordFieldMarkButton } from "./record-field-marks";
 
 /** What a descriptor field needs to offer (and optionally create) a related row. */
 export interface DescriptorFieldRelation {
@@ -220,13 +221,14 @@ export function LabeledDescriptorField({
   return (
     <FieldRoot invalid={invalid}>
       {showLabel ? (
-        <FieldLabel
+        <div className="flex items-center gap-1"><FieldLabel
           id={groupLabel ? labelId : undefined}
           htmlFor={isCompositeField || groupLabel ? undefined : controlId}
           required={field.required && !readOnly}
         >
           {field.label ?? field.name}
         </FieldLabel>
+        <RecordFieldMarkButton field={field.name} label={field.label} /></div>
       ) : null}
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       {field.control ? (
@@ -242,7 +244,7 @@ export function LabeledDescriptorField({
           onCommit,
           dialogValues: dialogValues ?? {},
         })
-      ) : field.relation ? (
+      ) : field.relation && (!field.widget || field.widget === "many2one" || field.widget === "many2many") ? (
         <DescriptorRelationControl
           controlId={controlId}
           describedBy={describedBy}

@@ -8,6 +8,8 @@ from typing import Any
 from angee.graphql.constants import CHANGE_GROUP_EXPIRY_SECONDS, PUBLIC_ID_FIELD_NAME
 
 SETTINGS = {
+    "ANGEE_HOOKS:append": ["ANGEE_GRAPHQL_RESOURCE_FILTERS"],
+    "ANGEE_GRAPHQL_RESOURCE_FILTERS": [],
     "STRAWBERRY_DJANGO:append": {
         "DEFAULT_PK_FIELD_NAME": PUBLIC_ID_FIELD_NAME,
         "MAP_AUTO_ID_AS_GLOBAL_ID": False,

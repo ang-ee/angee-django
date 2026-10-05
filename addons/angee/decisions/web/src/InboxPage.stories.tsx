@@ -2,18 +2,19 @@ import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
-import { createRouteHref, isJsonObject, JsonValueSchema } from "@angee/ui";
+import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
+import { ProposalSchema } from "./proposal";
 import { InboxPage } from "./InboxPage";
 import { DECISION_MODEL } from "./documents.console";
-import { decisionFixture, decisionGroupFixture, decisionResourceFixture, decisionSubjectFixture, decisionUserFixture } from "./testing";
+import { decisionFixture, decisionLinkFixture, decisionResourceFixture, decisionRecordFixture, decisionUserFixture } from "./testing";
 
 export default { title: "Decisions/Inbox", parameters: { layout: "fullscreen" } };
 export const Open = { render: () => <DecisionStory /> };
-export const Settled = { render: () => <DecisionStory settled /> };
-export const SettledWithoutFacts = { render: () => <DecisionStory settled emptyFacts /> };
-export const PendingWithoutFacts = { render: () => <DecisionStory pendingEmpty /> };
-export const SiblingClosed = { render: () => <DecisionStory siblingClosed /> };
+export const Closed = { render: () => <DecisionStory closed /> };
+export const ClosedWithoutAttribution = { render: () => <DecisionStory closed emptyFacts /> };
+export const OpenWithoutRequester = { render: () => <DecisionStory pendingEmpty /> };
+export const Multiple = { render: () => <DecisionStory multiple /> };
 export const Inbox = { render: () => <DecisionStory inbox /> };
 export const Conflict = { render: () => <DecisionStory conflict /> };
 export const InvalidAttempt = { render: () => <DecisionStory invalidAttempt /> };
@@ -31,19 +32,20 @@ const runtime = {
   auth: { user: { id: "usr_reviewer", name: "Reviewer" }, status: "authenticated" as const, hasRole: () => false },
 };
 
-function DecisionStory({ settled = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false, siblingClosed = false }: {
-  settled?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean; emptyFacts?: boolean;
-  pendingEmpty?: boolean; siblingClosed?: boolean;
+function DecisionStory({ multiple = false, closed = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false }: {
+  multiple?: boolean; closed?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean; emptyFacts?: boolean;
+  pendingEmpty?: boolean;
 }) {
   const schemas = useMemo(() => {
     let conflicting = conflict;
     let rejectAttempt = invalidAttempt;
     let current = decisionFixture({ permissions: readOnly ? [] : ["act"], context: { facts: [{ pointer: "/reference", label: "Reference", value: "R-7", authority: "source" }], references: [] } });
-    if (settled) current = { ...current, is_open: false, permissions: [], verdict: "COMPLETED", closed_reason: "RESOLVED", resolution: { action: "accept", note: "Already reviewed", reference: "R-7" },
-      resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
-    if (emptyFacts) current = { ...current, expires_at: null, resolved_by: null, resolved_at: null, closed_reason: null };
-    if (pendingEmpty) current = { ...current, requester: null, expires_at: null };
-    if (siblingClosed) current = { ...current, is_open: false, permissions: [], verdict: "PENDING", closed_reason: "SIBLING_SETTLED", resolution: {} };
+    if (multiple) current = { ...current, proposal: { ...v.parse(ProposalSchema, current.proposal), multiple: true } };
+    if (closed) current = { ...current, is_open: false, permissions: [], verdict: ["accept"], verdict_label: "Accept and archive",
+      answered_by: { display_name: "Reviewer" }, answered_at: "2026-09-29T09:30:00Z" };
+    if (emptyFacts) current = { ...current, answered_by: null, answered_at: null };
+    if (pendingEmpty) current = { ...current, requester: null };
+
     const fixture = storySchema(async (_input, init) => {
       const { query, variables } = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       if (query.includes("decide(")) {
@@ -53,13 +55,13 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
         }] });
         if (rejectAttempt) {
           rejectAttempt = false;
-          current = { ...current, revision: current.revision + 1 };
-          return jsonResponse({ data: { decide: { ok: false, message: "Check the answer.", validation_errors: { note: ["Add the missing detail."] } } } });
+          return jsonResponse({ data: { decide: { ok: false, message: "Check the answer.", validation_errors: { chosen: ["Choose an offered alternative."] } } } });
         }
-        const action = variables.action;
-        if ((action !== "accept" && action !== "reject") || !isJsonObject(variables.values)) throw new Error("Unexpected story decision payload.");
-        current = { ...current, is_open: false, permissions: [], revision: current.revision + 1, verdict: action === "reject" ? "REJECTED" : "COMPLETED", closed_reason: "RESOLVED",
-          resolution: { action, ...variables.values }, resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
+        const chosen = v.parse(v.array(v.string()), variables.chosen);
+        if (!chosen.length || chosen.some((key) => key !== "accept" && key !== "reject")) throw new Error("Unexpected choice.");
+        current = { ...current, is_open: false, permissions: [], revision: current.revision + 1,
+          verdict: chosen, verdict_label: chosen.map((key) => key === "accept" ? "Accept and archive" : "Keep what is on the record").join("; "),
+          answered_by: { display_name: "Reviewer" }, answered_at: "2026-09-29T09:30:00Z" };
         return jsonResponse({ data: { decide: { ok: true, message: "Decision recorded.", id: current.id } } });
       }
       if (query.includes("decisions_by_pk")) return jsonResponse({ data: { decisions_by_pk: { ...current, kind_label: "Review",
@@ -69,11 +71,11 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       decisionResourceFixture,
-      decisionGroupFixture,
-      decisionSubjectFixture,
+      decisionRecordFixture,
+      decisionLinkFixture,
       decisionUserFixture,
     ] } } } };
-  }, [settled, conflict, invalidAttempt, readOnly, emptyFacts, pendingEmpty, siblingClosed]);
+  }, [multiple, closed, conflict, invalidAttempt, readOnly, emptyFacts, pendingEmpty ]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}
     runtime={runtime} resourceName={DECISION_MODEL} resourceLabel="Decisions" operationDocuments={documents}>
     <InboxPage />

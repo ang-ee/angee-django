@@ -120,6 +120,27 @@ test("keeps long text fields in declaration order when they opt out of body plac
   ]);
 });
 
+test.each([undefined, true])("the statusbar widget owns header status and is excluded from fields and groups (status=%s)", (status) => {
+  const state: FieldDescriptor = { name: "state", widget: "statusbar", status };
+  const title: FieldDescriptor = { name: "number", title: true };
+  const detail: FieldDescriptor = { name: "date" };
+  const layout = formViewFieldLayout([title, state, detail], [title, state, detail], [
+    { fields: [state, detail], actions: [] },
+  ], null);
+  expect(layout.statusField).toBe(state);
+  expect(layout.gridFields).toEqual([detail]);
+  expect(layout.gridGroups[0]?.fields).toEqual([detail]);
+});
+
+test("status selection preserves custom header widgets and ordinary body fields", () => {
+  const stage: FieldDescriptor = { name: "stage", widget: "task.stage", status: true };
+  const status: FieldDescriptor = { name: "status", widget: "select" };
+  const custom = formViewFieldLayout([stage, status], [stage, status], [], null);
+  expect(custom.statusField).toBe(stage);
+  expect(custom.gridFields).toEqual([status]);
+  expect(formViewFieldLayout([status], [status], [], null).statusField).toBeUndefined();
+});
+
 test("object fields select only their declared row projection paths", () => {
   const paths = new Set<string>();
   addFieldSelection(

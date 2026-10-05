@@ -44,8 +44,6 @@ export const enPartiesMessages: Record<string, string> = {
   "party.contact.label": "Label",
   "party.contact.label.placeholder": "Primary, work, or another useful label",
   "party.contact.summary": "Contact details",
-  "party.contact.email": "Email",
-  "party.contact.phone": "Phone",
   "party.contact.required": "Enter an email address or phone number.",
   "party.contact.error": "Could not add this contact.",
   "address.label": "Address label",

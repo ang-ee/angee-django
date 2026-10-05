@@ -1,4 +1,9 @@
 [addon]
 name = "angee.decisions"
-description = "Human decisions with frozen forms and durable evidence"
-depends_on = ["angee.iam", "angee.graphql", "angee.jobs", "django.contrib.contenttypes"]
+description = "Questions on records with alternatives and audited verdicts"
+depends_on = ["angee.iam", "angee.graphql", "django.contrib.contenttypes"]
+
+[[migrations]]
+name = "cutover"
+app_label = "decisions"
+module = "runtime_migrations.cutover"

@@ -1,0 +1,29 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "workflows",
+      "owner": "RecordTimeline run state badge",
+      "prefix": "timeline.status.",
+      "values": [
+        "decision",
+        "plan_complete",
+        "plan_running",
+        "run",
+        "unknown",
+        "waiting"
+      ]
+    },
+    {
+      "namespace": "workflows",
+      "owner": "RecordTimeline run origin",
+      "prefix": "origin.",
+      "values": [
+        "manual",
+        "reprocess",
+        "trigger",
+        "unknown",
+        "workflow"
+      ]
+    }
+  ]
+}

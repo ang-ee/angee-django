@@ -12,6 +12,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
+from angee.compose.history import historical_labels
 from angee.compose.migrations import RuntimeMigrations
 from angee.compose.model_composition import ModelComposition
 from angee.compose.permissions import apply_schema_paths, extension_source_map
@@ -132,6 +133,12 @@ class Runtime:
 
         return self.composition.labels
 
+    @property
+    def migration_labels(self) -> tuple[str, ...]:
+        """Keep retired labels loadable until their retained graph retires the state."""
+
+        return tuple(sorted(set(self.labels) | set(historical_labels(self.runtime_dir))))
+
     def render_sources(self) -> dict[Path, str]:
         """Render one coherent model/web/permission source map before any write."""
 
@@ -165,7 +172,7 @@ class Runtime:
         return RuntimeMigrations(
             self.addons,
             runtime_dir=self.runtime_dir,
-            labels=self.labels,
+            labels=self.migration_labels,
         )
 
     @property
@@ -215,7 +222,7 @@ class Runtime:
         """
 
         migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
-        for label in self.labels:
+        for label in self.migration_labels:
             module = f"{self.runtime_module}.{label}.migrations"
             if label in migration_modules and migration_modules[label] != module:
                 raise ImproperlyConfigured(f"Project settings define Runtime-owned MIGRATION_MODULES[{label!r}]")

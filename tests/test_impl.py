@@ -20,77 +20,19 @@ from angee.base.impl import (
     ImplClassField,
     ImplDefaultsMixin,
     check_impl_registry,
-    freeze_form_schema,
     impl_choices,
     impl_choices_enum,
-    materialize_form_schema,
     model_config_form_spec,
     resolve_all_impl_classes,
     resolve_hook,
     resolve_hooks,
     resolve_impl_class,
 )
-from angee.base.jsonschema import validation_issues
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
 from tests.conftest import Integration, OAuthClient, VcsBridge
 from tests.tables import model_tables
-
-
-def test_frozen_form_metadata_and_per_row_defaults_compose_shared_schema_validation():
-    """Frozen forms retain each row's readonly identity while applying stored defaults."""
-    schema = materialize_form_schema({
-        "type": "array", "$defs": {"Row": {
-            "type": "object", "properties": {
-                "key": {"type": "string", "readOnly": True}, "text": {"type": "string"},
-            },
-        }}, "items": {"$ref": "#/$defs/Row"},
-    })
-    initial = [{"key": "a", "text": "first"}, {"key": "b", "text": "second"}]
-    freeze_form_schema(schema, initial)
-    initial[0]["key"] = "changed outside snapshot"
-    values = [{}, {"text": "edited"}]
-    assert validation_issues(schema, values, defaults=True) == {}
-    assert values == [{"key": "a", "text": "first"}, {"key": "b", "text": "edited"}]
-    values[1]["key"] = "a"
-    assert set(validation_issues(schema, values)) == {"1.key"}
-
-
-def test_frozen_relation_titles_use_model_verbose_names_unless_declared():
-    schema = materialize_form_schema({"type": "object", "properties": {
-        "selected_id": {"type": "string", "relation": {"resource": "auth.Permission"}},
-        "related_ids": {"type": "array", "items": {
-            "type": "string", "relation": {"resource": "auth.Permission"},
-        }},
-        "named_id": {"type": "string", "title": "Granted access", "relation": {"resource": "auth.Permission"}},
-    }})
-    fields = schema["properties"]
-    assert fields["selected_id"]["title"] == "Permission"
-    assert fields["related_ids"]["title"] == "Permissions"
-    assert fields["named_id"]["title"] == "Granted access"
-
-
-@pytest.mark.parametrize("declared_default", [False, True])
-def test_empty_array_form_defaults_preserve_valid_item_schemas(declared_default):
-    """No initialized rows means no positional schemas or fabricated readonly values."""
-    item = {"type": "object", "properties": {
-        "key": {"type": "string", "readOnly": True}, "text": {"type": "string"},
-    }}
-    schema = materialize_form_schema({"type": "object", "properties": {
-        "rows": {"type": "array", "items": item},
-    }})
-    if declared_default:
-        schema["properties"]["rows"]["default"] = []
-        freeze_form_schema(schema)
-    else:
-        freeze_form_schema(schema, {"rows": []})
-    values = {}
-    assert validation_issues(schema, values, defaults=True) == {}
-    assert values == {"rows": []}
-    assert schema["properties"]["rows"]["items"] == item
-    assert validation_issues(schema, {"rows": [{"key": "new", "text": "added"}]}) == {}
-    assert set(validation_issues(schema, {"rows": [{"text": 1}]})) == {"rows.0.text"}
 
 
 class _BaseImpl(ImplBase):
@@ -1242,7 +1184,7 @@ def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, mon
     with override_settings(ANGEE_TEST_IMPLS={BadAnnotation.key: "tests.test_impl.BadAnnotation"}):
         assert [error.id for error in check_impl_registry(_BaseImpl)] == ["angee.E005"]
 
-def test_relation_annotation_errors_retain_the_native_location_in_both_form_paths():
+def test_relation_annotation_errors_retain_the_native_location():
     from angee.base.impl import check_form_annotations
 
     relation = {"resource": "demo.Target", "create": {"resource": 0}}
@@ -1254,16 +1196,14 @@ def test_relation_annotation_errors_retain_the_native_location_in_both_form_path
 
     with pytest.raises(ImproperlyConfigured, match="invalid relation at create.resource"):
         model_config_form_spec(Config, owner="Config", json_fields=True)
-    with pytest.raises(ValidationError, match="invalid relation at create.resource"):
-        materialize_form_schema(Config.model_json_schema())
 
 
-def test_namespaced_relation_widgets_survive_config_and_frozen_action_form_projection():
+def test_namespaced_relation_widgets_survive_config_form_projection():
     class Config(BaseModel):
         target: str = Field(title="Target", json_schema_extra={
             "widget": "demo.target", "relation": {"resource": "demo.Target"},
         })
 
-    for schema in (model_config_form_spec(Config, owner="Config"), materialize_form_schema(Config.model_json_schema())):
-        assert schema["properties"]["target"]["widget"] == "demo.target"
-        assert schema["properties"]["target"]["relation"] == {"resource": "demo.Target"}
+    schema = model_config_form_spec(Config, owner="Config")
+    assert schema["properties"]["target"]["widget"] == "demo.target"
+    assert schema["properties"]["target"]["relation"] == {"resource": "demo.Target"}

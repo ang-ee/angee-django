@@ -2,12 +2,15 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
-import { decisionRunOrigin, workflowsRunsTab } from "./contributions";
+import { decisionRunOrigin, recordTimelineTab } from "./contributions";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 
+export { RecordTimeline, type RecordTimelineProps, type TimelineRecord } from "./RecordTimeline";
+export { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
+export { useRecordTimelineQuery } from "./RecordTimeline";
 export { WORKFLOW_STUDIO_TAB_ID } from "./catalogue/resources";
 
 export { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
@@ -29,7 +32,7 @@ export default defineBaseAddon({
     "workflows.triggers": { parent: "workflows.studio", label: "Triggers", icon: "activity", route: "workflows.triggers" },
   },
   containers: {
-    "record#aside": { "workflows.runs": workflowsRunsTab },
+    "record#aside": { "workflows.timeline": recordTimelineTab },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },
   statusTones: WORKFLOW_STATUS_TONES,

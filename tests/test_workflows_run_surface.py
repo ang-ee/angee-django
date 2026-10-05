@@ -2,13 +2,13 @@
 
 import pytest
 from django.db import IntegrityError, transaction
+from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.scoping import system_queryset
-from angee.decisions.contracts import DecisionRequest
-from angee.decisions.forms import Action
-from angee.decisions.states import Verdict
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.testing.models import Decision
 from angee.workflows import schema as workflow_schema
-from angee.workflows.reviews import ReviewStep
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
@@ -172,42 +172,64 @@ def test_run_subject_filters_use_model_labels_and_public_ids(schema, execution):
         (starter, {"subject_id": {"_eq": subjects[0].sqid}, "subject_model": {"_eq": "unknown.Model"}}),
     ):
         assert result_data(execute_schema(schema, query, {"where": filters}, user=actor)) == {
-            "workflowrun": [], "workflowrun_aggregate": {"aggregate": {"count": 0}},
+            "workflowrun": [],
+            "workflowrun_aggregate": {"aggregate": {"count": 0}},
         }
-    only_model = result_data(execute_schema(
-        schema, query, {"where": {"subject_model": {"_eq": "knowledge.vault"}}}, user=starter,
-    ))
+    only_model = result_data(
+        execute_schema(
+            schema,
+            query,
+            {"where": {"subject_model": {"_eq": "knowledge.vault"}}},
+            user=starter,
+        )
+    )
     assert only_model["workflowrun_aggregate"] == {"aggregate": {"count": 2}}
-    assert result_data(execute_schema(
-        schema, query, {"where": {"subject_id": {"_eq": subjects[0].sqid}}}, user=starter,
-    )) == visible
+    assert (
+        result_data(
+            execute_schema(
+                schema,
+                query,
+                {"where": {"subject_id": {"_eq": subjects[0].sqid}}},
+                user=starter,
+            )
+        )
+        == visible
+    )
 
 
-def test_run_evidence_redacts_references_after_source_read_is_revoked(schema, execution):
+def test_run_records_redacts_references_after_source_read_is_revoked(schema, execution):
     """Run readers keep the retained edge but cannot recover a hidden target ID."""
     admin, _sent = execution
-    starter, viewer = (create_user(name) for name in ("evidence-starter", "evidence-viewer"))
+    starter, viewer = (create_user(name) for name in ("records-starter", "records-viewer"))
     workflow = load_workflow(document("entry"), actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", starter)
     source = vault_for(starter, name="Retained source")
     run = start_run(workflow, actor=starter, subject=source)
     run.with_actor(starter).grant_record_access("reader", viewer)
     query = """query($id: String!) {
-      workflowrun_by_pk(id: $id) { id subject_model subject_id evidence { id record_model record_id } }
+      workflowrun_by_pk(id: $id) { id subject_model subject_id records { id record_model record_id } }
     }"""
     own = result_data(execute_schema(schema, query, {"id": run.sqid}, user=starter))["workflowrun_by_pk"]
-    assert len(own["evidence"]) == 1
-    assert own["evidence"][0]["record_model"] == "knowledge.Vault"
-    assert own["evidence"][0]["record_id"] == source.sqid
+    assert len(own["records"]) == 1
+    assert own["records"][0]["record_model"] == "knowledge.Vault"
+    assert own["records"][0]["record_id"] == source.sqid
     assert own["subject_id"] == source.sqid
     hidden = result_data(execute_schema(schema, query, {"id": run.sqid}, user=viewer))["workflowrun_by_pk"]
-    assert hidden["evidence"] == [{"id": own["evidence"][0]["id"], "record_model": None, "record_id": None}]
+    assert hidden["records"] == [{"id": own["records"][0]["id"], "record_model": None, "record_id": None}]
     assert hidden["subject_model"] is hidden["subject_id"] is None
-    assert result_data(execute_schema(schema, """query($id: String!) {
+    assert result_data(
+        execute_schema(
+            schema,
+            """query($id: String!) {
       workflowrun(where: {subject_id: {_eq: $id}}) { id }
       workflowrun_aggregate(where: {subject_id: {_eq: $id}}) { aggregate { count } }
-    }""", {"id": source.sqid}, user=viewer)) == {
-        "workflowrun": [], "workflowrun_aggregate": {"aggregate": {"count": 0}},
+    }""",
+            {"id": source.sqid},
+            user=viewer,
+        )
+    ) == {
+        "workflowrun": [],
+        "workflowrun_aggregate": {"aggregate": {"count": 0}},
     }
 
 
@@ -249,7 +271,8 @@ def test_run_origin_groups_and_filters_follow_admission_lineage_and_read_scope(s
         assert visible["workflowrun"] == [{"id": replacement.sqid, "origin": "REPROCESS"}]
         assert visible["workflowrun_aggregate"] == {"aggregate": {"count": 1}}
         assert {row["key"]["origin"]: row["aggregate"]["count"] for row in visible["workflowrun_groups"]} == {
-            "MANUAL": 1, "REPROCESS": 1,
+            "MANUAL": 1,
+            "REPROCESS": 1,
         }
     resource = next(item for item in schema.angee_resources if item.model_label == "workflows.WorkflowRun")
     axis = resource.query.axes["origin"]
@@ -270,66 +293,81 @@ def test_run_origin_groups_and_filters_follow_admission_lineage_and_read_scope(s
     ]
 
 
-class Accept(Action, key="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):
-    """One response keeps the decision-group query proof focused on links."""
-
-
-def test_step_decision_group_exact_filter_combines_with_status(schema, execution, register_step):
-    """A review waiter exposes its admitted group through the normal step resource."""
+def test_step_decisions_exact_filter_combines_with_status(schema, execution, register_step):
+    """A review waiter exposes its decisions through the normal step resource."""
     admin, _sent = execution
     starter, reviewer, other = (create_user(name) for name in ("group-starter", "group-reviewer", "group-other"))
 
-    class Question(ReviewStep[None, None, None, None]):
+    reference = vault_for(starter)
+    write_relationships([RelationshipTuple(to_object_ref(reference), "viewer", to_subject_ref(reviewer))])
+
+    class Question(DecisionStep[None, None, None]):
         key = "run_surface_question"
-        actions = (Accept,)
+        outcomes = {"accepted": "Accepted"}
 
         def ask(self, ctx):
-            return ctx.ask(DecisionRequest(kind="review", subject=None, assignees=(reviewer,), actions=self.actions))
+            return ctx.ask(
+                DecisionRequest(
+                    kind="review", requester=ctx.actor,
+                    records=(reference,),
+                    assignees=(reviewer,),
+                    proposal=DecisionProposal(
+                        alternatives=[{"key": "accept", "label": "Accept", "outcome": "accepted"}]
+                    ),
+                )
+            )
 
-        def apply(self, ctx, settled):
-            return ctx.done(outcome=settled[0].action.outcome)
+        def continue_with(self, ctx, decision, outcome):
+            return ctx.done(outcome=outcome)
 
     register_step(Question)
-    workflow = load_workflow({
-        "nodes": {"entry": {"step": Question.key}},
-        "results": [{"from": "entry", "when": ["accepted"], "as": "accepted"}],
-    }, actor=admin)
+    workflow = load_workflow(
+        {
+            "nodes": {"entry": {"step": Question.key}},
+            "results": [{"from": "entry", "when": ["accepted"], "as": "accepted"}],
+        },
+        actor=admin,
+    )
     for actor in (starter, other):
         workflow.with_actor(admin).grant_record_access("starter", actor)
     runs = [start_run(workflow, actor=starter) for _ in range(2)]
     for run in runs:
         run_until(run)
-    step = system_queryset(StepRun).select_related("decision_group").get(run=runs[0])
-    group = step.decision_group
+    step = system_queryset(StepRun).get(run=runs[0])
+    decision = system_queryset(Decision).get(requesting_steps=step)
     query = """query($where: steprun_bool_exp) {
-      steprun(where: $where) { id decision_group { id } }
+      steprun(where: $where) { id decision { id } }
       steprun_aggregate(where: $where) { aggregate { count } }
     }"""
-    where = {"decision_group": {"_eq": group.sqid}, "status": {"_eq": "waiting"}}
+    where = {"decision": {"_eq": decision.sqid}, "status": {"_eq": "waiting"}}
     assert result_data(execute_schema(schema, query, {"where": where}, user=starter)) == {
-        "steprun": [{"id": step.sqid, "decision_group": {"id": group.sqid}}],
+        "steprun": [{"id": step.sqid, "decision": {"id": decision.sqid}}],
         "steprun_aggregate": {"aggregate": {"count": 1}},
     }
     for actor, filters in ((other, where), (starter, {**where, "status": {"_eq": "ready"}})):
         assert result_data(execute_schema(schema, query, {"where": filters}, user=actor)) == {
-            "steprun": [], "steprun_aggregate": {"aggregate": {"count": 0}},
+            "steprun": [],
+            "steprun_aggregate": {"aggregate": {"count": 0}},
         }
     resource = next(item for item in schema.angee_resources if item.model_label == "workflows.StepRun")
-    assert resource.query.fields["decision_group"].filter is not None
+    assert resource.query.fields["decision"].filter is not None
 
 
 def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execution):
     """A retained position orders the whole execution and its resource pages alike."""
     actor, _sent = execution
-    workflow = load_workflow({
-        "nodes": {
-            "finish": {"step": "echo", "join": "all", "input": {"from": "branch_a"}},
-            "branch_b": {"step": "echo", "next": {"done": "finish"}},
-            "start": {"step": "echo", "next": {"done": ["branch_b", "branch_a"]}},
-            "branch_a": {"step": "echo", "next": {"done": "finish"}},
+    workflow = load_workflow(
+        {
+            "nodes": {
+                "finish": {"step": "echo", "join": "all", "input": {"from": "branch_a"}},
+                "branch_b": {"step": "echo", "next": {"done": "finish"}},
+                "start": {"step": "echo", "next": {"done": ["branch_b", "branch_a"]}},
+                "branch_a": {"step": "echo", "next": {"done": "finish"}},
+            },
+            "results": [{"from": "finish"}],
         },
-        "results": [{"from": "finish"}],
-    }, actor=actor)
+        actor=actor,
+    )
     run = start_run(workflow, actor=actor)
     run_until(run)
     assert run.status == "succeeded"
@@ -349,7 +387,7 @@ def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execu
     }"""
     for offset in (0, 2):
         result = result_data(execute_schema(schema, query, {"id": run.sqid, "offset": offset}, user=actor))
-        assert result["steprun"] == expected[offset:offset + 2]
+        assert result["steprun"] == expected[offset : offset + 2]
         assert result["workflowrun_by_pk"]["step_runs"] == expected
         assert result["narrow"]["step_runs"] == [{"node_key": row["node_key"]} for row in expected]
     resource = next(item for item in schema.angee_resources if item.model_label == "workflows.StepRun")
@@ -357,10 +395,16 @@ def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execu
     assert "rank" in schema._schema.get_type("steprun_order_by").fields
 
 
-@pytest.mark.parametrize("node_key,map_index,expected", [
-    ("ordinary", 0, False), ("body", 0, False), ("items_body", 0, False),
-    ("items.body", 0, True), ("items.body", 3, True),
-])
+@pytest.mark.parametrize(
+    "node_key,map_index,expected",
+    [
+        ("ordinary", 0, False),
+        ("body", 0, False),
+        ("items_body", 0, False),
+        ("items.body", 0, True),
+        ("items.body", 3, True),
+    ],
+)
 def test_map_body_fact_uses_node_identity_including_first_item(node_key, map_index, expected):
     """Unsaved values prove the model fact without inventing persisted map work."""
     row = StepRun(node_key=node_key, map_index=map_index)
@@ -369,10 +413,14 @@ def test_map_body_fact_uses_node_identity_including_first_item(node_key, map_ind
 
 def test_published_labels_describe_node_and_run_outcomes(schema, execution):
     actor, _sent = execution
-    workflow = load_workflow({
-        "nodes": {"source_facts": {"step": "route", "config": {"outcome": "left"}}},
-        "results": [{"from": "source_facts", "as": "accepted"}],
-    }, name="Labeled flow", actor=actor)
+    workflow = load_workflow(
+        {
+            "nodes": {"source_facts": {"step": "route", "config": {"outcome": "left"}}},
+            "results": [{"from": "source_facts", "as": "accepted"}],
+        },
+        name="Labeled flow",
+        actor=actor,
+    )
     published = workflow.published.document
     assert published["nodes"]["source_facts"]["label"] == "Source facts"
     assert published["nodes"]["source_facts"]["outcome_labels"]["left"] == "Left"
@@ -382,15 +430,27 @@ def test_published_labels_describe_node_and_run_outcomes(schema, execution):
     run_until(run)
     assert run.outcome == "accepted"
     assert str(run).startswith("Labeled flow")
-    data = result_data(execute_schema(schema, """query($id: String!) {
+    data = result_data(
+        execute_schema(
+            schema,
+            """query($id: String!) {
       workflowrun_by_pk(id: $id) {
         outcome outcome_label step_runs { node_key node_label outcome outcome_label }
       }
-    }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]
+    }""",
+            {"id": run.sqid},
+            user=actor,
+        )
+    )["workflowrun_by_pk"]
     assert data == {
-        "outcome": "accepted", "outcome_label": "Accepted",
-        "step_runs": [{
-            "node_key": "source_facts", "node_label": "Source facts",
-            "outcome": "left", "outcome_label": "Left",
-        }],
+        "outcome": "accepted",
+        "outcome_label": "Accepted",
+        "step_runs": [
+            {
+                "node_key": "source_facts",
+                "node_label": "Source facts",
+                "outcome": "left",
+                "outcome_label": "Left",
+            }
+        ],
     }

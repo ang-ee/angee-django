@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import cache
 from types import get_original_bases
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
+from typing import Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -28,9 +28,6 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-
-if TYPE_CHECKING:
-    from angee.workflows.reviews import ReviewStep
 
 
 class Retryable(Exception):
@@ -172,7 +169,7 @@ class Fail(_Settlement):
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
         retries = step_run.retries + 1
         if attempt.retryable and step_run.requires_duplicate_acknowledgement:
-            return rows.to_waiting(kind=WaitingKind.OPERATOR, reason="possible duplicate effect", retries=retries)
+            return rows.to_waiting(kind=WaitingKind.ERROR, reason="possible duplicate effect", retries=retries)
         if attempt.retryable and retries < step_run.step.retry.max_attempts:
             return rows.to_waiting(
                 until=Now() + step_run.step.retry.delay_for(retries),
@@ -187,38 +184,32 @@ class Fail(_Settlement):
 
 @dataclass(frozen=True)
 class Ask(_Settlement):
-    """A review request checked before the decision owner admits it."""
+    """One question admitted with the step's continuation state."""
 
-    requests: tuple[DecisionRequest, ...] = ()
-    policy: str = "first"
-    group_id: Any = None
-    errors: dict[str, list[str]] = field(default_factory=dict)
+    request: DecisionRequest
+    decision_id: Any = None
     state: Any = field(default_factory=dict)
 
     def check(self, step: type[Step], *, config: Any = None) -> Ask:
-        review = cast("type[ReviewStep[Any, Any, Any, Any]]", step)
-        offered = review.actions_for(config)
-        requests = []
-        for request in self.requests:
-            if any(action not in offered for action in request.actions):
-                raise ValidationError("A seat offers an action outside this review's declaration.")
-            parsed = review.parse_value(request.basis, review.basis_model, "basis")
-            basis = get_type_adapter(review.basis_model).dump_python(parsed, mode="json", by_alias=True)
-            requests.append(request.model_copy(update={"basis": basis}))
-        return replace(self, requests=tuple(requests), state=step.serialize_state(self.state))
+        request = DecisionRequest.model_validate(self.request)
+        offered = step.available_outcomes(config)
+        if any(
+            alternative.outcome not in offered for alternative in request.proposal.alternatives
+        ):
+            raise ValidationError("A proposal names an outcome not declared by the asking step.")
+        return replace(self, request=request, state=step.serialize_state(self.state))
 
     def admit(self, ctx: Any) -> Ask:
         manager = apps.get_model("decisions", "Decision").objects
-        if self.group_id is None:
-            group = manager.admit_group(self.requests, actor=ctx.actor, policy=self.policy)
-        else:
-            group = manager.reask(
-                self.group_id, actor=ctx.actor, actions=ctx.step.actions_for(ctx.config), errors=self.errors,
-            )
-        return replace(self, group_id=group.pk)
+        if ctx.step_run.decision_id is not None:
+            raise ValidationError("This step has already asked its decision.")
+        decision = manager.ask(self.request, actor=ctx.actor)
+        for record in self.request.records:
+            ctx.record(record)
+        return replace(self, decision_id=decision.pk)
 
     def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
-        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_group_id=self.group_id)
+        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_id=self.decision_id)
 
 
 type Settlement = Done | Wait | NextPage | Fail | Ask

@@ -5,8 +5,10 @@ import { enDecisionsMessages } from "./i18n";
 import { DECISION_MODEL } from "./documents.console";
 
 export { DECISION_MODEL } from "./documents.console";
-export { decisionContent, useDecisionContent, type DecisionContentProps } from "./content";
-export { DecisionsList, decisionRecordTab } from "./RecordDecisions";
+export { DecisionCard, type DecisionCardProps } from "./DecisionCard";
+export { decisionFieldMarks } from "./proposal";
+export { useDecision } from "./origin";
+export { type Decision } from "./documents.console";
 
 export default defineBaseAddon({
   id: "decisions",
@@ -29,7 +31,9 @@ export default defineBaseAddon({
     "decisions.waiting": { parent: "decisions.queue", label: "Waiting on me", icon: "check", route: "decisions.inbox", defaultResourceView: "decisions.waiting" },
     "decisions.all": { parent: "decisions.queue", label: "All decisions", icon: "check", route: "decisions.inbox", defaultResourceView: "decisions.all" },
   },
-  // Consumers present a decision kind (one per kind); waiting owners link back from it.
-  containers: { "decisions#content": { unique: "key" }, "decisions#origin": {} },
+  // Independent waiting owners link back from the generic card.
+  containers: { "decisions#origin": {} },
   i18n: { decisions: enDecisionsMessages },
 });
+
+export { decisionAttentionColumn, openDecisionFilter, useDecisionFieldMarks } from "./attention";

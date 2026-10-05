@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch
+from rebac import system_context
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.identity import public_id_for
 from angee.base.impl import resolve_all_impl_classes
 from angee.base.models import record_display_label
+from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.decisions.schema import DecisionGroupType
+from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -25,7 +29,7 @@ from angee.graphql.actions import (
 )
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
-from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
@@ -51,15 +55,14 @@ strawberry.enum(cast(Any, WaitingKind))
 Workflow = apps.get_model("workflows", "Workflow")
 WorkflowVersion = apps.get_model("workflows", "WorkflowVersion")
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
-WorkflowRunEvidence = apps.get_model("workflows", "WorkflowRunEvidence")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
-StepArtifact = apps.get_model("workflows", "StepArtifact")
+StepRecord = apps.get_model("workflows", "StepRecord")
 StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
-DecisionGroup = apps.get_model("decisions", "DecisionGroup")
 Decision = apps.get_model("decisions", "Decision")
+DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 _RUN_POLICY_VERSION = Prefetch(
     "version",
     queryset=system_queryset(WorkflowVersion).only("document"),
@@ -114,7 +117,7 @@ class WorkflowRunType(RecordReferenceNode):
     parent_step: StepRunType | None = actor_scoped_to_one("parent_step")
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
     trigger_event: TriggerEventType | None = actor_scoped_to_one("trigger_event")
-    evidence: list[WorkflowRunEvidenceType] = actor_scoped_to_many("evidence")
+    records: list[StepRecordType] = actor_scoped_to_many("records")
     step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
@@ -123,7 +126,7 @@ class WorkflowRunType(RecordReferenceNode):
     def input(self, info: strawberry.Info) -> JSON:
         """Keep non-reference input while checking marked sources at read time."""
         run = cast(Any, self)
-        evidence = read_scoped_queryset(WorkflowRunEvidence, request_from_info(info).user)
+        evidence = read_scoped_queryset(StepRecord, request_from_info(info).user)
         readable: set[tuple[str, str]] = set()
         for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
             if row._angee_record_readable:
@@ -140,13 +143,14 @@ class WorkflowRunType(RecordReferenceNode):
     created_at: auto
     updated_at: auto
     finished_at: auto
+    stopped_at: auto
 
-    @strawberry_django.field(only=["version_id"], prefetch_related=[_RUN_POLICY_VERSION])
+    @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
         """Read one run's bounded graph; list selections cost about five queries per row."""
         return cast(WorkflowRunGraph, cast(Any, self).graph(request_from_info(info).user))
 
-    @strawberry_django.field(only=["status"])
+    @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
         """Project the model's viewer-specific cancellation predicate."""
         return bool(cast(Any, self).can_cancel(request_from_info(info).user))
@@ -164,17 +168,12 @@ class WorkflowRunType(RecordReferenceNode):
     )
 
 
-@strawberry_django.type(WorkflowRunEvidence)
-class WorkflowRunEvidenceType(RecordReferenceNode):
-    """A retained run input reference, redacted when its source is unreadable."""
+@strawberry.type
+class StepNoteType:
+    """Reader-facing outcome notes, validated by the step context."""
 
-    run: WorkflowRunType | None = actor_scoped_to_one("run")
-    record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
-    )
+    tone: str
+    message: str
 
 
 @strawberry_django.type(StepRun)
@@ -185,9 +184,9 @@ class StepRunType(AngeeNode):
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     child_runs: list[WorkflowRunType] = actor_scoped_to_many("child_runs")
     awaited_run: WorkflowRunType | None = actor_scoped_to_one("awaited_run")
-    decision_group: DecisionGroupType | None = actor_scoped_to_one("decision_group")
+    decision: DecisionType | None = actor_scoped_to_one("decision")
     attempts: list[StepAttemptType] = actor_scoped_to_many("attempts")
-    artifacts: list[StepArtifactType] = actor_scoped_to_many("artifacts")
+    records: list[StepRecordType] = actor_scoped_to_many("records")
     watches: list[StepWatchType] = actor_scoped_to_many("watches")
     node_key: auto
     node_label: str = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
@@ -217,8 +216,19 @@ class StepRunType(AngeeNode):
         only=["node_key", "outcome", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
     )
     state: JSON
+    hold: str | None = strawberry_django.field(annotate={"_hold": StepRun.hold_expression()})
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["notes"])
+    def notes(self) -> list[StepNoteType]:
+        """Expose the note's small contract rather than untyped JSON."""
+        return [StepNoteType(**note) for note in cast(Any, self).notes]
+
+    @strawberry_django.field(only=["node_key", "run_id"])
+    def map_steps(self, info: strawberry.Info) -> list[StepRunType]:
+        """Map item execution stays beneath its authored parent in the timeline."""
+        return cast(Any, self).map_rows().with_actor(request_from_info(info).user).order_by("map_index")
 
     @strawberry_django.field(only=["status", "waiting_kind", "node_key", "run_id"])
     def can_retry(self, info: strawberry.Info) -> bool:
@@ -231,19 +241,7 @@ class StepRunType(AngeeNode):
         return bool(cast(Any, self).requires_duplicate_acknowledgement)
 
 
-@strawberry_django.type(DecisionGroup, name="DecisionGroupType", extend=True)
-class DecisionGroupWorkflowExtension:
-    """Expose the unique waiting execution through its own read permission."""
 
-    step_run: StepRunType | None = actor_scoped_to_one("step_run")
-
-
-@strawberry_django.type(Decision, name="DecisionType", extend=True)
-class DecisionWorkflowExtension:
-    """Project execution display fields through every related owner's read scope."""
-
-    workflow_name: str | None = strawberry_django.field(annotate=F("workflow_name"))
-    node_key: str | None = strawberry_django.field(annotate=F("node_key"))
 
 
 @strawberry_django.type(StepAttempt)
@@ -284,33 +282,13 @@ class WorkflowRunGraphStatusCount:
 
 
 @strawberry.type
-class WorkflowRunGraphStepRun:
-    """Payload-free execution summary with no relation traversal."""
-
-    id: PublicID = strawberry.field(resolver=AngeeNode.id)
-    status: StepRunStatus
-    waiting_kind: WaitingKind | None
-    wait_reason: str
-    outcome: str
-    outcome_label: str
-    failure_reason: str | None
-    attempt: int
-    page_index: int
-    map_total: int
-    map_settled: int
-    created_at: datetime
-    updated_at: datetime
-    deadline_at: datetime | None
-    wake_at: datetime | None
-
-
-@strawberry.type
 class WorkflowRunGraphNode:
     """Published topology composed with one summary row and complete item counts."""
 
-    step_run: WorkflowRunGraphStepRun | None
+    step_run: StepRunType | None
     item_counts: list[WorkflowRunGraphStatusCount]
     item_attempts: int
+    plan: str
 
     @strawberry.field
     def key(self) -> str:
@@ -356,7 +334,7 @@ class WorkflowRunGraphEdge:
 
 @strawberry.type
 class WorkflowRunGraph:
-    """Payload-free graph summary accessible to a run reader."""
+    """Frozen topology with actor-scoped execution resources and item summaries."""
 
     nodes: list[WorkflowRunGraphNode]
     edges: list[WorkflowRunGraphEdge]
@@ -376,12 +354,14 @@ class StepWatchType(RecordReferenceNode):
     )
 
 
-@strawberry_django.type(StepArtifact)
-class StepArtifactType(RecordReferenceNode):
+@strawberry_django.type(StepRecord)
+class StepRecordType(RecordReferenceNode):
     """A step's labeled reference to a record, governed by its execution policy."""
 
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["label"])
+    run: WorkflowRunType | None = actor_scoped_to_one("run")
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
+    operation: auto
     label: auto
     created_at: auto
 
@@ -534,35 +514,25 @@ _RUN_RESOURCE = hasura_model_resource(
     update=False,
     delete=False,
 )
-_RUN_EVIDENCE_RESOURCE = hasura_model_resource(
-    WorkflowRunEvidenceType,
-    model=WorkflowRunEvidence,
-    filterable=["id", "run"],
-    record_ref_filters=("record_model", "record_id"),
-    record_ref_requires_read=True,
-    sortable=["id"],
-    aggregatable=["id"],
-    insert=False,
-    update=False,
-    delete=False,
-)
 _STEP_RESOURCE = hasura_model_resource(
     StepRunType,
     model=StepRun,
     filterable=[
         "id",
         "run",
-        "decision_group",
+        "decision",
         "awaited_run",
         "node_key",
         "map_index",
         "status",
         "waiting_kind",
+        "hold",
         "outcome",
     ],
     sortable=["rank", "created_at", "node_key", "map_index", "deadline_at", "wake_at"],
     aggregatable=["id"],
     groupable=["status", "waiting_kind"],
+    filter_expressions={"hold": StepRun.hold_expression()},
     insert=False,
     update=False,
     delete=False,
@@ -577,10 +547,12 @@ _ATTEMPT_RESOURCE = hasura_model_resource(
     update=False,
     delete=False,
 )
-_ARTIFACT_RESOURCE = hasura_model_resource(
-    StepArtifactType,
-    model=StepArtifact,
-    filterable=["id", "step_run", "label"],
+_RECORD_RESOURCE = hasura_model_resource(
+    StepRecordType,
+    model=StepRecord,
+    filterable=["id", "run", "step_run", "operation", "label"],
+    record_ref_filters=("record_model", "record_id"),
+    record_ref_requires_read=True,
     sortable=["created_at", "label"],
     aggregatable=["id"],
     insert=False,
@@ -854,29 +826,101 @@ _RESOURCES = (
     _WORKFLOW_RESOURCE,
     _VERSION_RESOURCE,
     _RUN_RESOURCE,
-    _RUN_EVIDENCE_RESOURCE,
     _STEP_RESOURCE,
     _ATTEMPT_RESOURCE,
-    _ARTIFACT_RESOURCE,
+    _RECORD_RESOURCE,
     _WATCH_RESOURCE,
     _TRIGGER_RESOURCE,
     _TRIGGER_EVENT_RESOURCE,
 )
+
+@strawberry.input
+class TimelineRecordInput:
+    model: str
+    id: PublicID
+
+
+@strawberry.type
+class RecordTimelineType:
+    record_model: str
+    record_id: PublicID
+    runs: list[WorkflowRunType]
+    decisions: list[DecisionType]
+
+
+@strawberry.type
+class RecordTimelineSelectionType:
+    records: list[RecordTimelineType]
+    open_decision_count: int
+    has_runs: bool
+
+
+@strawberry.type
+class RecordTimelineQuery:
+    @strawberry_django.field
+    def record_timeline(
+        self, info: strawberry.Info, records: list[TimelineRecordInput], include_runs: bool = True,
+    ) -> RecordTimelineSelectionType:
+        """One read for a record or selection, through the record and run owners."""
+        if len(records) > 100:
+            raise ValidationError("A timeline selection accepts at most 100 records.")
+        actor = request_from_info(info).user
+        concerned = []
+        for reference in records:
+            model = apps.get_model(reference.model)
+            record = require_instance_for_id(model, str(reference.id), queryset=read_scoped_queryset(model, actor))
+            concerned.append(record)
+        targets = {canonical_record_target(record): record for record in concerned}
+        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=20)
+        runs = list(run_type_get_queryset(
+            run_query.order_by("-created_at", "-pk"),
+            WorkflowRunType, info,
+        ).select_related("parent_step").prefetch_related("records", Prefetch(
+            "trigger_event", queryset=with_record_reference_access(read_scoped_queryset(TriggerEvent, actor)),
+        ))) if include_runs else []
+        has_runs = bool(runs) if include_runs else run_query.exists()
+        decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related(Prefetch(
+            "records", queryset=with_record_reference_access(read_scoped_queryset(DecisionRecord, actor)),
+        )))
+        by_run = {run.pk: run for run in runs}
+        result = []
+        for target, record in targets.items():
+            selected = {run.pk for run in runs if (
+                (run.subject_content_type_id, run.subject_object_id) == (target.content_type.pk, target.object_id)
+                or any((link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
+                       for link in run.records.all()))}
+            for run_id in tuple(selected):
+                run = by_run[run_id]
+                while run.parent_step_id and run.parent_step.run_id in by_run:
+                    run = by_run[run.parent_step.run_id]
+                    if run.pk in selected:
+                        break
+                    selected.add(run.pk)
+            result.append(RecordTimelineType(
+                record_model=canonical_record_model(type(record))._meta.label,
+                record_id=PublicID(public_id_for(canonical_record_model(type(record)), target.object_id)),
+                runs=list(reversed([run for run in runs if run.pk in selected][:20])),
+                decisions=[decision for decision in decisions if any(
+                    (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
+                    for link in decision.records.all())],
+            ))
+        with system_context(reason="workflows.timeline.selection_attention"):
+            count = Decision.objects.open_for(*concerned).count()
+        return RecordTimelineSelectionType(records=result, open_decision_count=count, has_runs=has_runs)
+
 schemas = {
     "console": {
-        "query": [WorkflowStudioQuery, *(resource.query for resource in _RESOURCES)],
+        "query": [WorkflowStudioQuery, RecordTimelineQuery, *(resource.query for resource in _RESOURCES)],
         "mutation": [WorkflowStudioMutation, WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
-        "subscription": [changes(WorkflowRun, field="workflowRunChanged")],
-        "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
+        "subscription": [changes(WorkflowRun, field="workflowRunChanged"), changes(StepRun, field="stepRunChanged")],
         "types": [
             RunOrigin,
             WorkflowType,
             WorkflowVersionType,
             WorkflowRunType,
-            WorkflowRunEvidenceType,
             StepRunType,
             StepAttemptType,
-            StepArtifactType,
+            StepRecordType,
             StepWatchType,
             TriggerEnablePreviewType,
             TriggerType,

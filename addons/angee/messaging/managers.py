@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -3671,14 +3672,92 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         return cast(PartQuerySet, self.filter(file__isnull=False))
 
+    def attached_files(self) -> PartQuerySet:
+        """Return file-bearing attachment Part uses within this queryset's scope.
+
+        Use ``message.parts.attached_files()`` under the usual actor context, or
+        ``message.parts.with_actor(actor).attached_files()``. Compose stored-file,
+        disposition, role, MIME and byte-size predicates with the existing
+        message-bounded, cycle-safe ancestor navigation. Exclude inline parts,
+        signature and delivery-report branches, and zero-byte files. Open one
+        parsed ``message/rfc822`` level regardless of multipart depth; skip raw
+        message wrappers and deeper forwarded content without parsing file bytes.
+
+        Classification eagerly reads candidates and prefetches their readable
+        trees. The returned queryset preserves actor, filters and ordering,
+        restricted to the selected IDs at call time. Keep each Part use even
+        when several parts reference the same File; call again for new parts.
+        """
+
+        selected, _skipped = self._attached_file_selection()
+        return cast(PartQuerySet, self.attachments().filter(pk__in=selected))
+
+    def attached_file_skip_counts(self) -> dict[str, int]:
+        """Count skipped file-bearing Part uses using ``attached_files()`` policy.
+
+        Count each use once, by the first matching reason: ``signature``,
+        ``delivery_report``, ``inline``, ``forward_depth``, ``forwarded_message``,
+        ``empty_file``. Only nonzero reasons appear; parts without Files do not.
+        Signature roles or PGP/PKCS7 signature MIME types veto a whole branch,
+        as do multipart reports and delivery/disposition status messages.
+        Content-IDs and inline file parts also veto descendants; inline text or
+        multipart containers alone do not. Forward depth counts strict RFC822
+        ancestors, allowing one. MIME comparisons ignore case and parameters.
+        """
+
+        _selected, skipped = self._attached_file_selection()
+        return dict(skipped)
+
+    def _attached_file_selection(self) -> tuple[list[Any], Counter[str]]:
+        """Share classification between the selector and its skip counts."""
+
+        actor, bypass = self.effective_actor(strict=True)
+        tree = self.model.objects.using(self.db)
+        tree = (
+            tree.system_context(reason="messaging attached-file tree for an elevated queryset")
+            if bypass else tree.with_actor(actor)
+        ).select_related("fragment", "file", "file__mime_type")
+        candidates = self.attachments().select_related("file", "message").prefetch_related(
+            models.Prefetch("message__parts", queryset=tree),
+        )
+        owner = self.model.objects.db_manager(self.db)
+        selected: list[Any] = []
+        skipped: Counter[str] = Counter()
+        for part in candidates:
+            lineage = (part, *owner.ancestors_for_message(part.message, part.pk))
+            types = [row.type.split(";", 1)[0].strip().lower() for row in lineage]
+            if any(row.role == self.model.PartRole.SIGNATURE for row in lineage) or any(mime in {
+                "application/pgp-signature", "application/pkcs7-signature", "application/x-pkcs7-signature",
+            } for mime in types):
+                reason = "signature"
+            elif any(mime in {
+                "multipart/report", "message/delivery-status", "message/global-delivery-status",
+                "message/disposition-notification", "message/global-disposition-notification",
+            } for mime in types):
+                reason = "delivery_report"
+            elif any(row.cid or row.file_id and row.disposition == self.model.Disposition.INLINE for row in lineage):
+                reason = "inline"
+            elif types[1:].count("message/rfc822") > 1:
+                reason = "forward_depth"
+            elif types[0] == "message/rfc822":
+                reason = "forwarded_message"
+            elif not part.file.size_bytes:
+                reason = "empty_file"
+            else:
+                selected.append(part.pk)
+                continue
+            skipped[reason] += 1
+        return selected, skipped
+
 
 class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]
     """Owns bounded part creation and message-scoped navigation over body-part rows.
 
-    Tree reads use the base manager: callers must authorize the parent Message,
-    including record-scoped chatter projections. Each operation loads that
-    message's parts once, with fragment/file/MIME joins, or reuses its native
-    ``parts`` prefetch when its parts and related rows are fully loaded.
+    Tree reads falling back to the base manager require callers to authorize
+    the parent Message, including record-scoped chatter projections. Each
+    operation loads that message's parts once, with fragment/file/MIME joins,
+    or reuses a native ``parts`` prefetch of already authorized rows when its
+    parts and related rows are fully loaded.
     Incomplete caches fall back to that single joined read. Prefetch the relation with
     those joins for repeated queries without SQL; no separate tree cache is kept.
     """

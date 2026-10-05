@@ -98,7 +98,7 @@ describe("generated subtitle metadata", () => {
 
 describe("generated resource wire contract", () => {
   test("accepts a computed object field with no relation target", () => {
-    const resource = testDataResource("workflows.StepArtifact", {
+    const resource = testDataResource("workflows.StepRecord", {
       fields: [{
         name: "target_reference", kind: "object", readable: true,
         aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,

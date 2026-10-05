@@ -8,17 +8,17 @@ from django.db import models
 from django.db.models.functions import Now
 
 from angee.base.scoping import system_queryset
-from angee.decisions.testing.models import Decision, DecisionGroup
+from angee.decisions.testing.models import Decision
 from angee.workflows.managers import PRUNE_BATCH_LIMIT
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun, WorkflowRunEvidence
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, WorkflowRun
 from tests.conftest import vault_for
 from tests.tables import model_tables
 from tests.test_workflows_children import age_runs
 from tests.test_workflows_children import child_graph as child_graph
-from tests.test_workflows_review import answer, seats, start_review
+from tests.test_workflows_review import answer, questions, start_review
 from tests.test_workflows_review import review as review
 from tests.workflow_steps import Value, document
 
@@ -61,10 +61,10 @@ def test_prune_removes_derived_from_rows_with_the_run(execution):
     source = vault_for(actor, name="Retained input")
     run = start_run(workflow, actor=actor, subject=source)
     run_until(run)
-    assert system_queryset(WorkflowRunEvidence).filter(run=run).count() == 1
+    assert system_queryset(StepRecord).filter(run=run).count() == 1
     age_runs(run)
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(WorkflowRunEvidence).filter(run_id=run.pk).exists()
+    assert not system_queryset(StepRecord).filter(run_id=run.pk).exists()
 
 
 def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_graph, register_step):
@@ -196,35 +196,6 @@ def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_
     assert WorkflowRun.objects.prune() == 2
 
 
-@pytest.mark.parametrize("protected", [False, True])
-def test_prune_respects_decision_group_owner_across_every_reasked_round(review, protected_execution, protected):
-    """Newest-first cleanup releases the protected chain only after every owner permits it."""
-    _, people, _, _ = review
-    run, step = start_review(review, input={"reject_rounds": 2})
-    original = seats(step)[0]
-    for _ in range(3):
-        answer(seats(step)[0], people[0])
-        run_until(run)
-        step.refresh_from_db()
-    assert run.status == "succeeded"
-    groups = list(system_queryset(DecisionGroup).get(pk=step.decision_group_id).rounds())
-    assert len(groups) == 3 and all(not group.is_deletable for group in groups)
-    age_runs(run)
-    if protected:
-        evidence = protected_execution.objects.create(decision=original)
-        assert WorkflowRun.objects.prune() == 0
-        run.refresh_from_db()
-        step.refresh_from_db()
-        assert run.prune_after is not None and run.prune_reason
-        assert step.decision_group_id == groups[0].pk
-        assert system_queryset(DecisionGroup).filter(pk__in=[group.pk for group in groups]).count() == 3
-        assert system_queryset(Decision).filter(pk=original.pk).exists()
-        evidence.delete()
-        retry_prune(run)
-    assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(WorkflowRun).filter(pk=run.pk).exists()
-    assert not system_queryset(DecisionGroup).filter(pk__in=[group.pk for group in groups]).exists()
-    assert not system_queryset(Decision).filter(pk=original.pk).exists()
 
 
 def test_prune_checks_only_twenty_five_roots_and_marked_blockers_do_not_starve_later_batches(child_graph):
@@ -260,3 +231,14 @@ def test_retention_setting_keeps_recent_terminal_runs(execution, settings):
     assert WorkflowRun.objects.prune() == 0
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 90
     assert WorkflowRun.objects.prune() == 1
+
+def test_run_pruning_retains_decisions_and_releases_the_asking_link(review):
+    _, people, _, _ = review
+    run, step = start_review(review)
+    decision = questions(step)[0]
+    answer(decision, people[0])
+    run_until(run)
+    age_runs(run)
+    assert WorkflowRun.objects.prune() == 1
+    retained = system_queryset(Decision).get(pk=decision.pk)
+    assert not retained.requesting_steps.with_actor(people[0]).exists() and retained.verdict == ["approve"]

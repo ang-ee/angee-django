@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import * as v from "valibot";
-import { Badge, ErrorBanner, JsonValueSchema, MetaGrid, RecordReference, titleCase, useRecordPeek, useUiT, type JsonValue, type RecordPeekOpen } from "@angee/ui";
+import { ErrorBanner, JsonValueSchema, RecordReference, titleCase, useResolvedWidget, useRecordPeek, useUiT, type JsonValue, type RecordPeekOpen } from "@angee/ui";
 
 import { useDecisionsT } from "./i18n";
 
@@ -12,39 +12,44 @@ const ReferenceSchema = v.strictObject({
   page: v.nullish(v.pipe(v.number(), v.integer()), null),
   search: v.optional(v.record(v.string(), v.nullable(v.string())), {}),
 });
-const ContextSchema = v.strictObject({
+export const DecisionContextSchema = v.strictObject({
+  reason: v.optional(v.string(), ""),
   facts: v.optional(v.array(v.strictObject({
     pointer: v.string(),
     label: v.string(),
     value: JsonValueSchema,
-    subject: v.nullish(ReferenceSchema, null),
     authority: v.picklist(["source", "correction", "unverified"]),
     evidence: v.optional(v.array(ReferenceSchema), []),
+    widget: v.nullish(v.string()),
+    row: v.optional(v.record(v.string(), JsonValueSchema), {}),
   })), []),
   references: v.optional(v.array(ReferenceSchema), []),
 });
 type Reference = v.InferOutput<typeof ReferenceSchema>;
 
 /** Project only the decisions-owned context contract; record peeks retain native navigation. */
-export function DecisionContext({ context, showFacts = true }: { context: unknown; showFacts?: boolean }): ReactElement | null {
+export function DecisionContext({ context, reasonOnly = false, representedRecords = [] }: {
+  context: unknown; reasonOnly?: boolean; representedRecords?: readonly string[];
+}): ReactElement | null {
   const t = useDecisionsT();
   const openRecord = useRecordPeek();
-  const parsed = v.safeParse(ContextSchema, context);
+  const parsed = v.safeParse(DecisionContextSchema, context);
   if (!parsed.success) return <ErrorBanner description={t("context.invalid")} />;
-  const { facts, references } = parsed.output;
-  if ((!showFacts || !facts.length) && !references.length) return null;
+  if (reasonOnly) return parsed.output.reason ? <p className="mt-1 text-xs text-fg-muted">{parsed.output.reason}</p> : null;
+  const { facts } = parsed.output;
+  const references = parsed.output.references.filter((reference) => !representedRecords.includes(reference.id));
+  if (!facts.length && !references.length) return null;
   const authorityLabels = {
     source: t("context.source"), correction: t("context.correction"), unverified: t("context.unverified"),
   };
-  return <section aria-label={t("context.title")} className="min-w-0 space-y-4 [overflow-wrap:anywhere]">
-    {showFacts && facts.length ? <section aria-label={t("context.facts")} className="space-y-3">
-      <h2 className="font-semibold">{t("context.facts")}</h2>
-      <dl className="space-y-4">{facts.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="space-y-2">
-        <dt className="flex min-w-0 flex-wrap items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
-        <dd className="space-y-2">
-          <FactValue value={fact.value} />
-          {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || undefined} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
-          <References heading="h3" title={t("context.evidence")} references={fact.evidence} openRecord={openRecord} />
+  return <section aria-label={t("context.title")} className="min-w-0 space-y-2 text-xs [overflow-wrap:anywhere]">
+    {facts.length ? <section aria-label={t("context.facts")} className="space-y-1">
+      <h2 className="font-medium">{t("context.facts")}</h2>
+      <dl className="space-y-1">{facts.filter((fact) => fact.value !== null && fact.value !== "").map((fact, index) => <div key={`${fact.pointer}:${index}`} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+        <dt className="font-medium" title={authorityLabels[fact.authority]}><span>{fact.label}</span>:</dt>
+        <dd className="min-w-0">
+          <FactValue value={fact.value} widget={fact.widget} row={fact.row} />
+          {fact.evidence.length ? <span className="ml-1"><References heading="h3" title={t("context.evidence")} references={fact.evidence.filter((reference) => !representedRecords.includes(reference.id))} openRecord={openRecord} /></span> : null}
         </dd>
       </div>)}</dl>
     </section> : null}
@@ -52,23 +57,28 @@ export function DecisionContext({ context, showFacts = true }: { context: unknow
   </section>;
 }
 
-function FactValue({ value }: { value: JsonValue }): ReactElement {
+export function FactValue({ value, widget, row, relationModel, label, options, emptyLabel = "-" }: {
+  value: JsonValue; widget?: string | null; row?: Record<string, JsonValue>; relationModel?: string | null; label?: string;
+  options?: readonly { value: string; description?: string | null }[]; emptyLabel?: string;
+}): ReactElement {
   const t = useUiT();
-  if (Array.isArray(value)) return <ul className="list-disc space-y-1 pl-5">{value.map((item, index) =>
-    <li key={index}><FactValue value={item} /></li>,
-  )}</ul>;
-  if (value !== null && typeof value === "object") return <MetaGrid rows={Object.entries(value).map(([name, item]) => ({
-    id: name, label: titleCase(name), value: <FactValue value={item} />,
-  }))} />;
-  return <span>{value === null ? "-" : typeof value === "boolean" ? t(value ? "list.yes" : "list.no") : value}</span>;
+  const definition = useResolvedWidget(widget ?? "text");
+  const openRecord = useRecordPeek();
+  if (relationModel && typeof value === "string") return <RecordReference model={relationModel} id={value} label={label} onOpen={() => openRecord({ model: relationModel, id: value })} />;
+  if (widget && definition) return <definition.read value={value} row={row} />;
+  if (Array.isArray(value)) return <span>{value.map((item, index) => <span key={index}>{index ? "; " : ""}<FactValue value={item} /></span>)}</span>;
+  if (value !== null && typeof value === "object") return <span>{Object.entries(value).filter(([, item]) => item !== null && item !== "").map(([name, item], index) =>
+    <span key={name}>{index ? " · " : ""}<span className="text-fg-muted">{titleCase(name)} </span><FactValue value={item} /></span>,
+  )}</span>;
+  return <span>{value === null ? emptyLabel : typeof value === "boolean" ? t(value ? "list.yes" : "list.no") : options?.find((option) => option.value === value)?.description ?? value}</span>;
 }
 
 function References({ title, references, openRecord, heading: Heading = "h2" }: {
   title: string; references: readonly Reference[]; openRecord: RecordPeekOpen; heading?: "h2" | "h3";
 }): ReactElement | null {
   if (!references.length) return null;
-  return <section aria-label={title} className="space-y-1">
-    <Heading className="text-sm font-medium">{title}</Heading>
+  return <section aria-label={title} className="inline-flex flex-wrap gap-1">
+    <Heading className="sr-only">{title}</Heading>
     <ul className="flex min-w-0 flex-wrap gap-2">{references.map((reference, index) =>
       <li key={`${reference.model}:${reference.id}:${index}`} className="min-w-0 max-w-full"><RecordReference {...reference} label={reference.label || undefined} onOpen={() => openRecord(reference)} /></li>,
     )}</ul>
