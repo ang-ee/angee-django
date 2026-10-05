@@ -47,9 +47,11 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/add",
     component: lazyRouteComponent(() => import("./views/AddIntegrationPage"), "AddIntegrationPage"),
   },
-  // List/detail pairs: the list route owns the component/model, and the `$id`
-  // child carries only the nested record URL.
-  ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "integrate.Integration", { detailName: "integrate.integration" }),
+  // The inventory lists parents; generic parent links resolve to their child page.
+  ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "integrate.Integration", {
+    detailName: "integrate.integration",
+    detailComponent: lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationRecordRedirect"),
+  }),
   ...resourcePageRoutes("integrate.vendors", "/integrate/vendors", lazyRouteComponent(() => import("./views/VendorsPage"), "VendorsPage"), "integrate.Vendor", { detailName: "integrate.vendor" }),
   ...resourcePageRoutes("integrate.webhooks", "/integrate/webhooks", lazyRouteComponent(() => import("./views/WebhooksPage"), "WebhooksPage"), "integrate.WebhookSubscription", { detailName: "integrate.webhook" }),
 

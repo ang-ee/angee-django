@@ -51,6 +51,8 @@ export const enIntegrateMessages: Record<string, string> = {
   // Integrations page.
   "integrations.typeGroup": "Type",
   "integrations.targetState": "Availability",
+  "integrations.record.loading": "Opening integration…",
+  "integrations.record.unavailable": "Integration unavailable",
   "integrations.add.loading": "Loading integration types…",
   "integrations.add.loadError": "Could not load integration types.",
   "integrations.add.title": "Add integration",

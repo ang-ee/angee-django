@@ -3,6 +3,15 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const IntegrationRecordRedirectDocument = graphql(`
+  query IntegrationRecordRedirect($id: String!) {
+    integrations_by_pk(id: $id) {
+      id
+      concrete_target { state resource id }
+    }
+  }
+`);
+
 export const IntegrationCapabilities = graphql(`
   query IntegrationCapabilities {
     integration_capabilities {
