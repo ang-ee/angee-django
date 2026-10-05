@@ -117,7 +117,8 @@ export function ResourceToolbar({
   pagerSubject, pagerTotalUnit, className, wrap = false,
 }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
-  const shortcuts = useSearchShortcuts(searchDeclaration, modelMetadata);
+  const declaredShortcuts = useSearchShortcuts(searchDeclaration, modelMetadata);
+  const shortcuts = search.catalog.shortcuts ?? declaredShortcuts;
   const box = searchDeclaration?.box ?? (shortcuts.length ? "collapsed" : true);
   const [toolbarRef, roomy] = useContainerQuery<HTMLElement>(576);
   const favorites = search.catalog.favorites;

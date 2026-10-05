@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import type { ModelMetadata, ResourceQuery } from "@angee/metadata";
 import { modelChain, useContainer, type ComposedContainerChild } from "../../../runtime/containers";
 import type { SearchCatalog } from "./types";
+import { rejectSearchDeclaration } from "./declaration-errors";
 
 export type SearchShortcut =
   | { kind: "text"; field: string; label?: ReactNode; sequence?: number }
@@ -36,13 +37,18 @@ export function validateSearchShortcut(value: unknown, id: string, query?: Resou
     if (typeof shortcut.id !== "string" || !shortcut.id.trim()) fail("toggle requires a string id");
   } else if (shortcut.kind !== "group") {
     if (typeof shortcut.field !== "string" || !shortcut.field.trim()) fail("requires a string field");
-    if (query) {
-      const field = String(shortcut.field);
-      const operators = query.fields[field]?.filter?.operators;
-      if (!operators?.length) fail(`field "${field}" is not filterable`);
-      if (shortcut.kind === "text" && !operators?.includes("iContains")) fail(`field "${field}" does not support iContains`);
-    }
   }
+  if (query) {
+    const reason = searchShortcutQueryError(value as SearchShortcut, query);
+    if (reason) fail(reason);
+  }
+}
+
+function searchShortcutQueryError(shortcut: SearchShortcut, query: ResourceQuery): string | undefined {
+  if (shortcut.kind === "toggle" || shortcut.kind === "group") return;
+  const operators = query.fields[shortcut.field]?.filter?.operators;
+  if (!operators?.length) return `field "${shortcut.field}" is not filterable`;
+  if (shortcut.kind === "text" && !operators.includes("iContains")) return `field "${shortcut.field}" does not support iContains`;
 }
 
 /** Page identities are reserved render-time extras, never addon-owned children. */
@@ -67,17 +73,24 @@ export function useSearchShortcuts(declaration?: ListSearchDeclaration, metadata
   return useContainer<SearchShortcut>("resource#search", { models, extra });
 }
 
-/** Catalog-dependent targets are validated at render, including model-level contributions. */
-export function validateSearchShortcutCatalog(children: readonly ComposedContainerChild<SearchShortcut>[], catalog: SearchCatalog, renderItem = false) {
-  for (const { id, content } of children) {
+/** Validate shapes everywhere; omit unavailable metadata-dependent targets in production. */
+export function validateSearchShortcutCatalog(
+  children: readonly ComposedContainerChild<SearchShortcut>[],
+  catalog: SearchCatalog,
+  { renderItem = false, query, reported }: { renderItem?: boolean; query?: ResourceQuery; reported?: Set<string> } = {},
+): readonly ComposedContainerChild<SearchShortcut>[] {
+  return children.filter(({ id, content }) => {
     validateSearchShortcut(content, id);
-    const fail = (reason: string): never => { throw new Error(`Search shortcut "${id}": ${reason}.`); };
+    if (content.kind === "group" && renderItem) throw new Error(`Search shortcut "${id}": grouping is unavailable with renderItem.`);
+    const reason = query && searchShortcutQueryError(content, query);
+    if (reason) return rejectSearchDeclaration("shortcut", id, reason, reported);
+    const fail = (reason: string) => rejectSearchDeclaration("shortcut", id, reason, reported);
     switch (content.kind) {
-      case "text": if (!catalog.text.some((item) => item.field === content.field)) fail(`text field "${content.field}" is unavailable`); break;
-      case "facet": if (!catalog.facets.some((item) => item.field === content.field)) fail(`field "${content.field}" needs a facet catalog`); break;
-      case "clause": if (!catalog.fields.some((item) => (item.field ?? item.id) === content.field)) fail(`field "${content.field}" is not filterable`); break;
-      case "toggle": if (!catalog.filters.some((item) => item.id === content.id) && !catalog.favorites.some((item) => item.id === content.id)) fail(`unknown toggle id "${content.id}"`); break;
-      case "group": if (renderItem) fail("grouping is unavailable with renderItem"); break;
+      case "text": return catalog.text.some((item) => item.field === content.field) || fail(`text field "${content.field}" is unavailable`);
+      case "facet": return catalog.facets.some((item) => item.field === content.field) || fail(`field "${content.field}" needs a facet catalog`);
+      case "clause": return catalog.fields.some((item) => (item.field ?? item.id) === content.field) || fail(`field "${content.field}" is not filterable`);
+      case "toggle": return catalog.filters.some((item) => item.id === content.id) || catalog.favorites.some((item) => item.id === content.id) || fail(`unknown toggle id "${content.id}"`);
+      case "group": return true;
     }
-  }
+  });
 }

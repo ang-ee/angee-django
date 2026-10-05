@@ -12,11 +12,18 @@ import { RESOURCE_CONTAINERS } from "../resource-view-kinds";
 import { RowsListView } from "../RowsListView";
 import { useSearchCatalog } from "./catalog";
 import { useResourceSearch } from "./use-resource-search";
-import { pageSearchShortcuts, type ListSearchDeclaration } from "./shortcuts";
+import { pageSearchShortcuts, validateSearchShortcutCatalog, type ListSearchDeclaration } from "./shortcuts";
 import type { SearchFacet } from "./types";
+import { developmentMode } from "../../../lib/development-mode";
+import { SearchControls } from "./SearchControls";
+import { searchFixture } from "./search-fixture.test-support";
 
+vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
-beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
+beforeEach(() => {
+  vi.mocked(developmentMode).mockReturnValue(true);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80));
+});
 const query = ResourceQuery.forRows({ fields: {
   title: { scalar: "String" }, "requester.display_name": { scalar: "String" },
   submitted: { scalar: "DateTime" }, due: { scalar: "Date" }, duration: { scalar: "Float" },
@@ -253,4 +260,62 @@ test("a contributed shortcut alone chooses the collapsed default; an empty decla
   } }) });
   expect(screen.getByRole("button", { name: "My records" })).toBeTruthy();
   expect(screen.queryByRole("combobox", { name: "Filter records" })).toBeNull();
+});
+
+test("a production list renders and keeps working after dropping a filter and its toggle, reporting once per mount", async () => {
+  vi.mocked(developmentMode).mockReturnValue(false);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  function list() {
+    return <RowsListView scope="local" query={query} rows={[{ id: "visible", title: "Visible record", owner: "viewer" }]} columns={columns}
+      filterOptions={[...filters, { id: "setup", label: "Accepted", filter: { "stage.name": { exact: "Accepted" } } }]}
+      search={{ shortcuts: [{ kind: "toggle", id: "setup", label: "Accepted" }, { kind: "toggle", id: "mine" }] }} />;
+  }
+  const rendered = render(list());
+  expect(await screen.findByText("Visible record")).toBeTruthy();
+  expect(screen.getByRole("toolbar", { name: "Search shortcuts" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Accepted" })).toBeNull();
+  const validToggle = screen.getByRole("button", { name: "My records" });
+  fireEvent.click(validToggle);
+  expect(validToggle.getAttribute("aria-pressed")).toBe("true");
+  rendered.rerender(list());
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Accepted" })).toBeNull();
+  expect(error).toHaveBeenCalledTimes(2);
+  expect(error).toHaveBeenCalledWith('Search filter option "setup": filter.stage.name: unknown or non-filterable field.');
+  expect(error).toHaveBeenCalledWith('Search shortcut "page.toggle.setup": unknown toggle id "setup".');
+  rendered.unmount();
+  render(list());
+  expect(error).toHaveBeenCalledTimes(4);
+});
+
+test("standalone shortcut controls drop unavailable targets once in production and throw with identity in development", () => {
+  const search = searchFixture();
+  const shortcuts = pageSearchShortcuts({ shortcuts: [{ kind: "toggle", id: "setup", label: "Accepted" }, { kind: "text", field: "title" }] });
+  expect(() => validateSearchShortcutCatalog(shortcuts, search.catalog)).toThrow(/page.toggle.setup.*unknown toggle id/);
+  vi.mocked(developmentMode).mockReturnValue(false);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const rendered = render(<SearchControls search={search} shortcuts={shortcuts} />);
+  expect(screen.queryByRole("button", { name: "Accepted" })).toBeNull();
+  expect(screen.getByRole("searchbox", { name: "Title" })).toBeTruthy();
+  rendered.rerender(<SearchControls search={{ ...search, catalog: { ...search.catalog } }} shortcuts={[...shortcuts]} />);
+  expect(error).toHaveBeenCalledExactlyOnceWith('Search shortcut "page.toggle.setup": unknown toggle id "setup".');
+});
+
+test("malformed shortcuts, duplicate ids, box false and renderItem grouping still fail fast in production", () => {
+  vi.mocked(developmentMode).mockReturnValue(false);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  for (const content of [null, { kind: "unknown" }, { kind: "toggle" }, { kind: "text" },
+    { kind: "group", sequence: Infinity }, { kind: "facet", field: "status", multiple: "yes" }]) {
+    expect(() => validateSearchShortcutCatalog([
+      // @ts-expect-error Malformed runtime declarations must fail at the boundary.
+      { id: "extension.malformed", owner: "extension", address: "resource#search", content },
+    ], searchFixture().catalog)).toThrow(/extension.malformed/);
+  }
+  expect(() => pageSearchShortcuts({ shortcuts: [{ kind: "toggle", id: "setup" }, { kind: "toggle", id: "setup" }] })).toThrow(/Duplicate.*page.toggle.setup/);
+  // @ts-expect-error The box cannot be disabled by a declaration.
+  expect(() => pageSearchShortcuts({ box: false })).toThrow(/box must be true or "collapsed"/);
+  expect(() => validateSearchShortcutCatalog(pageSearchShortcuts({ shortcuts: [{ kind: "group" }] }),
+    searchFixture().catalog, { renderItem: true })).toThrow(/page.group.*renderItem/);
+  expect(error).not.toHaveBeenCalled();
 });

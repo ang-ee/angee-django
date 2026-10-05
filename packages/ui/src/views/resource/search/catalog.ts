@@ -40,11 +40,12 @@ const EMPTY = [] as const;
 /** Resolve declaration > contribution > inference once for every collection kind. */
 export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<TRow>): SearchCatalog {
   const schema = useSchemaFieldMetadata();
+  const reported = React.useRef(new Set<string>()).current;
   const { columns, rows, modelMetadata, resourceView, inferOptions = true } = input;
   const defaults = React.useMemo(() => declaredGroupDefaults(input.defaultGroup, input.defaultGroups).groups, [input.defaultGroup, input.defaultGroups]);
   const query = React.useMemo(() => input.query ?? queryForColumns(columns, modelMetadata, defaults), [input.query, columns, modelMetadata, defaults]);
   const shortcuts = useSearchShortcuts(input.search, modelMetadata);
-  for (const child of shortcuts) validateSearchShortcut(child.content, child.id, query);
+  for (const child of shortcuts) validateSearchShortcut(child.content, child.id);
   const shortcutTextFields = React.useMemo(() => shortcuts.flatMap(({ content }) => content.kind === "text" ? [content.field] : []), [shortcuts]);
   const serverGrouping = input.serverGrouping ?? Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource)
     && (resourceView.state.view === "list" || resourceView.state.view === "board"));
@@ -67,7 +68,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), mergeFilterFields(relations, inferredFields))))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
   [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, relations, inferredFields, query]);
-  const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query), [input.filterOptions, input.contributedFilterOptions, query]);
+  const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query, reported), [input.filterOptions, input.contributedFilterOptions, query, reported]);
   const facets = React.useMemo(() => {
     const choices = buildFilterOptions(columns, inferOptions ? rows : EMPTY, fields);
     const predicates = new Set(filters.map((option) => JSON.stringify(query.toWhere(option.filter))));
@@ -86,7 +87,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
       const authored = declared?.options ? inferred.map((option) => ({
         ...(options.find((bucket) => bucket.value === option.value) ?? option), label: option.label,
       })) : undefined;
-      const merged = mergeFilterOptions(authored, [...options, ...inferred], query);
+      const merged = mergeFilterOptions(authored, [...options, ...inferred], query, reported);
       const relation = contributed?.source === "relation"
         ? modelMetadata ? relationFieldInfo(name, modelMetadata, schema) : relationFieldInfoForQueryField(query.fields[name], schema)
         : null;
@@ -108,7 +109,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
         }),
       }];
     });
-  }, [columns, inferOptions, rows, fields, filters, contributedFacets, input.customFilterFields, query, modelMetadata, schema]);
+  }, [columns, inferOptions, rows, fields, filters, contributedFacets, input.customFilterFields, query, modelMetadata, schema, reported]);
   const curatedGroups = React.useMemo(() => {
     const contributed = input.contributedGroupOptions ?? contributedFacets.flatMap((facet) => facet.source === "relation" && facet.group !== false
       ? [{ id: facet.field, label: facet.label, group: facet.group ?? { field: facet.field } }] : []);
@@ -122,8 +123,9 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   })), [query, input.textFilterField, shortcutTextFields, modelMetadata, columns]);
   const catalog = React.useMemo(() => ({ text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
     [text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
-  validateSearchShortcutCatalog(shortcuts, catalog, input.renderItem);
-  return catalog;
+  return React.useMemo(() => ({ ...catalog, shortcuts: validateSearchShortcutCatalog(shortcuts, catalog, {
+    renderItem: input.renderItem, query, reported,
+  }) }), [shortcuts, catalog, input.renderItem, query, reported]);
 }
 
 /** Null removes only the default; explicitly requested text fields still apply. */

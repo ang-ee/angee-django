@@ -25,11 +25,12 @@ export function SearchControls({ search, shortcuts, box = true, narrow = false }
   narrow?: boolean;
 }): React.ReactElement {
   const t = useUiT();
-  validateSearchShortcutCatalog(shortcuts, search.catalog);
+  const reported = React.useRef(new Set<string>()).current;
+  const availableShortcuts = React.useMemo(() => validateSearchShortcutCatalog(shortcuts, search.catalog, { reported }), [shortcuts, search.catalog, reported]);
   const pinned = search.catalog.favorites.filter((favorite) => favorite.pinned);
-  return <Toolbar.Root aria-label={t("search.shortcuts")} data-search-shortcuts={shortcuts.length || pinned.length ? "" : undefined} className="flex flex-1 flex-wrap gap-2">
+  return <Toolbar.Root aria-label={t("search.shortcuts")} data-search-shortcuts={availableShortcuts.length || pinned.length ? "" : undefined} className="flex flex-1 flex-wrap gap-2">
     {!narrow ? <>
-      {shortcuts.filter(({ content }) => content.kind !== "toggle" || !pinned.some((favorite) => favorite.id === content.id))
+      {availableShortcuts.filter(({ content }) => content.kind !== "toggle" || !pinned.some((favorite) => favorite.id === content.id))
         .map(({ id, content }) => <Shortcut key={id} search={search} shortcut={content} />)}
       {pinned.map((favorite) => <ToggleShortcut key={favorite.id} search={search} id={favorite.id} />)}
       {search.queryDirty ? <Toolbar.Button onClick={search.clearQuery}>{t("resourceToolbar.clear")}</Toolbar.Button> : null}
