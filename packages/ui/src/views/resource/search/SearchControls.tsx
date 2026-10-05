@@ -26,7 +26,9 @@ export function SearchControls({ search, shortcuts, box = true, narrow = false }
 }): React.ReactElement {
   const t = useUiT();
   const reported = React.useRef(new Set<string>()).current;
-  const availableShortcuts = React.useMemo(() => validateSearchShortcutCatalog(shortcuts, search.catalog, { reported }), [shortcuts, search.catalog, reported]);
+  const availableShortcuts = React.useMemo(() => validateSearchShortcutCatalog(shortcuts, search.catalog, {
+    query: search.catalog.query, renderItem: search.catalog.renderItem, reported,
+  }), [shortcuts, search.catalog, reported]);
   const pinned = search.catalog.favorites.filter((favorite) => favorite.pinned);
   return <Toolbar.Root aria-label={t("search.shortcuts")} data-search-shortcuts={availableShortcuts.length || pinned.length ? "" : undefined} className="flex flex-1 flex-wrap gap-2">
     {!narrow ? <>

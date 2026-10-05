@@ -66,7 +66,7 @@ export function pageSearchShortcuts(declaration?: ListSearchDeclaration): readon
   });
 }
 
-/** The catalog and toolbar consume the same container projection and narrowing. */
+/** Resolve toolbar declarations and catalog text requests through the same container narrowing. */
 export function useSearchShortcuts(declaration?: ListSearchDeclaration, metadata?: ModelMetadata | null) {
   const extra = useMemo(() => pageSearchShortcuts(declaration), [declaration]);
   const models = useMemo(() => modelChain(metadata?.resource.canonicalLabel, metadata?.resource.modelLabel), [metadata]);
