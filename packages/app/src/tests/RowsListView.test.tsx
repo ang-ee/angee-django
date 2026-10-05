@@ -122,7 +122,7 @@ describe("RowsListView filters", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter" }),
+      await screen.findByRole("button", { name: "Search options" }),
     );
     expect(screen.getByText("No filters")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "East" })).toBeNull();

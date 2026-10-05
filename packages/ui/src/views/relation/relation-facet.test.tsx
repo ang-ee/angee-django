@@ -89,22 +89,20 @@ describe("useRelationFacets", () => {
         enabled: true,
       },
     );
-    expect(result.current.filters).toEqual([
+    expect(result.current.flatMap((facet) => facet.options)).toEqual([
       {
         id: 'provider:"provider-anthropic"',
         label: "Anthropic",
-        chipLabel: "Anthropic",
-        filter: { provider: { exact: "provider-anthropic" } },
+        filter: { provider: { exact: "provider-anthropic" } }, value: "provider-anthropic",
       },
       {
         id: 'provider:"provider-openai"',
         label: "OpenAI",
-        chipLabel: "OpenAI",
-        filter: { provider: { exact: "provider-openai" } },
+        filter: { provider: { exact: "provider-openai" } }, value: "provider-openai",
       },
     ]);
-    expect(result.current.filterFields).toEqual(expect.arrayContaining([expect.objectContaining({ type: "selection" })]));
-    expect(result.current.groupOptions).toEqual([{
+    expect(result.current[0]?.source).toBe("relation");
+    expect(result.current.map((facet) => ({ id: facet.field, label: facet.label, group: facet.group }))).toEqual([{
       id: "provider",
       label: "Provider",
       group: {
@@ -165,12 +163,12 @@ describe("useRelationFacets", () => {
       { wrapper: Metadata },
     );
 
-    expect(result.current.filters[0]).toMatchObject({
+    expect(result.current.flatMap((facet) => facet.options)[0]).toMatchObject({
       id: 'publisher:"provider-anthropic"',
-      filter: { publisher: { exact: "provider-anthropic" } },
+      filter: { publisher: { exact: "provider-anthropic" } }, value: "provider-anthropic",
     });
-    expect(result.current.filterFields).toEqual(expect.arrayContaining([expect.objectContaining({ type: "selection" })]));
-    expect(result.current.groupOptions).toEqual([{
+    expect(result.current[0]?.source).toBe("relation");
+    expect(result.current.map((facet) => ({ id: facet.field, label: facet.label, group: facet.group }))).toEqual([{
       id: "publisher",
       label: "Publisher",
       group: {
@@ -187,11 +185,11 @@ describe("useRelationFacets", () => {
       () => useRelationFacets("agents.InferenceModel", [{ field: "status" }]),
       { wrapper: Metadata },
     );
-    expect(result.current.filters).toEqual([{
-      id: 'status:"DRAFT"', label: "Draft", chipLabel: "Draft",
-      filter: { status: { exact: "DRAFT" } },
+    expect(result.current.flatMap((facet) => facet.options)).toEqual([{
+      id: 'status:"DRAFT"', label: "Draft",
+      filter: { status: { exact: "DRAFT" } }, value: "DRAFT",
     }]);
-    expect(result.current.filterFields[0]?.options).toEqual([{ value: "draft", label: "Draft" }]);
+    expect(result.current[0]?.options[0]?.value).toBe("DRAFT");
   });
 
   test("stays inert when the field is not a listable relation", () => {
@@ -211,11 +209,7 @@ describe("useRelationFacets", () => {
         enabled: false,
       },
     );
-    expect(result.current).toEqual({
-      filters: [],
-      filterFields: [],
-      groupOptions: [],
-    });
+    expect(result.current).toEqual([]);
   });
 });
 

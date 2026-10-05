@@ -24,7 +24,7 @@ from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
-from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import (
@@ -305,8 +305,8 @@ def test_multipart_with_attachment_and_inline_image() -> None:
     assert (inline.disposition, inline.cid, inline.type) == ("inline", "logo@cid", "image/png")
 
 
-def test_attachment_filename_is_clamped_to_storage_limit() -> None:
-    """An absurd MIME filename should not abort attachment ingestion downstream."""
+def test_attachment_filename_is_preserved_for_its_write_owner() -> None:
+    """Parsing retains the decoded name; the shared part/File writes bound it."""
 
     long_name = f"{'x' * 588}.pdf"
     raw = (
@@ -335,8 +335,7 @@ def test_attachment_filename_is_clamped_to_storage_limit() -> None:
     attachment = body.children[1]
 
     assert len(long_name) == 592
-    assert len(attachment.name) == 512
-    assert attachment.name.endswith(".pdf")
+    assert attachment.name == long_name
     assert attachment.content == b"PDFDATA"
 
 
@@ -1884,7 +1883,7 @@ def test_channel_sync_preserves_overlong_display_name_and_content_id(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Long RFC-5322 display names and Content-IDs land without truncation."""
+    """Wide RFC-5322 display names and Content-IDs within field limits stay lossless."""
 
     del composed_tables
     long_display_name = "Ada " + ("Lovelace " * 80).strip()
@@ -1923,6 +1922,76 @@ def test_channel_sync_preserves_overlong_display_name_and_content_id(
     part = Part._base_manager.get(message__external_id="wide-headers@x", type="text/html")
     assert handle.display_name == long_display_name
     assert part.cid == long_cid
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("excess", [0, 1])
+def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, excess: int,
+) -> None:
+    """Column-sized headers stay intact; larger display text and CIDs land safely."""
+
+    del composed_tables
+    name_limit = Handle._meta.get_field("display_name").max_length
+    cid_limit = Part._meta.get_field("cid").max_length
+    name = "é" * (name_limit + excess)
+    cid = "x" * (cid_limit + excess)
+    raw = _eml(
+        message_id="<bounded-headers@x>",
+        sender=f'"{name}" <ada@example.com>',
+        to=f'"{name}" <bob@example.com>',
+        extra_headers=f'Cc: "{name}" <carol@example.com>\r\nContent-ID: <{cid}>',
+        body="<p>Retained body.</p>",
+    ).replace(b'Content-Type: text/plain; charset="utf-8"', b'Content-Type: text/html; charset="utf-8"')
+    _wire_fake(monkeypatch, FakeImapAccount({"INBOX": _folder(raw)}))
+    channel = _imap_channel(batch_size=1)
+
+    with system_context(reason="test imap bounded source headers"):
+        assert channel.run_sync(now=_INTERNAL_DATE) == 1
+
+    assert list(Handle._base_manager.values_list("display_name", flat=True)) == [name[:name_limit]] * 3
+    part = Part._base_manager.get(message__external_id="bounded-headers@x", type="text/html")
+    assert part.cid == ("" if excess else cid)
+    assert part.fragment.text == "<p>Retained body.</p>"
+    assert not SyncDiscrepancy._base_manager.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poison sender leaves one field-specific discrepancy and advances the page."""
+
+    del composed_tables
+    value = "x" * Handle._meta.get_field("value").max_length + "@example.com"
+    account = FakeImapAccount({"INBOX": _folder(
+        _eml(message_id="<first@x>", subject="First"),
+        _eml(message_id="<poison@x>", subject="Poison", sender=f"Bad <{value}>"),
+        _eml(message_id="<last@x>", subject="Last"),
+    )})
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(batch_size=3)
+
+    with system_context(reason="test imap invalid sender quarantine"):
+        assert channel.run_sync(now=_INTERNAL_DATE) == 2
+
+    assert set(Message._base_manager.values_list("external_id", flat=True)) == {"first@x", "last@x"}
+    assert not Thread._base_manager.filter(title__text="Poison").exists()
+    assert not Handle._base_manager.filter(value=value).exists()
+    discrepancy = SyncDiscrepancy._base_manager.get()
+    assert discrepancy.code == "invalid_record"
+    assert discrepancy.details == {
+        "stream": "messages", "partition": "INBOX", "external_key": "poison@x",
+        "fields": ["value"], "message": "Record validation failed for fields: value.",
+    }
+    assert discrepancy.is_open
+    assert discrepancy.retry_at is not None
+    assert SyncStream.objects.current_for_bridge(channel, "messages").get().cursor == {
+        "uidvalidity": 100, "last_uid": 3,
+    }
+    channel.refresh_from_db()
+    assert channel.sync_stage == channel.SyncStage.COMPLETED
+    assert channel.sync_error == channel.last_error == ""
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2190,17 +2259,17 @@ def test_failed_run_never_persists_the_cursor(
         raise RuntimeError("ingest died")
 
     monkeypatch.setattr(type(Message.objects), "ingest", explode)
-    with (
-        system_context(reason="test imap failed sync"),
-        pytest.raises(BridgeSyncError, match="Integration operation failed"),
-    ):
+    with system_context(reason="test imap failed sync"), pytest.raises(BridgeSyncError) as refused:
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
+    assert isinstance(refused.value.__cause__, RuntimeError)
+    assert str(refused.value.__cause__) == "ingest died"
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
     assert Message._base_manager.count() == 0
+    assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_stage == Channel.SyncStage.FAILED
-    assert channel.sync_error == "messages (INBOX): Integration operation failed."
+    assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
     assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
     assert channel.sync_progress["details"] == {
         "stream": "messages", "partition": "INBOX", "stage": "pull",
@@ -2242,17 +2311,16 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
         return original_ingest(manager, *args, **kwargs)
 
     monkeypatch.setattr(manager_type, "ingest", fail_second_batch)
-    with (
-        system_context(reason="test imap partial sync"),
-        pytest.raises(BridgeSyncError, match="Integration operation failed"),
-    ):
+    with system_context(reason="test imap partial sync"), pytest.raises(BridgeSyncError) as refused:
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
+    assert isinstance(refused.value.__cause__, RuntimeError)
+    assert str(refused.value.__cause__) == "second batch died"
     assert Message._base_manager.count() == 2
     channel.refresh_from_db()
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
     assert channel.sync_stage == channel.SyncStage.FAILED
-    assert channel.sync_error == "messages (INBOX): Integration operation failed."
+    assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2278,13 +2346,10 @@ def test_failed_second_record_rolls_back_the_whole_page(
         return ingest(manager, *args, **kwargs)
 
     monkeypatch.setattr(manager_type, "ingest", fail_second)
-    with (
-        system_context(reason="test imap page rollback"),
-        pytest.raises(BridgeSyncError, match="Integration operation failed") as error,
-    ):
+    with system_context(reason="test imap page rollback"), pytest.raises(BridgeSyncError) as refused:
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
-    assert isinstance(error.value.__cause__, RuntimeError)
-    assert str(error.value.__cause__) == "second record failed"
+    assert isinstance(refused.value.__cause__, RuntimeError)
+    assert str(refused.value.__cause__) == "second record failed"
     assert Message._base_manager.count() == 0
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
 

@@ -4,8 +4,9 @@ import {
   type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewStatus, type Tone, type UiTranslate, type WidgetOption,
 } from "@angee/ui";
 import { toneColorVar } from "@angee/ui/lib/tones";
-import { WorkflowRunGraphDocument } from "./documents.console";
+import type { WorkflowRunGraphDocument } from "./documents.console";
 import { formatStepPage } from "./step-page";
+import { WORKFLOW_STEP_STATUS_TONES } from "./status-tones";
 
 export type RunGraphData = NonNullable<DocumentType<typeof WorkflowRunGraphDocument>["workflowrun_by_pk"]>["graph"];
 export type RunGraphNode = RunGraphData["nodes"][number];
@@ -19,7 +20,7 @@ export const RUN_GRAPH_EDGE_STYLES = {
 /** Project the server's pinned topology and complete aggregates into the shared canvas. */
 export function projectRunGraph(graph: RunGraphData, selected: string | undefined, options: {
   t: UiTranslate; statusOptions: readonly WidgetOption[]; waitOptions: readonly WidgetOption[];
-  resolveTone: (value: string) => Tone; locale?: string;
+  resolveTone: (value: string, override?: Record<string, Tone>) => Tone; locale?: string;
 }) {
   const { t, statusOptions, waitOptions, resolveTone, locale } = options;
   const list = new Intl.ListFormat(locale, { style: "short", type: "unit" });
@@ -28,15 +29,17 @@ export function projectRunGraph(graph: RunGraphData, selected: string | undefine
     const row = node.step_run;
     const kind = row ? optionToken(row.status) : "unreached";
     const label = row ? optionLabel(statusOptions, row.status) : t("run.graphPending");
-    const badge = node.body_key ? `${row?.map_settled ?? 0}/${row?.map_total ?? 0}`
-      : row && row.page_index > 0 ? formatStepPage(row.page_index, t) : label;
-    status[node.key] = { label: badge, tone: resolveTone(kind) };
-    const detail = node.body_key
-      ? list.format([...node.item_counts.map(({ status, count }) => t("run.graphStatusCount", {
-        count, status: optionTextLabel(optionLabel(statusOptions, status), status),
-      })), t("run.graphAttempts", { count: node.item_attempts })])
+    status[node.key] = { label, tone: resolveTone(kind, WORKFLOW_STEP_STATUS_TONES) };
+    const summary = node.body_key
+      ? (row && row.map_total > 0 ? list.format([`${row.map_settled}/${row.map_total}`,
+        ...node.item_counts.map(({ status, count }) => t("run.graphStatusCount", {
+          count, status: optionTextLabel(optionLabel(statusOptions, status), status),
+        })), t("run.graphAttempts", { count: node.item_attempts })]) : undefined)
       : row?.failure_reason || row?.wait_reason || (row?.waiting_kind
         ? optionTextLabel(optionLabel(waitOptions, row.waiting_kind), row.waiting_kind) : row?.outcome_label);
+    const page = row && current(node) && row.page_index > 0
+      ? formatStepPage(row.page_index, t) : undefined;
+    const detail = list.format([...(page ? [page] : []), ...(summary ? [summary] : [])]);
     return { id: node.key, kind, title: node.label, kindLabel: node.step_label, code: node.key,
       highlighted: current(node), selected: node.key === selected, detail,
       ariaLabel: list.format([node.label, optionTextLabel(label, kind), ...(detail ? [detail] : [])]),
@@ -48,11 +51,15 @@ export function projectRunGraph(graph: RunGraphData, selected: string | undefine
   }));
   const kinds = new Set(["unreached", ...statusOptions.map((option) => optionToken(option.value)), ...nodes.map((node) => node.kind)]);
   const nodeStyles = Object.fromEntries([...kinds].map((kind) => {
-    const tone = resolveTone(kind);
-    return [kind, graphNodeStyle(toneColorVar(tone), tone, { width: 244, height: 100,
+    const tone = resolveTone(kind, WORKFLOW_STEP_STATUS_TONES);
+    const border = ["unreached", "skipped", "canceled"].includes(kind)
+      ? `color-mix(in srgb, ${toneColorVar(tone)} 40%, var(--surface-sheet))` : toneColorVar(tone);
+    return [kind, graphNodeStyle(border, tone, { width: 244, height: 100,
       highlightedBorderColor: toneColorVar(tone), highlightedBackground: "var(--surface-sheet-2)" })];
   }));
   const ranked = [...graph.nodes].sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
-  const anchorNodeId = (ranked.find(current) ?? ranked.find((node) => optionToken(node.step_run?.status) === "failed"))?.key;
+  const anchorNodeId = (ranked.find(current)
+    ?? ranked.find((node) => optionToken(node.step_run?.status) === "failed")
+    ?? ranked.find((node) => optionToken(node.step_run?.status) === "canceled"))?.key;
   return { nodes, edges, nodeStyles, status, anchorNodeId };
 }

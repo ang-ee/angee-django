@@ -12,8 +12,9 @@ import { useValueStable } from "../../lib/use-value-stable";
 import { useStatusTone } from "../../widgets/use-status-tone";
 import { useRelationOptions } from "../relation/relation-options";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
-import { useResourceToolbarProps } from "../resource/resource-toolbar-props";
-import { useListViewToolbarInputs, type ListViewToolbarInputsProps } from "../resource/resource-view-toolbar-inputs";
+import { useResourceSearch } from "../resource/search/use-resource-search";
+import { useSearchCatalog, type UseSearchCatalogInput } from "../resource/search/catalog";
+import type { ResourceToolbarProps } from "../../toolbars";
 import { readPath } from "../resource/resource-view-list-body";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "../resource/surface/table-state";
 import type { UseResourceViewSurfaceProps } from "../resource/resource-view-surface";
@@ -34,12 +35,12 @@ interface GanttCollectionSurfaceProps<TRow extends Row> extends Pick<ListViewPro
   gantt: GanttViewSpec;
   laneSource: ResolvedBoardLaneSource;
   groupingPinned: boolean;
-  toolbarInputs: Omit<ListViewToolbarInputsProps<TRow>, "rows" | "list">;
+  searchInput: Omit<UseSearchCatalogInput<TRow>, "rows">;
 }
 
 /** Pages the related row catalogue; native list queries load all bars on that page. */
 export function GanttCollectionSurface<TRow extends Row>({
-  surfaceProps, gantt, laneSource, groupingPinned, toolbarInputs: input, availableViews,
+  surfaceProps, gantt, laneSource, groupingPinned, searchInput: input, availableViews,
   onCreate, createLabel, toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref,
 }: GanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
@@ -189,14 +190,16 @@ export function GanttCollectionSurface<TRow extends Row>({
       return { resources: [], events: [], detailsByLane: new Map<string, GanttLaneDetails>(), skipped: records.skipped, error: errorFromUnknown(cause) };
     }
   }, [metadata, tableRows, laneSource, lanes, catalogue.rows, gantt.current, lane, records.skipped, markers.rows, markers.skipped, markerSpec, markerMetadata, startField, endField, toneField, label, resolveTone, t]);
-  const toolbarInputs = useListViewToolbarInputs({ ...input, rows, list, serverGrouping: false });
-  const toolbar = useResourceToolbarProps({
-    ...toolbarInputs, resourceView, availableViews, view: "gantt", groupStack,
-    groupingEnabled: !groupingPinned && toolbarInputs.groupingEnabled,
-    favorites: resourceView.savedFavorites,
-    createLabel, onCreate, actions: toolbarActions, wrap: toolbarWrap, maxGroupDepth,
+  const catalog = useSearchCatalog({ ...input, rows, serverGrouping: false });
+  const search = useResourceSearch({ resourceView, catalog, groupStack,
+    groupingEnabled: !groupingPinned && (catalog.groups.length > 0 || groupStack.length > 0), maxGroupDepth });
+  const toolbar: ResourceToolbarProps = {
+    search, searchDeclaration: input.search, modelMetadata: input.modelMetadata, pager: list, availableViews, view: "gantt",
+    createLabel, onCreate, actions: toolbarActions, wrap: toolbarWrap,
+    onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
+    onViewChange: (availableViews?.length ?? 2) > 1 ? resourceView.setView : undefined,
     pagerMaxPageSize: MAX_PAGE_SIZE,
-  });
+  };
   const anchor = React.useMemo(() => calendarAnchorToDate(resourceView.state.anchor), [resourceView.state.anchor]);
   const onDateChange = React.useCallback((date: Date) => resourceView.setAnchor(calendarDateToAnchor(date)), [resourceView.setAnchor]);
   const renderResourceContent = React.useCallback((resource: GanttResource) => {

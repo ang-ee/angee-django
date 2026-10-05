@@ -516,7 +516,9 @@ export function StoragePage(): ReactElement {
       }
     >
       {(controller) => (
-        <ResourceViewProvider resource={FILE_MODEL} initialState={FILE_LIST_INITIAL_STATE}>
+        <ResourceViewProvider resource={FILE_MODEL} initialState={{ ...FILE_LIST_INITIAL_STATE,
+          groupStack: (controller.selectedId ?? ALL_SCOPE) === ALL_SCOPE ? [ALL_FILES_DEFAULT_GROUP] : [],
+        }}>
           <StorageExplorerContent
             controller={controller}
             openFileId={openFileId}
@@ -587,8 +589,6 @@ function StorageExplorerContent({
             },
     [driveId, effectiveScope],
   );
-  const defaultGroup =
-    effectiveScope === ALL_SCOPE ? ALL_FILES_DEFAULT_GROUP : null;
   const {
     navigation: fileNavigation,
     onListStateChange,
@@ -707,7 +707,6 @@ function StorageExplorerContent({
       ) : (
         <FileBrowserContent
           baseFilter={baseFilter}
-          defaultGroup={defaultGroup}
           rowHref={rowHref}
           bulkActions={renderBulkActions}
           onListStateChange={onListStateChange}

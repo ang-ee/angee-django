@@ -4,11 +4,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { Filter, ModelMetadataProvider, ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 import { ResourceToolbar, ResourceViewSwitcher } from "../../toolbars/ResourceToolbar";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
-import { useResourceToolbarProps } from "./resource-toolbar-props";
+import { useResourceSearch } from "./search/use-resource-search";
+import { useSearchCatalog } from "./search/catalog";
 import { RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY } from "./resource-view-favorites";
 import { favoriteFromResourceView, resourceViewPresetDefaults, validateResourceViewPreset, type ResourceViewPreset } from "./model/favorites";
 import { useResourceViewQueryFacts, useResourceViewTableState } from "./surface/table-state";
@@ -33,7 +34,8 @@ const archived: ResourceViewPreset = {
 };
 const presets = { [open.id]: open, [archived.id]: archived };
 
-afterEach(cleanup);
+beforeEach(() => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 80)));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function fixture(entry = "/", presetIds: readonly string[] = [archived.id], toolbar = false, menuResourceViewIds: readonly string[] = []) {
   let view!: ResourceViewContextValue;
@@ -44,9 +46,10 @@ function fixture(entry = "/", presetIds: readonly string[] = [archived.id], tool
     facts = useResourceViewQueryFacts({ resourceView: view, columns, modelMetadata: model });
     table = useResourceViewTableState({ resourceView: view, columns, modelMetadata: model,
       groupStack: view.state.groupStack });
-    const controls = useResourceToolbarProps({ resourceView: view,
-      pager: { total: 1, page: 1, pageSize: 20 }, view: view.state.view,
-      favorites: view.savedFavorites, filterRow: {} });
+    const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
+    const search = useResourceSearch({ resourceView: view, catalog });
+    const controls = { search, pager: { total: 1, page: 1, pageSize: 20 }, view: view.state.view,
+      availableViews: ["list", "board"] as const, onViewChange: view.setView, searchDeclaration: { box: "collapsed" as const } };
     if (toolbar) return <ResourceToolbar {...controls} />;
     return <ResourceViewSwitcher view={view.state.view} favorites={view.savedFavorites}
       onFavoriteSelect={view.applyFavorite} onViewChange={view.setView} />;
@@ -176,17 +179,15 @@ test("a local preset mount without presetIds keeps its initial view valid and un
   expect(view.savedFavorites.map((favorite) => favorite.id)).toEqual([archived.id]);
 });
 
-test("a shipped preset quick filter toggles off its fixed scope in a local widget", () => {
+test("a shipped preset toggle shortcut removes its fixed scope in a local widget", () => {
   let view!: ResourceViewContextValue;
   function Widget() {
     view = useResourceView();
-    const toolbar = useResourceToolbarProps({
-      resourceView: view,
-      pager: { total: 1, page: 1, pageSize: 10 },
-      view: "list",
-      favorites: view.savedFavorites,
-      filterRow: { quickFilterIds: [archived.id] },
-    });
+    const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
+    const search = useResourceSearch({ resourceView: view, catalog });
+    const toolbar = { search, pager: { total: 1, page: 1, pageSize: 10 },
+      view: "list" as const, searchDeclaration: { shortcuts: [{ kind: "toggle" as const, id: archived.id }] } };
+
     return <ResourceToolbar {...toolbar} />;
   }
   render(<ModelMetadataProvider metadata={metadata}>
@@ -197,10 +198,10 @@ test("a shipped preset quick filter toggles off its fixed scope in a local widge
       </ResourceViewProvider>
     </AppRuntimeProvider>
   </ModelMetadataProvider>);
-  const quickFilter = screen.getByRole("button", { name: archived.label });
-  expect(quickFilter.getAttribute("aria-pressed")).toBe("true");
+  const toggle = screen.getByRole("button", { name: archived.label });
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
-  fireEvent.click(quickFilter);
+  fireEvent.click(toggle);
   expect(view.state.preset).toBe("");
   expect(view.baseFilter).toBeUndefined();
   expect(screen.getByRole("button", { name: "Clear" })).toBeTruthy();
@@ -222,6 +223,23 @@ function LocalCapture({ onValue }: { onValue: (value: ResourceViewContextValue) 
   onValue(useResourceView());
   return null;
 }
+
+test.each([{ groupStack: [{ field: "status" }] }, { groupStack: [] }])("an explicit shipped preset stack $groupStack overrides per-view defaults", ({ groupStack }) => {
+  let view!: ResourceViewContextValue;
+  render(<ModelMetadataProvider metadata={metadata}>
+    <AppRuntimeProvider runtime={{ resourceViews: presets }}>
+      <ResourceViewProvider scope="local" resource="notes.Note" initialState={resourceViewPresetDefaults({
+        groupStacks: { list: [{ field: "owner" }], board: [{ field: "owner" }] },
+      }, { ...open, groupStack })}>
+        <LocalCapture onValue={(value) => { view = value; }} />
+      </ResourceViewProvider>
+    </AppRuntimeProvider>
+  </ModelMetadataProvider>);
+  expect(view.state.groupStack).toEqual(groupStack);
+  act(() => view.setGroupStack([{ field: "owner" }]));
+  act(() => view.clearQuery());
+  expect(view.state.groupStack).toEqual(groupStack);
+});
 
 test.each([
   { fixedFilter: { absent: { exact: "x" } } },

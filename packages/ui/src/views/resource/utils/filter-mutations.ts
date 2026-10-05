@@ -1,53 +1,17 @@
 import type { FilterClause, ResourceToolbarCustomFilterChip, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
-import type { ResourceQuery } from "@angee/metadata";
+import { QueryParseError, type ResourceQuery } from "@angee/metadata";
 import { dedupeBy } from "../../../lib/dedupe";
-import { DEFAULT_TEXT_FILTER_FIELD, Filter, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
 import { customFilterChipLabel, customFilterId, isFacetFilter, isLookup, mergeById, parseCustomFilterId } from "./labels";
-export function activeFilterIdsFor(
-  filter: ResourceViewFilter,
-  options: readonly ResourceToolbarFilterOption[],
-): readonly string[] {
-  const value = Filter.from(filter);
-  return options.flatMap((option) => {
-    const facet = Filter.facetFromFilter(option.filter);
-    if (!facet) return value.hasPreset(option.filter) ? [option.id] : [];
-    return value.facetValues(facet).includes(facet.value) ? [option.id] : [];
-  });
-}
-
-export function nextFacetFilter(
-  filter: ResourceViewFilter,
-  options: readonly ResourceToolbarFilterOption[],
-  id: string,
-): ResourceViewFilter {
-  const option = options.find((candidate) => candidate.id === id);
-  const facet = option ? Filter.facetFromFilter(option.filter) : null;
-  if (!option) return filter;
-  if (!facet) return Filter.from(filter).togglePreset(option.filter);
-  return Filter.from(filter).toggleFacet(facet);
-}
-
-export function textFilterValue(
-  filter: ResourceViewFilter,
-  field: string | null = DEFAULT_TEXT_FILTER_FIELD,
-): string {
-  return field ? Filter.from(filter).textTerm(field) : "";
-}
-
-export function nextTextFilter(
-  filter: ResourceViewFilter,
-  value: string,
-  field: string | null = DEFAULT_TEXT_FILTER_FIELD,
-): ResourceViewFilter {
-  return field ? Filter.from(filter).withTextTerm(value, field) : filter;
-}
-
+import type { UiTranslate } from "../../../i18n";
+import { rejectSearchDeclaration } from "../search/declaration-errors";
 export function customFilterChipsFor(
   filter: ResourceViewFilter,
   filterOptions: readonly ResourceToolbarFilterOption[],
   fields: readonly FilterClauseField[],
   textField: string | null = DEFAULT_TEXT_FILTER_FIELD,
+  t?: UiTranslate,
 ): readonly ResourceToolbarCustomFilterChip[] {
   const chips: ResourceToolbarCustomFilterChip[] = [];
   const fieldsByName = new Map(
@@ -69,6 +33,7 @@ export function customFilterChipsFor(
           operator,
           value: operatorValue,
           options: fieldsByName.get(field)?.options,
+          t,
         }),
       });
     }
@@ -116,9 +81,19 @@ export function mergeFilterOptions(
   explicit: readonly ResourceToolbarFilterOption[] | undefined,
   inferred: readonly ResourceToolbarFilterOption[],
   query: ResourceQuery,
+  reported?: Set<string>,
 ): readonly ResourceToolbarFilterOption[] {
   const options = mergeById(explicit, inferred);
-  return dedupeBy(options, (option) => JSON.stringify(query.toWhere(option.filter)));
+  const executable = options.flatMap((option) => {
+    try {
+      return [{ option, predicate: JSON.stringify(query.toWhere(option.filter)) }];
+    } catch (error) {
+      if (!(error instanceof QueryParseError)) throw error;
+      rejectSearchDeclaration("filter option", option.id, error.message, reported);
+      return [];
+    }
+  });
+  return dedupeBy(executable, (item) => item.predicate).map((item) => item.option);
 }
 
 export function mergeFilterFields(

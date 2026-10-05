@@ -151,6 +151,7 @@ export function useRelationPickerOptions(
   );
 }
 
+/** Search executable text fields on the server, otherwise labels in the loaded page. */
 export function useRelationOptions(
   relation: RelationFieldInfo | null,
   config: RelationOptionsConfig = {},
@@ -173,20 +174,24 @@ export function useRelationOptions(
   const activeSearchFields = metadata
     ? ResourceQuery.from(metadata).textSearchFields(searchFields)
     : [];
+  const text = searchText?.trim() ?? "";
+  const labelSearch = activeSearchFields.length > 0
+    ? ""
+    : text.toLocaleLowerCase();
   // Stabilise filters/sorters by VALUE: a consumer that declares them inline
   // (e.g. a board's `laneSource.filters`) rebuilds the array every render, and
   // forwarding a fresh identity into refine's `useList` drives an update loop.
   // A value-equal array keeps a stable identity, so plausible inline props are
   // safe without every caller memoising.
   const searchFilters: CrudFilter[] =
-    searchText?.trim() && activeSearchFields.length > 0
+    text && activeSearchFields.length > 0
       ? [
           {
             operator: "or",
             value: activeSearchFields.map((field) => ({
               field,
               operator: "contains",
-              value: searchText.trim(),
+              value: text,
             })),
           },
         ]
@@ -238,10 +243,12 @@ export function useRelationOptions(
     }),
     [run.query.isFetching, run.query.error?.message, refetch, run.result.total],
   );
-  const options = React.useMemo(
-    () => relationOptionsFromRows(rows, labelField, { sort }),
-    [labelField, rows, sort],
-  );
+  const options = React.useMemo(() => {
+    const options = relationOptionsFromRows(rows, labelField, { sort });
+    return labelSearch
+      ? options.filter((option) => option.label.toLocaleLowerCase().includes(labelSearch))
+      : options;
+  }, [labelField, labelSearch, rows, sort]);
   return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 

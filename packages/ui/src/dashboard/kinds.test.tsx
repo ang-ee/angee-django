@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
+import { searchFixture } from "../views/resource/search/search-fixture.test-support";
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource, testQueryField } from "@angee/metadata/testing";
@@ -255,10 +256,11 @@ describe("dashboard table columns", () => {
   });
 });
 
-test("hosts a shipped list preset with reduced chrome and reports the server total", () => {
+test("hosts a shipped list preset with reduced chrome and reports the server total", async () => {
   const onCountChange = vi.fn();
   const rowVerb = vi.fn();
   const observed = vi.fn();
+  const search = searchFixture({ catalog: { filters: [{ id: "open", label: "Open", filter: { status: "open" } }] } });
   function DeclaredView(props: HostedResourceViewProps) {
     const view = useResourceView();
     observed({ ...props, preset: view.state.preset, queryError: view.state.queryError, baseFilter: view.baseFilter });
@@ -268,8 +270,8 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
     }, [props.onListStateChange]);
     return <><div>Standard list</div><button type="button" onClick={rowVerb}>Open record</button><ResourceToolbar
       pager={{ total: 17, page: 1, pageSize: 20 }} view="list" availableViews={["list", "board"]}
-      filterOptions={[{ id: "open", label: "Open", filter: { status: "open" } }]}
-      onViewChange={() => {}} onFilterTextChange={() => {}} chrome={props.chrome}
+      search={search}
+      onViewChange={() => {}} chrome={props.chrome}
     /></>;
   }
   const hosted: WidgetSpec = { ...spec, kind: "resourceView", data: { shape: "resourceView", preset: "desk.open" },
@@ -286,7 +288,11 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
   expect(screen.getByText("Standard list")).toBeTruthy();
   screen.getByRole("button", { name: "Open record" }).click();
   expect(rowVerb).toHaveBeenCalledOnce();
-  expect(screen.getByLabelText("Filter records")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  const input = await screen.findByRole("combobox", { name: "Filter records" });
+  fireEvent.input(input, { target: { value: "document" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Search Title for: document" }));
+  expect(search.setText).toHaveBeenCalledExactlyOnceWith("document", "title");
   expect(screen.queryByLabelText("Previous page")).toBeNull();
   expect(screen.queryByLabelText("Board view")).toBeNull();
   expect(observed.mock.lastCall?.[0]).toMatchObject({ presentation: "embedded", scope: "inherit",

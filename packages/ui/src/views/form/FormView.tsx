@@ -17,6 +17,7 @@ import {
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
+import { SaveDiscardActions, dirtyControlBandClassName } from "./SaveDiscardActions";
 import { ActionFormProvider } from "./ActionFormProvider";
 import type {
   FieldDescriptor,
@@ -309,36 +310,19 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     void submitForm();
   };
   const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
-    <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? "bg-brand-soft" : undefined)}>
+    <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? dirtyControlBandClassName : undefined)}>
       <div className="flex min-w-max shrink-0 items-center gap-2">
         {toolbarStartNode}
-        {isCreate || formIsDirty ? (
-          <div className="flex items-center gap-2">
-            {formIsDirty ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={pending}
-                onClick={discardChanges}
-              >
-                {t("form.discard")}
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              loading={pending}
-              disabled={formReadOnly || previewBlocked}
-              onClick={() => {
-                void submitForm();
-              }}
-            >
-              {submitLabel ?? (isCreate ? t("form.create") : t("form.save"))}
-            </Button>
-          </div>
-        ) : null}
+        <SaveDiscardActions
+          isDirty={formIsDirty}
+          alwaysShowSave={isCreate}
+          saveIntent={isCreate ? "create" : "save"}
+          saveLabel={submitLabel}
+          pending={pending}
+          saveDisabled={formReadOnly || previewBlocked}
+          onDiscard={discardChanges}
+          onSave={() => { void submitForm(); }}
+        />
         <span ref={setToolbarHost} className="contents" />
         {!awaitingRecord && (
           availableDeclaredActions.length > 0 ||
@@ -456,6 +440,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
 
   // Keep one panel tree across presentations so retained editor drafts survive tab changes.
   if (tabbed && (recordPresentation === "workspace" || recordTabList.some((tab) => tab.presentation === "full-bleed"))) {
+    const compactHeader = recordPresentation === "workspace";
     const workspace = recordPresentation === "workspace"
       || recordTabList.some((tab) => tab.id === activeRecordTab && tab.presentation === "full-bleed");
     return (
@@ -473,10 +458,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           }}
         >
           {controlBand}
-          <div className={workspace ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
-            {recordHeader(workspace)}
+          <div className={compactHeader ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex-none flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
+            {recordHeader(compactHeader)}
             {errorBanners}
-            {hasBodyTabs ? overviewWithFormExtras : <div className={workspace ? "mt-2" : undefined}>{tabStrip}</div>}
+            {hasBodyTabs ? overviewWithFormExtras : <div className={compactHeader ? "mt-2" : undefined}>{tabStrip}</div>}
           </div>
           {!hasBodyTabs ? <Tabs.Panel
             value={FORM_VIEW_OVERVIEW_TAB_ID}

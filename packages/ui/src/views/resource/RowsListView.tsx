@@ -3,6 +3,7 @@ import type { ResourceQuery } from "@angee/metadata";
 
 import type { DndPayload } from "../../lib/dnd";
 import { useUiT } from "../../i18n";
+import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { GalleryView } from "../GalleryView";
 import {
   ResourceViewSwitcher,
@@ -15,7 +16,7 @@ import {
   useResourceViewMaybe,
   type ResourceViewContextValue,
 } from "./resource-view-context";
-import type { ResourceViewGroup } from "./resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewGroup } from "./resource-view-model";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
 import { ResourceQueryError } from "./ResourceQueryError";
@@ -30,16 +31,16 @@ import {
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
 import type {
+  ListSearchDeclaration,
   ListEmptyContent,
   ResourceCollectionPresentation,
   ResourceTableHeaderVisibility,
   ResourceTableLayout,
 } from "./resource-view-types";
-import { useResourceToolbarProps } from "./resource-toolbar-props";
-import {
-  useResourceViewToolbarInputs,
-} from "./resource-view-toolbar-inputs";
-import { useResourceViewGroupState } from "./resource-view-group-state";
+import { useResourceSearch } from "./search/use-resource-search";
+import { useSearchCatalog } from "./search/catalog";
+import type { ResourceToolbarProps } from "../../toolbars";
+import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "./search/group-defaults";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -50,10 +51,12 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   /** Explicit local query fields, including relations and fields outside display columns. */
   query?: ResourceQuery;
   columns: readonly ListColumn<TRow>[];
+  /** Combined box and optional controls over this collection's search model. */
+  search?: ListSearchDeclaration;
   filterOptions?: readonly ResourceToolbarFilterOption[];
   customFilterFields?: readonly FilterClauseField[];
   groupOptions?: readonly ResourceToolbarGroupOption[];
-  defaultGroup?: ResourceViewGroup | null;
+  defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   pageSize?: number;
   fetching?: boolean;
   error?: Error | null;
@@ -106,8 +109,9 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   const initialState = React.useMemo(
     () => ({
       pageSize: props.pageSize,
+      ...declaredGroupDefaults(props.defaultGroup),
     }),
-    [props.pageSize],
+    [props.pageSize, props.defaultGroup],
   );
   return withResourceViewScope({
     ambient: resourceView,
@@ -123,13 +127,20 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
 function ValidatedRowsListView<TRow extends StringIdRow>(
   props: RowsListViewProps<TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
+  const t = useUiT();
+  const defaults = React.useMemo(() => declaredGroupDefaults(props.defaultGroup), [props.defaultGroup]);
   const query = React.useMemo(
-    () => props.query ?? queryForColumns(props.columns, null, props.defaultGroup ? [props.defaultGroup] : []),
-    [props.query, props.columns, props.defaultGroup],
+    () => props.query ?? queryForColumns(props.columns, null, defaults.groups),
+    [props.query, props.columns, defaults],
   );
   let state = props.resourceView.state;
   try {
-    if (props.defaultGroup) query.group(props.defaultGroup);
+    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, props.resourceView.defaultState, t);
+  } catch (error) {
+    return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
+  }
+  try {
+    query.groupsFrom(defaults.groupStack);
     state = validateResourceViewState({
       ...state,
       filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
@@ -146,6 +157,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rows,
   query,
   columns,
+  search: searchDeclaration,
   filterOptions: explicitFilterOptions,
   customFilterFields: explicitCustomFilterFields,
   groupOptions,
@@ -174,12 +186,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   const t = useUiT();
   const rowActionSurface = useRowActionsSurface(rowActions);
   const [layout, setLayout] = React.useState<RowLayout>("list");
-  const effectiveGroupStack = useResourceViewGroupState({
-    resourceView,
-    defaultGroup,
-    modelMetadata: null,
-    clearRemovedDefault: false,
-  });
+  const effectiveGroupStack = resourceView.state.groupStack;
 
   const surface = useRowsResourceViewSurface({
     rows,
@@ -191,18 +198,18 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     error,
     onListStateChange,
   });
-  const toolbarInputs = useResourceViewToolbarInputs({
+  const catalog = useSearchCatalog({
+    search: searchDeclaration,
     columns,
     query,
     rows: surface.sourceRows,
     modelMetadata: null,
     resourceView,
-    list: surface.list,
     defaultGroup,
     groupOptions,
     filterOptions: explicitFilterOptions,
     customFilterFields: explicitCustomFilterFields,
-    groupStack: effectiveGroupStack,
+    textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
@@ -216,29 +223,14 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
         },
       }
     : emptyContent ?? t("list.empty");
-  const toolbar = useResourceToolbarProps({
-    actions: toolbarActions,
+  const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack });
+  const toolbar: ResourceToolbarProps = {
+    search, searchDeclaration, actions: toolbarActions, pager: surface.list,
     viewSwitcher: gallery ? (
-      <ResourceViewSwitcher<RowLayout>
-        mode="layout"
-        view={layout}
-        onViewChange={setLayout}
-      />
+      <ResourceViewSwitcher<RowLayout> mode="layout" view={layout} onViewChange={setLayout} />
     ) : undefined,
-    pager: toolbarInputs.pager,
-    group: effectiveGroupStack[0] ?? null,
-    groupStack: effectiveGroupStack,
-    groupOptions: toolbarInputs.groupOptions,
-    customGroupOptions: toolbarInputs.customGroupOptions,
-    groupingEnabled: toolbarInputs.groupingEnabled,
-    filterOptions: toolbarInputs.filterOptions,
-    customFilterFields: toolbarInputs.customFilterFields,
-    customFilterChips: toolbarInputs.customFilterChips,
-    favorites: resourceView.savedFavorites,
-    activeFilterIds: toolbarInputs.activeFilterIds,
-    filterText: toolbarInputs.filterText,
-    resourceView,
-  });
+    onPageChange: resourceView.setPage, onPageSizeChange: resourceView.setPageSize,
+  };
 
   return (
     <ResourceListFrame

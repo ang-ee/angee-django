@@ -82,6 +82,18 @@ def fallback_attachment_name(mime: str) -> str:
     return f"{ATTACHMENT_FALLBACK_STEM}{attachment_extension(mime)}"
 
 
+def truncate_filename(name: str, max_length: int) -> str:
+    """Fit display text to its owner's field limit, retaining a fitting extension."""
+
+    if len(name) <= max_length:
+        return name
+    stem, dot, suffix = name.rpartition(".")
+    extension = f"{dot}{suffix}" if dot and stem else ""
+    if extension and len(extension) < max_length:
+        return f"{stem[: max_length - len(extension)]}{extension}"
+    return name[:max_length]
+
+
 def sha256_stream(reader: BinaryIO, *, capture_head: int = 0) -> tuple[str, int, bytes]:
     """Stream-hash a binary reader without materializing it.
 

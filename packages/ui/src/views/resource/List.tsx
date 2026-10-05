@@ -7,11 +7,6 @@ import {
   ListView,
   type ListViewProps,
 } from "./ListView";
-import type {
-  ResourceViewDefaultGroups,
-  ResourceViewGroup,
-  ResourceViewKind,
-} from "./resource-view-model";
 import {
   PAGE_ELEMENT_SLOT,
   mergePageFacets,
@@ -46,12 +41,6 @@ export interface ListProps<TRow extends Row = Row>
   resource?: string;
   /** Column and facet element declarations for this list. */
   children?: React.ReactNode;
-  /** Initial collection view for the resource list. */
-  defaultView?: ResourceViewKind;
-  /** Group seeded by the resource list. */
-  defaultGroup?: ResourceViewGroup | null;
-  /** Per-view group defaults seeded by the resource list. */
-  defaultGroups?: ResourceViewDefaultGroups;
   /** Collection renderer. Defaults to the grouped-capable `ListView`. */
   list?: ListComponent<TRow>;
 }

@@ -63,15 +63,12 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
-interface ResourceViewGroupUpdateOptions {
-  /** Initial default reconciliation preserves the restored page and selection. */
-  resetScope?: boolean;
-}
-
 export interface ResourceViewContextValue {
   /** Resource whose collection state this provider owns. */
   resource?: string;
   state: ResourceViewState;
+  /** Declared route defaults resolved for the current view kind. */
+  readonly defaultState: Readonly<ResourceViewState>;
   /** Effective immutable scope: caller base filter combined with the selected preset. */
   baseFilter?: ResourceViewFilter;
   setColumnVisibility: OnChangeFn<VisibilityState>;
@@ -92,8 +89,7 @@ export interface ResourceViewContextValue {
   clearQuery: () => void;
   /** Remove a selected shipped preset, including its immutable fixed filter. */
   clearPreset: () => void;
-  setGroup: (group: ResourceViewGroup | null, options?: ResourceViewGroupUpdateOptions) => void;
-  setGroupStack: (groupStack: readonly ResourceViewGroup[], options?: ResourceViewGroupUpdateOptions) => void;
+  setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
   setView: (view: ResourceViewKind) => void;
@@ -320,8 +316,8 @@ function RouteResourceViewProvider({
     [defaultsFor, readState, routePreset, navigate, namespace, queryState, rowSelection, search],
   );
   const defaultState = useMemo(
-    () => createResourceViewState(defaultsFor(routePreset)),
-    [defaultsFor, routePreset],
+    () => createResourceViewState({ ...defaultsFor(routePreset), view: state.view }),
+    [defaultsFor, routePreset, state.view],
   );
   const value = useResourceViewContextValue({
     updateState,
@@ -331,6 +327,7 @@ function RouteResourceViewProvider({
     favoriteKey,
     presetIds: allowedPresetIds,
     defaultState,
+    initialState,
     state,
   });
 
@@ -367,7 +364,7 @@ function LocalResourceViewProvider({
     },
     [],
   );
-  const defaultState = useMemo(() => createResourceViewState(initialState), [initialState]);
+  const defaultState = useMemo(() => createResourceViewState({ ...initialState, view: state.view }), [initialState, state.view]);
   const value = useResourceViewContextValue({
     updateState,
     setRowSelection,
@@ -376,6 +373,7 @@ function LocalResourceViewProvider({
     favoriteKey,
     presetIds: allowedPresetIds,
     defaultState,
+    initialState,
     state,
   });
 
@@ -394,6 +392,7 @@ function useResourceViewContextValue({
   favoriteKey,
   presetIds,
   defaultState,
+  initialState,
   state: sourceState,
 }: {
   updateState: OnChangeFn<ResourceViewState>;
@@ -403,6 +402,7 @@ function useResourceViewContextValue({
   favoriteKey?: string;
   presetIds?: readonly string[];
   defaultState: ResourceViewState;
+  initialState?: ResourceViewInitialState;
   state: ResourceViewState;
 }): ResourceViewContextValue {
   const metadata = useModelMetadata(resource ?? "");
@@ -535,22 +535,17 @@ function useResourceViewContextValue({
     [resetScope],
   );
   const setGroupStack = useCallback(
-    (groups: readonly ResourceViewGroup[], options?: ResourceViewGroupUpdateOptions) => {
+    (groups: readonly ResourceViewGroup[]) => {
       const groupStack = normaliseGroupStack(groups);
-      const update = options?.resetScope === false ? updateState : resetScope;
-      update((current) => ({
-        ...current,
-        group: groupStack[0] ?? null,
-        groupStack,
-        groupDefaultCleared: groupStack.length === 0,
-      }));
+      resetScope((current) => ({ ...current, groupStack }));
     },
-    [resetScope, updateState],
+    [resetScope],
   );
   return useMemo(
     () => ({
       resource,
       state,
+      defaultState,
       baseFilter: effectiveBaseFilter,
       setColumnVisibility: (updater: Parameters<OnChangeFn<VisibilityState>>[0]) => updateState((current) => ({
         ...current, columnVisibility: functionalUpdate(updater, current.columnVisibility),
@@ -577,9 +572,7 @@ function useResourceViewContextValue({
           ...current,
           filter: {},
           sorting: [],
-          group: null,
           groupStack: [],
-          groupDefaultCleared: true,
           queryError: null,
         })),
       queryDirty,
@@ -589,9 +582,7 @@ function useResourceViewContextValue({
           preset: defaultState.preset,
           filter: defaultState.filter,
           sorting: defaultState.sorting,
-          group: defaultState.group,
           groupStack: defaultState.groupStack,
-          groupDefaultCleared: defaultState.groupDefaultCleared,
           queryError: null,
         })),
       clearPreset: () =>
@@ -600,13 +591,9 @@ function useResourceViewContextValue({
           preset: "",
           filter: {},
           sorting: [],
-          group: null,
           groupStack: [],
-          groupDefaultCleared: true,
           queryError: null,
         })),
-      setGroup: (group: ResourceViewGroup | null, options?: ResourceViewGroupUpdateOptions) =>
-        setGroupStack(group ? [group] : [], options),
       setGroupStack,
       toggleSelectedId: (id: string, selected?: boolean) =>
         setRowSelection((current) => ({
@@ -615,12 +602,15 @@ function useResourceViewContextValue({
         })),
       clearSelectedIds,
       setView: (view: ResourceViewKind) =>
-        updateState((current) => ({
-          ...current,
-          view,
-          groupDefaultCleared:
-            view === current.view ? current.groupDefaultCleared : false,
-        })),
+        updateState((current) => {
+          if (view === current.view) return current;
+          const defaults = resourceViewPresetDefaults(initialState,
+            resourceViewPreset(resourceViews, current.preset, metadata?.resource.modelLabel ?? resource, presetIds));
+          const atDefault = current.groupStack.length === 0 || stableSerialize(current.groupStack)
+            === stableSerialize(createResourceViewState({ ...defaults, view: current.view }).groupStack);
+          return { ...current, view, groupStack: atDefault
+            ? createResourceViewState({ ...defaults, view }).groupStack : current.groupStack };
+        }),
       setMode: (mode: CalendarViewMode) =>
         updateState((current) => ({ ...current, mode })),
       setAnchor: (anchor: string) =>
@@ -642,7 +632,6 @@ function useResourceViewContextValue({
             return {
               ...current,
               ...favoriteState,
-              groupDefaultCleared: favoriteState.groupStack.length === 0,
               queryError: null,
             };
           } catch (error) {
@@ -660,6 +649,7 @@ function useResourceViewContextValue({
       resource,
       state,
       defaultState,
+      initialState,
       queryDirty,
       preset,
       effectiveBaseFilter,

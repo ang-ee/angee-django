@@ -1,7 +1,7 @@
 import * as React from "react";
+import type { SearchFacet } from "../resource/search/types";
 import { useAngeeFacets } from "@angee/refine";
-import { ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
-import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../toolbars";
+import { Filter, ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
 import type { ResourceViewFilter } from "../resource/resource-view-model";
 import { resourceFieldGroupLabel } from "../resource/model-metadata-defaults";
 import { groupLabel } from "../resource/resource-view-list-body";
@@ -13,17 +13,13 @@ const RELATION_FACET_OPTION_LIMIT = 200;
 const EMPTY_OPTIONS: readonly FacetDescriptor[] = [];
 
 export type RelationFacetOptions = FacetDescriptor;
-export interface RelationFacets {
-  filters: readonly ResourceToolbarFilterOption[];
-  filterFields: readonly FilterClauseField[];
-  groupOptions: readonly ResourceToolbarGroupOption[];
-}
+export type RelationFacets = readonly SearchFacet[];
 interface DeclaredRelationFacet {
   field: string;
   label: React.ReactNode;
   axis: GroupAxis;
   pageSize: number;
-  groupOption?: ResourceToolbarGroupOption;
+  group: SearchFacet["group"];
 }
 
 /** Declared facet choices and bucket predicates share the resource query's axis. */
@@ -46,7 +42,7 @@ export function useRelationFacets(
       const label = option.label ?? resourceFieldGroupLabel(field, metadata?.fields[field]);
       const group = option.group === false ? null : query.group(option.group ?? { field }).spec;
       return [{ field, label, axis, pageSize: option.pageSize ?? RELATION_FACET_OPTION_LIMIT,
-        ...(group ? { groupOption: { id: field, label, group } } : {}),
+        group: group ?? false,
       }];
     });
   }, [options, query, metadata]);
@@ -57,19 +53,17 @@ export function useRelationFacets(
   const result = useAngeeFacets(groupOperation.target, {
     document: groupOperation.document, facets: facetSpecs, enabled: facetSpecs.length > 0,
   });
-  return React.useMemo(() => ({
-    filters: facets.flatMap((facet) => (result.facets[facet.field]?.options ?? []).flatMap((option) => {
+  return React.useMemo(() => facets.map((facet): SearchFacet => ({
+    field: facet.field, label: facet.label, source: "relation", group: facet.group,
+    options: (result.facets[facet.field]?.options ?? []).flatMap((option) => {
       const filter = facet.axis.drill({ key: option.key });
-      const label = facetOptionLabel(facet, option, metadata, t);
-      return filter ? [{ id: facet.axis.bucketId({ key: option.key }), label, chipLabel: label, filter }] : [];
-    })),
-    filterFields: facets.map((facet) => ({
-      id: facet.field, field: facet.field, label: facet.label, type: "selection" as const,
-      options: (result.facets[facet.field]?.options ?? []).flatMap((option) =>
-        option.value === null ? [] : [{ value: option.value, label: facetOptionLabel(facet, option, metadata, t) }]),
-    })),
-    groupOptions: facets.flatMap((facet) => facet.groupOption ? [facet.groupOption] : []),
-  }), [facets, metadata, result.facets, t]);
+      if (!filter) return [];
+      const value = Filter.facetFromFilter(filter)?.value;
+      return [{ id: facet.axis.bucketId({ key: option.key }),
+        label: facetOptionLabel(facet, option, metadata, t), filter,
+        ...(value === undefined ? {} : { value }) }];
+    }),
+  })), [facets, metadata, result.facets, t]);
 }
 
 function facetOptionLabel(

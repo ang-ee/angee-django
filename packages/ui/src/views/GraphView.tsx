@@ -228,6 +228,10 @@ const NO_EDGES: never[] = [];
 
 const NODE_TYPES = { angee: GraphNode };
 
+function nodeColor(node: Node): string {
+  return node.style?.borderColor ?? "var(--border-strong)";
+}
+
 export function GraphView<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -307,12 +311,13 @@ function GraphCanvas<
   const resolvedNodeStyles = useValueStable(nodeStyles);
   const resolvedEdgeStyles = useValueStable(edgeStyles);
   const resolvedDefaultEdgeStyle = useValueStable(defaultEdgeStyle);
+  const [measured, setMeasured] = React.useState<Readonly<Record<string, { width: number; height: number }>>>({});
   const geometryNodes = useValueStable(nodes.map((node) => {
     const style = nodeStyleFor(node.kind, nodeStyles);
     return {
       id: node.id,
-      width: style.width,
-      height: style.height,
+      width: measured[node.id]?.width ?? style.width,
+      height: measured[node.id]?.height ?? style.height,
     };
   }));
   const geometryEdges = useValueStable(edges.map((edge) => ({
@@ -320,20 +325,20 @@ function GraphCanvas<
     source: edge.source,
     target: edge.target,
   })));
+  const needsLayout = nodes.some((node) => node.position === undefined);
   const geometryLayout = React.useMemo(
     () =>
-      layoutGraph({
+      needsLayout ? layoutGraph({
         nodes: geometryNodes,
         edges: geometryEdges,
         layout: resolvedLayout,
-      }),
-    [geometryEdges, geometryNodes, resolvedLayout],
+      }) : null,
+    [needsLayout, geometryEdges, geometryNodes, resolvedLayout],
   );
   // Only transient selection/dragging is local; records and settled positions stay controlled.
   const [selection, setSelection] = React.useState<Readonly<Record<string, boolean>>>({});
   const [edgeSelection, setEdgeSelection] = React.useState<Readonly<Record<string, boolean>>>({});
   const [dragging, setDragging] = React.useState<Readonly<Record<string, GraphViewPosition>>>({});
-  const [measured, setMeasured] = React.useState<Readonly<Record<string, { width: number; height: number }>>>({});
   const nodeSet = JSON.stringify(nodes.map((node) => node.id).sort());
   const edgeSet = JSON.stringify(edges.map((edge) => edge.id).sort());
   const [previousNodeSet, setPreviousNodeSet] = React.useState(nodeSet);
@@ -357,7 +362,7 @@ function GraphCanvas<
     const next = new Map<string, RenderNode<TNodeKind, TNodeMeta>>();
     const result = nodes.map((node) => {
       const selected = node.selected ?? selection[node.id] ?? false;
-      const position = dragging[node.id] ?? node.position ?? geometryLayout.positions.get(node.id)!;
+      const position = dragging[node.id] ?? node.position ?? geometryLayout!.positions.get(node.id)!;
       const previous = nodeCache.current.get(node.id);
       const style = resolvedNodeStyles[node.kind];
       const overlay = status?.[node.id];
@@ -400,11 +405,11 @@ function GraphCanvas<
     }
   }, [invalidEdges]);
   const renderEdges = React.useMemo(() => edges
-    .filter((edge) => geometryLayout.visibleEdgeIds.has(edge.id) && !invalidEdges.includes(edge))
+    .filter((edge) => !invalidEdges.includes(edge))
     .map((edge) => ({
       ...toReactFlowEdge(edge, resolvedEdgeStyles, resolvedDefaultEdgeStyle),
       selected: edge.selected ?? edgeSelection[edge.id] ?? false,
-    })), [edges, geometryLayout, invalidEdges, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
+    })), [edges, invalidEdges, resolvedDefaultEdgeStyle, resolvedEdgeStyles, edgeSelection]);
   // A primitive selector stays stable when unrelated store state changes.
   const handlesReady = useStore((state) => renderEdges.every((edge) => {
     const source = state.nodeLookup.get(edge.source)?.internals.handleBounds?.source;
@@ -601,7 +606,8 @@ function GraphCanvas<
         >
           <Background color="var(--border-subtle)" gap={20} />
           <Controls showInteractive={false} />
-          {miniMap ? <MiniMap pannable zoomable /> : null}
+          {miniMap ? <MiniMap<RenderNode<TNodeKind, TNodeMeta>> pannable zoomable
+            nodeColor={nodeColor} nodeStrokeColor={nodeColor} /> : null}
         </ReactFlow>
       </div>
     </div>
@@ -649,7 +655,7 @@ function toReactFlowNode<
       borderColor: emphasized
         ? style.highlightedBorderColor ?? "var(--brand)"
         : style.borderColor,
-      borderWidth: emphasized ? 2 : 1,
+      borderWidth: 1,
       background: emphasized
         ? style.highlightedBackground ?? "var(--brand-soft)"
         : style.background ?? "var(--surface-sheet)",
@@ -705,15 +711,16 @@ function GraphNodeLabel<TKind extends string>({
   style: GraphViewNodeStyle;
   status?: GraphViewStatus;
 }): React.ReactElement {
+  const kindLabel = node.kindLabel ?? node.kind;
   return (
     <div className="relative min-w-0 px-3 py-2 text-left">
       <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
-        <span className="truncate text-13 font-semibold text-fg">
+        <span className="min-w-0 flex-1 truncate text-13 font-semibold text-fg">
           {node.title}
         </span>
-        <Badge density="compact" tone={style.badgeTone ?? "neutral"}>
-          {node.kindLabel ?? node.kind}
-        </Badge>
+        {kindLabel !== node.title ? <Badge className="max-w-[50%]" density="compact" tone={style.badgeTone ?? "neutral"}>
+          <span className="min-w-0 truncate">{kindLabel}</span>
+        </Badge> : null}
       </div>
       {status ? <Badge className="absolute -top-3 right-2" tone={status.tone ?? "neutral"} density="compact">{status.label}</Badge> : null}
       {node.code ? (
@@ -721,8 +728,8 @@ function GraphNodeLabel<TKind extends string>({
           {node.code}
         </Code>
       ) : null}
-      {node.detail ? (
-        <div className={cn(textRoleVariants({ role: "caption", truncate: true }), "mt-1")}>
+      {node.detail !== undefined ? (
+        <div className={cn(textRoleVariants({ role: "caption", truncate: true }), "mt-1 min-h-[1lh]")}>
           {node.detail}
         </div>
       ) : null}

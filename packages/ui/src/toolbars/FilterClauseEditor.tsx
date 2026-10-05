@@ -73,7 +73,7 @@ export function FilterClauseRow({ fields, value, onChange, onSubmit, error, read
         }} />
       <Select size="sm" value={operator} readOnly={readOnly}
         aria-label={t("resourceToolbar.filterOperator")}
-        options={operatorsForField(field).map((item) => ({ value: item, label: filterOperatorLabel(item) }))}
+        options={operatorsForField(field).map((item) => ({ value: item, label: filterOperatorLabel(item, t) }))}
         onValueChange={(next) => {
           const selected = operatorsForField(field).find((item) => item === next);
           if (selected) onChange({ ...value, fieldId: field.id, operator: selected });

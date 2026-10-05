@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
   DISABLED_RESOURCE,
   ModelMetadataProvider,
@@ -158,16 +158,11 @@ describe("ListView board laneSource", () => {
     });
   });
 
-  test("pins the board group axis from laneSource without a default group", async () => {
+  test("pins board rendering without changing the provider's declared grouping", async () => {
     renderLeadBoard({ withDefaultGroup: false });
-
-    await waitFor(() => {
-      expect(harness.boardProps?.resourceView.state.groupStack).toEqual([
-        {
-          field: "stage",
-        },
-      ]);
-    });
+    expect(await screen.findByTestId("board-view")).toBeTruthy();
+    expect(harness.boardProps?.resourceView.state.groupStack).toEqual([]);
+    expect(harness.boardProps?.groups.map((group) => group.key)).toEqual(["stg_new", "stg_qualified", "stg_proposal"]);
   });
 
   test("fails fast when laneSource does not resolve a relation", () => {

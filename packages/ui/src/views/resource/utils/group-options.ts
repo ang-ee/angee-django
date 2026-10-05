@@ -22,7 +22,10 @@ export function buildGroupOptions<TRow extends Row>(
     const axis = query.axis(name);
     const declaration = query.axes[name]!;
     const initial = defaults.find(({ field }) => field === name);
-    const granularities = declaration.extractions.map(({ name }) => name);
+    // A group must be openable. A server extraction with no drill (a number part such as
+    // year_number or day_of_week) has no matching filter, so it is not offered as a choice.
+    const granularities = declaration.extractions
+      .filter((extraction) => !declaration.server || extraction.drill).map(({ name }) => name);
     const date = declaration.kind === "date" || granularities.length > 0;
     return {
       id: name,
@@ -37,12 +40,4 @@ export function buildGroupOptions<TRow extends Row>(
 
 export function resolveResourceViewGroup(group: ResourceViewGroup, metadata: ModelMetadata | null): ResourceViewGroup {
   return metadata ? ResourceQuery.from(metadata).group(group).spec : group;
-}
-
-/** A malformed group is a view error, never silently removed from the request. */
-export function validResourceViewGroupStack(
-  groups: readonly ResourceViewGroup[],
-  metadata: ModelMetadata | null,
-): readonly ResourceViewGroup[] {
-  return metadata ? ResourceQuery.from(metadata).groupsFrom(groups).map((axis) => axis.spec) : groups;
 }

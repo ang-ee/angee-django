@@ -8,6 +8,7 @@ import {
 import { STEP_RUN_MODEL, StepDecisionDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { formatStepPage, stepPageCodec } from "./step-page";
+import { WORKFLOW_STEP_STATUS_TONES } from "./status-tones";
 import { useStepRetryActions } from "./step-retry";
 
 /** Child collections fetch one selected detail; rows never mount their own queries. */
@@ -42,7 +43,7 @@ export function StepRuns({ runId, nodeKeys }: {
       <Column field="map_index" header={t("step.mapIndex")} showWhen={(row) => row.is_mapped === true} />
       <Column field="map_settled" header={t("step.mapSettled")} showWhen={(row) => row.is_map === true} />
       <Column field="map_total" header={t("step.mapTotal")} showWhen={(row) => row.is_map === true} />
-      <Column field="status" header={t("run.status")} widget="statusBadge" />
+      <Column field="status" header={t("run.status")} widget="statusBadge" tone={WORKFLOW_STEP_STATUS_TONES} />
       <Column field="outcome_label" header={t("run.outcome")} />
       <Column field="attempt" header={t("step.attempts")} />
     </List>

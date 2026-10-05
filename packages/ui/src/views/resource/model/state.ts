@@ -16,10 +16,7 @@ export interface ResourceViewState {
   filter: ResourceViewFilter;
   /** Failed boundary validation prevents dependent reads until state is repaired. */
   queryError?: Error | null;
-  group: ResourceViewGroup | null;
   groupStack: readonly ResourceViewGroup[];
-  /** The user explicitly cleared a declared default group. */
-  groupDefaultCleared: boolean;
   view: ResourceViewKind;
   mode: CalendarViewMode;
   anchor: string;
@@ -27,7 +24,9 @@ export interface ResourceViewState {
 
 /** Decode declarative defaults at the view boundary; live state stays native. */
 export function createResourceViewState(initial: ResourceViewInitialState = {}): ResourceViewState {
-  const groupStack = normaliseGroupStack(initial.groupStack ?? (initial.group ? [initial.group] : []));
+  const view = initial.view ?? "list";
+  const groupStack = normaliseGroupStack(initial.groupStacks?.[view] === null ? []
+    : initial.groupStacks?.[view] ?? initial.groupStack ?? (initial.group ? [initial.group] : []));
   return {
     ...(initial.preset ? { preset: initial.preset } : {}),
     columnVisibility: initial.columnVisibility ?? {},
@@ -40,10 +39,8 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
       : initial.sort ? [{ id: initial.sort.field, desc: initial.sort.dir === "desc" }] : [],
     rowSelection: Object.fromEntries(Array.from(initial.selectedIds ?? [], (id) => [id, true])),
     filter: Filter.from(initial.filter).value,
-    group: groupStack[0] ?? null,
     groupStack,
-    groupDefaultCleared: false,
-    view: initial.view ?? "list",
+    view,
     mode: initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE,
     anchor: initial.anchor ?? todayCalendarAnchor(),
   };
@@ -56,7 +53,7 @@ export function validateResourceViewState(state: ResourceViewState, query: Resou
     const filter = query.filterFrom(state.filter);
     const groupStack = query.groupsFrom(state.groupStack).map((axis) => axis.spec);
     query.sortFrom(state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" })));
-    return { ...state, filter, groupStack, group: groupStack[0] ?? null };
+    return { ...state, filter, groupStack };
   } catch (error) {
     return { ...state, queryError: error instanceof Error ? error : new Error("Invalid query state.") };
   }

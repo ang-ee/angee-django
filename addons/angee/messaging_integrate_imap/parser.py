@@ -52,7 +52,6 @@ _EMAIL_PLATFORM = str(Handle.Platform.EMAIL)
 
 _MESSAGE_ID_RE = re.compile(r"<([^<>]+)>")
 _QUOTE_MARKER_RE = re.compile(r"^\s*(?:>\s?)+")
-_FILENAME_MAX_LENGTH = 512
 # The RFC 3676 "-- " (or Outlook "__…") delimiter line that opens a signature
 # match; dropped from the signature part so only the signature text lands.
 _SIGNATURE_DELIMITER_RE = re.compile(r"[-_]{2,}\s*")
@@ -694,16 +693,9 @@ def _decoded_payload(message: MIMEPart) -> bytes | None:
 
 
 def _safe_filename(name: str) -> str:
-    """Return a storage-safe display filename for one MIME part."""
+    """Sanitize MIME path separators; the write owners bound display text."""
 
-    safe = _UNSAFE_FILENAME_RE.sub("_", name).strip()
-    if len(safe) <= _FILENAME_MAX_LENGTH:
-        return safe
-    stem, dot, suffix = safe.rpartition(".")
-    extension = f"{dot}{suffix}" if dot and stem else ""
-    if extension and len(extension) < _FILENAME_MAX_LENGTH:
-        return f"{stem[: _FILENAME_MAX_LENGTH - len(extension)]}{extension}"
-    return safe[:_FILENAME_MAX_LENGTH]
+    return _UNSAFE_FILENAME_RE.sub("_", name).strip()
 
 
 def _ensure_plain_body(body: ParsedPart | None) -> ParsedPart | None:

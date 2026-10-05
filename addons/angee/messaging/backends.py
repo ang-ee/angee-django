@@ -211,6 +211,11 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
         return ()
 
+    def record_key(self, record: ParsedMessage) -> str:
+        """Identify a failed message without exposing its body or metadata."""
+
+        return record.external_id
+
     def apply_record(self, stream: Any, record: ParsedMessage) -> ApplyResult:
         """Compose messaging's idempotent ingest inside the driver's page transaction."""
 

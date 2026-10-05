@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { resolveContainer, type ContainersDeclaration, type CoreContainer } from "@angee/ui/runtime";
+import { RESOURCE_CONTAINERS } from "@angee/ui/views/index";
 
 import { compileContainers, type ContainerLayer } from "./containers";
 import { explainComposition } from "./explain";
@@ -12,6 +13,33 @@ const layer = (id: string, containers: Record<string, unknown>, dependsOn: strin
   ({ id, dependsOn, containers: containers as ContainersDeclaration });
 const ids = (children: readonly { id: string }[]): string[] => children.map((child) => child.id);
 const scope = (routes: string[] = [], apps: string[] = []) => ({ apps, routes, perspective: null });
+
+test("search extras interleave with contributions and route narrowing reaches page ids with diagnostics", () => {
+  const composed = compileContainers([layer("extension", { "notes.Note#search": [
+    { "extension.mine": { sequence: 15, content: { kind: "toggle", id: "mine" } } },
+    { only: ["page.text.title", "extension.mine"], when: { route: "extension.queue" } },
+    { except: ["page.text.title"], when: { route: "extension.detail" } },
+  ] })], RESOURCE_CONTAINERS);
+  const extra = [
+    { id: "page.text.title", owner: "page", address: "resource#search", sequence: 10, content: { kind: "text", field: "title" } },
+    { id: "page.facet.status", owner: "page", address: "resource#search", sequence: 20, content: { kind: "facet", field: "status" } },
+  ];
+  const children = (route?: string) => resolveContainer(composed, "resource#search", {
+    models: ["notes.Note"], extra, scope: scope(route ? [route] : []),
+  });
+  expect(ids(children())).toEqual(["page.text.title", "extension.mine", "page.facet.status"]);
+  expect(ids(resolveContainer(compileContainers([], []), "resource#search", { extra: [...extra].reverse() })))
+    .toEqual(["page.text.title", "page.facet.status"]);
+  expect(ids(children("extension.queue"))).toEqual(["page.text.title", "extension.mine"]);
+  expect(ids(children("extension.detail"))).toEqual(["extension.mine", "page.facet.status"]);
+  expect(composed.diagnostics.some((message) => message.includes("page.text.title"))).toBe(true);
+  expect(() => compileContainers([layer("extension", { "notes.Note#search": { "page.text.title": { hide: true } } })], RESOURCE_CONTAINERS))
+    .toThrow(/alters unknown child.*page.text.title/);
+  expect(() => compileContainers([layer("extension", { "resource#search": { "page.text.title": { content: { kind: "text", field: "title" } } } })], RESOURCE_CONTAINERS))
+    .toThrow(/namespace/);
+  expect(() => compileContainers([layer("extension", { "resource#search": { when: { route: "extension.queue" },
+    "extension.mine": { content: { kind: "toggle", id: "mine" } } } })], RESOURCE_CONTAINERS)).toThrow(/conditional|when/);
+});
 
 describe("compileContainers", () => {
   test("declares kind and model children; a page merges kind, canonical and concrete model in position order", () => {
@@ -323,6 +351,59 @@ describe("compileContainers", () => {
       .toThrow(/"tags" alters child "chatter.comments" of container "record#aside", which "messaging" removed/);
     expect(() => compileContainers([messaging, layer("tags", { "record#aside": [{ "chatter.comments": { hide: true }, when: { app: "tags" } }] })], [aside]))
       .toThrow(/which "messaging" removed/);
+  });
+
+  test("render-time extras interleave with kind and model children by sequence", () => {
+    const aside: CoreContainer = { address: "record#aside", models: true, extras: true };
+    const composed = compileContainers([layer("a", {
+      "record#aside": { "a.b": { content: "first", sequence: 10 } },
+      "notes.Note#aside": { "a.c": { content: "last", sequence: 20 } },
+    })], [aside]);
+    const extra = [{ id: "page.middle", owner: "page", address: "record#aside", content: "middle", sequence: 15 }];
+    expect(ids(resolveContainer(composed, "record#aside", { models: ["notes.Note"], extra })))
+      .toEqual(["a.b", "page.middle", "a.c"]);
+    // Contributed children can also stand between two page-declared extras.
+    const surrounding = [
+      { id: "page.last", owner: "page", address: "record#aside", content: "last", sequence: 25 },
+      { id: "page.first", owner: "page", address: "record#aside", content: "first", sequence: 5 },
+    ];
+    expect(ids(resolveContainer(composed, "record#aside", { models: ["notes.Note"], extra: surrounding })))
+      .toEqual(["page.first", "a.b", "a.c", "page.last"]);
+  });
+
+  test("unpositioned render-time extras trail all composed children in input order", () => {
+    const aside: CoreContainer = { address: "record#aside", extras: true, children: {
+      "chatter.activity": { content: "activity", sequence: 20 },
+      "chatter.comments": { content: "comments", sequence: 10 },
+      "chatter.sources": { content: "sources" },
+    } };
+    const composed = compileContainers([], [aside]);
+    const extra = [
+      { id: "workflow", owner: "page", address: "record#aside", content: "workflow" },
+      { id: "details", owner: "page", address: "record#aside", content: "details" },
+      { id: "records", owner: "page", address: "record#aside", content: "records" },
+    ];
+    expect(ids(resolveContainer(composed, "record#aside", { extra })))
+      .toEqual(["chatter.comments", "chatter.activity", "chatter.sources", "workflow", "details", "records"]);
+  });
+
+  test.each([
+    { position: { before: "a.b" }, expected: ["page.tab", "a.b", "a.c"] },
+    { position: { after: "a.b" }, expected: ["a.b", "page.tab", "a.c"] },
+  ])("a render-time extra anchors on a composed id with $position", ({ position, expected }) => {
+    const aside: CoreContainer = { address: "record#aside", extras: true };
+    const composed = compileContainers([layer("a", { "record#aside": {
+      "a.b": { content: "first", sequence: 10 },
+      "a.c": { content: "last", sequence: 20 },
+    } })], [aside]);
+    const extra = [{ id: "page.tab", owner: "page", address: "record#aside", content: "tab", ...position }];
+    expect(ids(resolveContainer(composed, "record#aside", { extra }))).toEqual(expected);
+  });
+
+  test("hide cannot alter a render-time extra id at composition", () => {
+    const aside: CoreContainer = { address: "record#aside", extras: true };
+    expect(() => compileContainers([layer("files", { "record#aside": { "page.details": { hide: true } } })], [aside]))
+      .toThrow(/alters unknown child "page.details"/);
   });
 
   test("a container taking render-time children (extras) admits ids composition cannot know in only and except", () => {

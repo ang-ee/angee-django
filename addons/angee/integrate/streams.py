@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections, connection, connections, transaction
+from django.db import DataError, close_old_connections, connection, connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 from pydantic import ConfigDict, JsonValue, TypeAdapter
@@ -48,6 +48,13 @@ def _validated_cursor(value: Any) -> dict[str, Any]:
         return _CURSOR.validate_python(value)
     except PydanticValidationError as exc:
         raise AdapterContractError("Stream cursors must contain plain finite JSON objects.") from exc
+
+
+def _public_partition(partition: str) -> str:
+    """Render URL partition identity without credentials or query parameters."""
+
+    parts = urlsplit(partition)
+    return parts.path if parts.scheme and parts.netloc else partition
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,11 +84,9 @@ class PartitionFailure:
     def details(self) -> dict[str, str]:
         """Return operator-safe identity and cause; URLs expose only their path."""
 
-        partition = self.definition.partition
-        parts = urlsplit(partition)
         return {
             "stream": self.definition.key,
-            "partition": parts.path if parts.scheme and parts.netloc else partition,
+            "partition": _public_partition(self.definition.partition),
             "stage": self.stage,
             "message": _safe_integration_failure(self.error).message,
         }
@@ -602,10 +607,10 @@ def _apply_page(
                                 "Adapters return ApplyResult; only the driver promotes the primary link."
                             )
                         _promote(link, record, outcome, origin="remote")
-                    applied.append(outcome)
                     _resolve_applied(locked, record)
-                    count += outcome.count
-            except (SemanticError, ValidationError) as error:
+                applied.append(outcome)
+                count += outcome.count
+            except (SemanticError, ValidationError, DataError) as error:
                 # The record savepoint rolled back, including a new identity.
                 if locked.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange):
                     link = _manager("RecordLink").observe(
@@ -613,7 +618,30 @@ def _apply_page(
                         record.external_key,
                         metadata=record.metadata or None,
                     )
-                refusal = error if isinstance(error, SemanticError) else SemanticError("invalid_record")
+                if isinstance(error, SemanticError):
+                    refusal = error
+                else:
+                    fields = (
+                        sorted(error.error_dict)
+                        if isinstance(error, ValidationError) and hasattr(error, "error_dict")
+                        else ["unknown"]
+                    )
+                    refusal = SemanticError(
+                        "invalid_record" if isinstance(error, ValidationError) else "invalid_record_data",
+                        details={
+                            "stream": locked.key,
+                            "partition": _public_partition(locked.partition),
+                            "external_key": (
+                                record.external_key if isinstance(record, RecordChange) else adapter.record_key(record)
+                            ),
+                            "fields": fields,
+                            "message": (
+                                f"Record validation failed for fields: {', '.join(fields)}."
+                                if isinstance(error, ValidationError)
+                                else _safe_integration_failure(error).message
+                            ),
+                        },
+                    )
                 discrepancies.append(_quarantine(locked, record, refusal, link=link).pk)
         adapter.finish_page(locked, page, applied)
         if reconcile_state is not None:
@@ -1092,18 +1120,18 @@ def sync_bridge(bridge: Any) -> int:
                         except Exception as error:  # noqa: BLE001 -- partition setup/cleanup can also fail.
                             failures.append(PartitionFailure(futures[future], "partition", error))
             if failures:
-                error = BridgeSyncError(failures)
-                for failure in error.failures:
+                sync_error = BridgeSyncError(failures)
+                for failure in sync_error.failures:
                     failure.log(bridge)
-                details = [failure.details for failure in error.failures]
+                details = [failure.details for failure in sync_error.failures]
                 # All workers have stopped: a later healthy page cannot overwrite
                 # the failed partition with its own progress before settlement.
                 _report(
-                    bridge, error.public_message,
+                    bridge, sync_error.public_message,
                     stream=details[0]["stream"], partition=details[0]["partition"],
                     stage=details[0]["stage"], failures=details,
                 )
-                raise error from error.failures[0].error
+                raise sync_error from sync_error.failures[0].error
             return landed
     finally:
         adapter.close()

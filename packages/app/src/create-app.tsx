@@ -1,4 +1,5 @@
 import {
+  ResourceQuery,
   canonicalModelLabel,
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
@@ -70,6 +71,7 @@ import {
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
+import { validateSearchShortcut } from "@angee/ui/views/resource-view-types";
 import { composeAddons } from "./define-addon";
 import {
   ModalsHost,
@@ -317,6 +319,24 @@ export function createApp(input: CreateAppInput): AngeeApp {
     apps: menuTree.appIds(),
     perspectives: new Set(input.addons.flatMap((addon) => Object.keys(addon.perspectives ?? {}))),
   });
+  for (const [address, children] of Object.entries(composed.containers.children)) {
+    if (!address.endsWith("#search")) continue;
+    const modelLabel = address.slice(0, -"#search".length);
+    for (const child of children) {
+      validateSearchShortcut(child.content, child.id);
+      if (modelLabel === "resource") continue;
+      const models = Object.values(schemas).flatMap((schema) => {
+        const model = schema.fieldMetadata.labels[modelLabel];
+        return model ? [model] : [];
+      });
+      let failure: unknown;
+      const valid = models.some((model) => {
+        try { validateSearchShortcut(child.content, child.id, ResourceQuery.from(model)); return true; }
+        catch (error) { failure = error; return false; }
+      });
+      if (!valid) throw failure ?? new Error(`Unknown resource "${modelLabel}" in search shortcut "${child.id}".`);
+    }
+  }
   for (const preset of Object.values(composed.resourceViews)) {
     const models = Object.values(schemas).flatMap((schema) => {
       const model = schema.fieldMetadata.labels[preset.resource];

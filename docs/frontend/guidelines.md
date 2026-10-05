@@ -395,11 +395,18 @@ shared UI copy through an addon bundle.
   because a verb must remain understandable without recognizing its icon.
   Mark the state's next descriptor `primary`; keep infrequent descriptors at
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
-- A list route declares its shipped `presetIds`, `filterRow` quick filter and facet
-  ids, `createAction`, and `boardCard` fields on `ResourceList`/`List` rather than
-  building parallel controls. The route default preset is included automatically.
-  Quick filter ids may name shipped presets or filter options. A scoped create verb
-  uses a server-projected parent record for its permission; the create label comes
+- A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
+  and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full
+  combined box; declared or contributed shortcuts default it to a collapsed
+  trigger. The box stays reachable below 36rem toolbar width, where shortcuts
+  hide. Shortcuts compose the same model as the box; toggle ids may name filter
+  options, presets or favorites. The route default preset joins automatically.
+  Named filters that fail resource-query parsing and shortcuts with unavailable
+  metadata-dependent targets throw with their ids in development; production
+  omits them and logs each id and reason once per mount. Malformed declarations
+  still fail fast in every environment.
+  A scoped create verb uses a server-projected parent record for its permission;
+  the create label comes
   from resource vocabulary. `chrome` may hide the view switcher, pager, or column
   chooser without changing query state; `chrome.heading` declares label, hint,
   and audience around the live count. A nonselectable list hides Share but keeps
@@ -873,6 +880,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `form#chrome` | passive record chrome at the toolbar's right edge | `ReactNode` |
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
+| `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
 | `record#aside` | chatter tabs | `ChatterTabContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
@@ -920,12 +928,24 @@ capability check; whether a
 kind is offered is the container's, so layers narrow kinds per model with
 `only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
 
+`resource#search` has model inheritance and accepts page-declared `page.*`
+extras alongside contributed typed shortcuts. `only`/`except` reach both;
+`hide` alters declared contributions only, and route/app/perspective `when`
+narrows those verbs. The box follows the shortcuts and is never a child that
+can be hidden. Field capability checks run at composition for model
+contributions; list catalogs validate page and kind-level targets at render.
+See [search declarations](../../packages/ui/src/views/resource/search/shortcuts.ts).
+
 ### Rendering and testing
 
 An owner reads its container with `useContainer(address, { models, row, impls,
 extra })`: the children in order, narrowed for the current app, route and
 perspective, with variants applied and `permission` checked when a `row` is
-given. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
+given. Render-time extras with a `sequence` interleave with composed children;
+unpositioned extras trail in input order, preserving page chatter tab order.
+An extra's `before`/`after` may anchor on a composed child id. `only`/`except`
+reach extras by id; `hide` alters declared children, so hiding an extra id fails
+composition. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
 children in order, `containerContents` returns them as keyed nodes for a
 parser, and `containerHasContent` lets the host omit an empty wrapper.
 `useDrawers(edge)` reads one drawer edge; `resolveContainer` is the same
@@ -954,6 +974,11 @@ facts are on `createApp(...).explain.containers`; see the
 [app package](../../packages/app/README.md).
 
 ## Form save contracts
+
+`FormView` composes `SaveDiscardActions` in `ControlBand` with
+`dirtyControlBandClassName`; non-record edit surfaces compose the same owners
+over their own draft and persistence callbacks, with the page band outside
+`SettingsShell` so it reaches the layout host.
 
 View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
 real identity and permitted people. Compose `useRuntimeViewAs` at shared write

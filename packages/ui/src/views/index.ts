@@ -106,6 +106,11 @@ export {
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
+export {
+  SaveDiscardActions,
+  dirtyControlBandClassName,
+  type SaveDiscardActionsProps,
+} from "./form/SaveDiscardActions";
 export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
 export {
   useActionForm,
@@ -445,7 +450,7 @@ export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
 
 export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";
 export { GanttLane, type GanttLaneDetails, type GanttLanePerson } from "./gantt/gantt-lane";
-export type { GanttViewSpec } from "./resource/resource-view-types";
+export type { ListSearchDeclaration, SearchShortcut, GanttViewSpec } from "./resource/resource-view-types";
 export {
   RESOURCE_CONTAINERS,
   ResourceViewKindsProvider,

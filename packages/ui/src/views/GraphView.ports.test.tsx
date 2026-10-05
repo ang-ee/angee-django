@@ -10,6 +10,48 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
+test("GraphNodeLabel preserves box geometry and caption rows through highlight and detail changes", () => {
+  const base = { id: "a", kind: "node", title: "Alpha", code: "alpha", selected: true };
+  const styles = { node: graphNodeStyle("gray", "neutral", { highlightedBorderColor: "blue" }) };
+  const graph = (highlighted: boolean, detail: string) => <GraphView
+    nodes={[{ ...base, highlighted, detail }]} edges={[]} nodeStyles={styles} />;
+  const view = render(graph(false, ""), { wrapper: Provider });
+  const geometry = () => {
+    const box = screen.getByTestId("rf__node-a");
+    const label = screen.getByText("Alpha").parentElement!.parentElement!;
+    return {
+      width: box.style.width, minHeight: box.style.minHeight, padding: box.style.padding,
+      borderWidth: box.style.borderWidth, borderStyle: box.style.borderStyle, borderRadius: box.style.borderRadius,
+      labelClass: label.className,
+      rows: Array.from(label.children).map((row) => [row.tagName, row.className]),
+    };
+  };
+  const before = geometry();
+  const ring = screen.getByTestId("rf__node-a").style.boxShadow;
+  expect(ring).toContain("5px var(--brand)");
+  expect(before.rows).toHaveLength(3);
+  expect(before.rows[2]?.[1]).toContain("min-h-[1lh]");
+  for (const [highlighted, detail] of [[true, ""], [true, "Page 4"], [false, "Page 4"], [false, ""]] as const) {
+    view.rerender(graph(highlighted, detail));
+    expect(geometry()).toEqual(before);
+    const box = screen.getByTestId("rf__node-a");
+    expect(box.style.borderColor).toBe(highlighted ? "blue" : "gray");
+    expect(box.style.boxShadow).toBe(ring);
+    expect(screen.getByText("Alpha").parentElement!.parentElement!.lastElementChild?.textContent).toBe(detail);
+  }
+});
+
+test("node headers omit a repeated type label and constrain distinct labels", () => {
+  const styles = { node: graphNodeStyle("gray", "neutral", { width: 100 }) };
+  const view = render(<GraphView nodes={[{ id: "a", kind: "node", title: "Review source", kindLabel: "Review source" }]}
+    edges={[]} nodeStyles={styles} />, { wrapper: Provider });
+  expect(screen.getAllByText("Review source")).toHaveLength(1);
+  view.rerender(<GraphView nodes={[{ id: "a", kind: "node", title: "Review source", kindLabel: "Review a much longer type" }]}
+    edges={[]} nodeStyles={styles} />);
+  expect(screen.getByText("Review source").className).toContain("min-w-0");
+  expect(screen.getByText("Review a much longer type").className).toContain("truncate");
+});
+
 test("renders named output ports and status without changing a node's kind", () => {
   const base = { id: "a", kind: "node", title: "Alpha", ariaLabel: "Alpha" };
   const styles = { node: graphNodeStyle("var(--border-strong)", "neutral") };

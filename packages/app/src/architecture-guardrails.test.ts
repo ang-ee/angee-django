@@ -4,7 +4,8 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { RecordIssues, baseIcons } from "@angee/ui";
+import { RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
+import { FILTER_OPERATORS } from "@angee/metadata";
 
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
@@ -101,6 +102,8 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("ActionMenu", "@angee/ui", "src/toolbars/ActionMenu.tsx"),
   frameworkCriticalExport("ActionTrigger", "@angee/ui", "src/toolbars/ActionMenu.tsx"),
   frameworkCriticalExport("RecordActionBar", "@angee/ui", "src/views/form/RecordActionBar.tsx"),
+  frameworkCriticalExport("SaveDiscardActions", "@angee/ui", "src/views/form/SaveDiscardActions.tsx"),
+  frameworkCriticalExport("dirtyControlBandClassName", "@angee/ui", "src/views/form/SaveDiscardActions.tsx"),
   frameworkCriticalExport("VisibilityControl", "@angee/ui", "src/widgets/visibility.tsx"),
   frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),
   frameworkCriticalExport("DocumentTitle", "@angee/ui", "src/chrome/DocumentTitle.tsx"),
@@ -146,6 +149,22 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
 ];
 
 const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
+  {
+    namespace: "ui",
+    owner: "@angee/ui FilterClauseOperator",
+    prefix: "search.operator.",
+    values: [...FILTER_OPERATORS, "isNotNull"],
+  },
+  {
+    namespace: "ui",
+    owner: "@angee/metadata QueryExtraction.name date granularities",
+    prefix: "search.granularity.",
+    values: [
+      "year", "quarter", "month", "week", "day", "hour", "minute", "second",
+      "year_number", "quarter_number", "month_number", "iso_week_number",
+      "day_of_month", "day_of_week", "day_of_year", "hour_number", "minute_number", "second_number",
+    ],
+  },
   {
     namespace: "ui",
     owner: "@refinedev/core resource action labels",
@@ -400,6 +419,11 @@ describe("React architecture guardrails", () => {
 
   test("RecordIssues is available through the public UI entry", () => {
     expect(RecordIssues).toBeTypeOf("function");
+  });
+
+  test("Save/Discard actions and dirty band styling are available through the public UI entry", () => {
+    expect(SaveDiscardActions).toBeTypeOf("function");
+    expect(dirtyControlBandClassName).toBeTypeOf("string");
   });
 
   test(

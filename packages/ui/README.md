@@ -15,11 +15,21 @@ from runtime: fixed filters join the provider's effective base filter, and nativ
 column visibility survives saved views. Relation columns retain their authored
 field as their table ID even when metadata resolves a different display path.
 `ResourceList`/`ListView` may declare `presetIds` for route-local shipped views,
-`filterRow` with filter-option or shipped-preset quick ids and facet ids, and
-`boardCard` with a title and up to four fields. Saved favourites can be renamed
-and pinned into the filter row. Quick ids and pinned favourites appear as chips;
-the Favorites menu still owns saving and pinning. `chrome.heading` takes `label`,
-`hint`, and `audience`; the shared list frame supplies the live count. `chrome`
+`search={{ box, shortcuts }}` with text, facet, clause, toggle and group controls,
+and `boardCard` with a title and up to four fields. The full search box is the
+default; shortcuts default it to a collapsed badge trigger (`box: true` keeps
+it full). Every control reads the shared model, and the box shows every active
+item. Pinned favorites appear as toggles after declared shortcuts without
+collapsing a box-only list. Below 36rem toolbar width only the badge trigger
+remains. Addons contribute the same typed shortcuts through `resource#search`;
+`sequence` interleaves them with page `page.*` extras, and `only`/`except` narrow
+both. See [the declaration contract](src/views/resource/search/shortcuts.ts).
+Named filters that fail resource-query parsing and shortcuts with unavailable
+metadata-dependent targets throw with their ids in development; production
+omits them and logs each id and reason once per mount. Malformed declarations
+still fail fast in every environment.
+`chrome.heading` takes `label`, `hint`, and `audience`; the shared list frame
+supplies the live count. `chrome`
 can also hide the view switcher, pager, or column chooser without changing the
 collection query. Bare enum columns use `statusBadge` and metadata option labels.
 A scalar stage column may declare `widget="statusBadge"`, `options`, and `tone`.
@@ -83,6 +93,11 @@ creation-key conflict. A stale revision keeps local edits until an explicit relo
 and discard. Custom submit owners receive `baselineRecord` and `clientCreationKey`
 and retain responsibility for their own operation arguments.
 
+`GraphView` automatically lays out unpositioned nodes using measured sizes and
+preserves explicit positions. Layout debt: `GraphEditor` still lays out from
+declared sizes; `GraphView` should become the single automatic-layout owner and
+report measured positions to the editor.
+
 ## Resource query migration
 
 Resource views now use the resource's single `query` contract through
@@ -123,9 +138,15 @@ dependent reads. Bounded local collections use `ResourceQuery.forRows` with
 explicit field declarations and pass that query to `RowsListView` when the
 visible columns do not describe all queryable fields.
 
-Toolbar shortcuts and custom choices have separate jobs. `groupOptions` curates
-the quick groups (an empty array means no shortcuts); declared facets supply
-shortcuts when no explicit list is given. Custom filter and group editors always
+`defaultGroup` and `defaultGroups` declare a list's starting group stack, one
+grouping or an ordered stack per view kind (`null` disables grouping for that
+view). The stack is part of the list's default state: it applies on first paint,
+is not written to the URL until changed, and is what reset returns to. Group by
+offers only granularities whose groups can be opened.
+
+Search shortcuts and curated choices have separate jobs. `groupOptions` curates
+the first group axes (an empty array omits curated axes); declared facets supply
+axes when no explicit list is given. The box's clause and group editors always
 use the complete `ResourceQuery` capabilities, including fields absent from
 visible columns. Authored server collections use their declared query without
 sampling a record page for choices. Keep new capabilities in the backend resource

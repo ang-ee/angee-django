@@ -304,12 +304,13 @@ class Definition(BaseModel):
             ) from error
 
     def node_label(self, key: str) -> str:
-        """Use the frozen label, an explicit step label, or the authored node key."""
+        """Respect authored labels; unlabeled map groups use their key's title."""
         node = self.node(key)
         if node.label:
             return node.label
+        map_group = isinstance(node, Node) and node.body is not None
         try:
-            label = node.implementation.__dict__.get("label")
+            label = None if map_group else node.implementation.__dict__.get("label")
         except ImproperlyConfigured:
             label = None
         return label or key.replace("_", " ").capitalize()

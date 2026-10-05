@@ -15,7 +15,9 @@ afterEach(cleanup);
 
 test("the routed run defaults to its filling graph and retains Overview", async () => {
   render(<RunStory />);
-  await screen.findByTestId("rf__node-inspect");
+  // The file's first render pays the cold graph-module transform; under CI's parallel `pnpm -r test`
+  // load that exceeds the default 1s wait (locally it is ~250ms).
+  await screen.findByTestId("rf__node-inspect", undefined, { timeout: 5000 });
   expect(screen.getByRole("tab", { name: "Graph" }).getAttribute("aria-selected")).toBe("true");
   expect(screen.getByTestId("run-graph-canvas").className).toContain("flex-1");
   await openOverview();
@@ -259,41 +261,38 @@ test("selected step opens in the shared drawer with attempts and records", async
 test("run list groups and filters status, workflow and origin through shared metadata", async () => {
   const requests: RunRequest[] = [];
   render(<RunStory list onRequest={(request) => requests.push(request)} />);
-  await screen.findByText("Failed");
+  await screen.findByRole("button", { name: "Failed" });
   expect(requests.some(({ variables }) => JSON.stringify(variables.group_by) === '[{"field":"STATUS"}]')).toBe(true);
-  fireEvent.click(await screen.findByLabelText(/^Filter( and favorites)?$/));
-  fireEvent.click((await screen.findAllByRole("button", { name: "Failed" })).at(-1)!);
-  expect(screen.getAllByRole("button", { name: "Manual" })).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Manual" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
+  const panel = await screen.findByRole("dialog", { name: "Search options" });
+  fireEvent.click(within(panel).getByRole("button", { name: "Failed" }));
+  expect(within(panel).getAllByRole("button", { name: "Manual" })).toHaveLength(1);
+  fireEvent.click(within(panel).getByRole("button", { name: "Manual" }));
   await waitFor(() => expect(requests.some(({ variables }) => {
     const where = JSON.stringify(variables.where) ?? "";
     return where.includes('"status":{"_eq":"failed"}') && where.includes('"origin":{"_eq":"manual"}');
   })).toBe(true));
-  fireEvent.click(await screen.findByRole("button", { name: "Record review" }));
+  fireEvent.click(within(panel).getByRole("button", { name: "Record review" }));
   await waitFor(() => expect(requests.some(({ variables }) => (JSON.stringify(variables.where) ?? "").includes('"version__workflow":{"_eq":"wfl_review"}'))).toBe(true));
-  // Grouping has its own picker beside the filter.
-  fireEvent.click(screen.getByLabelText(/^Filter( and favorites)?$/));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Manual" })).toBeNull());
-  fireEvent.click(screen.getByLabelText("Group by"));
+  // The combined box keeps filters and the complete group catalog together.
   const beforeWorkflowGroup = requests.length;
-  fireEvent.click(await screen.findByRole("button", { name: "Add custom group" }));
-  fireEvent.click(screen.getByRole("combobox", { name: "Group field" }));
+  fireEvent.click(await screen.findByRole("button", { name: "More axes…" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Group axis" }));
   const workflow = await screen.findByRole("option", { name: "Workflow" });
   fireEvent.pointerDown(workflow, { pointerType: "mouse" });
   fireEvent.click(workflow);
-  await waitFor(() => expect(screen.getByRole("combobox", { name: "Group field" }).textContent).toContain("Workflow"));
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Group axis" }).textContent).toContain("Workflow"));
+  fireEvent.click(screen.getByRole("button", { name: "Add level" }));
   await waitFor(() => expect(requests.slice(beforeWorkflowGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("VERSION__WORKFLOW"))).toBe(true));
   const beforeOriginGroup = requests.length;
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-  fireEvent.click(screen.getByRole("combobox", { name: "Group field" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Group axis" }));
   const origin = await screen.findByRole("option", { name: "Origin" });
   fireEvent.pointerDown(origin, { pointerType: "mouse" });
   fireEvent.click(origin);
-  await waitFor(() => expect(screen.getByRole("combobox", { name: "Group field" }).textContent).toContain("Origin"));
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  fireEvent.click(screen.getByLabelText("Group by"));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Add custom group" })).toBeNull());
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Group axis" }).textContent).toContain("Origin"));
+  fireEvent.click(screen.getByRole("button", { name: "Add level" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "More axes…" })).toBeNull());
   fireEvent.click(await screen.findByRole("button", { name: "Record review" }));
   await waitFor(() => expect(requests.slice(beforeOriginGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("ORIGIN"))).toBe(true));
   await waitFor(() => expect(requests.some(({ variables }) => {

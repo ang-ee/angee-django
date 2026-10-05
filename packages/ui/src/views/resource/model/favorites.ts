@@ -91,7 +91,7 @@ export function resourceViewPresetDefaults(
     ...(preset.view === undefined ? {} : { view: preset.view }),
     ...(preset.sort === undefined ? {} : { sort: preset.sort }),
     ...(preset.filter === undefined ? {} : { filter: Filter.from(preset.filter).value }),
-    ...(preset.groupStack === undefined ? {} : { groupStack: v.parse(GroupSpecsSchema, preset.groupStack) }),
+    ...(preset.groupStack === undefined ? {} : { groupStack: v.parse(GroupSpecsSchema, preset.groupStack), groupStacks: undefined }),
     ...(preset.columnVisibility === undefined ? {} : { columnVisibility: preset.columnVisibility }),
   };
 }

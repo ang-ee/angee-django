@@ -22,7 +22,6 @@ import {
   buildGroupOptions,
   mergeFilterFields,
   resolveResourceViewGroup,
-  validResourceViewGroupStack,
 } from "./resource-view-utils";
 import {
   columnsWithMetadataDefaults,
@@ -41,7 +40,10 @@ const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
   kind: "date", server: { input: field.toUpperCase(), key: field },
-  extractions: DATE_EXTRACTIONS.map((name) => ({ name, input: name.toUpperCase(), key: `${field}_${name}` })),
+  // Truncations declare a range drill, as the server does: their groups can be opened.
+  extractions: DATE_EXTRACTIONS.map((name) => ({ name, input: name.toUpperCase(), key: `${field}_${name}`, rangeKey: "range", drill: {
+    kind: "range" as const, field, valueKey: `${field}_${name}`, rangeKey: "range", valueMap: [], nullMode: "isNull" as const,
+  } })),
 });
 const NOTE_METADATA = canonicalModel({
   title: { name: "title", kind: "scalar", scalar: "String" },
@@ -954,7 +956,7 @@ describe("canonical relation grouping", () => {
     const defaults = [{ field: "status" }, { field: "status" }];
     const options = buildGroupOptions([{ field: "status" }], MESSAGE_METADATA, defaults);
     expect(options.filter((option) => option.id === "status")).toHaveLength(1);
-    expect(() => validResourceViewGroupStack(defaults, MESSAGE_METADATA)).toThrow(/duplicate group/);
+    expect(() => ResourceQuery.from(MESSAGE_METADATA).groupsFrom(defaults)).toThrow(/duplicate group/);
   });
   test("offers one relation axis and never its label or backend key", () => {
     const options = buildGroupOptions([{ field: "sender.party.display_name" }, { field: "status" }], MESSAGE_METADATA, null);
@@ -962,12 +964,9 @@ describe("canonical relation grouping", () => {
     expect(options).toContainEqual({ id: "sender", label: "Sender", group: { field: "sender" }, type: "value" });
   });
   test("reports stale label groups instead of silently dropping query state", () => {
-    expect(() => validResourceViewGroupStack([{ field: "sender__display_name" }], MESSAGE_METADATA)).toThrow(/unknown group axis/);
-    expect(() => validResourceViewGroupStack([{ field: "sender.display_name" }], MESSAGE_METADATA)).toThrow(/unknown group axis/);
-    expect(validResourceViewGroupStack([{ field: "sender" }, { field: "status" }], MESSAGE_METADATA)).toEqual([{ field: "sender" }, { field: "status" }]);
-  });
-  test("preserves an unvalidated group until a metadata owner is available", () => {
-    expect(validResourceViewGroupStack([{ field: "anything" }], null)).toEqual([{ field: "anything" }]);
+    expect(() => ResourceQuery.from(MESSAGE_METADATA).groupsFrom([{ field: "sender__display_name" }])).toThrow(/unknown group axis/);
+    expect(() => ResourceQuery.from(MESSAGE_METADATA).groupsFrom([{ field: "sender.display_name" }])).toThrow(/unknown group axis/);
+    expect(ResourceQuery.from(MESSAGE_METADATA).groupsFrom([{ field: "sender" }, { field: "status" }]).map((axis) => axis.spec)).toEqual([{ field: "sender" }, { field: "status" }]);
   });
   test("reports invalid author defaults instead of silently changing the collection", () => {
     expect(() => buildGroupOptions([{ field: "status" }], MESSAGE_METADATA,

@@ -4,6 +4,8 @@ This fragment provides the workflow catalogue, retained execution evidence, and
 operator actions. The Workflows rail opens runs; the catalogue lists definitions, published versions,
 and their recent runs. The studio edits and publishes workflow drafts.
 
+Full-bleed tabs, including Workflows Studio, intentionally keep the full record header so it stays steady across tabs.
+
 The default Graph run tab draws the pinned version and complete map progress through
 the shared read-only canvas. Selecting a node stores `node` in the URL and opens the
 shell inspector with node-scoped step evidence, checkpoint, attempts and decisions.

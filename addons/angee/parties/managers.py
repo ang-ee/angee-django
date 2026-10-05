@@ -238,7 +238,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             platform=self.model.Platform.for_value(value),
             value=value,
             display_name=display_name,
-            source=LinkSource.MANUAL,
+            source=cast(LinkSource, LinkSource.MANUAL),
             metadata={"user_id": str(user.pk)},
         )
 
@@ -295,7 +295,8 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         excluded from the generic refresh loop; :meth:`claim_own` is its only write
         path, so a routine upsert cannot silently transfer an account between users.
         ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
-        on every hit; blank values never clobber.
+        on every hit; blank values never clobber. Source display text is truncated
+        to its field limit; identifiers are validated without changing their meaning.
         """
 
         if "owner" in fields or "owner_id" in fields:
@@ -304,6 +305,19 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             raise TypeError("Handle.normalized_value is maintained by Handle.save().")
         normalized_value = self.model.normalize_value(platform, value)
         external_id = str(fields.get("external_id") or "")
+        for name, identifier in {
+            "platform": platform,
+            "value": value,
+            "normalized_value": normalized_value,
+            "external_id": external_id,
+        }.items():
+            try:
+                self.model._meta.get_field(name).run_validators(identifier)
+            except ValidationError as error:
+                raise ValidationError({name: error}) from error
+        for name in ("display_name", "label"):
+            if fields.get(name):
+                fields[name] = fields[name][: self.model._meta.get_field(name).max_length]
         if external_id:
             try:
                 handle, created = self.get_or_create(

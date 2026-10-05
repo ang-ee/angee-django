@@ -131,6 +131,8 @@ def test_map_graph_counts_all_items_and_attempts_at_constant_query_cost(schema, 
         counts.append(len(queries))
         assert len(nodes) == node_count
         for node in nodes:
+            assert node["label"] == f"Items {node['key'].rsplit('_', 1)[1]}"
+            assert node["label"] == system_queryset(StepRun).get(run=run, node_key=node["key"]).node_label
             assert node["body_key"] == node["key"] + ".body"
             assert node["item_counts"] == [{"status": "SUCCEEDED", "count": size}]
             assert node["item_attempts"] == size

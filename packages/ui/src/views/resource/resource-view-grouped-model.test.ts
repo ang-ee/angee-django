@@ -232,6 +232,20 @@ describe("buildGroupedRenderModel", () => {
     ]);
   });
 
+  test("a number-part extraction explains why its bucket has no listable rows", () => {
+    const contract = ResourceQuery.forRows({ fields: { created: { scalar: "DateTime" } } }).contract;
+    contract.axes.created!.server = { input: "created", key: "created" };
+    contract.axes.created!.extractions = [{ name: "month_number", input: "MONTH_NUMBER", key: "number" }];
+    const input = params({ query: ResourceQuery.from(testDataResource("test.Record", { query: contract })),
+      groupStack: [{ field: "created", granularity: "month_number" }] });
+    const initial = buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, input);
+    const key = initial.groupScopes[0]!.key;
+    const model = buildGroupedRenderModel<Row>(new Map([[key, result([{ key: { number: 10 }, count: 3 }])]]), EMPTY_LEAVES, EMPTY_ROWS, input);
+    expect(model.items).toEqual([expect.objectContaining({ kind: "groupHeader", expandable: false,
+      unavailableMessage: "search.numberPartItemsUnavailable" })]);
+    expect(model.leafScopes).toEqual([]);
+  });
+
   test.each([
     ["loading", undefined, "skeleton", undefined],
     [

@@ -197,6 +197,30 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
         return len(Message.objects.ingest(messages, channel=channel))
 
 
+@pytest.mark.django_db(transaction=True)
+def test_ingest_bounds_neutral_part_fields_without_truncating_subject(channel: Any) -> None:
+    """Every bridge shares the part limits while fragment-backed subjects stay whole."""
+
+    fields = {name: "é" * (Part._meta.get_field(name).max_length + 1) for name in ("name", "type", "cid")}
+    subject = "s" * (Part._meta.get_field("name").max_length + 1)
+    parsed = replace(
+        _parsed("bounded-parts", subject=subject),
+        headers=((fields["name"], "retained header value"),),
+        body=ParsedPart(text="Retained body", **fields),
+    )
+
+    assert _ingest([parsed], channel=channel) == 1
+
+    body = Part._base_manager.get(message__external_id=parsed.external_id, role="body")
+    assert body.name == fields["name"][: Part._meta.get_field("name").max_length]
+    assert body.type == fields["type"][: Part._meta.get_field("type").max_length]
+    assert body.cid == ""
+    assert body.fragment.text == "Retained body"
+    header = Part._base_manager.get(message=body.message, role="header")
+    assert header.name == fields["name"][: Part._meta.get_field("name").max_length]
+    assert Part._base_manager.get(message=body.message, role="title").fragment.text == subject
+
+
 def _ingest_sender(*, channel: Any, external_id: str, value: str) -> Handle:
     """Ingest one inbound message and return its persisted sender handle."""
 
@@ -2575,9 +2599,10 @@ def test_ingest_rejects_oversized_message_metadata(channel: Any) -> None:
 
     parsed = _parsed("oversized-metadata", metadata={"tags": ["x" * (512 * 1024)]})
 
-    with pytest.raises(ValueError, match="message metadata exceeds 524288 UTF-8 JSON bytes"):
+    with pytest.raises(ValidationError, match="message metadata exceeds 524288 UTF-8 JSON bytes") as refused:
         _ingest([parsed], channel=channel)
 
+    assert list(refused.value.error_dict) == ["metadata"]
     assert not Message._base_manager.filter(external_id="oversized-metadata").exists()
 
 

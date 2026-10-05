@@ -100,6 +100,7 @@ from angee.storage.uploads import (
     CappedReader,
     detect_mime,
     sha256_stream,
+    truncate_filename,
 )
 
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
@@ -815,10 +816,12 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         The caller hashes outside this write path. An inherited READY hit returns
         before the reader is consumed; otherwise the bytes stream through the
         selected Django storage backend and the normal finalize contract
-        verifies the declared digest and size.
+        verifies the declared digest and size. Source filenames are display text,
+        truncated to the File field's limit; content identity stays lossless.
         """
 
         digest = _normalized_hash(content_hash)
+        filename = truncate_filename(filename, self.model._meta.get_field("filename").max_length)
         expected_size = max(int(size_bytes), 0)
         with system_context(reason="storage.file.ingest_stream"):
             row = self.draft(

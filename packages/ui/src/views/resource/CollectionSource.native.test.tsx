@@ -207,7 +207,6 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
         ]}
         onRowClick={open}
         availableViews={["list"]}
-        textFilterField="title"
         customFilterFields={[]}
         groupOptions={[]}
       />
@@ -252,7 +251,10 @@ test("an authored server page uses native list paging without a model-resource q
   act(() => f.view.setPage(2));
   await screen.findByText("Activity all page 2");
   expect(f.requests.at(-1)).toMatchObject({ page: 2, pageSize: 25 });
-  act(() => f.view.setFilter({ title: { iContains: "document" } }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  const search = await screen.findByRole("combobox", { name: "Filter records" });
+  fireEvent.input(search, { target: { value: "document" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Search Title for: document" }));
   await waitFor(() =>
     expect(f.requests.at(-1)).toMatchObject({
       page: 1,
@@ -270,16 +272,16 @@ test("an authored source groups through the complete custom catalog without pres
     filter: { title: { iContains: "document" } },
   }));
 
-  fireEvent.click(screen.getByLabelText("Group by"));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   expect(screen.queryByRole("button", { name: "Account" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-  const field = screen.getByLabelText("Group field");
+  fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
+  const field = screen.getByRole("combobox", { name: "Group axis" });
   expect(field.textContent).toContain("Account");
   fireEvent.click(field);
   expect(await screen.findByRole("option", { name: "Account" })).toBeTruthy();
   expect(screen.queryByRole("option", { name: "Title" })).toBeNull();
   fireEvent.click(field);
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add level" }));
 
   await waitFor(() => expect(f.requests.some((request) =>
     "group" in request
@@ -297,7 +299,7 @@ test("an authored source groups through the complete custom catalog without pres
 test("an authored source keeps its complete filter catalog when shortcut inference is disabled", async () => {
   fixture(false);
   await screen.findByText("Activity all page 1");
-  fireEvent.click(screen.getByLabelText("Filter"));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(screen.getByRole("button", { name: "Add custom filter" }));
   const field = screen.getByLabelText("Filter field");
   fireEvent.click(field);

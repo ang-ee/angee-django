@@ -262,6 +262,12 @@ for model resources with Django-owned computed predicates. Until that API exists
 input extensions into the dependency's dataclass filter visitor and scalar
 comparison types. That bridge relies on upstream internals; move it upstream
 and delete the local adapter when the dependency owns computed model filters.
+An addon composing onto another addon's model contributes such a filter through
+the same bridge by declaring `hasura_filter_expressions` (name → provider taking
+the target queryset) on its extension base, so the owner's resource never names
+it; intake's `requester_name` and `requested_by_viewer` on `projects.Task` are
+the example. A provider owns its access rule: filter only on what every reader
+of the row already sees, or on the actor alone.
 
 ## Rendered Binding
 
@@ -273,7 +279,7 @@ resource transport/auth/live integration. The active frontend owners are
 
 | Pick | Owns | Angee adds |
 |---|---|---|
-| @base-ui/react | Headless primitives: dialog, popover, menu, tabs, tooltip, field, toolbar, scroll area, and related UI | Styled binding and composition rules; controlled `open`/`onOpenChange` owns popover/dialog transition timing |
+| @base-ui/react | Headless primitives: dialog, popover, menu, tabs, tooltip, field, toolbar, combobox, select, scroll area, and related UI | Styled binding and composition rules; controlled `open`/`onOpenChange` owns popover/dialog transition timing |
 | @floating-ui/react-dom | Floating-element positioning and virtual anchors | Popover and menu anchoring |
 | @angee/logo-react | Angee brand logo and cube marks | Brand lockup in the public layout |
 | react-markdown + remark-gfm | Markdown rendering (GitHub-flavored) | Markdown widget preview |

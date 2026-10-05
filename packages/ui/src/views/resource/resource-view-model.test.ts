@@ -3,7 +3,8 @@
 import { createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
-import { useResourceToolbarProps } from "./resource-toolbar-props";
+import { useResourceSearch } from "./search/use-resource-search";
+import { searchFixture } from "./search/search-fixture.test-support";
 import { favoriteFromResourceView } from "./model/favorites";
 import { useResourceViewQueryFacts } from "./surface/table-state";
 import { initialResourceSorting } from "./resource-view-codecs";
@@ -68,7 +69,7 @@ describe("resource-view model", () => {
     expect(roundTrip.pagination.pageSize).toBe(20);
     expect(roundTrip.sorting).toEqual([{ id: "updatedAt", desc: true }]);
     expect(roundTrip.filter).toEqual({ title: { iContains: "alpha" } });
-    expect(roundTrip.group).toEqual({
+    expect(roundTrip.groupStack[0]).toEqual({
       field: "status",
       granularity: "year",
     });
@@ -148,7 +149,6 @@ describe("resource-view model", () => {
     });
     const roundTrip = resourceViewSearchToState(search, initial);
     expect(roundTrip.filter).toEqual({});
-    expect(roundTrip.group).toBeNull();
     expect(roundTrip.groupStack).toEqual([]);
     expect(roundTrip.sorting).toEqual([]);
   });
@@ -166,7 +166,7 @@ describe("resource-view model", () => {
 
     expect((state.pagination.pageIndex + 1)).toBe(2);
     expect(state.pagination.pageSize).toBe(80);
-    expect(state.group).toEqual({ field: "status", granularity: "year" });
+    expect(state.groupStack[0]).toEqual({ field: "status", granularity: "year" });
     expect(state.groupStack).toEqual([
       { field: "status", granularity: "year" },
       { field: "updatedAt", granularity: "month" },
@@ -214,7 +214,7 @@ describe("resource-view model", () => {
     const state = createResourceViewState({ groupStack: [{ field: "reviewer" }] });
     const search = resourceViewStateToSearch(state);
     expect(search.group).toBe("reviewer");
-    expect(resourceViewSearchToState(search).group).toEqual({ field: "reviewer" });
+    expect(resourceViewSearchToState(search).groupStack).toEqual([{ field: "reviewer" }]);
     expect(resourceViewSearchToState({ group: "reviewer.displayName~reviewer~reviewerId" }).queryError?.message).toMatch(/group/);
   });
 
@@ -242,20 +242,19 @@ describe("resource-view model", () => {
   test("consecutive toolbar filter changes compose against the latest state", () => {
     const { result } = renderHook(() => {
       const view = useResourceView();
-      const toolbar = useResourceToolbarProps({
+      const toolbar = useResourceSearch({
         resourceView: view,
-        pager: { page: view.state.pagination.pageIndex + 1, pageSize: view.state.pagination.pageSize, total: undefined },
-        filterOptions: [
+        catalog: searchFixture({ catalog: { filters: [
           { id: "active", label: "Active", filter: { status: { exact: "ACTIVE" } } },
           { id: "manual", label: "Manual", filter: { origin: { exact: "MANUAL" } } },
-        ],
+        ] } }).catalog,
       });
       return { view, toolbar };
     }, { wrapper: viewWrapper({ page: 3, selectedIds: ["note-1"] }) });
     act(() => {
-      result.current.toolbar.onFilterToggle?.("active");
-      result.current.toolbar.onFilterToggle?.("manual");
-      result.current.toolbar.onFilterTextChange?.("review");
+      result.current.toolbar.toggleFilter("active");
+      result.current.toolbar.toggleFilter("manual");
+      result.current.toolbar.setText("review");
     });
     expect(result.current.view.state.filter).toEqual({
       status: { exact: "ACTIVE" }, origin: { exact: "MANUAL" }, title: { iContains: "review" },
@@ -420,3 +419,26 @@ function viewWrapper(initialState: ResourceViewInitialState = {}) {
 function viewHook(initialState: ResourceViewInitialState = {}) {
   return renderHook(useResourceView, { wrapper: viewWrapper(initialState) });
 }
+
+test("the URL base follows the selected view; default stacks omit keys and cleared stacks survive reload", () => {
+  const list = [{ field: "project" }, { field: "status" }];
+  const board = [{ field: "status" }];
+  const initial: ResourceViewInitialState = { groupStack: [{ field: "folder" }], groupStacks: { list, board, gantt: null } };
+  expect(resourceViewSearchToState({}, initial).groupStack).toEqual(list);
+  expect(resourceViewStateToSearch(createResourceViewState(initial), initial)).toEqual({});
+  const boardState = resourceViewSearchToState({ view: "board" }, initial);
+  expect(boardState.groupStack).toEqual(board);
+  expect(resourceViewStateToSearch(boardState, initial)).toEqual({ view: "board" });
+  expect(resourceViewSearchToState({ view: "gantt" }, initial).groupStack).toEqual([]);
+  expect(resourceViewSearchToState({ view: "calendar" }, initial).groupStack).toEqual([{ field: "folder" }]);
+  const removed = { ...createResourceViewState(initial), groupStack: list.slice(0, 1) };
+  const encoded = resourceViewStateToSearch(removed, initial);
+  expect(encoded).toEqual({ group: "project" });
+  expect(resourceViewSearchToState(encoded, initial).groupStack).toEqual(list.slice(0, 1));
+  const cleared = resourceViewStateToSearch({ ...removed, groupStack: [] }, initial);
+  expect(cleared).toEqual({ group: "", then: "" });
+  expect(resourceViewSearchToState(cleared, initial).groupStack).toEqual([]);
+  const boardClear = resourceViewStateToSearch({ ...boardState, groupStack: [] }, initial);
+  expect(boardClear).toEqual({ group: "", view: "board" });
+  expect(resourceViewSearchToState(boardClear, initial).groupStack).toEqual([]);
+});

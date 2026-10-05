@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
-from typing import Any, Self, cast
+from collections.abc import Callable, Iterator, Mapping
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -12,9 +12,11 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
-from django.db.models.functions import NullIf
+from django.db.models.functions import Coalesce, NullIf
+from django.db.models.lookups import Exact
 from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
 from rebac.backends import backend
+from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError
@@ -846,6 +848,66 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         bind_actor(task, actor)
         self.refresh_from_db()
         return task
+
+
+def task_requester_rows() -> models.QuerySet[Any]:
+    """A task's requests in attribution order; the first is the one the task shows as filed by."""
+
+    return apps.get_model("intake", "Need")._base_manager.filter(
+        task_id=models.OuterRef("pk"),
+    ).order_by("created_at", "pk")
+
+
+def task_requester_name() -> models.Subquery:
+    """The name a task shows for its requester: the first request's party, else the name it claimed."""
+
+    blank = models.Value("", output_field=models.TextField())
+    return models.Subquery(
+        task_requester_rows().annotate(name=Coalesce(
+            NullIf(models.F("party__display_name"), blank),
+            NullIf(models.F("claimed_name"), blank),
+            output_field=models.TextField(),
+        )).values("name")[:1],
+        output_field=models.TextField(),
+    )
+
+
+def _requester_name_filter(queryset: models.QuerySet[Any]) -> models.Subquery:
+    """Filter on the requester's name as every reader of the task already sees it (never the email)."""
+
+    del queryset
+    return task_requester_name()
+
+
+def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expression:
+    """Whether the request's actor filed the task: its first request's party is the actor's person (MTI child).
+
+    It compares the actor with itself only, so it reveals nothing about anyone else's requests;
+    an actor without a user matches nothing.
+    """
+
+    user_id = actor_user_id(relation_actor(queryset))
+    if user_id is None:
+        return models.Value(False, output_field=models.BooleanField())
+    filed_by = models.Subquery(task_requester_rows().values("party__person__user")[:1])
+    return models.Case(
+        models.When(Exact(filed_by, user_id), then=models.Value(True)),
+        default=models.Value(False),
+        output_field=models.BooleanField(),
+    )
+
+
+class TaskIntakeFilters(models.Model):
+    """Filter tasks by who filed them, the way the task shows it: intake's first request."""
+
+    extends = "projects.Task"
+    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], Any]]] = {
+        "requester_name": _requester_name_filter,
+        "requested_by_viewer": _requested_by_viewer_filter,
+    }
+
+    class Meta:
+        abstract = True
 
 
 class ProjectIntakeSetup(models.Model):
