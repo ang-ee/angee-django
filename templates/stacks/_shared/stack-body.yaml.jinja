@@ -10,12 +10,12 @@
 {#   Both modes run directly against the framework workspace's source checkouts. #}
 {# instance = stacks/local — owns bootstrap-admin secrets and the static frontend. #}
 {#   Its docker runtime uses jobs over the compose network, with Caddy serving the SPA. #}
-{# Wrapper-provided variables: stack_flavor, runtime_mode, postgres_user, postgres_db, postgres_address #}
-{# (the body composes database_url from those three), redis_url, celery_broker_url, operator_url, #}
+{# Wrapper-provided variables: stack_flavor, runtime_mode, postgres_user/_db/_address and redis_address/_db/_broker_db #}
+{# (the body composes database_url, redis_url, and celery_broker_url from them), operator_url, #}
 {# mcp_url, operator_bind, pgdata_mount, (process only) app_source; framework_source — plus the dev #}
-{# copier inputs postgres_mode (unset for local), addons_profile, and work_state_source. #}
+{# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, and work_state_source. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
-{% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}
+{% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
 version: 1
 kind: stack
 {% if stack_flavor == "framework" %}
@@ -104,8 +104,8 @@ ports:
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
 {% if runtime_mode == "process" %}
 {% if postgres_mode == "external" %}{% else %}  postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
-{% endif %}  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
-{% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
+{% endif %}{% if redis_mode == "external" %}{% else %}  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
+{% endif %}{% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
   ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
   storybook: { value: {{ storybook_port }}, export_env: STORYBOOK_PORT }
@@ -364,7 +364,7 @@ services:
       - "${ports.postgres}:5432"
 {% endif %}
 
-{% endif %}  # Shared Redis for Channels fanout (DB 0) and Celery transport (DB 1).
+{% endif %}{% if redis_mode == "external" %}{% else %}  # Shared Redis for Channels fanout (DB {{ redis_db }}) and Celery transport (DB {{ redis_broker_db }}).
   redis:
     runtime: container
     image: redis:7-alpine
@@ -373,7 +373,7 @@ services:
       - "${ports.redis}:6379"
 {% endif %}
 
-{% if runtime_mode == "process" %}{% if enable_ollama %}  # Optional shared local inference server. Models live in the stack-owned bind
+{% endif %}{% if runtime_mode == "process" %}{% if enable_ollama %}  # Optional shared local inference server. Models live in the stack-owned bind
   # mount and are pulled manually; no agent owns or duplicates this singleton.
   ollama:
     runtime: container
@@ -426,7 +426,7 @@ services:
       - "-c"
       - >-
         {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
-    after: [provision, redis]
+    after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}
 
