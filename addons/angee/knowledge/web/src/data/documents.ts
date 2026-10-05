@@ -92,6 +92,9 @@ export const KnowledgePages = graphql(`
       parent
       updated_at
       created_by_label
+      is_trashed
+      trash_reason
+      trashed_by_label
     }
   }
 `);
