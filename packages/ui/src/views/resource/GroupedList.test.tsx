@@ -49,7 +49,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
       table={table} tableColumns={tableColumns} visibleColumnCount={columns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={groupMeasuresFromColumns(columns)} expandedKeys={new Set(["january"])}
-      toggleGroup={onToggle} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={new Set()} interactive
+      toggleGroup={onToggle} setGroupsExpanded={() => undefined} setScopePage={onPageChange} setScopePageSize={onPageSizeChange} selectedIds={new Set()} interactive
       renderRowActions={actions ? () => null : undefined} emptyContent="Empty" fetching={false} error={null}
     />
   );
@@ -149,21 +149,28 @@ test.each(["records", "groups"] as const)("%s header reuses the native page-size
   expect(onToggle).not.toHaveBeenCalled();
 });
 
-function GroupedRecordHarness({ selectable }: { selectable: boolean }): React.ReactElement {
+function GroupedRecordHarness({ selectable, expanded = true, onSetExpanded = () => undefined, onView }: {
+  selectable: boolean;
+  expanded?: boolean;
+  onSetExpanded?: (keys: readonly string[], expanded: boolean) => void;
+  onView?: (view: ReturnType<typeof useResourceView>) => void;
+}): React.ReactElement {
   const resourceView = useResourceView();
+  onView?.(resourceView);
   const tableColumns = defaultColumns.map((column) => ({ id: column.field, accessorKey: column.field, header: column.field }));
-  const table = useReactTable<Row>({ data: [{ id: "r1", title: "Hello" }], columns: tableColumns, getCoreRowModel: getCoreRowModel() });
+  // Lists key rows by record id, as the surfaces do.
+  const table = useReactTable<Row>({ data: [{ id: "r1", title: "Hello" }], columns: tableColumns, getCoreRowModel: getCoreRowModel(), getRowId: (record) => String(record.id) });
   const row = table.getRowModel().rows[0]!;
   const tableScrollRef = React.useRef<HTMLDivElement>(null);
   const listItems: GroupedListItem<Row>[] = [
     {
       kind: "groupHeader", bucketKey: "january", depth: 0, label: "January",
-      count: 1, expandable: true, expanded: true, bucket: { key: { month: "January" }, count: 1 },
+      count: 1, expandable: true, expanded, bucket: { key: { month: "January" }, count: 1 },
     },
-    {
-      kind: "record", itemKey: "january:r1", row,
+    ...(expanded ? [{
+      kind: "record" as const, itemKey: "january:r1", row,
       nav: { filter: undefined, order: undefined, page: 1, pageSize: 20, rows: [], total: 1, fetching: false },
-    },
+    }] : []),
   ];
   const rowVirtualizer = useVirtualizer({
     count: listItems.length,
@@ -176,7 +183,7 @@ function GroupedRecordHarness({ selectable }: { selectable: boolean }): React.Re
       table={table} tableColumns={tableColumns} visibleColumnCount={defaultColumns.length}
       resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
       rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={[]} expandedKeys={new Set(["january"])}
-      toggleGroup={() => undefined} setScopePage={() => undefined} setScopePageSize={() => undefined}
+      toggleGroup={() => undefined} setGroupsExpanded={onSetExpanded} setScopePage={() => undefined} setScopePageSize={() => undefined}
       selectedIds={new Set()} interactive emptyContent="Empty" fetching={false} error={null}
     />
   );
@@ -221,4 +228,51 @@ test("a non-selectable flat record row emits no leading column cell", () => {
   // its content cells alone — no leading spacer or checkbox (unlike the grouped body).
   expect(cells.length).toBe(defaultColumns.length);
   expect(cells[0]!.textContent).toContain("Hello");
+});
+
+test("the grouped header chevron collapses every expanded group, then expands them all", () => {
+  const onSetExpanded = vi.fn();
+  const { rerender } = render(
+    <ResourceViewProvider scope="local">
+      <GroupedRecordHarness selectable onSetExpanded={onSetExpanded} />
+    </ResourceViewProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Collapse all groups" }));
+  expect(onSetExpanded).toHaveBeenLastCalledWith(["january"], false);
+  rerender(
+    <ResourceViewProvider scope="local">
+      <GroupedRecordHarness selectable expanded={false} onSetExpanded={onSetExpanded} />
+    </ResourceViewProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Expand all groups" }));
+  expect(onSetExpanded).toHaveBeenLastCalledWith(["january"], true);
+});
+
+test("grouped lists select a whole group or every loaded row, and a near miss on the checkbox still selects", () => {
+  let view!: ReturnType<typeof useResourceView>;
+  render(
+    <ResourceViewProvider scope="local">
+      <GroupedRecordHarness selectable onView={(next) => { view = next; }} />
+    </ResourceViewProvider>,
+  );
+  const group = screen.getByRole("checkbox", { name: "Select the loaded rows in January" });
+  fireEvent.click(group);
+  expect(view.state.rowSelection).toEqual({ r1: true });
+  expect(screen.getByRole("checkbox", { name: "Select all loaded rows" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
+  expect(view.state.rowSelection).toEqual({});
+  // Clicking the cell around the row checkbox toggles it and never opens the row.
+  const rowToggle = screen.getByRole("checkbox", { name: "Select row" }).parentElement!;
+  fireEvent.click(rowToggle);
+  expect(view.state.rowSelection).toEqual({ r1: true });
+});
+
+test("a collapsed group's checkbox is disabled until its rows are loaded", () => {
+  render(
+    <ResourceViewProvider scope="local">
+      <GroupedRecordHarness selectable expanded={false} />
+    </ResourceViewProvider>,
+  );
+  const group = screen.getByRole("checkbox", { name: "Select the loaded rows in January" });
+  expect(group.getAttribute("aria-disabled") ?? group.getAttribute("data-disabled")).not.toBeNull();
 });

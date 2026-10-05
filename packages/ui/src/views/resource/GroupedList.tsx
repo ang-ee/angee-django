@@ -40,9 +40,11 @@ import {
   ListHeaderCell,
   ListLoadingFooter,
   RowActionsHeader,
+  LeadingSelectionCell,
   ListSkeletonRows,
   MeasureFooter,
   RecordRow,
+  SelectionToggle,
   VirtualPaddingRow,
   alignOf,
   estimateGroupedItemSize,
@@ -82,6 +84,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   footerAggregate: AggregateBucket | null;
   expandedKeys: ReadonlySet<string>;
   toggleGroup: (key: string) => void;
+  setGroupsExpanded: (keys: readonly string[], expanded: boolean) => void;
   setScopePage: (key: string, page: number) => void;
   setScopePageSize: (key: string, pageSize: number) => void;
   selectedIds: ReadonlySet<string>;
@@ -112,6 +115,7 @@ export function GroupedListBody<TRow extends Row>({
   rowVirtualizer,
   footerAggregate,
   toggleGroup,
+  setGroupsExpanded,
   setScopePage,
   setScopePageSize,
   interactive,
@@ -142,6 +146,56 @@ export function GroupedListBody<TRow extends Row>({
     (nav: GroupedRecordNav) => onListStateChange?.(snapshotFromNav<TRow>(nav)),
     [onListStateChange],
   );
+  const groupHeaders = React.useMemo(
+    () => listItems.filter((item): item is Extract<GroupedListItem<TRow>, { kind: "groupHeader" }> =>
+      item.kind === "groupHeader" && item.expandable),
+    [listItems],
+  );
+  const anyExpanded = groupHeaders.some((item) => item.expanded);
+  const expandAll = groupHeaders.length > 0 ? (
+    <button
+      type="button"
+      className="flex size-6 items-center justify-center rounded-4 text-fg-muted outline-none hover:bg-inset hover:text-fg focus-visible:focus-ring"
+      aria-label={t(anyExpanded ? "list.collapseAllGroups" : "list.expandAllGroups")}
+      title={t(anyExpanded ? "list.collapseAllGroups" : "list.expandAllGroups")}
+      onClick={() => setGroupsExpanded(
+        groupHeaders.filter((item) => item.expanded === anyExpanded).map((item) => item.bucketKey),
+        !anyExpanded,
+      )}
+    >
+      <Glyph name={anyExpanded ? "chevron-down" : "chevron-right"} className="size-3.5" />
+    </button>
+  ) : null;
+  // Loaded record ids per group (nested groups included) and for the whole list.
+  const { groupRowIds, loadedRowIds } = React.useMemo(() => {
+    const byGroup = new Map<string, string[]>();
+    const all: string[] = [];
+    const open: { depth: number; key: string }[] = [];
+    for (const item of listItems) {
+      if (item.kind === "groupHeader") {
+        while (open.length > 0 && open.at(-1)!.depth >= item.depth) open.pop();
+        open.push({ depth: item.depth, key: item.bucketKey });
+        byGroup.set(item.bucketKey, []);
+      } else if (item.kind === "record") {
+        all.push(item.row.id);
+        for (const group of open) byGroup.get(group.key)!.push(item.row.id);
+      }
+    }
+    return { groupRowIds: byGroup, loadedRowIds: all };
+  }, [listItems]);
+  const rowSelection = resourceView.state.rowSelection;
+  const { setRowSelection } = resourceView;
+  const selectIds = React.useCallback((ids: readonly string[], selected: boolean) => {
+    setRowSelection((current) => {
+      const next = { ...current };
+      for (const id of ids) {
+        if (selected) next[id] = true;
+        else delete next[id];
+      }
+      return next;
+    });
+  }, [setRowSelection]);
+  const selectedCount = loadedRowIds.filter((id) => rowSelection[id]).length;
 
   return (
     <>
@@ -151,7 +205,7 @@ export function GroupedListBody<TRow extends Row>({
       >
         <Table className={tableLayout === "fixed" ? "table-fixed" : undefined}>
           <colgroup>
-            <col className="w-8" />
+            <col className={selectable ? "w-14" : "w-8"} />
             {visibleColumns.map((column) => (
               <col key={column.id} />
             ))}
@@ -160,8 +214,22 @@ export function GroupedListBody<TRow extends Row>({
           <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
             {table.getHeaderGroups().map((group) => (
               <TableRow key={group.id}>
-                {/* Grouped mode omits page-level select-all; per-row selection still works. */}
-                <TableHead sticky className="w-8" />
+                {selectable ? (
+                  <LeadingSelectionCell
+                    head
+                    grouped
+                    chevron={expandAll}
+                    label={t("list.selectAllLoaded")}
+                    checked={loadedRowIds.length > 0 && selectedCount === loadedRowIds.length}
+                    indeterminate={selectedCount > 0 && selectedCount < loadedRowIds.length}
+                    disabled={loadedRowIds.length === 0}
+                    onCheckedChange={(checked) => selectIds(loadedRowIds, checked)}
+                  />
+                ) : (
+                  <TableHead sticky className="w-8 p-0">
+                    <div className="flex justify-center">{expandAll}</div>
+                  </TableHead>
+                )}
                 {group.headers.map((header, index) => (
                   <ListHeaderCell
                     key={header.id}
@@ -227,6 +295,9 @@ export function GroupedListBody<TRow extends Row>({
                       draggableRow={draggableRow}
                       onRecordOpen={handleRecordOpen}
                       onToggleGroup={toggleGroup}
+                      groupRowIds={groupRowIds}
+                      rowSelection={rowSelection}
+                      onSelectIds={selectIds}
                       onPageChange={setScopePage}
                       onPageSizeChange={setScopePageSize}
                       loadingLabel={t("list.loading")}
@@ -288,6 +359,9 @@ interface GroupedItemRowProps<TRow extends Row> {
   draggableRow?: (row: TRow) => DndPayload | null;
   onRecordOpen: (nav: GroupedRecordNav) => void;
   onToggleGroup: (key: string) => void;
+  groupRowIds: ReadonlyMap<string, readonly string[]>;
+  rowSelection: Readonly<Record<string, boolean>>;
+  onSelectIds: (ids: readonly string[], selected: boolean) => void;
   onPageChange: (key: string, page: number) => void;
   onPageSizeChange: (key: string, pageSize: number) => void;
   loadingLabel: React.ReactNode;
@@ -310,17 +384,30 @@ function GroupedItemRow<TRow extends Row>({
   draggableRow,
   onRecordOpen,
   onToggleGroup,
+  groupRowIds,
+  rowSelection,
+  onSelectIds,
   onPageChange,
   onPageSizeChange,
   loadingLabel,
   t,
 }: GroupedItemRowProps<TRow>): React.ReactElement {
   switch (item.kind) {
-    case "groupHeader":
+    case "groupHeader": {
+      const ids = groupRowIds.get(item.bucketKey) ?? [];
+      const selectedCount = ids.filter((id) => rowSelection[id]).length;
       return (
         <GroupedHeaderRow
           renderGroupLabel={renderGroupLabel}
           item={item}
+          selection={selectable ? {
+            label: t("list.selectGroup", { label: item.label }),
+            checked: ids.length > 0 && selectedCount === ids.length,
+            indeterminate: selectedCount > 0 && selectedCount < ids.length,
+            // Only loaded rows can be selected; a collapsed group has none yet.
+            disabled: ids.length === 0,
+            onCheckedChange: (checked: boolean) => onSelectIds(ids, checked),
+          } : undefined}
           visibleColumns={visibleColumns}
           measuresByColumn={measuresByColumn}
           onToggle={onToggleGroup}
@@ -331,6 +418,7 @@ function GroupedItemRow<TRow extends Row>({
           t={t}
         />
       );
+    }
     case "record":
       return (
         <RecordRow
@@ -367,6 +455,8 @@ function GroupedItemRow<TRow extends Row>({
 interface GroupedHeaderRowProps<TRow extends Row> {
   renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
   item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
+  /** The group's checkbox, when the list is selectable. */
+  selection?: React.ComponentProps<typeof SelectionToggle>;
   visibleColumns: readonly TableColumn<TRow, unknown>[];
   measuresByColumn: ReadonlyMap<string, GroupMeasure>;
   onToggle: (key: string) => void;
@@ -380,6 +470,7 @@ interface GroupedHeaderRowProps<TRow extends Row> {
 function GroupedHeaderRow<TRow extends Row>({
   renderGroupLabel,
   item,
+  selection,
   visibleColumns,
   measuresByColumn,
   onToggle,
@@ -439,7 +530,7 @@ function GroupedHeaderRow<TRow extends Row>({
         }
       }}
     >
-      <TableCell className="h-9 w-8 bg-sheet-2 p-0">
+      <TableCell className={cn("h-9 bg-sheet-2 p-0", selection ? "w-14" : "w-8")}>
         <div className="flex min-h-9 items-center gap-2">
           <button
             type="button"
@@ -463,6 +554,7 @@ function GroupedHeaderRow<TRow extends Row>({
               className="size-3.5 shrink-0 text-fg-muted"
             />
           </button>
+          {selection ? <SelectionToggle {...selection} className="min-h-9 w-6 shrink-0" /> : null}
           {!labelColumn ? labelContent : null}
           {!trailingColumn && !pagerColumn ? pager : null}
         </div>
