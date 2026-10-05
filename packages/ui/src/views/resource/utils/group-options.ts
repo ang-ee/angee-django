@@ -30,7 +30,9 @@ export function buildGroupOptions<TRow extends Row>(
         ?? resourceFieldGroupLabel(name, metadata?.fields[name]),
       group: initial ?? { ...axis.spec, ...(date && granularities.includes("day") ? { granularity: "day" } : {}) },
       type: date ? "date" as const : "value" as const,
-      ...(date ? { granularities } : {}),
+      ...(date ? { granularities, ...(declaration.server ? {
+        granularityDrills: declaration.extractions.filter((extraction) => extraction.drill).map((extraction) => extraction.name),
+      } : {}) } : {}),
     };
   });
 }

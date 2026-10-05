@@ -4,11 +4,13 @@ import { dedupeBy } from "../../../lib/dedupe";
 import { DEFAULT_TEXT_FILTER_FIELD, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
 import { customFilterChipLabel, customFilterId, isFacetFilter, isLookup, mergeById, parseCustomFilterId } from "./labels";
+import type { UiTranslate } from "../../../i18n";
 export function customFilterChipsFor(
   filter: ResourceViewFilter,
   filterOptions: readonly ResourceToolbarFilterOption[],
   fields: readonly FilterClauseField[],
   textField: string | null = DEFAULT_TEXT_FILTER_FIELD,
+  t?: UiTranslate,
 ): readonly ResourceToolbarCustomFilterChip[] {
   const chips: ResourceToolbarCustomFilterChip[] = [];
   const fieldsByName = new Map(
@@ -30,6 +32,7 @@ export function customFilterChipsFor(
           operator,
           value: operatorValue,
           options: fieldsByName.get(field)?.options,
+          t,
         }),
       });
     }

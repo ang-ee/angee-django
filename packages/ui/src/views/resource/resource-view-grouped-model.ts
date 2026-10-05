@@ -297,6 +297,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
         label,
         count: bucket.count,
         expandable,
+        ...(!expandable && axis.extraction && !axis.extraction.drill
+          ? { unavailableMessage: t("search.numberPartItemsUnavailable") } : {}),
         expanded,
         bucket,
       };

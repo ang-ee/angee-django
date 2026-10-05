@@ -325,7 +325,7 @@ function GroupedItemRow<TRow extends Row>({
           measuresByColumn={measuresByColumn}
           onToggle={onToggleGroup}
           trailingColumn={renderRowActions !== undefined}
-          unavailableLabel={t("list.itemsUnavailable")}
+          unavailableLabel={item.unavailableMessage ?? t("list.itemsUnavailable")}
           onPageChange={onPageChange}
           onPageSizeChange={onPageSizeChange}
           t={t}

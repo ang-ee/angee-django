@@ -73,7 +73,7 @@ export function GroupedBoardBody<TRow extends Row>({
                 {item.pager ? <GroupedScopePager pager={item.pager} label={item.label}
                   onPageChange={setScopePage} onPageSizeChange={setScopePageSize} t={t} /> : null}
                 {item.expandable ? renderItems(index + 1, next) : (
-                  <p className="text-13 text-fg-muted">{t("list.itemsUnavailable")}</p>
+                  <p className="text-13 text-fg-muted">{item.unavailableMessage ?? t("list.itemsUnavailable")}</p>
                 )}
               </div>
             </BoardLaneFrame>,

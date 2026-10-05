@@ -5,9 +5,10 @@ import type { ResourceViewState } from "../resource-view-model";
 import { customFilterChipsFor } from "../utils/filter-mutations";
 import { fieldLabel } from "../model-metadata-defaults";
 import type { SearchActiveItem, SearchCatalog } from "./types";
+import type { UiTranslate } from "../../../i18n";
 
 /** One projection owns activity for every search presentation. */
-export function activeItems(state: ResourceViewState, catalog: SearchCatalog): readonly SearchActiveItem[] {
+export function activeItems(state: ResourceViewState, catalog: SearchCatalog, t?: UiTranslate): readonly SearchActiveItem[] {
   const filter = Filter.from(state.filter);
   const items: SearchActiveItem[] = [];
   const claimed = new Set<string>();
@@ -33,6 +34,11 @@ export function activeItems(state: ResourceViewState, catalog: SearchCatalog): r
     const options = facet.options.filter((option) => option.value === undefined
       ? filter.hasPreset(option.filter)
       : values.includes(option.value));
+    for (const value of values) {
+      if (options.some((option) => option.value === value)) continue;
+      const option = facet.optionForValue?.(value);
+      if (option) options.push(option);
+    }
     if (!options.length) continue;
     facetFields.add(facet.field);
     items.push({ id: `facet:${facet.field}`, kind: "facet", field: facet.field, label: facet.label, options });
@@ -45,7 +51,7 @@ export function activeItems(state: ResourceViewState, catalog: SearchCatalog): r
   // claims its field. Text owns iContains, not other comparisons on that field.
   let remaining = Filter.from(filter.withoutFields([...claimed, ...facetFields]));
   for (const text of catalog.text) remaining = Filter.from(remaining.withTextTerm("", text.field));
-  for (const chip of customFilterChipsFor(remaining.value, [], catalog.fields, null)) {
+  for (const chip of customFilterChipsFor(remaining.value, [], catalog.fields, null, t)) {
     items.push({ id: `clause:${chip.id}` as `clause:${string}:${FilterClauseOperator}`, kind: "clause", label: chip.label });
   }
   state.groupStack.forEach((level, index) => {

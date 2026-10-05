@@ -27,11 +27,12 @@ export function ResourceConditionEditor({ resource, value, onChange, readOnly = 
     </div>;
   }
   const fields = buildFilterFields([], [], metadata, query);
-  return <ConditionGroup value={filter} fields={fields} readOnly={readOnly || !onChange}
+  return <QueryConditionEditor value={filter} fields={fields} readOnly={readOnly || !onChange}
     onChange={(next) => onChange?.(query.toWhere(next))} />;
 }
 
-function ConditionGroup({ value, fields, onChange, readOnly }: {
+/** Canonical filter editor shared by live search and persisted wire conditions. */
+export function QueryConditionEditor({ value, fields, onChange, readOnly = false }: {
   value: QueryFilter;
   fields: readonly FilterClauseField[];
   onChange: (value: QueryFilter) => void;
@@ -53,7 +54,7 @@ function ConditionGroup({ value, fields, onChange, readOnly }: {
         {!readOnly ? <Button type="button" size="sm" variant="ghost" onClick={() => replace(name)}>{t("condition.removeGroup")}</Button> : null}
       </div>
       {(operand as readonly QueryFilter[]).map((branch, index, branches) => <div key={`${index}:${JSON.stringify(branch)}`} className="grid gap-1 pl-2">
-        <ConditionGroup value={branch} fields={fields} readOnly={readOnly}
+        <QueryConditionEditor value={branch} fields={fields} readOnly={readOnly}
           onChange={(next) => replace(name, branches.map((current, at) => at === index ? next : current))} />
         {!readOnly ? <Button type="button" size="sm" variant="ghost"
           onClick={() => replace(name, branches.filter((_, at) => at !== index))}>{t("condition.removeBranch")}</Button> : null}
@@ -64,9 +65,9 @@ function ConditionGroup({ value, fields, onChange, readOnly }: {
       <div className="flex items-center gap-2"><strong>{t("condition.not")}</strong>
         {!readOnly ? <Button type="button" size="sm" variant="ghost" onClick={() => replace(name)}>{t("condition.removeGroup")}</Button> : null}
       </div>
-      <ConditionGroup value={operand as QueryFilter} fields={fields} onChange={(next) => replace(name, next)} readOnly={readOnly} />
+      <QueryConditionEditor value={operand as QueryFilter} fields={fields} onChange={(next) => replace(name, next)} readOnly={readOnly} />
     </section> : <div key={name} className="grid gap-1">
-      {customFilterChipsFor({ [name]: operand }, [], fields, null).map((chip) => <div key={chip.id} className="flex items-center gap-2">
+      {customFilterChipsFor({ [name]: operand }, [], fields, null, t).map((chip) => <div key={chip.id} className="flex items-center gap-2">
         <span className="text-13">{chip.label}</span>
       </div>)}
       {!readOnly ? <Button type="button" size="sm" variant="ghost" onClick={() => replace(name)}>{t("condition.removeRule")}</Button> : null}

@@ -4,6 +4,7 @@ import type { FilterClause } from "../../../toolbars/FilterClauseEditor";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { addCustomFilter, removeCustomFilter } from "../utils/filter-mutations";
 import { activeItems } from "./active";
+import { useUiT } from "../../../i18n";
 import type { ResourceSearch, SearchCatalog } from "./types";
 
 export interface UseResourceSearchInput {
@@ -18,8 +19,9 @@ export interface UseResourceSearchInput {
 export function useResourceSearch({ resourceView, catalog, groupStack = resourceView.state.groupStack,
   groupingEnabled = catalog.groups.length > 0 || groupStack.length > 0, maxGroupDepth,
 }: UseResourceSearchInput): ResourceSearch {
+  const t = useUiT();
   return React.useMemo<ResourceSearch>(() => {
-    const active = activeItems({ ...resourceView.state, groupStack }, catalog);
+    const active = activeItems({ ...resourceView.state, groupStack }, catalog, t);
     const setGroupStack = (stack: readonly GroupSpec[]) => {
       if (groupingEnabled) resourceView.setGroupStack(maxGroupDepth === undefined ? stack : stack.slice(-Math.max(1, maxGroupDepth)));
     };
@@ -45,8 +47,10 @@ export function useResourceSearch({ resourceView, catalog, groupStack = resource
         }, remaining);
       });
     };
-    const toggleFacetOption = (field: string, id: string) => {
-      const option = catalog.facets.find((facet) => facet.field === field)?.options.find((candidate) => candidate.id === id);
+    const toggleFacetOption: ResourceSearch["toggleFacetOption"] = (field, id, supplied) => {
+      const facet = catalog.facets.find((facet) => facet.field === field);
+      const option = facet?.options.find((candidate) => candidate.id === id) ?? supplied;
+      if (!facet) return;
       if (!option) return;
       resourceView.setFilter((current) => {
         const filter = Filter.from(current);
@@ -77,6 +81,7 @@ export function useResourceSearch({ resourceView, catalog, groupStack = resource
     const removeGroup = (index: number) => setGroupStack(groupStack.filter((_, position) => position !== index));
     return {
       catalog, active, groupStack, groupingEnabled, maxGroupDepth, queryDirty: resourceView.queryDirty,
+      filter: resourceView.state.filter, setFilter: resourceView.setFilter,
       setText, toggleFilter, setFacet, toggleFacetOption,
       addClause: (clause) => resourceView.setFilter((current) => addCustomFilter(current, clause)),
       setClause,
@@ -110,5 +115,5 @@ export function useResourceSearch({ resourceView, catalog, groupStack = resource
       resetQuery: resourceView.resetQuery,
       clearQuery: resourceView.clearQuery,
     };
-  }, [resourceView, catalog, groupStack, groupingEnabled, maxGroupDepth]);
+  }, [resourceView, catalog, groupStack, groupingEnabled, maxGroupDepth, t]);
 }

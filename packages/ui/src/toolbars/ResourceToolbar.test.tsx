@@ -39,20 +39,19 @@ test("calendar keeps period controls and hides filter, grouping and pager", () =
 
 test("reduced chrome keeps filtering and a single kind omits its switcher", () => {
   toolbar({ view: "list", availableViews: ["list"], chrome: { pager: false, viewSwitcher: false } });
-  expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Search options" })).toBeTruthy();
   expect(screen.queryByLabelText("Previous page")).toBeNull();
   expect(screen.queryByLabelText("List view")).toBeNull();
 });
 
-test("grouping stays beside today's picker and curated labels win", () => {
+test("an undeclared list has the combined box only and curated group labels win", () => {
   toolbar({ search: groupSearch({ groupingEnabled: true, groupStack: [status.group],
     catalog: { curatedGroups: [status], groups: [{ ...status, label: "Raw status" }] } }) });
-  const filter = screen.getByRole("button", { name: "Filter" });
-  const group = screen.getByLabelText("Group by");
-  expect(filter.closest(".resource-toolbar-query")).toBe(group.closest(".resource-toolbar-query"));
-  expect(group.textContent).toContain("Group by: Status");
+  const filter = screen.getByRole("button", { name: "Search options" });
+  expect(screen.queryByRole("button", { name: "Group by" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Remove Status" }).parentElement?.textContent).toContain("Group by: Status");
   expect(screen.getByRole("button", { name: "Remove Status" })).toBeTruthy();
-  fireEvent.click(group);
+  fireEvent.click(filter);
   expect(screen.getByRole("listitem", { name: "Status" })).toBeTruthy();
 });
 
@@ -62,8 +61,8 @@ test("custom-only groups offer granularities and prevent adding a duplicate leve
     groupStack: [{ field: "created", granularity: "month" }],
     catalog: { curatedGroups: [], groups: [{ id: "created", label: "Created", group: { field: "created" },
       type: "date", granularities: ["month", "year"] }] } }) });
-  expect(screen.getByLabelText("Group by").textContent).toContain("Created · Month");
-  fireEvent.click(screen.getByLabelText("Group by"));
+  expect(screen.getByRole("button", { name: "Remove Created · Month" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   expect(screen.queryByRole("button", { name: "Created" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
   expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
@@ -78,7 +77,7 @@ test("a changed catalog replaces stale custom field and granularity drafts", () 
     { id: "created", label: "Created", group: { field: "created" }, type: "date", granularities: ["day"] },
   ] } });
   const result = toolbar({ search: first });
-  fireEvent.click(screen.getByLabelText("Group by"));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
   result.rerender(<ResourceToolbar pager={PAGER} search={searchFixture({ groupingEnabled: true, addGroup,
     catalog: { groups: [{ id: "date", label: "Document date", group: { field: "date" },
@@ -100,9 +99,9 @@ test("the compact row dispatches named filters and facets by catalog identity", 
   toolbar({ search, filterRow: { quickFilterIds: ["mine"], facetIds: ["status"] } });
   expect(screen.queryByLabelText("Filter records")).toBeNull();
   expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-  expect(screen.getByRole("searchbox", { name: "Filter records" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(within(screen.getByLabelText("Filters")).getByRole("button", { name: "Mine" }));
   expect(search.toggleFilter).toHaveBeenCalledWith("mine");
   fireEvent.click(screen.getByRole("combobox", { name: "Status" }));
@@ -122,7 +121,7 @@ test("shipped and pinned favorites retain their toggles, rename and pin controls
   fireEvent.click(button); expect(search.toggleFavorite).toHaveBeenCalledWith(preset.id);
   fireEvent.click(screen.getByRole("button", { name: "Clear" }));
   expect(search.clearQuery).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(screen.getByRole("button", { name: "Unpin favorite" }));
   expect(search.pinFavorite).toHaveBeenCalledWith(preset.id, false);
 });
@@ -132,7 +131,7 @@ test("chips use the active projection and dispatch to model commands", () => {
     active: [{ id: "filter:open", kind: "filter", label: "Open" }] });
   toolbar({ search });
   fireEvent.click(screen.getByRole("button", { name: "Remove Open" }));
-  expect(search.toggleFilter).toHaveBeenCalledWith("open");
+  expect(search.clear).toHaveBeenCalledWith("filter:open");
 });
 
 test.each([false, true])("one chip per group level removes only that level (compact %s)", (compact) => {
@@ -147,15 +146,15 @@ test.each([false, true])("one chip per group level removes only that level (comp
   render(<ResourceViewProvider scope="local" initialState={{ groupStack: [
     { field: "created", granularity: "month" }, status.group, { field: "created", granularity: "year" },
   ] }}><Content /></ResourceViewProvider>);
-  if (compact) fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-  expect(screen.getByRole("button", { name: "Remove Created · Month" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Remove Status" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Remove Created · Year" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Remove Created · Month" }));
-  expect(screen.queryByRole("button", { name: "Remove Created · Month" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Remove Status" }).parentElement?.textContent).toContain("Group by:");
-  expect(screen.getByRole("button", { name: "Remove Created · Year" }).parentElement?.textContent).toContain("then:");
-  expect(screen.getByLabelText("Group by").textContent).toContain("Status › Created · Year");
+  if (compact) fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+  const chips = within(screen.getByRole("toolbar", { name: "Active search" }));
+  expect(chips.getByRole("button", { name: "Remove Created · Month" })).toBeTruthy();
+  expect(chips.getByRole("button", { name: "Remove Status" })).toBeTruthy();
+  expect(chips.getByRole("button", { name: "Remove Created · Year" })).toBeTruthy();
+  fireEvent.click(chips.getByRole("button", { name: "Remove Created · Month" }));
+  expect(chips.queryByRole("button", { name: "Remove Created · Month" })).toBeNull();
+  expect(chips.getByRole("button", { name: "Remove Status" }).parentElement?.textContent).toContain("Group by:");
+  expect(chips.getByRole("button", { name: "Remove Created · Year" }).parentElement?.textContent).toContain("then:");
 });
 
 test("shared utilities stay between query controls and pager; wrapping is opt-in", () => {
@@ -167,10 +166,10 @@ test("shared utilities stay between query controls and pager; wrapping is opt-in
   expect(filter.closest("section")?.className).toContain("resource-toolbar-wrap");
 });
 
-test("providers without writable preferences keep the plain Filter trigger", () => {
+test("providers without writable preferences keep the complete box reachable", () => {
   toolbar();
-  expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Filter and favorites" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Search options" })).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "Search options" })).toHaveLength(1);
 });
 
 test("a shipped favorite quick filter uses the provider's id, not a saved-view object", () => {
@@ -204,12 +203,10 @@ test("writable preferences expose saving, and an empty curated catalog still all
   const search = searchFixture({ saveFavorite: vi.fn(), groupingEnabled: true,
     catalog: { groups: [status], curatedGroups: [] } });
   toolbar({ search });
-  fireEvent.click(screen.getByLabelText("Group by"));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
   fireEvent.click(screen.getByRole("button", { name: "Add level" }));
   expect(search.addGroup).toHaveBeenCalledWith({ field: "status" });
-  fireEvent.click(screen.getByLabelText("Group by"));
-  fireEvent.click(screen.getByLabelText("Filter and favorites"));
   expect(screen.getByRole("button", { name: "Save current search" })).toBeTruthy();
 });
 

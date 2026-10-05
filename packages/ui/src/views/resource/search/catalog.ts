@@ -3,7 +3,7 @@ import { Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, t
 import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import type { ColumnDescriptor } from "../../page";
 import { relationFilterFields } from "../../relation/relation-filter";
-import { fieldLabel } from "../model-metadata-defaults";
+import { fieldLabel, relationFieldInfo, relationFieldInfoForQueryField } from "../model-metadata-defaults";
 import { queryForColumns } from "../resource-query";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewDefaultGroups, ResourceViewGroup } from "../resource-view-model";
@@ -83,9 +83,18 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
         ...(options.find((bucket) => bucket.value === option.value) ?? option), label: option.label,
       })) : undefined;
       const merged = mergeFilterOptions(authored, [...options, ...inferred], query);
+      const relation = contributed?.source === "relation"
+        ? modelMetadata ? relationFieldInfo(name, modelMetadata, schema) : relationFieldInfoForQueryField(query.fields[name], schema)
+        : null;
+      const axis = relation && query.axes[name]?.server && query.axes[name]?.drill ? query.axis(name) : null;
       return [{ field: name, label: field.label ?? contributed?.label ?? fieldLabel(name, undefined),
         source: declared?.options ? "declared" : contributed?.source ?? "scalar",
         ...(contributed?.group !== undefined ? { group: contributed.group } : {}),
+        ...(relation && axis ? { relation, optionForValue: (value: string, label: React.ReactNode = value) => {
+          const bucket = { key: { [axis.groupBy().valueKey]: value } };
+          const filter = axis.drill(bucket);
+          return filter ? { id: axis.bucketId(bucket), label, filter, value } : undefined;
+        } } : {}),
         options: merged.flatMap((option) => {
           const key = JSON.stringify(query.toWhere(option.filter));
           if (predicates.has(key)) return [];
@@ -95,7 +104,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
         }),
       }];
     });
-  }, [columns, inferOptions, rows, fields, filters, contributedFacets, input.customFilterFields, query]);
+  }, [columns, inferOptions, rows, fields, filters, contributedFacets, input.customFilterFields, query, modelMetadata, schema]);
   const curatedGroups = React.useMemo(() => {
     const contributed = input.contributedGroupOptions ?? contributedFacets.flatMap((facet) => facet.source === "relation" && facet.group !== false
       ? [{ id: facet.field, label: facet.label, group: facet.group ?? { field: facet.field } }] : []);

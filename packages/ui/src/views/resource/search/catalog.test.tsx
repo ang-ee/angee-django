@@ -77,3 +77,33 @@ test("curated grouping preserves declared, contributed and inferred precedence",
   expect(catalog().curatedGroups.length).toBeGreaterThan(0);
   expect(catalog({ groupOptions: [] }).curatedGroups).toEqual([]);
 });
+
+test("the box catalog retains every query axis and filterable field regardless of visible columns", () => {
+  const full = ResourceQuery.forRows({ fields: {
+    title: { scalar: "String" }, status: { kind: "enum", values: [{ value: "open" }] },
+    owner: { scalar: "ID" }, amount: { scalar: "Float" }, created: { scalar: "DateTime" },
+    metadata: { kind: "json", scalar: "JSON" },
+  } }).contract;
+  for (const [field, axis] of Object.entries(full.axes)) axis.server = { input: field, key: field };
+  const complete = ResourceQuery.from(testDataResource("test.Record", { query: full }));
+  const result = catalog({ query: complete, serverGrouping: true, columns: [{ field: "title" }],
+    inferOptions: false, groupOptions: [], customFilterFields: [] });
+  expect(Object.keys(complete.axes).length).toBeGreaterThan(2);
+  expect(result.fields.length).toBeGreaterThan(2);
+  expect(result.groups.map((axis) => axis.group.field).sort()).toEqual(Object.keys(complete.axes).sort());
+  expect(result.fields.map((field) => field.field ?? field.id).sort()).toEqual(Object.entries(complete.fields)
+    .filter(([, field]) => field.filter?.operators.length).map(([name]) => name).sort());
+});
+
+test("date grouping choices carry the query extraction's drill capability", () => {
+  const contract = ResourceQuery.forRows({ fields: { created: { scalar: "DateTime" } } }).contract;
+  contract.axes.created!.server = { input: "created", key: "created" };
+  contract.axes.created!.extractions = [
+    { name: "year_number", input: "YEAR_NUMBER", key: "number" },
+    { name: "month", input: "MONTH", key: "month", rangeKey: "range", drill: {
+      kind: "range", field: "created", valueKey: "month", rangeKey: "range", valueMap: [], nullMode: "isNull",
+    } },
+  ];
+  const result = catalog({ query: ResourceQuery.from(testDataResource("test.Record", { query: contract })), serverGrouping: true, columns: [] });
+  expect(result.groups[0]).toMatchObject({ granularities: ["year_number", "month"], granularityDrills: ["month"] });
+});

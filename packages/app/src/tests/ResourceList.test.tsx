@@ -889,7 +889,7 @@ describe("ResourceList", () => {
     ).toBeNull();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Group by" }),
+      screen.getByRole("button", { name: "Search options" }),
     );
 
     expect(await screen.findByRole("button", { name: "More axes…" })).toBeTruthy();
@@ -899,7 +899,7 @@ describe("ResourceList", () => {
     render(<TestUrlState><ListView resource="notes.Note" columns={columns}
       chrome={{ viewSwitcher: false, pager: false, columnChooser: false }} /></TestUrlState>);
     expect(await screen.findByText("First")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Search options" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Previous page" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Visible fields" })).toBeNull();
@@ -1772,7 +1772,7 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Updated At · Month" }).parentElement?.textContent)
       .toContain("Group by: Updated At · Month"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -1791,7 +1791,7 @@ describe("ResourceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Updated At · Month" }).parentElement?.textContent)
       .toContain("Group by: Updated At · Month"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -1861,7 +1861,7 @@ describe("ResourceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Updated At · Month" }).parentElement?.textContent)
       .toContain("Group by: Updated At · Month"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -1882,15 +1882,15 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Updated At · Day" }).parentElement?.textContent)
       .toContain("Group by: Updated At · Day"));
-    fireEvent.click(screen.getByRole("button", { name: "Group by" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search options" }));
     fireEvent.click(await screen.findByRole("button", { name: "Clear grouping" }));
 
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Group by" }).textContent,
-      ).toBe("Group by"),
+        screen.queryByRole("button", { name: "Remove Updated At · Day" }),
+      ).toBeNull(),
     );
   });
 
@@ -1900,7 +1900,7 @@ describe("ResourceList", () => {
       columns={[...columns, { field: "updatedAt", header: "Updated At" }]} formFields={formFields} />;
     const result = render(<TestUrlState searchParams="?group=status&then=updatedAt:month"
       onUrlUpdate={onUrlUpdate}>{list}</TestUrlState>);
-    fireEvent.click(await screen.findByRole("button", { name: "Group by" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
     fireEvent.click(await screen.findByRole("button", { name: "Move up Updated At · Month" }));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -1911,7 +1911,7 @@ describe("ResourceList", () => {
     const savedSearch = onUrlUpdate.mock.calls.at(-1)?.[0].search;
     result.unmount();
     render(<TestUrlState searchParams={savedSearch} onUrlUpdate={onUrlUpdate}>{list}</TestUrlState>);
-    fireEvent.click(await screen.findByRole("button", { name: "Group by" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
     const levels = within(await screen.findByRole("list", { name: "Levels" }));
     expect(levels.getAllByRole("listitem").map((level) => level.getAttribute("aria-label")))
       .toEqual(["Updated At · Month", "Status"]);
@@ -2030,7 +2030,7 @@ describe("ResourceList", () => {
       expect(onSelect).toHaveBeenCalledWith("note-2");
       const pager = await screen.findByRole("navigation", { name: "Record navigation" });
       expect(pager.textContent?.replace(/\s+/g, " ")).toContain("2 / 2");
-      expect(screen.queryByRole("button", { name: "Filter", hidden: true })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Search options", hidden: true })).toBeNull();
       const request = sdkMocks.listCalls.findLast((call) => call.enabled !== false);
       expect(JSON.stringify(request?.filter)).toContain("2026-01-01");
       expect(JSON.stringify(request?.filter)).toContain("2026-02-01");
@@ -2188,7 +2188,7 @@ describe("ResourceList", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter" }),
+      await screen.findByRole("button", { name: "Search options" }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "Add custom filter" }),
@@ -2209,7 +2209,7 @@ describe("ResourceList", () => {
     // labels that distinction.
     expect(
       await screen.findAllByText("Title contains (case-sensitive) Fir"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   test("saves and reapplies the current resource-view search", async () => {
@@ -2228,7 +2228,7 @@ describe("ResourceList", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter and favorites" }),
+      await screen.findByRole("button", { name: "Search options" }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "Save current search" }),
@@ -2238,7 +2238,7 @@ describe("ResourceList", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter and favorites" }),
+      await screen.findByRole("button", { name: "Search options" }),
     );
     expect(await screen.findByRole("button", { name: "Two per page" }))
       .toBeTruthy();
@@ -2254,7 +2254,7 @@ describe("ResourceList", () => {
     });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Filter and favorites" }),
+      await screen.findByRole("button", { name: "Search options" }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Two per page" }));
     await waitFor(() => {
@@ -2278,7 +2278,7 @@ describe("ResourceList", () => {
     );
 
     await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Group by" }).textContent)
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Updated At · Day" }).parentElement?.textContent)
       .toContain("Group by: Updated At · Day"));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -2307,7 +2307,7 @@ describe("ResourceList", () => {
     await screen.findByRole("button", { name: "Groups 3-4 / 4 groups" });
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Group by",
+        name: "Search options",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Add Updated At · Month" }));
@@ -2387,7 +2387,7 @@ describe("ResourceList", () => {
     });
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Group by",
+        name: "Search options",
       }),
     );
     fireEvent.click(screen.getByRole("combobox", { name: "Granularity for Updated At · Day" }));
