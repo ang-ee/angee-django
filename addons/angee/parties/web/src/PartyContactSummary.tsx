@@ -64,21 +64,11 @@ export function PartyContactSummary({ party }: PartyContactSummaryProps): React.
   const { email, phone } = partyContactValues(party);
   const name = text(party?.display_name);
   if (!name && !addressText && !email && !phone) return null;
+  const facts = [addressText, email, phone].filter(Boolean);
   return (
-    <section
-      aria-label={t("party.contact.summary")}
-      className="flex flex-wrap gap-x-8 gap-y-1 text-sm text-fg-muted"
-    >
-      <div className="min-w-48">
-        {name ? <p className="font-medium text-fg">{name}</p> : null}
-        {addressText ? <address className="not-italic">{addressText}</address> : null}
-      </div>
-      {email || phone ? (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-          {email ? <><dt>{t("party.contact.email")}</dt><dd>{email}</dd></> : null}
-          {phone ? <><dt>{t("party.contact.phone")}</dt><dd>{phone}</dd></> : null}
-        </dl>
-      ) : null}
-    </section>
+    <p aria-label={t("party.contact.summary")} className="text-sm text-fg-muted [overflow-wrap:anywhere]">
+      {name ? <span className="font-medium text-fg">{name}</span> : null}
+      {facts.map((fact) => <React.Fragment key={fact}>{" · "}{fact}</React.Fragment>)}
+    </p>
   );
 }

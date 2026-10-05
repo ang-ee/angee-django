@@ -73,13 +73,17 @@ export function RecordActionBar({
   const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor; fromMenu: boolean } | null>(
     null,
   );
+  // A reason that reads the record applies once a record is loaded; a static reason applies with `disabled`.
+  const disabledReason = (action: ActionDescriptor): React.ReactNode =>
+    typeof action.disabledReason === "function" ? (record != null ? action.disabledReason(record) : undefined)
+      : action.disabled ? action.disabledReason : undefined;
   const actionMutation = useMutation<
     ActionResult,
     unknown,
     ActionMutationVariables
   >({
     mutationFn: async ({ action, values }) => {
-      if (blockedRef.current || action.disabled || (action.permission && !holdsPermission(record, action.permission))) return;
+      if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
       if (action.run) {
         return action.run({
           record,
@@ -112,7 +116,7 @@ export function RecordActionBar({
 
   const runAction = React.useCallback(
     async (action: RecordActionDescriptor): Promise<void> => {
-      if (blockedRef.current || action.disabled || (action.permission && !holdsPermission(record, action.permission))) return;
+      if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
       if (action.confirm) {
         const confirmation =
           typeof action.confirm === "function" && record !== null
@@ -164,7 +168,7 @@ export function RecordActionBar({
   const menuActions = visibleActions.filter((action) => action.placement !== "toolbar");
   const visibleDeleteAction = deleteAction?.canDelete ? deleteAction : undefined;
   const disabled = (action: ActionDescriptor) =>
-    blocked || Boolean(action.disabled) || pendingId !== null ||
+    blocked || Boolean(action.disabled) || Boolean(disabledReason(action)) || pendingId !== null ||
     (recordId === null && !action.run && !action.submit);
   if (
     visibleActions.length === 0 &&
@@ -212,15 +216,15 @@ export function RecordActionBar({
         {contributedActions}
         {formDialog}
       </> : <>
-        {toolbarActions.map((action, index) => (
+        {toolbarActions.map((action, index) => { const reason = disabledReason(action); return (
           <React.Fragment key={action.id}><Button type="button" size="sm"
             variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-            disabled={disabled(action)} aria-describedby={action.disabled && action.disabledReason ? `${descriptionId}-${action.id}` : undefined}
+            disabled={disabled(action)} aria-describedby={reason ? `${descriptionId}-${action.id}` : undefined}
             loading={pendingId === action.id} onClick={() => void runAction(action)}>
             {action.icon ? <Glyph name={action.icon} /> : null}
             {action.label}
-          </Button>{action.disabled && action.disabledReason ? <span id={`${descriptionId}-${action.id}`} className="text-xs text-fg-muted">{action.disabledReason}</span> : null}</React.Fragment>
-        ))}
+          </Button>{reason ? <span id={`${descriptionId}-${action.id}`} className="text-xs text-fg-muted">{reason}</span> : null}</React.Fragment>
+        ); })}
         {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
           {deleteTrigger}
           {visibleDeleteAction !== undefined && menuActions.length > 0 ? (

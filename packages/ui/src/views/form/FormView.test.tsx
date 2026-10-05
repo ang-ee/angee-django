@@ -2433,7 +2433,7 @@ describe("FormView", () => {
     expect(title.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(header.firstElementChild?.contains(title)).toBe(true);
     expect(header.lastElementChild?.contains(steps)).toBe(true);
-    expect(header.lastElementChild?.className).toContain("ml-auto");
+    expect(header.lastElementChild?.className).toContain("justify-end");
     expect(header.className).toContain("flex-wrap");
     expect(header.firstElementChild?.className).toContain("basis-64");
     expect(screen.queryByText("Status")).toBeNull();

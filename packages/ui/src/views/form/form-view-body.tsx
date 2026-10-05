@@ -194,7 +194,7 @@ export function FormViewRecordHeader({
   const statusMark = currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null;
   const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
     compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
-    statusOnTitleRow ? "ml-auto max-w-full" : "w-full",
+    statusOnTitleRow ? "flex-auto justify-end" : "w-full",
   )}>
     <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
       compactStatus ? (
