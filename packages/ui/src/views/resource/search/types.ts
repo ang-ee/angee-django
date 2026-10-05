@@ -4,6 +4,7 @@ import type { FilterClause, FilterClauseField, FilterClauseOperator } from "../.
 import type { ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars/ResourceToolbar";
 import type { ResourceViewFavorite } from "../resource-view-model";
 import type { ResourceViewContextValue } from "../resource-view-context";
+import type { RelationFieldInfo } from "../model-metadata-defaults";
 
 /** A bucket keeps its executable predicate, including the valueless blank bucket. */
 export interface SearchFacetOption {
@@ -20,6 +21,9 @@ export interface SearchFacet {
   source: "relation" | "scalar" | "declared";
   /** Preserve an authored Facet's grouping opt-out or alternate group axis. */
   group?: GroupSpec | false;
+  /** Query-resolved target and bucket factory for values beyond the facet page. */
+  relation?: RelationFieldInfo;
+  optionForValue?: (value: string, label?: ReactNode) => SearchFacetOption | undefined;
 }
 
 export interface SearchCatalog {
@@ -48,10 +52,12 @@ export interface ResourceSearch {
   groupingEnabled: boolean;
   maxGroupDepth?: number;
   queryDirty: boolean;
+  filter: QueryFilter;
+  setFilter: ResourceViewContextValue["setFilter"];
   setText(value: string, field?: string): void;
   toggleFilter(id: string): void;
   setFacet(field: string, optionIds: readonly string[]): void;
-  toggleFacetOption(field: string, optionId: string): void;
+  toggleFacetOption(field: string, optionId: string, option?: SearchFacetOption): void;
   addClause(clause: FilterClause): void;
   setClause(field: string, clause: FilterClause | null): void;
   addGroup(level: GroupSpec): void;

@@ -16,7 +16,7 @@ afterEach(cleanup);
 
 const defaultColumns: readonly ColumnDescriptor<Row>[] = [{ field: "title", header: "Title" }];
 
-function Harness({ pending = false, actions = false, columns = defaultColumns, onPageChange, onPageSizeChange = () => undefined, onToggle, unit = "records" }: {
+function Harness({ pending = false, actions = false, columns = defaultColumns, onPageChange, onPageSizeChange = () => undefined, onToggle, unit = "records", unavailableMessage }: {
   pending?: boolean;
   actions?: boolean;
   columns?: readonly ColumnDescriptor<Row>[];
@@ -24,6 +24,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
   onPageSizeChange?: (key: string, pageSize: number) => void;
   unit?: "records" | "groups";
   onToggle: (key: string) => void;
+  unavailableMessage?: string;
 }): React.ReactElement {
   const resourceView = useResourceView();
   const tableColumns = columns.map((column) => ({ id: column.field, accessorKey: column.field, header: column.field }));
@@ -32,7 +33,7 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
   const listItems: GroupedListItem<Row>[] = [
     {
       kind: "groupHeader", bucketKey: "january", depth: 0, label: "January",
-      count: 45, expandable: true, expanded: true,
+      count: 45, expandable: !unavailableMessage, expanded: !unavailableMessage, unavailableMessage,
       bucket: { key: { month: "January" }, count: 45, sum: { amount: 30 } },
       pager: { pageKey: "january", page: 2, pageSize: 20, total: 45, unit, pending },
     },
@@ -53,6 +54,19 @@ function Harness({ pending = false, actions = false, columns = defaultColumns, o
     />
   );
 }
+
+test("a number-part group explains why its rows are unavailable and cannot be opened", () => {
+  const onToggle = vi.fn();
+  const unavailableMessage = "Items unavailable: grouping by a number part has no matching filter, so its rows cannot be listed.";
+  render(<ResourceViewProvider scope="local">
+    <Harness unavailableMessage={unavailableMessage} onPageChange={vi.fn()} onToggle={onToggle} />
+  </ResourceViewProvider>);
+  expect(screen.getByText(unavailableMessage)).toBeTruthy();
+  const toggle = screen.getByRole("button", { name: "January" });
+  expect(toggle.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(toggle);
+  expect(onToggle).not.toHaveBeenCalled();
+});
 
 test.each([false, true])("group pager shares the header and does not toggle expansion (actions=%s)", (actions) => {
   const onPageChange = vi.fn();

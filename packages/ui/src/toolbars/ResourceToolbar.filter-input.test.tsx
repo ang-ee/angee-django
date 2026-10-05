@@ -11,7 +11,7 @@ afterEach(cleanup);
 async function editor(field: FilterClauseField) {
   const add = vi.fn();
   render(<ResourceToolbar pager={{ total: 0, page: 1, pageSize: 20 }} search={searchFixture({ catalog: { fields: [field] }, addClause: add })} />);
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "Add custom filter" }));
   return add;
 }

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { GroupSpec } from "@angee/metadata";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
@@ -114,4 +114,27 @@ test("Clear grouping clears the stack and leaves Add available", () => {
   expect(levels()).toEqual([]);
   expect(screen.queryByRole("button", { name: "Clear grouping" })).toBeNull();
   expect(screen.getByRole("button", { name: "More axes…" }).hasAttribute("disabled")).toBe(false);
+});
+
+test("granularity families follow the catalog's drill fact in both selects and inline choices", async () => {
+  const axis = { ...created, granularities: ["day_of_week", "month", "year_number", "day"],
+    granularityDrills: ["month", "year_number"] };
+  const search = searchFixture({ groupingEnabled: true, catalog: { groups: [axis], curatedGroups: [axis] },
+    groupStack: [{ field: "created", granularity: "month" }], active: [
+      { id: "group:0", kind: "group", index: 0, level: { field: "created", granularity: "month" }, label: "Created" },
+    ] });
+  render(<GroupStackPanel search={search} />);
+  fireEvent.click(screen.getByRole("combobox", { name: "Granularity for Created · Month" }));
+  expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+    "Month", "Year number", "Day of week", "Day",
+  ]);
+  expect(screen.getByText("Ranges")).toBeTruthy();
+  expect(screen.getByText("Number parts")).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Granularity for Created · Month" }), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "More granularities for Created" }));
+  const parts = within(screen.getByRole("region", { name: "Number parts" }));
+  expect(parts.getAllByRole("button").map((button) => button.textContent)).toEqual(["Day of week", "Day"]);
+  expect(within(screen.getByRole("group", { name: "Ranges" })).getAllByRole("button").map((button) => button.textContent))
+    .toEqual(["Month", "Year number"]);
 });

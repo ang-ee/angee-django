@@ -256,6 +256,7 @@ describe("resource metadata defaults", () => {
         group: { field: "updatedAt", granularity: "day" },
         type: "date",
         granularities: DATE_EXTRACTIONS,
+        granularityDrills: [],
       },
       {
         id: "createdAt",
@@ -263,6 +264,7 @@ describe("resource metadata defaults", () => {
         group: { field: "createdAt", granularity: "day" },
         type: "date",
         granularities: DATE_EXTRACTIONS,
+        granularityDrills: [],
       },
     ]);
   });

@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
 import type { UiTranslate } from "../../../i18n";
+import { enUiBundle } from "../../../i18n/en";
+import { createAngeeI18nInstance } from "../../../runtime/i18n";
 import { modelLabelSegment } from "@angee/metadata";
 import { dedupeBy } from "../../../lib/dedupe";
 import type { FilterClauseOperator, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { Filter, type ResourceViewLookup, type ResourceViewLookupOperator, type FilterFacet } from "../resource-view-model";
 import { groupFieldLabel } from "../resource-view-list-body";
+const englishT = createAngeeI18nInstance(enUiBundle).getFixedT("en", "ui");
 export function createLabelForResource(resource: string, t: UiTranslate, vocabularyLabel?: string): string {
   const name = vocabularyLabel ?? groupFieldLabel(modelLabelSegment(resource) || "record").toLowerCase();
   return t("resourceToolbar.createResource", { resource: name });
@@ -44,72 +47,27 @@ export function customFilterChipLabel({
   operator,
   value,
   options,
+  t = englishT,
 }: {
   fieldLabel: ReactNode;
   operator: ResourceViewLookupOperator;
   value: unknown;
   options?: FilterClauseField["options"];
+  t?: UiTranslate;
 }): ReactNode {
   if (operator === "isNull") {
-    return `${labelText(fieldLabel) ?? "Field"} is ${
-      value === false ? "not empty" : "empty"
-    }`;
+    return t("search.emptyClause", { field: labelText(fieldLabel) ?? t("search.field"),
+      value: t(value === false ? "search.notEmpty" : "search.empty") });
   }
-  return `${labelText(fieldLabel) ?? "Field"} ${filterOperatorLabel(operator)} ${
-    filterValueLabel(value, options)
-  }`;
+  return t("search.clause", { field: labelText(fieldLabel) ?? t("search.field"),
+    operator: filterOperatorLabel(operator, t), value: filterValueLabel(value, options) });
 }
 
 export function filterOperatorLabel(
   operator: FilterClauseOperator,
+  t: UiTranslate = englishT,
 ): string {
-  switch (operator) {
-    case "ne": return "is not";
-    case "notInList": return "is not one of";
-    case "like": return "matches pattern";
-    case "iLike": return "matches pattern (ignore case)";
-    case "notLike": return "does not match pattern";
-    case "notILike": return "does not match pattern (ignore case)";
-    case "similar": return "is similar to pattern";
-    case "notSimilar": return "is not similar to pattern";
-    case "regex": return "matches regular expression";
-    case "iRegex": return "matches regular expression (ignore case)";
-    case "notRegex": return "does not match regular expression";
-    case "notIRegex": return "does not match regular expression (ignore case)";
-    case "jsonContains": return "contains JSON";
-    case "jsonContainedIn": return "is contained in JSON";
-    case "hasKey": return "has key";
-    case "hasKeysAny": return "has any keys";
-    case "hasKeysAll": return "has all keys";
-    case "exact":
-      return "is";
-    case "inList":
-      return "is one of";
-    case "isNull":
-      return "is empty";
-    case "isNotNull":
-      return "is not empty";
-    case "iContains":
-      return "contains";
-    case "contains":
-      return "contains (case-sensitive)";
-    case "iStartsWith":
-      return "starts with";
-    case "startsWith":
-      return "starts with (case-sensitive)";
-    case "iEndsWith":
-      return "ends with";
-    case "endsWith":
-      return "ends with (case-sensitive)";
-    case "gt":
-      return ">";
-    case "gte":
-      return ">=";
-    case "lt":
-      return "<";
-    case "lte":
-      return "<=";
-  }
+  return t(`search.operator.${operator}`);
 }
 
 function filterValueLabel(value: unknown, options: FilterClauseField["options"]): string {

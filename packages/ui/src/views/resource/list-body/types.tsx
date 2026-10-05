@@ -85,6 +85,8 @@ export type GroupedListItem<TRow extends Row> =
       label: string;
       count: number;
       expandable: boolean;
+      /** The query owner explains why an extraction cannot list its rows. */
+      unavailableMessage?: string;
       expanded: boolean;
       bucket: AggregateBucket;
       pager?: GroupedListPager;
