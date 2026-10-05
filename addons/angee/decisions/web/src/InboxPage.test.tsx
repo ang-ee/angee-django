@@ -61,7 +61,7 @@ test("queries the open inbox and links the loaded decision", async () => {
 test("the native filter box edits personal predicates and preserves unrelated search", async () => {
   const { getList, router } = fixture("/decisions?preset=decisions.waiting&keep=external&page=3");
   await screen.findByText("River");
-  fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "I can act" }));
   fireEvent.click(await screen.findByRole("button", { name: "Requested by me" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
@@ -78,7 +78,7 @@ test("the native filter box edits personal predicates and preserves unrelated se
 test("finds delegated seats through the server authority filter", async () => {
   const { getList } = fixture();
   await screen.findByText("River");
-  fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "I can act" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     _and: [{ can_act: { _eq: true } }, { is_open: { _eq: true } }],
@@ -88,7 +88,7 @@ test("finds delegated seats through the server authority filter", async () => {
 test("Assigned to me filters assignees independently of the Waiting on me authority preset", async () => {
   const { getList } = fixture("/decisions?preset=decisions.all");
   await screen.findByText("River");
-  fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
+  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "Assigned to me" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
     assignees: { _eq: "user-1" },

@@ -3,7 +3,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type * as React from "react";
 import { addWeeks, startOfDay, startOfWeek } from "date-fns";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../../runtime";
 import { setHumanDateLocale } from "../../widgets/date-format";
 import type { GanttProps } from "./gantt";
@@ -16,7 +16,11 @@ vi.mock("./gantt-nav", () => ({
   GanttNav: () => null, GanttNavToday: () => null, GanttNavPrev: () => null,
   GanttNavNext: () => null, GanttTitle: () => null, GanttScaleSwitcher: () => null,
 }));
-afterEach(() => { cleanup(); drawing.props = null; setHumanDateLocale("en"); });
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 8, 30, 12));
+});
+afterEach(() => { cleanup(); vi.useRealTimers(); drawing.props = null; setHumanDateLocale("en"); });
 
 describe("Gantt drawing adapter", () => {
   test("disables drag, resize, slot selection, row selection and write callbacks", () => {
@@ -74,13 +78,18 @@ describe("Gantt drawing adapter", () => {
     expect(screen.queryByText("Default title")).toBeNull();
   });
 
-  test("fits every bar and today to weeks, then releases the range on navigation", () => {
+  test.each([
+    { now: new Date(2026, 8, 30, 12), firstWeek: new Date(2026, 6, 20), endWeek: new Date(2026, 11, 21) },
+    // Monday midnight is an exclusive end: the bar's last instant is still Sunday.
+    { now: new Date(2026, 9, 5, 12), firstWeek: new Date(2026, 6, 27), endWeek: new Date(2026, 11, 21) },
+  ])("fits every bar and today to weeks, then releases the range on navigation ($now)", ({ now, firstWeek, endWeek }) => {
+    vi.setSystemTime(now);
     const today = startOfDay(new Date());
     const first = addWeeks(today, -10);
     const last = addWeeks(today, 10);
     render(<GanttSurface resources={[]} events={[{ id: "bar", title: "Interval", start: first, end: last }]} fitToEvents />);
-    expect(drawing.props?.range).toEqual({ start: startOfWeek(first, { weekStartsOn: 1 }), end: addWeeks(startOfWeek(last, { weekStartsOn: 1 }), 2) });
-    expect(drawing.props?.initialCenter).toEqual(startOfWeek(first, { weekStartsOn: 1 }));
+    expect(drawing.props?.range).toEqual({ start: firstWeek, end: endWeek });
+    expect(drawing.props?.initialCenter).toEqual(firstWeek);
     expect(drawing.props?.infiniteScroll).toBe(false);
     act(() => drawing.props?.onDateChange?.(addWeeks(today, 1)));
     expect(drawing.props?.range).toBeUndefined();

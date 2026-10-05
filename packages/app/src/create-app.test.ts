@@ -387,7 +387,7 @@ describe("createApp search codec", () => {
 
     expect(parsed).toEqual({ keep: "external", empty: "", page: "1", sort: "", filter: "", group: "", then: "" });
     expect(resourceViewSearchToState(parsed, initial)).toMatchObject({
-      pagination: { pageIndex: 0 }, sorting: [], filter: {}, group: null, groupStack: [],
+      pagination: { pageIndex: 0 }, sorting: [], filter: {}, groupStack: [],
     });
   });
 });
