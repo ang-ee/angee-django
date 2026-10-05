@@ -1766,6 +1766,19 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
         return person
 
+    def follow_user_name(self, user: Any) -> None:
+        """Rename ``user``'s linked :class:`Person` after the account, as :meth:`for_user` names it.
+
+        Runs within the caller's ``system_context``; a person already carrying
+        the account's name is left untouched.
+        """
+
+        name = _user_display_name(user)
+        person_model = apps.get_model("parties", "Person")
+        for person in person_model.objects.filter(user=user).exclude(display_name=name):
+            person.display_name = name
+            person.save(update_fields=["display_name", "updated_at"])
+
     def search_display_name(self, query: str, *, limit: int = 20) -> list[Any]:
         """Return a bounded actor-visible people list filtered by display name."""
 
