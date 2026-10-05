@@ -5,6 +5,8 @@ import type { ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "..
 import type { ResourceViewFavorite } from "../resource-view-model";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { RelationFieldInfo } from "../model-metadata-defaults";
+import type { ComposedContainerChild } from "../../../runtime/containers";
+import type { SearchShortcut } from "./shortcuts";
 
 /** A bucket keeps its executable predicate, including the valueless blank bucket. */
 export interface SearchFacetOption {
@@ -27,6 +29,8 @@ export interface SearchFacet {
 }
 
 export interface SearchCatalog {
+  /** The catalog owner's validated container projection, when it resolves shortcuts. */
+  shortcuts?: readonly ComposedContainerChild<SearchShortcut>[];
   text: readonly { field: string; label: ReactNode }[];
   filters: readonly ResourceToolbarFilterOption[];
   facets: readonly SearchFacet[];

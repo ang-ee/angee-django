@@ -24,6 +24,10 @@ collapsing a box-only list. Below 36rem toolbar width only the badge trigger
 remains. Addons contribute the same typed shortcuts through `resource#search`;
 `sequence` interleaves them with page `page.*` extras, and `only`/`except` narrow
 both. See [the declaration contract](src/views/resource/search/shortcuts.ts).
+Named filters that fail resource-query parsing and shortcuts with unavailable
+metadata-dependent targets throw with their ids in development; production
+omits them and logs each id and reason once per mount. Malformed declarations
+still fail fast in every environment.
 `chrome.heading` takes `label`, `hint`, and `audience`; the shared list frame
 supplies the live count. `chrome`
 can also hide the view switcher, pager, or column chooser without changing the

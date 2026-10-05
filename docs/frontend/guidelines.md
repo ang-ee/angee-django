@@ -401,6 +401,10 @@ shared UI copy through an addon bundle.
   trigger. The box stays reachable below 36rem toolbar width, where shortcuts
   hide. Shortcuts compose the same model as the box; toggle ids may name filter
   options, presets or favorites. The route default preset joins automatically.
+  Named filters that fail resource-query parsing and shortcuts with unavailable
+  metadata-dependent targets throw with their ids in development; production
+  omits them and logs each id and reason once per mount. Malformed declarations
+  still fail fast in every environment.
   A scoped create verb uses a server-projected parent record for its permission;
   the create label comes
   from resource vocabulary. `chrome` may hide the view switcher, pager, or column

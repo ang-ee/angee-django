@@ -1,14 +1,17 @@
 // @vitest-environment happy-dom
 import type { ReactNode } from "react";
 import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 import { ResourceQuery } from "@angee/metadata";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
 import { useSearchCatalog, searchTextFields, type UseSearchCatalogInput } from "./catalog";
 import type { SearchFacet } from "./types";
+import { developmentMode } from "../../../lib/development-mode";
 
-afterEach(cleanup);
+vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
+beforeEach(() => vi.mocked(developmentMode).mockReturnValue(true));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const query = ResourceQuery.forRows({ fields: {
   title: { scalar: "String" }, "owner.name": { scalar: "String" }, amount: { scalar: "Int" },
   status: { kind: "enum", values: [{ value: "open" }, { value: "closed" }] },
@@ -109,4 +112,43 @@ test("date grouping offers only granularities whose groups can be opened", () =>
   ];
   const result = catalog({ query: ResourceQuery.from(testDataResource("test.Record", { query: contract })), serverGrouping: true, columns: [] });
   expect(result.groups[0]?.granularities).toEqual(["month"]);
+});
+
+test("production catalog drops invalid declared and contributed predicates and their toggle shortcuts", () => {
+  vi.mocked(developmentMode).mockReturnValue(false);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const valid = { id: "open", label: "Open", filter: { status: { exact: "open" } } };
+  const result = catalog({
+    filterOptions: [{ id: "setup", label: "Accepted", filter: { "stage.name": { exact: "Accepted" } } }, valid],
+    contributedFilterOptions: [{ id: "contributed-invalid", label: "Missing", filter: { missing: { exact: "value" } } }],
+    scalarFacets: [{ ...status, options: [...status.options,
+      { id: "invalid-bucket", label: "Invalid bucket", filter: { missing: { exact: "value" } } },
+    ] }],
+    search: { shortcuts: [{ kind: "toggle", id: "setup" }, { kind: "toggle", id: "open" }] },
+  });
+  expect(result.filters).toEqual([valid]);
+  expect(result.shortcuts?.map((shortcut) => shortcut.id)).toEqual(["page.toggle.open"]);
+  expect(result.facets.flatMap((facet) => facet.options).some((option) => option.id === "invalid-bucket")).toBe(false);
+  expect(error).toHaveBeenCalledTimes(4);
+  expect(error).toHaveBeenCalledWith('Search shortcut "page.toggle.setup": unknown toggle id "setup".');
+});
+
+test("development catalog fails during render with the invalid filter's identity", () => {
+  expect(() => catalog({ filterOptions: [
+    { id: "setup", label: "Accepted", filter: { "stage.name": { exact: "Accepted" } } },
+  ] })).toThrow(/setup.*filter.stage.name.*unknown or non-filterable field/);
+});
+
+test("metadata-dependent field shortcuts are omitted in production and retain valid shortcuts", () => {
+  vi.mocked(developmentMode).mockReturnValue(false);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const result = catalog({ search: { shortcuts: [
+    { kind: "clause", field: "missing" }, { kind: "text", field: "amount" },
+    { kind: "facet", field: "owner" }, { kind: "text", field: "title" },
+  ] } });
+  expect(result.shortcuts?.map((shortcut) => shortcut.id)).toEqual(["page.text.title"]);
+  expect(error).toHaveBeenCalledTimes(3);
+  expect(error).toHaveBeenCalledWith('Search shortcut "page.clause.missing": field "missing" is not filterable.');
+  expect(error).toHaveBeenCalledWith('Search shortcut "page.text.amount": field "amount" does not support iContains.');
+  expect(error).toHaveBeenCalledWith('Search shortcut "page.facet.owner": field "owner" needs a facet catalog.');
 });
