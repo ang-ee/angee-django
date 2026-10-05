@@ -533,6 +533,31 @@ describe("FormView", () => {
     expect(screen.getByRole("tab", { name: "Schedule" }).getAttribute("aria-selected")).toBe("true");
   });
 
+  test("a default-tab rule chooses from the loaded record once; the viewer's choice and a routed tab win", async () => {
+    const rule = vi.fn((record: Row) => record.wordCount === 3 ? "activity" : undefined);
+    const tabs = [
+      { id: "notes", label: "Notes", render: () => <p>Notes pane</p> },
+      { id: "activity", label: "Activity", render: () => <p>Activity pane</p> },
+    ];
+    const first = renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
+      defaultRecordTab={rule} recordTabs={tabs}>
+      <Field name="title" title />
+    </FormView>);
+    expect(await screen.findByText("Activity pane")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(await screen.findByText("Notes pane")).toBeTruthy();
+    expect(rule).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
+      defaultRecordTab={rule} recordTab="notes" recordTabs={tabs}>
+      <Field name="title" title />
+    </FormView>);
+    expect(await screen.findByText("Notes pane")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Notes" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   test("create forms expose only body tabs and invalid defaults select their first tab", async () => {
     renderWithProviders(<FormView resource="notes.Note" layout="tabs" defaultRecordTab="missing"
       bodyTabs={[{ id: "summary", label: "Summary", render: () => <p>Body summary</p> }]}
