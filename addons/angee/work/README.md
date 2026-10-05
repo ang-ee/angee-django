@@ -25,5 +25,9 @@ tasks; it never physically deletes a task, and its optional reason is the histor
 change reason. Restore returns a removed task to the stage history shows before
 its latest removal, or to the queue's default stage when that stage no longer
 admits hand entry. Concealment withholds the task and its conversation from
-everyone but administrators, so only they restore. Clients label Decline as
-Reject where appropriate.
+everyone but administrators, managers included. The task's `restore` permission
+names who brings it back: administrators and, for an inherited task, its queue's
+writers. `removed_tasks(queue, parent)` lists only the concealed tasks the reader
+holds `restore` on, with their removal facts, and `RemovedTasks` renders that list;
+a restricted task stays with administrators. Clients label Decline as Reject
+where appropriate.

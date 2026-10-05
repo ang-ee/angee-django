@@ -23,12 +23,13 @@ from angee.graphql.actions import (
 )
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.ids import PublicID, instance_for_id, optional_public_id, to_public_id
 from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_label, user_public_id
+from angee.iam.identity import user_display_labels, user_label, user_public_id
+from angee.iam.permissions import request_from_info
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 
@@ -247,9 +248,9 @@ def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int, r
 
 @action_guard("Restore task failed.")
 def restore_task(info: strawberry.Info, task: PublicID, expected_revision: int) -> ActionResult:
-    """Return a removed task to the stage it held before removal."""
+    """Return a removed task to the stage it held before removal, as a ``restore`` holder."""
 
-    target = authorized_permission_target(info, Task, task, "write")
+    target = authorized_permission_target(info, Task, task, "restore")
     target.restore(expected_revision=expected_revision)
     return ActionResult(ok=True, message="Task restored.", id=target.sqid)
 
@@ -270,6 +271,68 @@ class ProjectManagerRosterType:
 
     offered: bool
     people: list[ProjectManagerPersonType]
+
+
+@strawberry.type
+class RemovedTaskType:
+    """A concealed task its reader may restore: only the facts a Removed list shows."""
+
+    id: PublicID
+    title: str
+    revision: int
+    parent: PublicID | None
+    removed_at: datetime | None
+    removed_by_label: str | None
+    removal_reason: str
+
+
+@strawberry.type
+class WorkRemovedTaskQuery:
+    """The Removed list of concealed tasks, for the readers who may restore them."""
+
+    @strawberry.field
+    def removed_tasks(
+        self,
+        info: strawberry.Info,
+        queue: PublicID | None = None,
+        parent: PublicID | None = None,
+        limit: int = 100,
+    ) -> list[RemovedTaskType]:
+        """Return concealed tasks the reader holds ``restore`` on, in a readable queue or under a readable parent.
+
+        Concealment keeps these rows unreadable; only their removal facts leave
+        this resolver, one row per task the reader may bring back.
+        """
+
+        user = getattr(request_from_info(info), "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return []
+        scope: dict[str, Any] = {}
+        for name, model, value in (("queue", Queue, queue), ("parent", Task, parent)):
+            if value is None:
+                continue
+            owner = instance_for_id(model, value, queryset=model._default_manager.all())
+            if owner is None:
+                return []
+            scope[name] = owner
+        rows = list(Task.removed_for(user, **scope)[: max(1, min(limit, 100))])
+        records = Task.removal_records(row.pk for row in rows)
+        labels = user_display_labels(
+            (getattr(records.get(row.pk), "updated_by_id", None) for row in rows),
+            request=request_from_info(info),
+        )
+        return [
+            RemovedTaskType(
+                id=strawberry.ID(str(row.sqid)),
+                title=row.title,
+                revision=row.revision,
+                parent=to_public_id(Task, row.parent_id),
+                removed_at=getattr(records.get(row.pk), "history_date", None),
+                removed_by_label=labels.get(getattr(records.get(row.pk), "updated_by_id", None)),
+                removal_reason=str(getattr(records.get(row.pk), "history_change_reason", None) or ""),
+            )
+            for row in rows
+        ]
 
 
 @strawberry.type
@@ -573,14 +636,20 @@ _CYCLE_RESOURCE = hasura_model_resource(
 _RESOURCE_TYPES = [*_QUEUE_RESOURCE.types, *_STAGE_RESOURCE.types, *_CYCLE_RESOURCE.types]
 
 _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
-    "query": [WorkPeopleQuery, _QUEUE_RESOURCE.query, _STAGE_RESOURCE.query, _CYCLE_RESOURCE.query],
+    "query": [
+        WorkPeopleQuery,
+        WorkRemovedTaskQuery,
+        _QUEUE_RESOURCE.query,
+        _STAGE_RESOURCE.query,
+        _CYCLE_RESOURCE.query,
+    ],
     "mutation": [
         WorkActionMutation,
         _QUEUE_RESOURCE.mutation,
         _STAGE_RESOURCE.mutation,
         _CYCLE_RESOURCE.mutation,
     ],
-    "types": [ProjectManagerPersonType, ProjectManagerRosterType,
+    "types": [ProjectManagerPersonType, ProjectManagerRosterType, RemovedTaskType,
               WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
     "input_extensions": [ProjectWorkSetupInput, MilestoneWorkSetupInput],
     "type_extensions": [TaskWorkExtension, ProjectWorkExtension, MilestoneWorkExtension],
