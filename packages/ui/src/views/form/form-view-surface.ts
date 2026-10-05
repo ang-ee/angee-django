@@ -154,8 +154,13 @@ export interface UseFormViewSurfaceProps {
   recordTab?: string;
   /** Called when the selected tab changes. */
   onRecordTabChange?: (tab: string) => void;
-  /** Initial tab; unavailable ids fall back to the first body tab, or Overview. */
-  defaultRecordTab?: string;
+  /**
+   * Initial tab, or a rule choosing it from the record. A rule runs once per record, when the
+   * record and its tab fields have loaded; a later change to the record does not move the tab.
+   * The routed tab and the viewer's own choice win over either. Unavailable ids fall back to
+   * the first body tab, or Overview.
+   */
+  defaultRecordTab?: string | ((record: Row) => string | undefined);
   /** Labelled, non-collapsible groups join the form's single tab strip. */
   layout?: "stacked" | "tabs";
   /** Content tabs alongside editable lines and groups in the tabbed layout. */
@@ -235,8 +240,11 @@ export function useFormViewSurface({
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
   const t = useUiT();
-  const [localRecordTab, setLocalRecordTab] = React.useState(defaultRecordTab);
-  const requestedRecordTab = recordTab ?? localRecordTab;
+  // The viewer's own choice on this record, and the default a rule chose for it; null until set.
+  const [localRecordTab, setLocalRecordTab] = React.useState<string | null>(null);
+  const [ruledRecordTab, setRuledRecordTab] = React.useState<string | null>(null);
+  const requestedRecordTab = recordTab ?? localRecordTab
+    ?? (typeof defaultRecordTab === "function" ? ruledRecordTab ?? FORM_VIEW_OVERVIEW_TAB_ID : defaultRecordTab);
   const setActiveRecordTab = React.useCallback((tab: string) => {
     if (recordTab === undefined) setLocalRecordTab(tab);
     onRecordTabChange?.(tab);
@@ -603,9 +611,23 @@ export function useFormViewSurface({
     actionsBlocked,
   });
 
+  // A new record, or a new fixed default, starts from the default again; a rule's identity may
+  // change every render, so only whether there is one counts.
+  const fixedDefaultRecordTab = typeof defaultRecordTab === "function" ? null : defaultRecordTab;
   React.useEffect(() => {
-    if (recordTab === undefined) setLocalRecordTab(defaultRecordTab);
-  }, [defaultRecordTab, resource, id, recordTab]);
+    setLocalRecordTab(null);
+    setRuledRecordTab(null);
+  }, [fixedDefaultRecordTab, resource, id]);
+  const recordTabRule = useLatestRef(typeof defaultRecordTab === "function" ? defaultRecordTab : undefined);
+  const tabFieldsPending = !isCreate && canonicalTabFields.length > 0
+    && Boolean(canonicalMetadata?.resource.roots.detail) && canonicalRead.query.isPending;
+  React.useEffect(() => {
+    const rule = recordTabRule.current;
+    if (!rule || ruledRecordTab !== null || tabRecord == null || tabFieldsPending) return;
+    // The previous record can still be displayed for a moment after the id changes.
+    if (id != null && tabRecord.id != null && String(tabRecord.id) !== String(id)) return;
+    setRuledRecordTab(rule(tabRecord) ?? FORM_VIEW_OVERVIEW_TAB_ID);
+  }, [id, recordTabRule, ruledRecordTab, tabFieldsPending, tabRecord]);
   const fieldLayout = React.useMemo(
     () =>
       formViewFieldLayout(
