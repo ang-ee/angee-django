@@ -26,9 +26,11 @@ export function AppearanceSettingsPage(): ReactElement {
   useEffect(() => discard, [discard]);
 
   return <>
-    {!readOnly ? <ControlBand className={appearance.dirty ? dirtyControlBandClassName : undefined}>
-      <SaveDiscardActions isDirty={appearance.dirty} pending={saving} onSave={() => { void appearance.save().catch(() => undefined); }} onDiscard={discard} />
-    </ControlBand> : null}
+    <ControlBand className={appearance.dirty ? dirtyControlBandClassName : undefined}>
+      {!readOnly ? <SaveDiscardActions isDirty={appearance.dirty} pending={saving} onSave={() => { void appearance.save().catch(() => undefined); }} onDiscard={discard} /> : null}
+      {/* Reset is the page's one standing control, and the only way out of an unsupported saved preference. */}
+      <Button className="ml-auto" variant="ghost" size="sm" loading={saving} onClick={() => void appearance.reset()}>{t("reset")}</Button>
+    </ControlBand>
     <SettingsShell maxWidth="1100" gap="8">
     <header className="grid gap-1"><h1 className="text-22 font-semibold text-fg">{t("title")}</h1><p className="text-13 text-fg-muted">{t("description")}</p></header>
     {appearance.notice ? <Alert tone={appearance.notice === "theme-unavailable" ? "warning" : "danger"} title={appearance.notice === "theme-unavailable" ? t("unavailable") : appearance.notice === "options-invalid" ? t("invalidOptions") : t("unsupported")} /> : null}
@@ -55,7 +57,6 @@ export function AppearanceSettingsPage(): ReactElement {
       <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={appearance.currentPreferences.options} />)}</div>
     </SettingsSection> : null}
     {tools.length && !readOnly ? <SettingsSection title={t("tools.title")}><ContainerOutlet entries={tools} /></SettingsSection> : null}
-    <div><Button variant="secondary" loading={appearance.saving} onClick={() => void appearance.reset()}>{t("reset")}</Button></div>
     </SettingsShell>
   </>;
 }
