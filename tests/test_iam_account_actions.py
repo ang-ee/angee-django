@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.signals import user_logged_in
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -22,6 +23,7 @@ from rebac import (
 )
 
 from angee.base.mixins import StaleRevisionError
+from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import create_platform_admin, execute_schema, graphql_request, result_data
 from tests.iam_campaign import Person
@@ -102,6 +104,28 @@ def test_field_gates_keep_identity_and_authority_columns_with_administrators(spa
     assert not execute_schema(schema, UPDATE, {"id": target_id, "set": changed}, user=admin).errors
     stored = _stored(target)
     assert (stored.email, stored.username) == ("admin-set@example.com", "admin-set")
+
+
+def test_writers_never_touch_preferences_or_audit_dates(spaces_tables):
+    manager = _manager("audit-manager")
+    target = User.objects.create_user("audited", "audited@example.com", "a-password")
+    changes = ({"preferences": {"homePath": "/elsewhere"}}, {"date_joined": timezone.now()}, {"last_login": timezone.now()})
+    for change in changes:
+        field = next(iter(change))
+        with actor_context(manager), pytest.raises(PermissionDenied, match=f"write__{field}"):
+            User.objects.with_actor(manager).get(pk=target.pk).update_account(change)
+    stored = _stored(target)
+    assert stored.preferences in ({}, None) and stored.last_login is None
+    # The person's own preference writes, and the sign-in stamp, still land.
+    stored.update_preferences({"homePath": "/mine"})
+    assert _stored(target).preferences == {"homePath": "/mine"}
+    revision = _stored(target).account_revision
+    # Django's own stamp is replaced: its instance save would trip the gate.
+    assert all(entry[0][0] != DJANGO_LAST_LOGIN_UID for entry in user_logged_in.receivers)
+    stamp_last_login(sender=User, user=_stored(target))
+    stamped = _stored(target)
+    assert stamped.last_login is not None
+    assert stamped.account_revision == revision  # a sign-in never stales an open edit
 
 
 def test_writers_never_update_protected_accounts_but_administrators_do(spaces_tables):
